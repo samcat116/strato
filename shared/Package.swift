@@ -27,7 +27,7 @@ let package = Package(
         // Keep in lockstep with agent/ and control-plane/ — all three verify
         // SPIFFE SVID chains through this package.
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
     ],
     targets: [
         .target(

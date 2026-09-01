@@ -186,18 +186,31 @@ Alternatively, skip the redirect and `tail -f` a TTY instead.
 `RequestLoggingMiddleware` emits one structured line per HTTP request:
 
 ```
-http_request method=GET path=/health/live status=200 durationMs=1.4
+http_request method=GET http.route=/health/live path=/health/live status=200 durationMs=1.4
 ```
+
+For matched requests, `http.route` and the compatibility `path` field contain
+the registered route template (for example, `/auth/claim/:token`), never the
+concrete URL. Unmatched requests use the constant `unmatched`. This keeps access
+logs safe for secret-bearing path parameters and bounded for route-level queries;
+query values are never included. Authorization denials, rate-limit events, and
+sanitized request-error events use the same route value.
 
 Failed requests are logged too: a thrown `Abort` (401/403/404/…) propagates back
 through the middleware as an error, so the status is derived from the error
 (`AbortError.status`, else `500`) to match what the client receives. `5xx`
 responses are logged at `error` level, everything else at `info` — always as the
 same `http_request` event, so it's one status-bearing line per request.
+Thrown errors include only their stable type in `error`; potentially
+request-derived descriptions are omitted and can be correlated through
+`request-id`.
 
 **Toggle:** the `REQUEST_LOGGING` environment variable (`true`/`false`). When
 unset it defaults to **on outside `.production`** and off in production; set
-`REQUEST_LOGGING=true` to enable it in production for debugging.
+`REQUEST_LOGGING=true` to enable it in production for debugging. The toggle
+controls ordinary `http_request` access events only. Thrown errors always emit a
+sanitized `http_request_error` event with status, error type, route, and request
+ID so production failures remain visible without logging error descriptions.
 
 ## Service identity on the health endpoints
 

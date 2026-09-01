@@ -147,12 +147,14 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
         let remaining = max(0, policy.limit - count.count)
         if count.count > policy.limit {
+            let route = request.secretSafeLogPath
             request.logger.warning(
                 "rate_limit_exceeded",
                 metadata: [
                     "scope": .string(scope.rawValue),
                     "identity": .string(identity),
-                    "path": .string(request.url.path),
+                    "http.route": .string(route),
+                    "path": .string(route),
                 ])
             return limitedResponse(limit: policy.limit, resetAfter: count.ttl)
         }
