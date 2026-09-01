@@ -835,12 +835,19 @@ struct ObservedStateApplier {
 
         let failedCurrentGeneration =
             observed.lastError != nil && observed.failedGeneration == vm.generation
-        // No deadline means no user mutation is outstanding. This is a
-        // steady-state repair failure: persist exactly what the agent observed,
-        // but retain the desired state and generation so the level-triggered
-        // loop can heal it later. In particular, do not synthesize a stale
-        // mutation outcome from whichever resource event happens to be latest.
-        if failedCurrentGeneration, vm.convergenceDeadline == nil {
+        // A blocked refusal is both an actionable error and an unfinished
+        // convergence attempt. The agent will re-drive it at this generation,
+        // so retain desired state and the deadline while persisting the
+        // degraded reason. The deadline sweep remains the backstop if the host
+        // never recovers. An unclassified failure from an older agent keeps the
+        // historical terminal behavior.
+        //
+        // With no deadline, no user mutation is outstanding. That is a
+        // steady-state repair failure and follows the same retain-and-retry
+        // path regardless of classification.
+        if failedCurrentGeneration,
+            observed.failureClassification == .blocked || vm.convergenceDeadline == nil
+        {
             if changed {
                 try await vm.save(on: db)
             }
@@ -906,7 +913,10 @@ struct ObservedStateApplier {
 
             let outcome = try await ResourceConvergence.recordFailure(
                 vm, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: vm.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 // A repeat of an already-recorded failure: nothing was
                 // persisted by the call above, so this report's own changes
@@ -1244,10 +1254,12 @@ struct ObservedStateApplier {
 
         let failedCurrentGeneration =
             observed.lastError != nil && observed.failedGeneration == sandbox.generation
-        // A failure with no deadline belongs to steady-state repair, not to a
-        // pending mutation. Keep intent and generation intact and emit no
-        // operation outcome; a later same-generation retry can still recover.
-        if failedCurrentGeneration, sandbox.convergenceDeadline == nil {
+        // Blocked failures remain active mutations because the agent will
+        // re-drive them at this generation. A failure with no deadline is a
+        // steady-state repair and retains intent for the same reason.
+        if failedCurrentGeneration,
+            observed.failureClassification == .blocked || sandbox.convergenceDeadline == nil
+        {
             if changed {
                 try await sandbox.save(on: db)
             }
@@ -1283,7 +1295,10 @@ struct ObservedStateApplier {
             }
             let outcome = try await ResourceConvergence.recordFailure(
                 sandbox, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: sandbox.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await sandbox.save(on: db)
             }
@@ -1609,6 +1624,15 @@ struct ObservedStateApplier {
             volume.status = derived
             changed = true
         }
+        // Preserve the desired state and deadline for an actionable refusal
+        // the agent is still retrying. Replica and status facts above still
+        // land, including the degraded reason.
+        if failedAtTarget, observed.failureClassification == .blocked {
+            if changed {
+                try await volume.save(on: db)
+            }
+            return normalizedDesiredSize
+        }
         let settlesConvergence =
             volume.desiredStatus != .absent
             && ((!wasConverged && volume.isConverged)
@@ -1629,7 +1653,10 @@ struct ObservedStateApplier {
                 )?.mutation ?? .create
             let outcome = try await ResourceConvergence.recordFailure(
                 volume, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: volume.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await volume.save(on: db)
             }
@@ -1657,7 +1684,7 @@ struct ObservedStateApplier {
     // MARK: - Snapshot artifacts (STR-150)
 
     /// One family's half of a report. Written once and applied three times:
-    /// the diff, the convergence quartet, the derived status and the
+    /// the diff, the convergence metadata, the derived status and the
     /// absent-then-reap dance are identical across the families, and only what
     /// the captured facts *mean* differs — which each model absorbs in
     /// `applyCapturedFacts`.
@@ -1755,6 +1782,17 @@ struct ObservedStateApplier {
             changed = true
         }
 
+        // A blocked capture/export keeps its requested intent until a later
+        // same-generation report succeeds or the convergence deadline expires.
+        let failedCurrentGeneration =
+            observed.lastError != nil && observed.failedGeneration == artifact.generation
+        if failedCurrentGeneration, observed.failureClassification == .blocked {
+            if changed {
+                try await artifact.save(on: db)
+            }
+            return footprintChanged
+        }
+
         let settlesConvergence =
             artifact.desiredStatus != .absent
             && ((!wasConverged && artifact.isConverged)
@@ -1775,7 +1813,10 @@ struct ObservedStateApplier {
                 )?.mutation ?? .create
             let outcome = try await ResourceConvergence.recordFailure(
                 artifact, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: artifact.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await artifact.save(on: db)
             }

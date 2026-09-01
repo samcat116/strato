@@ -2193,9 +2193,9 @@ actor LibvirtService: HypervisorService {
             }
         } catch let error as UEFIVarstoreError {
             // Rethrown as itself, not wrapped: it is a `ClassifiableError` and
-            // says `permanent`, and the reconciler reads that off the thrown
-            // error. Its message already names the varstore path, which carries
-            // the VM id, and `perform` logs the id alongside.
+            // preserves the distinction between a stable varstore failure and
+            // blocked destination ENOSPC. Its message already names the
+            // varstore path, which carries the VM id, and `perform` logs the id.
             throw error
         } catch {
             throw HypervisorServiceError.diskError(

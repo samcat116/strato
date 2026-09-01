@@ -7,6 +7,8 @@ public enum UEFIVarstoreError: Error, LocalizedError, ClassifiableError, Sendabl
     case toolUnavailable(String)
     /// qemu-img ran and refused, with its own output attached.
     case conversionFailed(String)
+    /// The destination filesystem cannot currently hold the varstore.
+    case insufficientDiskSpace(String)
     /// A varstore is already at the path, in a format the document does not
     /// declare. Reusing it would define cleanly and fail the *start*.
     case formatMismatch(String)
@@ -15,19 +17,21 @@ public enum UEFIVarstoreError: Error, LocalizedError, ClassifiableError, Sendabl
         switch self {
         case .toolUnavailable(let detail): return detail
         case .conversionFailed(let detail): return detail
+        case .insufficientDiskSpace(let detail): return detail
         case .formatMismatch(let detail): return detail
         }
     }
 
     public var errorDescription: String? { description }
 
-    /// Both are permanent. The source is a static file the distro's EDK2
-    /// package installed, so a conversion that fails does so for a reason no
-    /// retry changes: the template is missing or unreadable, the destination
-    /// filesystem is full, or the agent cannot write it. Retrying would spend
-    /// the VM's whole per-generation budget re-running the same doomed command
-    /// instead of reporting the remediation once.
-    public var failureClassification: FailureClassification { .permanent }
+    public var failureClassification: FailureClassification {
+        switch self {
+        case .insufficientDiskSpace:
+            return .blocked
+        case .toolUnavailable, .conversionFailed, .formatMismatch:
+            return .permanent
+        }
+    }
 }
 
 /// Creates a VM's UEFI variable store, in the format the domain document
@@ -111,9 +115,13 @@ public struct UEFIVarstore: Sendable {
                     metadata: [
                         "template": .string(template), "path": .string(path), "output": .string(output),
                     ])
-                throw UEFIVarstoreError.conversionFailed(
+                let detail =
                     "could not convert the UEFI variable store template \(template) to qcow2 at \(path). "
-                        + "qemu-img output: \(output)")
+                    + "qemu-img output: \(output)"
+                if output.contains("No space left on device") {
+                    throw UEFIVarstoreError.insufficientDiskSpace(detail)
+                }
+                throw UEFIVarstoreError.conversionFailed(detail)
             }
 
             // Atomic publish, so the path only ever holds a complete varstore —

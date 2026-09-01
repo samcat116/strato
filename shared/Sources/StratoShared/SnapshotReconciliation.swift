@@ -292,7 +292,7 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
 }
 
 /// One snapshot artifact's state as actually observed on an agent (STR-150).
-/// The convergence quartet matches `ObservedVMState` — see the doc comments
+/// The convergence metadata matches `ObservedVMState` — see the doc comments
 /// there.
 public struct ObservedSnapshotState: Codable, Sendable {
     public let snapshotId: UUID
@@ -322,6 +322,9 @@ public struct ObservedSnapshotState: Codable, Sendable {
     /// The generation whose convergence produced `lastError` (see
     /// `ObservedVMState.failedGeneration` for why the control plane needs it).
     public let failedGeneration: Int64?
+    /// Retry semantics for `lastError`; see
+    /// `ObservedVMState.failureClassification`.
+    public let failureClassification: ObservedFailureClassification?
 
     public init(
         snapshotId: UUID,
@@ -333,7 +336,8 @@ public struct ObservedSnapshotState: Codable, Sendable {
         observedGeneration: Int64,
         convergencePhase: String? = nil,
         lastError: String? = nil,
-        failedGeneration: Int64? = nil
+        failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil
     ) {
         self.snapshotId = snapshotId
         self.kind = kind
@@ -345,5 +349,6 @@ public struct ObservedSnapshotState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
     }
 }

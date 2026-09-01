@@ -696,6 +696,7 @@ extension Agent {
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
+            desiredWorkloadReservation: desiredReservation,
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
@@ -816,13 +817,10 @@ extension Agent {
             claim = bootClaim
         } else {
             let raw = await rawHostCapacitySnapshot()
-            do {
-                claim = try capacityAdmissionLedger.claim(
-                    .positiveDelta(from: currentReservation, to: desiredReservation),
-                    snapshot: raw, agentName: initialAgentID)
-            } catch let refusal as HostCapacityAdmissionError {
-                throw DependencyPendingError(refusal.localizedDescription)
-            }
+            claim = try capacityAdmissionLedger.claim(
+                .positiveDelta(from: currentReservation, to: desiredReservation),
+                desiredWorkloadReservation: desiredReservation,
+                snapshot: raw, agentName: initialAgentID)
         }
         defer { capacityAdmissionLedger.release(claim) }
         let service = try reconcileService(for: item.id)

@@ -27,6 +27,13 @@ struct FailureClassificationTests {
         #expect(notFound.failureClassification == .transient)
     }
 
+    @Test("Host space exhaustion is blocked across cache, OCI, and storage paths")
+    func diskSpaceErrorsAreBlocked() {
+        #expect(StorageBackendError.insufficientDiskSpace("full").failureClassification == .blocked)
+        #expect(ImageCacheError.insufficientDiskSpace("full").failureClassification == .blocked)
+        #expect(OCIError.insufficientDiskSpace(detail: "full").failureClassification == .blocked)
+    }
+
     /// `blocked` is its own case rather than a flavour of the two above because
     /// it answers the two questions differently: report it (like permanent),
     /// keep retrying it (unlike permanent), and burn no attempt doing so

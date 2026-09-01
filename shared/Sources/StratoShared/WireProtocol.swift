@@ -11,8 +11,10 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 56 adds recorded
-    /// guest-exec replay and acknowledgement. Version 55 carries the
+    /// The only wire/schema version this build accepts. Version 57 adds the
+    /// failure classification that distinguishes blocked reconciliation from
+    /// terminal failure. Version 56 adds recorded guest-exec replay and
+    /// acknowledgement. Version 55 carries the
     /// permanent Ceph credential-revocation ledger to every client in a site.
     /// Version 54 carries a
     /// volume snapshot's backend independently of its parent volume entry so
@@ -26,7 +28,7 @@ public enum WireProtocol {
     /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
     /// contract (STR-237), and v46's authoritative native-OVN load-balancer
     /// state and observations (STR-28).
-    public static let currentVersion = 56
+    public static let currentVersion = 57
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.
