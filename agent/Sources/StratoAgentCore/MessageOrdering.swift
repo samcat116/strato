@@ -74,7 +74,8 @@ extension MessageEnvelope {
             return [Self.reconcileLane]
         case .consoleConnect, .consoleDisconnect, .consoleData:
             return routingKey(in: payload, field: \.vmId, prefix: "console:")
-        case .guestExecStart, .guestExecInput, .guestExecResize, .guestExecClose:
+        case .guestExecStart, .guestExecInput, .guestExecResize, .guestExecClose,
+            .guestExecRecordedAck:
             return routingKey(in: payload, field: \.sessionId, prefix: "exec:")
         default:
             return [unkeyedSerializationLane]

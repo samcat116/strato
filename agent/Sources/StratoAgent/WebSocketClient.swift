@@ -10,6 +10,12 @@ import StratoAgentSPIFFE
 import StratoShared
 import Synchronization
 
+struct ControlPlaneInboundFrame: Sendable {
+    let envelope: MessageEnvelope
+    let generation: ControlPlaneWebSocketState.Generation
+    let byteCount: Int
+}
+
 // Thread-safe boolean wrapper for continuation resume tracking
 final class AtomicBool: Sendable {
     private let value: Mutex<Bool>
@@ -29,26 +35,42 @@ final class AtomicBool: Sendable {
 
 // Thread-safe WebSocket wrapper to avoid EventLoop affinity issues
 final class LockedWebSocket: Sendable {
-    private let websocket: Mutex<WebSocket?>
+    private struct Entry {
+        let generation: ControlPlaneWebSocketState.Generation
+        let websocket: WebSocket
+    }
+
+    private let websocket: Mutex<Entry?>
 
     init() {
         self.websocket = Mutex(nil)
     }
 
-    func set(_ newValue: WebSocket?) {
-        websocket.withLock { $0 = newValue }
+    func set(
+        _ newValue: WebSocket,
+        generation: ControlPlaneWebSocketState.Generation
+    ) {
+        websocket.withLock { current in
+            if let current, current.generation.rawValue > generation.rawValue {
+                return
+            }
+            current = Entry(generation: generation, websocket: newValue)
+        }
     }
 
-    func get() -> WebSocket? {
-        websocket.withLock { $0 }
+    func get(generation: ControlPlaneWebSocketState.Generation) -> WebSocket? {
+        websocket.withLock { current in
+            guard current?.generation == generation else { return nil }
+            return current?.websocket
+        }
     }
-}
 
-/// A decoded outer envelope plus the size of the WebSocket frame that carried it.
-/// The typed inner message is decoded later on the agent actor, off the event loop.
-struct InboundWebSocketFrame: Sendable {
-    let envelope: MessageEnvelope
-    let byteCount: Int
+    func clear(generation: ControlPlaneWebSocketState.Generation) {
+        websocket.withLock { current in
+            guard current?.generation == generation else { return }
+            current = nil
+        }
+    }
 }
 
 actor WebSocketClient {
@@ -72,7 +94,11 @@ actor WebSocketClient {
     // `notConnected` throw. Advisory, never a correctness gate: the socket can
     // drop between the check and the send, which is why `sendMessage` still
     // guards on it.
-    private(set) var isConnected = false
+    var isConnected: Bool {
+        guard let generation = connectionState.connectedGeneration else { return false }
+        return wsHolder.get(generation: generation) != nil
+    }
+    private var connectionState = ControlPlaneWebSocketState()
     private var heartbeatTask: Task<Void, Never>?
 
     // Ordered hand-off for inbound frames. `onText`/`onBinary` fire sequentially on the
@@ -80,16 +106,12 @@ actor WebSocketClient {
     // drains this stream and dispatches each frame onto a per-resource serial lane. This
     // replaces the previous "one detached Task per frame" model, which gave no FIFO
     // guarantee and could reorder operations for the same VM (see issue #179).
-    private let inboundContinuation: AsyncStream<InboundWebSocketFrame>.Continuation
-
-    // Distinguishes an operator-initiated disconnect (no reconnect) from an unexpected
-    // drop (triggers the agent's reconnection loop).
-    private var intentionalDisconnect = false
+    private let inboundContinuation: AsyncStream<ControlPlaneInboundFrame>.Continuation
 
     init(
         url: String, agent: Agent, logger: Logger, tlsConfiguration: TLSConfiguration? = nil,
         spiffePinning: SPIFFEPeerPinning? = nil,
-        inboundContinuation: AsyncStream<InboundWebSocketFrame>.Continuation
+        inboundContinuation: AsyncStream<ControlPlaneInboundFrame>.Continuation
     ) {
         self.url = url
         self.agent = agent
@@ -109,11 +131,8 @@ actor WebSocketClient {
         logger.info("TLS configuration updated")
     }
 
-    func connect() async throws {
+    func connect() async throws -> ControlPlaneWebSocketState.Generation {
         logger.info("Attempting to connect to WebSocket server", metadata: ["url": .string(url)])
-
-        // A fresh connection attempt is, by definition, not an intentional disconnect.
-        intentionalDisconnect = false
 
         // Parse URL
         guard let parsedURL = URL(string: url) else {
@@ -152,8 +171,16 @@ actor WebSocketClient {
         // The agent authenticates with its SPIFFE X.509 SVID over mTLS; the
         // upgrade request carries no credential headers.
         let headers = HTTPHeaders()
+        let generation = connectionState.beginConnection()
+        var connectionBecameCurrent = false
+        defer {
+            if !connectionBecameCurrent {
+                connectionState.markConnectionFailed(generation)
+            }
+        }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
             let resumed = AtomicBool(false)
             let wsHolderRef = self.wsHolder
             let loggerRef = self.logger
@@ -169,7 +196,7 @@ actor WebSocketClient {
                 let clientRef = self
 
                 // Store WebSocket in thread-safe box (still on EventLoop)
-                wsHolderRef.set(ws)
+                wsHolderRef.set(ws, generation: generation)
 
                 // Text and binary frames carry the same JSON envelope, so both
                 // decode through here. Only the outer envelope is decoded on
@@ -186,7 +213,11 @@ actor WebSocketClient {
 
                         // Preserve arrival order: hand off to the agent's ordered inbound
                         // pipeline rather than spawning an unordered per-frame Task.
-                        inboundRef.yield(InboundWebSocketFrame(envelope: envelope, byteCount: data.count))
+                        inboundRef.yield(
+                            ControlPlaneInboundFrame(
+                                envelope: envelope,
+                                generation: generation,
+                                byteCount: data.count))
                     } catch {
                         WireMessageLogger.logEnvelopeDecodingFailure(
                             direction: .inbound,
@@ -210,10 +241,12 @@ actor WebSocketClient {
 
                 ws.onClose.whenComplete { _ in
                     loggerRef.info("WebSocket connection closed")
-                    wsHolderRef.set(nil)
+                    wsHolderRef.clear(generation: generation)
                     // Bridge the event-loop callback back onto the actor to update
                     // connection state and trigger reconnection if this was unexpected.
-                    Task { await clientRef?.handleConnectionClosed() }
+                    Task {
+                        await clientRef?.handleConnectionClosed(generation: generation)
+                    }
                 }
 
                 loggerRef.info("WebSocket connection established and ready")
@@ -270,33 +303,47 @@ actor WebSocketClient {
         }
 
         // Mark as connected and start heartbeat after successful connection
-        isConnected = true
-        startHeartbeat()
+        guard connectionState.markConnected(generation),
+            wsHolder.get(generation: generation) != nil
+        else {
+            connectionState.markConnectionFailed(generation)
+            if let ws = wsHolder.get(generation: generation) {
+                try? await ws.close().get()
+            }
+            wsHolder.clear(generation: generation)
+            throw WebSocketClientError.connectionFailed(
+                "Connection was superseded before it became current")
+        }
+        startHeartbeat(generation: generation)
+        connectionBecameCurrent = true
 
         logger.info("WebSocket connect() returned - connection should stay alive")
+        return generation
+    }
+
+    func isCurrentConnection(
+        _ generation: ControlPlaneWebSocketState.Generation
+    ) -> Bool {
+        connectionState.connectedGeneration == generation
+            && wsHolder.get(generation: generation) != nil
     }
 
     func disconnect() async {
-        guard isConnected else {
-            return
-        }
+        guard let generation = connectionState.beginIntentionalDisconnect() else { return }
 
         logger.info("Disconnecting from WebSocket server")
-
-        // Mark this close as intentional so the onClose handler does not reconnect.
-        intentionalDisconnect = true
 
         // Stop heartbeat
         heartbeatTask?.cancel()
         heartbeatTask = nil
 
         // Close WebSocket
-        if let ws = wsHolder.get() {
+        if let ws = wsHolder.get(generation: generation) {
             try? await ws.close().get()
         }
 
-        wsHolder.set(nil)
-        isConnected = false
+        wsHolder.clear(generation: generation)
+        _ = connectionState.markClosed(generation)
         logger.info("Disconnected from WebSocket server")
     }
 
@@ -322,11 +369,9 @@ actor WebSocketClient {
     }
 
     func sendMessage<T: WebSocketMessage>(_ message: T) async throws {
-        guard isConnected else {
-            throw WebSocketClientError.notConnected
-        }
-
-        guard let ws = wsHolder.get() else {
+        guard let generation = connectionState.connectedGeneration,
+            let ws = wsHolder.get(generation: generation)
+        else {
             throw WebSocketClientError.notConnected
         }
 
@@ -359,26 +404,39 @@ actor WebSocketClient {
 
     /// Invoked when the underlying WebSocket closes. Tears down connection state and,
     /// unless the close was operator-initiated, asks the agent to begin reconnecting.
-    private func handleConnectionClosed() async {
-        isConnected = false
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-
-        if intentionalDisconnect {
+    private func handleConnectionClosed(
+        generation: ControlPlaneWebSocketState.Generation
+    ) async {
+        switch connectionState.markClosed(generation) {
+        case .stale:
+            logger.debug("Ignoring close callback from a superseded WebSocket connection")
+            return
+        case .intentional:
+            heartbeatTask?.cancel()
+            heartbeatTask = nil
             logger.debug("WebSocket closed intentionally; not reconnecting")
             return
+        case .unexpected:
+            heartbeatTask?.cancel()
+            heartbeatTask = nil
         }
 
         logger.warning("WebSocket closed unexpectedly; requesting reconnection")
         await agent?.handleConnectionLost()
     }
 
-    private func startHeartbeat() {
+    private func startHeartbeat(generation: ControlPlaneWebSocketState.Generation) {
+        heartbeatTask?.cancel()
         heartbeatTask = Task {
-            while !Task.isCancelled && isConnected {
+            while !Task.isCancelled && isConnected
+                && connectionState.connectedGeneration == generation
+            {
                 do {
                     // Send heartbeat every 20 seconds
                     try await Task.sleep(for: .seconds(20))
+                    guard isConnected, connectionState.connectedGeneration == generation else {
+                        return
+                    }
 
                     if let agent = agent {
                         await agent.sendHeartbeat()

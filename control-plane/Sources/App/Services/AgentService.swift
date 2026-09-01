@@ -708,9 +708,10 @@ actor AgentService {
     /// signal that says *which connection generation* is current; a replica id
     /// alone is intentionally not treated as that authority.
     func removeAgent(_ agentKey: String) async {
-        // For the same reason, do not fail captured commands from this close.
-        // A terminal frame may belong to a successor connection; the durable
-        // command deadline handles executions that are truly abandoned.
+        // Do not fail recorded commands from a socket close. The same agent
+        // process keeps their guest channels alive and re-offers authoritative
+        // state on its successor connection; the durable deadline remains the
+        // fallback for executions abandoned by an agent-process failure.
         presenceRefreshedAt.removeValue(forKey: agentKey)
         routeRefreshedAt.removeValue(forKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)

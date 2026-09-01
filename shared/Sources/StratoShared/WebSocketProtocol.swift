@@ -22,7 +22,7 @@ public enum MessageType: String, Codable, Sendable {
     case error = "error"
     case vmLog = "vm_log"
 
-    // Live streams are correlated by sessionId and ordered by the WebSocket.
+    // Live streams and recorded replay are keyed by sessionId.
     case guestExecStart = "guest_exec_start"
     case guestExecStarted = "guest_exec_started"
     case guestExecInput = "guest_exec_input"
@@ -31,6 +31,8 @@ public enum MessageType: String, Codable, Sendable {
     case guestExecExit = "guest_exec_exit"
     case guestExecClose = "guest_exec_close"
     case guestExecClosed = "guest_exec_closed"
+    case guestExecRecordedState = "guest_exec_recorded_state"
+    case guestExecRecordedAck = "guest_exec_recorded_ack"
 
     case sandboxLog = "sandbox_log"
 }

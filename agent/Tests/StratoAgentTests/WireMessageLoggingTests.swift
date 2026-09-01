@@ -39,6 +39,7 @@ struct WireMessageLoggingTests {
                     requestId: "request-guest-command",
                     resourceKind: .virtualMachine,
                     resourceId: "vm-1",
+                    sessionKind: .interactive,
                     sessionId: "exec-session-1",
                     command: ["/bin/sh", "-c", guestCommand],
                     env: ["TOKEN": guestEnvironmentSecret]),
@@ -124,6 +125,7 @@ struct WireMessageLoggingTests {
             requestId: "request-42",
             resourceKind: .sandbox,
             resourceId: "sandbox-42",
+            sessionKind: .interactive,
             sessionId: "session-42",
             command: ["/bin/true"])
         let envelope = try MessageEnvelope(message: message)
