@@ -428,16 +428,31 @@ struct UserController: RouteCollection {
     ///   credential is something its creator is accountable for, and the raw
     ///   constraint violation used to surface as a 500.
     ///
-    /// Must run inside the deletion transaction. Every volume the user
-    /// created is locked `FOR UPDATE` — the detached ones included, since
-    /// those are exactly the rows whose attachment state could otherwise flip
-    /// between this count and the delete. The SCIM count needs no lock: a
-    /// token minted concurrently is caught by the RESTRICT constraint and the
-    /// caller's `isConstraintFailure` translation.
+    /// Must run inside the deletion transaction. Two locks make the check
+    /// unskippable rather than advisory:
+    ///
+    /// * **the user row first**, because every creator-reference INSERT takes
+    ///   `FOR KEY SHARE` on it through the FK, which conflicts with
+    ///   `FOR UPDATE`. A VM create minting an attached boot volume writes a
+    ///   *new* row with `vm_id` and `created_by_id` already set, so no volume
+    ///   lock can catch it — it either commits before this lock and is
+    ///   scanned below, or waits out the transaction and fails its FK against
+    ///   the deleted row;
+    /// * **every volume the user created**, detached ones included, since
+    ///   those are exactly the rows whose attachment state could otherwise
+    ///   flip between this count and the delete — an attach commits through
+    ///   `ResourceMutation.accept`'s `FOR UPDATE` on the same row.
+    ///
+    /// The SCIM count needs no lock of its own: a token minted concurrently
+    /// now waits on the user-row lock, and the RESTRICT constraint plus the
+    /// caller's `isConstraintFailure` translation backstop it regardless.
     private func requireDeletableCreatorReferences(_ userID: UUID, on db: Database) async throws {
         guard let sql = db as? any SQLDatabase else {
             throw Abort(.internalServerError, reason: "User deletion requires a SQL database")
         }
+        _ = try await sql.raw(
+            "SELECT id FROM \(ident: User.schema) WHERE id = \(bind: userID) FOR UPDATE"
+        ).all(decodingColumn: "id", as: UUID.self)
         let volumeAttachments = try await sql.raw(
             """
             SELECT vm_id IS NOT NULL AS attached FROM volumes

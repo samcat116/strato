@@ -406,4 +406,35 @@ final class UserControllerTests: BaseTestCase {
             #expect(try await User.find(creator.id, on: app.db) == nil)
         }
     }
+
+    @Test("a mutation saved from a pre-delete snapshot does not resurrect nulled attribution")
+    func testStaleModelSaveDoesNotResurrectAttribution() async throws {
+        try await withTestApp { app in
+            try await setupCommonTestData(on: app.db)
+            let (admin, creator, project) = try await makeCreatorFixture(on: app.db)
+
+            let volume = try await TestDataBuilder(db: app.db).createVolume(
+                name: "resized-later", project: project, createdBy: creator)
+            // A second instance loaded the way a mutation handler loads one,
+            // *before* the creator disappears — its in-memory createdBy still
+            // names the soon-deleted user.
+            let snapshot = try #require(await Volume.find(volume.id, on: app.db))
+
+            try await app.test(.DELETE, "/api/users/\(creator.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: admin.token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            // Fluent updates only the properties a handler actually set after
+            // loading, so saving the stale snapshot must neither write the
+            // deleted UUID back (an FK violation) nor resurrect attribution.
+            snapshot.size = snapshot.size * 2
+            try await snapshot.save(on: app.db)
+
+            let reloaded = try #require(await Volume.find(volume.id, on: app.db))
+            #expect(reloaded.$createdBy.id == nil)
+            #expect(reloaded.size == snapshot.size)
+        }
+    }
 }
