@@ -1,0 +1,54 @@
+.claude/settings.json
+  s_e96ba4ae06c4bf::t_2e772d9cb602fb 7-48,51,56-70,74-89
+control-plane/Sources/App/Middleware/RequestLoggingMiddleware.swift
+  s_077a86d6d40679::t_4cdac78787016e 4,27-31,34-37,68-70,72-74,76-82
+  s_077a86d6d40679::t_7ee73772db2dea 42-44
+  s_077a86d6d40679::t_464e3c19b69012 71,75,83-135
+docs/deployment/logging.md
+  s_077a86d6d40679::t_4cdac78787016e 189,192-196
+  s_077a86d6d40679::t_1d01cf05cf2a89 203-205
+  s_7d1f19f0e9619e::t_5b7bc5c5531f3a 197
+docs/deployment/observability.md
+  s_077a86d6d40679::t_4cdac78787016e 443
+control-plane/Tests/AppPlatformTests/RequestLoggingMiddlewareTests.swift
+  s_077a86d6d40679::t_7ee73772db2dea 19-20,32,40,42
+  s_077a86d6d40679::t_4cdac78787016e 1-17,21-29,31,34-39,41,46-52,54-87
+  s_077a86d6d40679::t_3715b928025121 30,53
+  s_077a86d6d40679::t_c58dbbbdc5d682 33
+  s_077a86d6d40679::t_f444fd5097cb99 43-45
+  s_077a86d6d40679::t_5eed61525bcc81 18
+control-plane/Package.swift
+  s_077a86d6d40679::t_4cdac78787016e 181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "ecd475711ab7e3a8561d6679a5f1ac2b9cf5a1f4",
+  "prompts": {},
+  "sessions": {
+    "s_077a86d6d40679": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-7f59-7941-a8a0-7ac6a6126488",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7d1f19f0e9619e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1cb2e549-06ea-4795-b05f-85ff1369a7b6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
