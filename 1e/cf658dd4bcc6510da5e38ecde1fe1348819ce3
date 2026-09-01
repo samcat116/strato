@@ -1,0 +1,24 @@
+control-plane/Tests/AppPlatformTests/IdempotencyTests.swift
+  s_3c8cb79c69ff83::t_aa641260c451ec 282-304
+  s_3c8cb79c69ff83::t_0f70f7239480cd 227-233
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_3c8cb79c69ff83::t_2c0ef7b1486929 44-47
+  s_3c8cb79c69ff83::t_ac46ce12a62255 231-240,247-248
+  s_3c8cb79c69ff83::t_bc3b747f13d3b6 285-286,291-293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1ecf658dd4bcc6510da5e38ecde1fe1348819ce3",
+  "prompts": {},
+  "sessions": {
+    "s_3c8cb79c69ff83": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eec77b7e-2d11-4a9b-8f6f-5437cc9446bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
