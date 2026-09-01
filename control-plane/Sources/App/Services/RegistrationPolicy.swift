@@ -25,7 +25,7 @@ struct RegistrationPolicy: Sendable {
     static let environmentKey = "SELF_REGISTRATION_ENABLED"
 
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> RegistrationPolicy {
-        RegistrationPolicy(selfRegistrationEnabled: configuration.bool(.selfRegistrationEnabled)!)
+        RegistrationPolicy(selfRegistrationEnabled: configuration.bool(.selfRegistrationEnabled))
     }
 
     /// The effective answer for right now: the setting, or bootstrap.

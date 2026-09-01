@@ -59,9 +59,11 @@ extension StratoAgent {
         func run() async throws {
             // A bare `LoggingSystem.bootstrap` rather than `launchAgent`'s: this
             // command must not install signal handlers or read agent config.
+            let baseLoggingMetadata = AgentLoggingMetadata.base()
             LoggingSystem.bootstrap { label in
                 var handler = StreamLogHandler.standardError(label: label)
                 handler.logLevel = .warning
+                handler.metadata = baseLoggingMetadata
                 return handler
             }
 

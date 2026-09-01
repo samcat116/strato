@@ -41,18 +41,13 @@ struct ImageDownloadMTLSTests {
     /// (issue #562). The route serves an agent only images it holds a grant
     /// for, so every success path here needs one.
     private func grantImage(app: Application, agentName: String, image: Image) async throws {
-        let agent = Agent(
-            name: agentName,
+        let agent = try await TestDataBuilder(db: app.db).createAgent(
+            named: agentName,
             hostname: "\(agentName).test",
-            version: "1.0.0",
-            status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 1 << 33, availableMemory: 1 << 33,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            )
-        )
-        try await agent.save(on: app.db)
+                totalDisk: 1 << 40, availableDisk: 1 << 40))
         await app.coordination.grantImageDownload(agentId: agent.id!.uuidString, imageId: image.id!)
     }
 
@@ -258,7 +253,7 @@ struct ImageDownloadMTLSTests {
 /// Like the agent WebSocket suites' running-app harness, plus a temp-directory
 /// object store so download responses have real bytes to stream.
 private func withRunningImageApp(_ test: (Application, Int) async throws -> Void) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         let tempStorage = NSTemporaryDirectory() + "strato-dl-mtls-tests-" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: tempStorage, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: tempStorage) }

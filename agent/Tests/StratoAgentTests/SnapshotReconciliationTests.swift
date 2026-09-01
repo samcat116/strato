@@ -103,11 +103,12 @@ struct SnapshotReconciliationTests {
         parent: UUID = UUID(),
         status: DesiredSnapshotStatus = .present,
         generation: Int64 = 1,
+        volumeStorage: DesiredVolumeStorage? = nil,
         export: DesiredSnapshotExport? = nil
     ) -> DesiredSnapshotState {
         DesiredSnapshotState(
             snapshotId: id, kind: kind, parentId: parent, desiredStatus: status,
-            generation: generation, export: export)
+            generation: generation, volumeStorage: volumeStorage, export: export)
     }
 
     private static func present(
@@ -210,6 +211,64 @@ struct SnapshotReconciliationTests {
 
         #expect(await actuator.performed.map(\.0) == [.delete])
         #expect(await actuator.artifacts[id.uuidString] == nil)
+    }
+
+    @Test("A replacement Ceph client deletes a snapshot without a local record")
+    func absentCephSnapshotWithoutRecordStillDeletes() async {
+        let id = UUID()
+        let clusterId = UUID()
+        let credentialId = UUID()
+        let storage = DesiredVolumeStorage.ceph(
+            CephVolumeStorage(
+                clusterId: clusterId, fsid: UUID().uuidString, pool: "volumes",
+                namespace: "project-a", clientName: "client.strato-project-a",
+                monEndpoints: ["v2:mon.example:3300"], credentialId: credentialId,
+                keyring: "[client.strato-project-a]\nkey = secret", messengerMode: .secure))
+        let actuator = MockSnapshotActuator()
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync([
+                Self.entry(
+                    id, kind: .volumeSnapshot, status: .absent, generation: 2,
+                    volumeStorage: storage)
+            ]))
+
+        // The item is visible as in-flight before the delete has completed;
+        // report assembly therefore emits present=false progress instead of
+        // prematurely confirming deletion by omission.
+        var sawInFlight = false
+        for _ in 0..<50 {
+            if await reconciler.inFlightWorkloads(kind: .volumeSnapshot)[id.uuidString] == 2 {
+                sawInFlight = true
+                break
+            }
+            await Task.yield()
+        }
+        try? await Task.sleep(for: .milliseconds(50))
+
+        let performedSteps = await actuator.performed.map(\.0)
+        #expect(sawInFlight || performedSteps == [.delete])
+        #expect(performedSteps == [.delete])
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volumeSnapshot) == 2)
+    }
+
+    @Test("A missing local snapshot remains already absent")
+    func absentLocalSnapshotWithoutRecordDoesNotDelete() async {
+        let id = UUID()
+        let actuator = MockSnapshotActuator()
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync([
+                Self.entry(
+                    id, kind: .volumeSnapshot, status: .absent, generation: 2,
+                    volumeStorage: .local)
+            ]))
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(await actuator.performed.isEmpty)
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volumeSnapshot) == 2)
     }
 
     /// STR-98's contract, inherited whole: an artifact the sync does not list is

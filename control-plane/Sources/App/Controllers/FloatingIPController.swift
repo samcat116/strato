@@ -535,16 +535,8 @@ struct FloatingIPController: RouteCollection {
         do {
             try await req.db.transaction { db in
                 try await floatingIP.save(on: db)
-                switch try await DesiredStateGenerationWriter.advance(
-                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
-                {
-                case .applied:
-                    break
-                case .missing:
-                    throw Abort(.notFound, reason: "Network no longer exists")
-                case .superseded:
-                    throw Abort(.internalServerError, reason: "Network generation did not advance")
-                }
+                try await DesiredStateGenerationWriter.advanceOrThrow(
+                    schema: LogicalNetwork.schema, id: try network.requireID(), resource: "Network", on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "Interface already has a floating IP attached")
@@ -559,7 +551,7 @@ struct FloatingIPController: RouteCollection {
             metadata: [
                 "floatingIpId": .string(floatingIP.id!.uuidString),
                 "address": .string(floatingIP.address),
-                "vmId": .string(vmID.uuidString),
+                "strato.vm.id": .string(vmID.uuidString),
                 "interfaceId": .string(interfaceId.uuidString),
             ])
         return try FloatingIPResponse(from: floatingIP, interface: interface)
@@ -589,16 +581,8 @@ struct FloatingIPController: RouteCollection {
         try await req.db.transaction { db in
             try await floatingIP.save(on: db)
             if let network {
-                switch try await DesiredStateGenerationWriter.advance(
-                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
-                {
-                case .applied:
-                    break
-                case .missing:
-                    throw Abort(.notFound, reason: "Network no longer exists")
-                case .superseded:
-                    throw Abort(.internalServerError, reason: "Network generation did not advance")
-                }
+                try await DesiredStateGenerationWriter.advanceOrThrow(
+                    schema: LogicalNetwork.schema, id: try network.requireID(), resource: "Network", on: db)
             }
         }
 
@@ -678,16 +662,8 @@ struct FloatingIPController: RouteCollection {
         do {
             try await req.db.transaction { db in
                 try await floatingIP.save(on: db)
-                switch try await DesiredStateGenerationWriter.advance(
-                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
-                {
-                case .applied:
-                    break
-                case .missing:
-                    throw Abort(.notFound, reason: "Network no longer exists")
-                case .superseded:
-                    throw Abort(.internalServerError, reason: "Network generation did not advance")
-                }
+                try await DesiredStateGenerationWriter.advanceOrThrow(
+                    schema: LogicalNetwork.schema, id: try network.requireID(), resource: "Network", on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "Load balancer already has a floating IP attached")

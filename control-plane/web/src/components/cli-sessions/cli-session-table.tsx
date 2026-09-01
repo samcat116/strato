@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import {
@@ -28,7 +30,7 @@ export function CLISessionTable({ sessions, isLoading }: CLISessionTableProps) {
 
   const handleRevoke = async (session: CLISession) => {
     if (
-      !window.confirm(
+      !await confirmAction(
         `Revoke CLI session "${session.clientName}"? The CLI will be signed out immediately and must log in again.`
       )
     ) {

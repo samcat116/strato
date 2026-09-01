@@ -34,11 +34,16 @@ separate hosts.
   ports are needed on the hypervisor
 
 The enrollment install script (below) installs everything else the agent
-needs: QEMU (`qemu-system-x86`, `qemu-utils`), libvirt (11.5+),
+needs: QEMU (`qemu-system-x86`, `qemu-utils`), the client-only Ceph RBD tools
+(`ceph-common`), libvirt (11.5+),
 OVN/OVS chassis packages (`ovn-host`, `openvswitch-switch`), and
 swtpm/OVMF for Windows guests. Hypervisors run only the OVN chassis side;
 the per-site NB/SB/northd central runs separately (see
 `deploy/ovn-central/`).
+
+Libvirt 11.5 is the local-disk QEMU floor. QEMU with project-namespaced RBD
+needs libvirt 11.6+; Firecracker clients that map RBD through krbd do not need
+libvirt.
 
 #### macOS (development only)
 
@@ -165,10 +170,8 @@ VMs run on agents — Linux hosts with KVM.
 2. Run the generated bootstrap command on the hypervisor host:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-     | sudo bash -s -- --control-plane-url 'wss://your-control-plane/agent/ws' \
-     --agent-name 'hv-01' --spire-join-token '...' \
-     --spire-server-address '...' --trust-domain '...'
+   curl -fsSL https://your-control-plane/api/agent-enrollments/install \
+     | sudo bash -s -- 'enroll_v1_...'
    ```
 
 That one command installs the agent and its host dependencies, attests the

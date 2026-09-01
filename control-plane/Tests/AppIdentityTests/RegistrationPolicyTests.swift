@@ -78,7 +78,7 @@ final class RegistrationPolicyTests: BaseTestCase {
 
     @Test("an empty deployment reports bootstrap, whatever the setting")
     func testBootstrapReported() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
             try await app.test(.GET, "/api/public/registration") { res in
@@ -92,7 +92,7 @@ final class RegistrationPolicyTests: BaseTestCase {
 
     @Test("once a user exists the disabled setting takes effect")
     func testDisabledOnceUsersExist() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
@@ -107,7 +107,7 @@ final class RegistrationPolicyTests: BaseTestCase {
 
     @Test("the default deployment reports registration open")
     func testEnabledByDefault() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: true)
 
@@ -126,7 +126,7 @@ final class RegistrationPolicyTests: BaseTestCase {
     /// attacker would call.
     @Test("register is refused when self-registration is disabled")
     func testRegisterForbiddenWhenDisabled() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
@@ -141,7 +141,7 @@ final class RegistrationPolicyTests: BaseTestCase {
     /// admin who could invite anyone, so the first account is always allowed.
     @Test("the first account may be created even when disabled")
     func testBootstrapAccountAllowedWhenDisabled() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
             try await register(app, username: "first", expect: .ok)
@@ -158,7 +158,7 @@ final class RegistrationPolicyTests: BaseTestCase {
 
     @Test("register still works when self-registration is enabled")
     func testRegisterAllowedWhenEnabled() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: true)
 
@@ -177,7 +177,7 @@ final class RegistrationPolicyTests: BaseTestCase {
     /// *disabled* gate, and each land as a system admin.
     @Test("concurrent bootstrap registrations produce exactly one account")
     func testConcurrentBootstrapRegistrationsSerialize() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 
             let attempts = 8
@@ -203,7 +203,7 @@ final class RegistrationPolicyTests: BaseTestCase {
     /// to come before the conflict check, so taken and free names look alike.
     @Test("refusal does not reveal whether a username is taken")
     func testDisabledDoesNotLeakExistingUsernames() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             app.registrationPolicy = RegistrationPolicy(selfRegistrationEnabled: false)
 

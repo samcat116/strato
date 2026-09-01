@@ -27,16 +27,9 @@ struct IAMNode: Content, Hashable, Sendable {
     }
 }
 
-/// The IAM-relevant attributes of the node a walk started from, read off the
-/// row the walk already loaded to find its parent.
-///
-/// Every one of these used to cost a second `find` of the same row further
-/// down the check (`GuardrailStore.resourceEnvironment` and the slice loader's
-/// network attributes both re-fetched the leaf). Harvesting them here is what
-/// makes the walk the *only* read of the leaf — and it puts the "which types
-/// carry an environment" question in one place: a new resource type with an
-/// `environment` column that forgets to fill this in silently falls out of
-/// every environment ceiling, so it is answered where the row is in hand.
+/// IAM-relevant attributes captured while the walk loads the leaf row. New
+/// resource types with an `environment` column must populate this value or they
+/// will fall outside environment ceilings.
 struct IAMLeafFacts: Sendable, Equatable {
     /// The leaf's `environment` column, for the types that store one. Nil for
     /// the types that genuinely have none (environment is an attribute, never

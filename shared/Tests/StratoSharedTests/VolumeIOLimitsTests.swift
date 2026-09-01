@@ -80,6 +80,7 @@ struct VolumeIOLimitsTests {
             """
         let decoded = try decodeJSON(DesiredVolumeState.self, from: json)
         #expect(decoded.ioLimits == nil)
+        #expect(decoded.storage == .local)
         #expect(decoded.sizeBytes == 10_737_418_240)
     }
 

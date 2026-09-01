@@ -123,6 +123,34 @@ api() { # api <method> <path> [json-body]
 
 jget() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" 2>/dev/null; }
 
+redeem_agent_enrollment() { # redeem_agent_enrollment <enroll_v1 token>
+  local token="$1"
+  curl -sS --fail-with-body -X POST \
+    -H "Authorization: Bearer $token" \
+    -H 'Accept: application/vnd.strato.agent-bootstrap.v1' \
+    "${ORIGIN}/api/agent-enrollments/bootstrap"
+}
+
+bootstrap_value() { # bootstrap_value <agentName|joinToken|trustDomain>
+  local field="$1"
+  python3 -c '
+import base64
+import binascii
+import sys
+
+indexes = {"agentName": 2, "joinToken": 3, "trustDomain": 5}
+lines = sys.stdin.read().splitlines()
+if len(lines) != 7 or lines[0] != "STRATO_AGENT_BOOTSTRAP_V1":
+    raise SystemExit("invalid Strato agent bootstrap bundle")
+try:
+    index = indexes[sys.argv[1]]
+    value = base64.b64decode(lines[index], validate=True).decode("utf-8")
+except (KeyError, ValueError, UnicodeDecodeError, binascii.Error) as error:
+    raise SystemExit(f"invalid Strato agent bootstrap value: {error}")
+print(value)
+' "$field"
+}
+
 should_stop() { [[ "$STOP_AFTER" == "$1" ]]; }
 
 # --- --down --------------------------------------------------------------------
@@ -275,8 +303,19 @@ if [[ "$(agent_count)" == "0" ]]; then
   enroll="$(api POST /api/agent-enrollments \
     "{\"agentName\":\"$AGENT_NAME\",\"siteId\":\"$SITE_ID\",\"organizationId\":\"$ORG_ID\",\"expirationHours\":24}")" \
     || die "enrollment request failed: $enroll"
-  JOIN_TOKEN="$(jget "d['spire']['joinToken']" <<<"$enroll")"
-  [[ -n "$JOIN_TOKEN" ]] || { echo "$enroll" | head -c 400; die "enrollment returned no join token"; }
+  bootstrap_token="$(jget "d['bootstrapToken']" <<<"$enroll")" \
+    || die "enrollment response did not contain a bootstrap token"
+  [[ -n "$bootstrap_token" ]] || die "enrollment returned an empty bootstrap token"
+  bootstrap="$(redeem_agent_enrollment "$bootstrap_token")" \
+    || die "bootstrap-token redemption failed"
+  bootstrap_agent_name="$(bootstrap_value agentName <<<"$bootstrap")" \
+    || die "bootstrap response did not contain a valid agent name"
+  [[ "$bootstrap_agent_name" == "$AGENT_NAME" ]] \
+    || die "bootstrap response named '$bootstrap_agent_name', expected '$AGENT_NAME'"
+  JOIN_TOKEN="$(bootstrap_value joinToken <<<"$bootstrap")" \
+    || die "bootstrap response did not contain a valid join token"
+  TRUST_DOMAIN="$(bootstrap_value trustDomain <<<"$bootstrap")" \
+    || die "bootstrap response did not contain a valid trust domain"
 
   mkdir -p "$RUN_DIR" || die "cannot write $RUN_DIR"
 

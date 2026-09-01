@@ -246,9 +246,9 @@ extension VolumeSnapshot: SnapshotArtifactResource {
     /// stops moving, so arming it here would re-run the check on every report and
     /// start destroying snapshots because their volume diverged.
     ///
-    /// Enforcement stays at admission, which is why `reserveVolumeSnapshot`
-    /// checks the parent volume's *whole* size rather than the overlay's: a
-    /// snapshot cannot be admitted unless the pool could absorb it fully grown.
+    /// Enforcement stays at admission, where the parent volume's *whole* size
+    /// is reserved rather than the overlay's: a snapshot cannot be admitted
+    /// unless the pool could absorb it fully grown.
     var storageQuotaScope: (projectID: UUID, environment: String)? { nil }
 
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VolumeSnapshot] {

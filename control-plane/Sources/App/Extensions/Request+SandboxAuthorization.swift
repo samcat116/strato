@@ -13,12 +13,6 @@ extension Request {
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the sandbox
     ///   does not exist, `.forbidden` if the user lacks `action` on it.
     func authorizedSandbox(_ sandboxID: UUID, action: String) async throws -> Sandbox {
-        guard let sandbox = try await Sandbox.find(sandboxID, on: db) else {
-            throw Abort(.notFound)
-        }
-
-        try await authorize(action, on: IAMNode(type: .sandbox, id: sandboxID))
-
-        return sandbox
+        try await authorizedResource(sandboxID, as: Sandbox.self, nodeType: .sandbox, action: action)
     }
 }

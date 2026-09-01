@@ -35,7 +35,6 @@ final class VMMutableMetadataTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let store = InMemoryCoordinationStore()
             app.coordination = CoordinationService(store: store, logger: app.logger)
@@ -65,23 +64,13 @@ final class VMMutableMetadataTests {
     private func registerAgent(
         app: Application, project: Project, organizationID: UUID
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: "mutable-metadata-agent",
-            hostname: "mutable-metadata-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40),
-            hypervisors: [
-                HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-            ],
-            protocolVersion: WireProtocol.currentVersion)
         let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
-        return try await app.agentService.registerAgent(
-            message, agentName: message.agentId, siteID: siteID,
-            organizationScope: .organization(organizationID)
-        ).uuidString
+        return try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: "mutable-metadata-agent",
+            hostname: "mutable-metadata-host",
+            siteID: siteID,
+            organizationScope: .organization(organizationID))
     }
 
     private func attachBootVolume(app: Application, vm: VM, agentID: String) async throws {

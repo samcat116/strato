@@ -331,6 +331,11 @@ struct SiteController: RouteCollection {
                 .conflict,
                 reason: "Site has \(poolCount) floating IP pool(s) pinned to it; move or delete them first")
         }
+        let cephClusterCount = try await CephCluster.query(on: req.db)
+            .filter(\.$site.$id == siteId).count()
+        guard cephClusterCount == 0 else {
+            throw Abort(.conflict, reason: "Site has a registered Ceph cluster; remove it first")
+        }
 
         try await site.delete(on: req.db)
         return .noContent
@@ -380,9 +385,8 @@ struct SiteController: RouteCollection {
         // Changing site while the agent hosts VMs is the same hazard the
         // removal path guards: the old site's controller scopes its networks
         // by current membership, so networks referenced only by this agent's
-        // still-running VMs would drop out of the old shared NB. (A site-less
-        // agent's VMs live in its private local NB, which the new site's
-        // shared deployment won't contain either.) Require a drain first.
+        // still-running VMs would drop out of the old shared NB. Require a
+        // drain first.
         if agent.$site.id != targetSiteId {
             let hostedVMs = try await VM.query(on: req.db)
                 .filter(\.$hypervisorId == agentId.uuidString)

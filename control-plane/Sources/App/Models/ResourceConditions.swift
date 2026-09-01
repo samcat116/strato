@@ -79,7 +79,9 @@ struct ResourceConditions: Content, Equatable {
 
     /// Why a resource is not converging, and since when.
     struct Degraded: Content, Equatable {
-        /// The agent's error from the failed attempt, verbatim.
+        /// The agent's error from the failed attempt, or a control-plane
+        /// projection error that prevented this generation from reaching the
+        /// agent.
         let reason: String
         /// The generation whose convergence produced `reason`. Compare with
         /// `targetGeneration` to tell a failure of the state currently being
@@ -202,6 +204,18 @@ extension VM: TimestampedConvergenceObservable {}
 extension Sandbox: TimestampedConvergenceObservable {}
 extension Volume: ConvergenceObservable {}
 
+/// A control-plane projection failure cannot ride the agent-owned convergence
+/// columns: the agent is still reporting against its last successful sync and
+/// would clear them on its next heartbeat. VMs are currently the only resource
+/// family whose assembler can reject one entry independently.
+protocol DesiredStateAssemblyFailureObservable: AnyObject {
+    var desiredStateAssemblyError: String? { get set }
+    var desiredStateAssemblyErrorGeneration: Int64? { get set }
+    var desiredStateAssemblyErrorAt: Date? { get set }
+}
+
+extension VM: DesiredStateAssemblyFailureObservable {}
+
 /// A resource whose `conditions` block and `isConverged` predicate are one
 /// derivation over one set of columns.
 ///
@@ -229,14 +243,16 @@ protocol ConvergenceDerived: ConvergenceObservable {
 extension ConvergenceDerived {
     /// Derived on read — the client-facing answer to "is this mutation done?".
     var conditions: ResourceConditions {
-        ResourceConditions(
+        let assemblyFailure = self as? any DesiredStateAssemblyFailureObservable
+        return ResourceConditions(
             targetGeneration: generation,
             observedGeneration: observedGeneration,
             desiredSatisfied: desiredSatisfied,
             phase: convergencePhase,
-            lastError: lastError,
-            failedGeneration: failedGeneration,
-            lastErrorAt: (self as? any TimestampedConvergenceObservable)?.lastErrorAt
+            lastError: assemblyFailure?.desiredStateAssemblyError ?? lastError,
+            failedGeneration: assemblyFailure?.desiredStateAssemblyErrorGeneration ?? failedGeneration,
+            lastErrorAt: assemblyFailure?.desiredStateAssemblyErrorAt
+                ?? (self as? any TimestampedConvergenceObservable)?.lastErrorAt
         )
     }
 
@@ -455,6 +471,9 @@ extension VM: ConvergingResource {
         lastError = committed.lastError
         failedGeneration = committed.failedGeneration
         lastErrorAt = committed.lastErrorAt
+        desiredStateAssemblyError = committed.desiredStateAssemblyError
+        desiredStateAssemblyErrorGeneration = committed.desiredStateAssemblyErrorGeneration
+        desiredStateAssemblyErrorAt = committed.desiredStateAssemblyErrorAt
         divergenceDetectedAt = committed.divergenceDetectedAt
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
@@ -503,6 +522,9 @@ extension Volume: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .volume }
     var projectID: UUID { $project.id }
     func placementAgentIDs(on db: any Database) async throws -> [String] {
+        if try await VolumeService.pool(of: self, on: db)?.mode == .ceph {
+            return reconcilerAgentId.map { [$0] } ?? []
+        }
         if desiredStatus == .absent {
             return try await VolumeService.agentIDsWithPhysicalReplicas(of: self, on: db)
         }
@@ -532,6 +554,13 @@ extension Volume: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         observedSizeBytes = committed.observedSizeBytes
         finalizers = committed.finalizers
+        // Canonical RBD attachment and Ceph execution ownership are written
+        // by observed-state application and reachability failover. Every API
+        // mutation saves the whole Fluent model after taking this lock, so it
+        // must adopt both or a request snapshot can overwrite a racing report
+        // or move the reconciler back to an unavailable host.
+        diskAttachment = committed.diskAttachment
+        reconcilerAgentId = committed.reconcilerAgentId
         // The desired size, for the same read-modify-write reason as the
         // attachment below: `accept` saves the whole model, so an attach or a
         // throttle accepted while a resize commits would write its pre-request

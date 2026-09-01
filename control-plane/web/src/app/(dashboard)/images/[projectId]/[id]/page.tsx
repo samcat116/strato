@@ -1,4 +1,4 @@
-import ImageDetailPage from "../../detail/page";
+import { ImageDetailPage } from "@/components/images/image-detail-page";
 
 export default async function ImagePage({
   params,

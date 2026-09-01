@@ -1,5 +1,8 @@
 import Foundation
+import HTTPTypes
+import OpenAPIRuntime
 import StratoAPIClient
+import Synchronization
 import Testing
 
 @testable import StratoCLICore
@@ -29,6 +32,41 @@ struct StratoClientTests {
             for: "test")
         return StratoClient.authenticated(
             serverURL: baseURL, contextName: "test", credentialStore: store, transport: transport)
+    }
+
+    @Test("Mutation middleware generates one key and preserves an explicit caller key")
+    func testMutationIdempotencyKey() async throws {
+        let header = HTTPField.Name("Idempotency-Key")!
+        let captured = Mutex<[HTTPRequest]>([])
+        let middleware = IdempotencyKeyMiddleware()
+        let next:
+            @concurrent @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (
+                HTTPResponse, HTTPBody?
+            ) = { request, _, _ in
+                captured.withLock { $0.append(request) }
+                return (HTTPResponse(status: .accepted), nil)
+            }
+
+        _ = try await middleware.intercept(
+            HTTPRequest(method: .post, scheme: nil, authority: nil, path: "/api/vms"),
+            body: HTTPBody(Data(#"{"name":"db"}"#.utf8)),
+            baseURL: baseURL,
+            operationID: "createVM",
+            next: next)
+
+        var explicit = HTTPRequest(
+            method: .delete, scheme: nil, authority: nil, path: "/api/vms/one")
+        explicit.headerFields[header] = "command-invocation-key"
+        _ = try await middleware.intercept(
+            explicit,
+            body: nil,
+            baseURL: baseURL,
+            operationID: "deleteVM",
+            next: next)
+
+        let requests = captured.withLock { $0 }
+        #expect(UUID(uuidString: requests[0].headerFields[header] ?? "") != nil)
+        #expect(requests[1].headerFields[header] == "command-invocation-key")
     }
 
     @Test("Sends bearer token, builds the operation's path, and decodes the response")

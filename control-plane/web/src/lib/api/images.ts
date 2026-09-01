@@ -6,8 +6,9 @@ import type {
   Image,
   ArtifactKind,
   CreateImageRequest,
+  ImageUploadForm,
   UpdateImageRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const imagesApi = {
   list(projectId: string, signal?: AbortSignal): Promise<Image[]> {
@@ -35,7 +36,7 @@ export const imagesApi = {
   async upload(
     projectId: string,
     file: File,
-    metadata: Omit<CreateImageRequest, "sourceURL">,
+    metadata: Omit<ImageUploadForm, "file" | "name"> & { name: string },
     onProgress?: (progress: number) => void
   ): Promise<Image> {
     const formData = new FormData();

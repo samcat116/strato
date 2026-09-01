@@ -110,14 +110,8 @@ struct VolumeAttachProjectContainmentTests {
                 try req.content.encode(
                     AttachVolumeRequest(vmId: vm.id!, deviceName: nil, bootOrder: nil, readonly: nil))
             } afterResponse: { res in
-                // Pin the *specific* success, not merely the absence of the
-                // containment message: an attach that clears every guard is
-                // accepted (STR-148 — there is no in-band agent dispatch left to
-                // fail, so this used to be a 500 from `agentNotFound`).
-                // Asserting only that the containment reason is missing would
-                // still pass if a refactor moved some earlier-firing check ahead
-                // of the guard — any such check answers 400/403/404/409 and
-                // fails here.
+                // Pin the specific success, not merely the absence of the
+                // containment message: any earlier guard failure must fail here.
                 #expect(res.status == .accepted)
                 #expect(!res.body.string.contains("belongs to a different project"))
             }

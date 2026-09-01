@@ -283,7 +283,7 @@ public struct AgentConfig {
     ]
 
     public let controlPlaneURL: String
-    public let logLevel: String?
+    public let logLevel: AgentLogLevel?
     public let networkMode: NetworkMode?
     public let ovnEncapIP: String?
     public let ovnEncapType: String?
@@ -447,7 +447,7 @@ public struct AgentConfig {
 
     private init(
         controlPlaneURL: String,
-        logLevel: String? = nil,
+        logLevel: AgentLogLevel? = nil,
         networkMode: NetworkMode? = nil,
         ovnEncapIP: String? = nil,
         ovnEncapType: String? = nil,
@@ -595,7 +595,16 @@ public struct AgentConfig {
             throw AgentConfigError.missingRequiredField("control_plane_url")
         }
 
-        let logLevel = try await values.string("log_level")
+        let logLevel: AgentLogLevel?
+        if let configuredLogLevel = try await values.string("log_level") {
+            do {
+                logLevel = try AgentLogLevel(parsing: configuredLogLevel)
+            } catch {
+                throw AgentConfigError.invalidConfiguration(error.localizedDescription)
+            }
+        } else {
+            logLevel = nil
+        }
         let networkModeString = try await values.string("network_mode")
         let ovnEncapIP = try await values.string("ovn_encap_ip")
         let ovnEncapType = try await values.string("ovn_encap_type")
@@ -1132,7 +1141,7 @@ public struct AgentConfig {
         let defaults = builtinDefaults
         let defaultValues: [AbsoluteConfigKey: ConfigValue] = [
             "control_plane_url": ConfigValue(.string(defaults.controlPlaneURL), isSecret: false),
-            "log_level": ConfigValue(.string(defaults.logLevel ?? "info"), isSecret: false),
+            "log_level": ConfigValue(.string(defaults.logLevel?.rawValue ?? "info"), isSecret: false),
             "network_mode": ConfigValue(
                 .string(defaults.networkMode?.rawValue ?? NetworkMode.user.rawValue), isSecret: false),
             "enable_hvf": ConfigValue(.bool(defaults.enableHVF ?? false), isSecret: false),
@@ -1163,7 +1172,7 @@ public struct AgentConfig {
         #endif
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            logLevel: "info",
+            logLevel: .info,
             networkMode: networkMode,
             enableHVF: enableHVF,
             enableKVM: enableKVM,

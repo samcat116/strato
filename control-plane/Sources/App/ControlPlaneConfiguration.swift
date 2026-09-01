@@ -87,7 +87,9 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
     case rateLimitTrustedProxyHops = "RATE_LIMIT_TRUSTED_PROXY_HOPS"
     case auditRetentionDays = "AUDIT_RETENTION_DAYS"
     case auditMaxQueueDepth = "AUDIT_MAX_QUEUE_DEPTH"
+    case auditMaxQueueBytes = "AUDIT_MAX_QUEUE_BYTES"
     case auditMaxBatchSize = "AUDIT_MAX_BATCH_SIZE"
+    case auditMaxBatchBytes = "AUDIT_MAX_BATCH_BYTES"
     case iamDecisionLogRetentionDays = "IAM_DECISION_LOG_RETENTION_DAYS"
     case iamDecisionLogMaxQueueDepth = "IAM_DECISION_LOG_MAX_QUEUE_DEPTH"
     case iamDecisionLogMaxBatchSize = "IAM_DECISION_LOG_MAX_BATCH_SIZE"
@@ -122,7 +124,9 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .rateLimitTrustedProxyHops: 1
         case .auditRetentionDays: nil
         case .auditMaxQueueDepth, .iamDecisionLogMaxQueueDepth: 2048
+        case .auditMaxQueueBytes: 64 * 1_024 * 1_024
         case .auditMaxBatchSize, .iamDecisionLogMaxBatchSize: 128
+        case .auditMaxBatchBytes: 8 * 1_024 * 1_024
         case .iamDecisionLogRetentionDays: 30
         case .webhookDeliveryIntervalSeconds: 15
         case .webhookAutoDisableDays: 3
@@ -131,7 +135,7 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .guestIdentityJWTTTL: 300
         case .guestIdentityJWTMaxTTL: 3600
         case .ssfPollIntervalSeconds: 60
-        case .sandboxRetentionHours: AgentService.defaultSandboxRetentionHours
+        case .sandboxRetentionHours: AgentMaintenanceLoop.defaultSandboxRetentionHours
         case .snapshotDefaultTTLSeconds: nil
         }
     }
@@ -149,7 +153,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .rateLimitAuthMax, .rateLimitAuthWindow, .rateLimitAPIMax, .rateLimitAPIWindow,
             .rateLimitFailureThreshold, .rateLimitFailureBaseDelay, .rateLimitFailureMaxDelay,
             .rateLimitFailureWindow, .rateLimitTrustedProxyHops, .auditMaxQueueDepth,
-            .auditMaxBatchSize, .iamDecisionLogMaxQueueDepth, .iamDecisionLogMaxBatchSize,
+            .auditMaxQueueBytes, .auditMaxBatchSize, .auditMaxBatchBytes,
+            .iamDecisionLogMaxQueueDepth, .iamDecisionLogMaxBatchSize,
             .webhookDeliveryIntervalSeconds, .webhookAutoDisableDays, .spireSVIDTTL,
             .spireIssuanceWindowHours, .guestIdentityJWTTTL, .guestIdentityJWTMaxTTL,
             .ssfPollIntervalSeconds:
@@ -234,6 +239,7 @@ enum ControlPlaneStringKey: String, CaseIterable, Sendable {
     case ssfTransmitterAllowedSuffixes = "SSF_TRANSMITTER_ALLOWED_SUFFIXES"
     case ssfCallbackBaseURL = "SSF_CALLBACK_BASE_URL"
     case stratoSecretEncryptionKey = "STRATO_SECRET_ENCRYPTION_KEY"
+    case stratoSecretEncryptionKeysPrevious = "STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS"
     case iamDecisionLogMaxConcurrency = "IAM_DECISION_LOG_MAX_CONCURRENCY"
     case iamSymCCSolverPath = "IAM_SYMCC_SOLVER_PATH"
 
@@ -267,7 +273,8 @@ enum ControlPlaneStringKey: String, CaseIterable, Sendable {
             .spireServerAPIAddress, .spireServerPublicAddress, .spiffeEndpointSocket,
             .spiffeJWTAudience, .spireMetricsPrometheusURL, .guestIdentityAudiences,
             .ssfTransmitterAllowedHosts, .ssfTransmitterAllowedSuffixes, .ssfCallbackBaseURL,
-            .stratoSecretEncryptionKey, .iamDecisionLogMaxConcurrency, .iamSymCCSolverPath:
+            .stratoSecretEncryptionKey, .stratoSecretEncryptionKeysPrevious,
+            .iamDecisionLogMaxConcurrency, .iamSymCCSolverPath:
             nil
         }
     }
@@ -292,7 +299,7 @@ enum ControlPlaneStringKey: String, CaseIterable, Sendable {
         switch self {
         case .databasePassword, .valkeyPassword, .sessionValkeyPassword,
             .imageS3AccessKeyID, .imageS3SecretAccessKey, .imageS3SessionToken,
-            .stratoSecretEncryptionKey:
+            .stratoSecretEncryptionKey, .stratoSecretEncryptionKeysPrevious:
             true
         default:
             false
@@ -371,7 +378,9 @@ struct ControlPlaneConfiguration: Sendable {
         do {
             let key = ControlPlaneIntKey.databaseMigrationStatementTimeoutMS
             let explicit = try await reader.fetchInt(forKey: ConfigKey(key.rawValue.lowercased()))
-            let resolved = explicit ?? key.defaultValue(normalStatementTimeout: normalStatementTimeout)!
+            let resolved =
+                explicit ?? key.defaultValue(normalStatementTimeout: normalStatementTimeout)
+                ?? normalStatementTimeout
             if let range = key.validRange, !range.contains(resolved) {
                 throw ControlPlaneConfigurationError.invalidValue(
                     key: key.rawValue,
@@ -446,10 +455,60 @@ struct ControlPlaneConfiguration: Sendable {
         )
     }
 
-    func bool(_ key: ControlPlaneBoolKey) -> Bool? { booleans[key] }
-    func int(_ key: ControlPlaneIntKey) -> Int? { integers[key] }
-    func double(_ key: ControlPlaneDoubleKey) -> Double { numbers[key]! }
+    func bool(_ key: ControlPlaneBoolKey) -> Bool {
+        guard let value = booleans[key] else {
+            preconditionFailure("\(key.rawValue) has no default; use optionalBool(_:)")
+        }
+        return value
+    }
+
+    func optionalBool(_ key: ControlPlaneBoolKey) -> Bool? { booleans[key] }
+
+    func int(_ key: ControlPlaneIntKey) -> Int {
+        guard let value = integers[key] else {
+            preconditionFailure("\(key.rawValue) has no default; use optionalInt(_:)")
+        }
+        return value
+    }
+
+    func optionalInt(_ key: ControlPlaneIntKey) -> Int? { integers[key] }
+
+    func double(_ key: ControlPlaneDoubleKey) -> Double {
+        guard let value = numbers[key] else {
+            preconditionFailure("Missing resolved value for \(key.rawValue)")
+        }
+        return value
+    }
+
     func string(_ key: ControlPlaneStringKey) -> String? { strings[key] }
+
+    func requiredString(_ key: ControlPlaneStringKey) -> String {
+        guard let value = strings[key] else {
+            preconditionFailure("\(key.rawValue) has no default; use string(_:)")
+        }
+        return value
+    }
+
+    var schedulingStrategy: SchedulingStrategy {
+        guard let value = SchedulingStrategy(rawValue: requiredString(.schedulingStrategy)) else {
+            preconditionFailure("SCHEDULING_STRATEGY escaped startup validation")
+        }
+        return value
+    }
+
+    var imageStorageBackend: ImageObjectStoreFactory.Backend {
+        guard let value = ImageObjectStoreFactory.Backend(rawValue: requiredString(.imageStorageBackend)) else {
+            preconditionFailure("IMAGE_STORAGE_BACKEND escaped startup validation")
+        }
+        return value
+    }
+
+    var databaseTLSMode: DatabaseTLSMode {
+        guard let value = DatabaseTLSMode(rawValue: requiredString(.databaseTLS)) else {
+            preconditionFailure("DATABASE_TLS escaped startup validation")
+        }
+        return value
+    }
 
     /// Returns the resolved value only when the environment supplied this key,
     /// preserving call-site fallbacks that must not be activated by a default.

@@ -362,7 +362,7 @@ struct VolumeAttachmentTests {
             try await volume.save(on: app.db)
             let generationBefore = volume.generation
 
-            await app.agentService.sweepStrandedVolumeAttachments()
+            await app.agentMaintenance.sweepStrandedVolumeAttachments()
 
             let swept = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.deviceName == nil)
@@ -384,7 +384,7 @@ struct VolumeAttachmentTests {
                 on: app, user: admin, project: project)
             let generationBefore = volume.generation
 
-            await app.agentService.sweepStrandedVolumeAttachments()
+            await app.agentMaintenance.sweepStrandedVolumeAttachments()
 
             let swept = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.deviceName == "disk0")

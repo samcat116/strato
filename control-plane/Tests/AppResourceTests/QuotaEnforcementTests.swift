@@ -27,7 +27,7 @@ final class QuotaEnforcementTests {
         var networkName: String? = nil
     }
 
-    private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
+    private static func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
 
     /// Boots a configured app with a member user (currentOrganization set), org,
     /// project, and a ready image, ready to POST /api/vms.
@@ -37,7 +37,6 @@ final class QuotaEnforcementTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "quotauser", email: "quota@example.com")
@@ -147,9 +146,11 @@ final class QuotaEnforcementTests {
                 name: "dept", maxVCPUs: 4, ou: eng)
 
             // A create that fits is reserved against the ancestor quota.
-            try await QuotaEnforcementService.reserve(
-                for: project, environment: "development",
-                vcpus: 3, memory: gb(2), storage: gb(10), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserve(
+                    for: project, environment: "development",
+                    vcpus: 3, memory: Self.gb(2), storage: Self.gb(10), on: transaction)
+            }
             let afterReserve = try await ResourceQuota.find(engQuota.id, on: app.db)!
             #expect(afterReserve.reservedVCPUs == 3)
             #expect(afterReserve.vmCount == 1)
@@ -159,9 +160,11 @@ final class QuotaEnforcementTests {
 
             // The next create would push the department past its 4-vCPU cap → rejected.
             await #expect(throws: Abort.self) {
-                try await QuotaEnforcementService.reserve(
-                    for: project, environment: "development",
-                    vcpus: 3, memory: gb(1), storage: gb(1), on: app.db)
+                try await app.db.transaction { transaction in
+                    try await QuotaEnforcementService.reserve(
+                        for: project, environment: "development",
+                        vcpus: 3, memory: Self.gb(1), storage: Self.gb(1), on: transaction)
+                }
             }
         }
     }
@@ -198,9 +201,11 @@ final class QuotaEnforcementTests {
             let projQuota = try await builder.createResourceQuota(
                 name: "proj", maxVCPUs: 10, project: project)
 
-            try await QuotaEnforcementService.reserve(
-                for: project, environment: "development",
-                vcpus: 3, memory: gb(4), storage: gb(20), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserve(
+                    for: project, environment: "development",
+                    vcpus: 3, memory: Self.gb(4), storage: Self.gb(20), on: transaction)
+            }
 
             let refreshedOrg = try await ResourceQuota.find(orgQuota.id, on: app.db)!
             let refreshedProj = try await ResourceQuota.find(projQuota.id, on: app.db)!
@@ -219,9 +224,11 @@ final class QuotaEnforcementTests {
                 name: "tight", maxVCPUs: 2, project: project)
 
             await #expect(throws: Abort.self) {
-                try await QuotaEnforcementService.reserve(
-                    for: project, environment: "development",
-                    vcpus: 4, memory: gb(1), storage: gb(1), on: app.db)
+                try await app.db.transaction { transaction in
+                    try await QuotaEnforcementService.reserve(
+                        for: project, environment: "development",
+                        vcpus: 4, memory: Self.gb(1), storage: Self.gb(1), on: transaction)
+                }
             }
         }
     }
@@ -236,9 +243,11 @@ final class QuotaEnforcementTests {
                 name: "tight", maxVCPUs: 1, project: project)
 
             await #expect(throws: Abort.self) {
-                try await QuotaEnforcementService.reserve(
-                    for: project, environment: "development",
-                    vcpus: 4, memory: gb(1), storage: gb(1), on: app.db)
+                try await app.db.transaction { transaction in
+                    try await QuotaEnforcementService.reserve(
+                        for: project, environment: "development",
+                        vcpus: 4, memory: Self.gb(1), storage: Self.gb(1), on: transaction)
+                }
             }
 
             // The roomy org quota must be untouched: the tight project quota failed
@@ -259,9 +268,11 @@ final class QuotaEnforcementTests {
             try await quota.save(on: app.db)
 
             // vcpus(4) exceeds max(1) but the quota is disabled → no throw.
-            try await QuotaEnforcementService.reserve(
-                for: project, environment: "development",
-                vcpus: 4, memory: gb(1), storage: gb(1), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserve(
+                    for: project, environment: "development",
+                    vcpus: 4, memory: Self.gb(1), storage: Self.gb(1), on: transaction)
+            }
 
             let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(refreshed.reservedVCPUs == 4)
@@ -282,9 +293,11 @@ final class QuotaEnforcementTests {
 
             // vmB is created under the quota. reserve resyncs to real usage (vmA) then
             // adds vmB, so the counters reflect both once vmB's row exists.
-            try await QuotaEnforcementService.reserve(
-                for: project, environment: "development",
-                vcpus: 2, memory: gb(2), storage: gb(10), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserve(
+                    for: project, environment: "development",
+                    vcpus: 2, memory: Self.gb(2), storage: Self.gb(10), on: transaction)
+            }
             _ = try await builder.createVM(name: "b", project: project)  // cpu 2
 
             let afterReserve = try await ResourceQuota.find(quota.id, on: app.db)!
@@ -294,7 +307,9 @@ final class QuotaEnforcementTests {
             // Deleting vmA must not drag vmB's reservation down with it: a blind
             // decrement of vmA's 2 vCPUs would erase vmB and drop the count to zero.
             try await vmA.delete(on: app.db)
-            try await QuotaEnforcementService.release(for: vmA, on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.release(for: vmA, on: transaction)
+            }
 
             let afterDelete = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(afterDelete.reservedVCPUs == 2)  // vmB preserved
@@ -311,13 +326,15 @@ final class QuotaEnforcementTests {
             let quota = try await builder.createResourceQuota(
                 name: "shared", maxVCPUs: 10, project: project)
 
-            try await QuotaEnforcementService.reserveSandbox(
-                for: project, environment: "development",
-                vcpus: 3, memory: gb(4), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserveSandbox(
+                    for: project, environment: "development",
+                    vcpus: 3, memory: Self.gb(4), on: transaction)
+            }
 
             let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(refreshed.reservedVCPUs == 3)
-            #expect(refreshed.reservedMemory == gb(4))
+            #expect(refreshed.reservedMemory == Self.gb(4))
             // Sandboxes reserve no storage and must not consume a VM slot.
             #expect(refreshed.reservedStorage == 0)
             #expect(refreshed.vmCount == 0)
@@ -337,15 +354,19 @@ final class QuotaEnforcementTests {
 
             // 2 (VM) + 3 (sandbox) exceeds the shared pool of 4.
             await #expect(throws: Abort.self) {
-                try await QuotaEnforcementService.reserveSandbox(
-                    for: project, environment: "development",
-                    vcpus: 3, memory: gb(1), on: app.db)
+                try await app.db.transaction { transaction in
+                    try await QuotaEnforcementService.reserveSandbox(
+                        for: project, environment: "development",
+                        vcpus: 3, memory: Self.gb(1), on: transaction)
+                }
             }
 
             // A sandbox that fits the remaining 2 vCPUs is admitted.
-            try await QuotaEnforcementService.reserveSandbox(
-                for: project, environment: "development",
-                vcpus: 2, memory: gb(1), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserveSandbox(
+                    for: project, environment: "development",
+                    vcpus: 2, memory: Self.gb(1), on: transaction)
+            }
         }
     }
 
@@ -358,21 +379,27 @@ final class QuotaEnforcementTests {
             quota.maxSandboxes = 1
             try await quota.save(on: app.db)
 
-            try await QuotaEnforcementService.reserveSandbox(
-                for: project, environment: "development",
-                vcpus: 1, memory: gb(1), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserveSandbox(
+                    for: project, environment: "development",
+                    vcpus: 1, memory: Self.gb(1), on: transaction)
+            }
             _ = try await builder.createSandbox(name: "first", project: project)
 
             await #expect(throws: Abort.self) {
-                try await QuotaEnforcementService.reserveSandbox(
-                    for: project, environment: "development",
-                    vcpus: 1, memory: gb(1), on: app.db)
+                try await app.db.transaction { transaction in
+                    try await QuotaEnforcementService.reserveSandbox(
+                        for: project, environment: "development",
+                        vcpus: 1, memory: Self.gb(1), on: transaction)
+                }
             }
 
             // The sandbox limit must not affect VM admission.
-            try await QuotaEnforcementService.reserve(
-                for: project, environment: "development",
-                vcpus: 1, memory: gb(1), storage: gb(1), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserve(
+                    for: project, environment: "development",
+                    vcpus: 1, memory: Self.gb(1), storage: Self.gb(1), on: transaction)
+            }
         }
     }
 
@@ -387,13 +414,15 @@ final class QuotaEnforcementTests {
             let quota = try await builder.createResourceQuota(
                 name: "late", maxVCPUs: 100, project: project)
 
-            try await QuotaEnforcementService.reserve(
-                for: project, environment: "development",
-                vcpus: 2, memory: gb(2), storage: gb(10), on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.reserve(
+                    for: project, environment: "development",
+                    vcpus: 2, memory: Self.gb(2), storage: Self.gb(10), on: transaction)
+            }
 
             let refreshed = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(refreshed.reservedVCPUs == 3)  // sandbox 1 + VM 2
-            #expect(refreshed.reservedMemory == gb(3))
+            #expect(refreshed.reservedMemory == Self.gb(3))
             #expect(refreshed.vmCount == 1)
             #expect(refreshed.sandboxCount == 1)
         }
@@ -410,14 +439,18 @@ final class QuotaEnforcementTests {
             let sandbox = try await builder.createSandbox(name: "goes", project: project)  // 1 cpu
 
             // Bring the counters up to date with both workloads.
-            try await QuotaEnforcementService.release(for: vm, on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.release(for: vm, on: transaction)
+            }
             let before = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(before.reservedVCPUs == 3)
             #expect(before.vmCount == 1)
             #expect(before.sandboxCount == 1)
 
             try await sandbox.delete(on: app.db)
-            try await QuotaEnforcementService.release(for: sandbox, on: app.db)
+            try await app.db.transaction { transaction in
+                try await QuotaEnforcementService.release(for: sandbox, on: transaction)
+            }
 
             let after = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(after.reservedVCPUs == 2)  // the VM's reservation survives
@@ -446,7 +479,7 @@ final class QuotaEnforcementTests {
                 try req.content.encode(
                     CreateSandboxBody(
                         name: "too-big", image: "ghcr.io/acme/worker:v1",
-                        projectId: project.id, cpus: 8, memory: gb(1)))
+                        projectId: project.id, cpus: 8, memory: Self.gb(1)))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
                 // Same frontend contract as VMs: the reason must contain "quota".
@@ -476,7 +509,7 @@ final class QuotaEnforcementTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "too-big", imageId: image.id, projectId: project.id,
-                        environment: "development", cpu: 8, memory: gb(2), disk: gb(10),
+                        environment: "development", cpu: 8, memory: Self.gb(2), disk: Self.gb(10),
                         networkName: "default"))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
@@ -508,7 +541,7 @@ final class QuotaEnforcementTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "fits", imageId: image.id, projectId: project.id,
-                        environment: "development", cpu: 2, memory: gb(4), disk: gb(20),
+                        environment: "development", cpu: 2, memory: Self.gb(4), disk: Self.gb(20),
                         networkName: "default"))
             } afterResponse: { res in
                 // Creation is asynchronous (issue #259): the endpoint commits the
@@ -521,8 +554,8 @@ final class QuotaEnforcementTests {
 
             let afterCreate = try await ResourceQuota.find(quota.id, on: app.db)!
             #expect(afterCreate.reservedVCPUs == 2)
-            #expect(afterCreate.reservedMemory == gb(4))
-            #expect(afterCreate.reservedStorage == gb(20))
+            #expect(afterCreate.reservedMemory == Self.gb(4))
+            #expect(afterCreate.reservedStorage == Self.gb(20))
             #expect(afterCreate.vmCount == 1)
             #expect(afterCreate.volumeCount == 1)
 

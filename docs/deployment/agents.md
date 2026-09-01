@@ -23,7 +23,7 @@ configured for SPIRE (see [Enrolling a node](#enrolling-a-node)).
 | --- | --- |
 | OS | Linux with systemd and KVM. Ubuntu 26.04 or another distribution shipping libvirt 11.5+; **Ubuntu 24.04 is not supported** (libvirt 10.0.0) |
 | libvirt | **11.5.0 or newer**, with `qemu:///system` reachable |
-| Packages | `qemu-utils`, `qemu-system-<arch>`, `ovmf`/`qemu-efi-aarch64`, `libvirt-daemon-system`, `libvirt-clients`, `swtpm`, `swtpm-tools`, plus `ovn-host`/`openvswitch-switch` for SDN networking |
+| Packages | `qemu-utils`, `ceph-common`, `qemu-system-<arch>`, `ovmf`/`qemu-efi-aarch64`, `libvirt-daemon-system`, `libvirt-clients`, `swtpm`, `swtpm-tools`, plus `ovn-host`/`openvswitch-switch` for SDN networking |
 
 The [install script](#one-command-install) installs and configures all of it.
 
@@ -36,6 +36,13 @@ node that looks healthy but fails every checkpoint, so both the installer's
 preflight and the agent's own check the version and say so up front. The agent's
 check is **gating**: a node below the floor reports `.qemu` as unavailable
 rather than accepting VMs it cannot fully serve.
+
+**Ceph QEMU requires 11.6.** The 11.5 floor remains sufficient for QEMU VMs
+backed by local disks. A project-scoped RBD namespace is encoded as
+`pool/namespace/image`, which libvirt supports from 11.6, so an agent with a
+reachable 11.5 daemon does not advertise Ceph-volume placement. A
+Firecracker/krbd-only agent may advertise Ceph without libvirt; krbd maps the
+same namespaced image directly and does not pass through libvirt.
 
 **libvirt configuration.** The agent owns every path under `/var/lib/strato`,
 and libvirt's QEMU driver would otherwise run QEMU as `libvirt-qemu:kvm` and
@@ -93,10 +100,10 @@ curl -X POST https://strato.example.com/api/agent-enrollments \
   -d '{"agentName": "hv-01", "organizationId": "<uuid>", "siteId": "<uuid>"}'
 ```
 
-The control plane provisions the node in SPIRE — a one-time **join token**
-for `spire-agent` node attestation and a **workload registration entry**
-entitling the node's `strato-agent` to its SPIFFE ID — and returns a
-`bootstrapCommand`: a single copy-paste line to run on the new host.
+The control plane prepares the node's **workload registration entry** in SPIRE
+and returns a `bootstrapCommand`: a single copy-paste line containing one
+short-lived enrollment token. The host exchanges that token for every
+server-selected value and a fresh one-time SPIRE join token.
 
 - `GET /api/agent-enrollments` lists enrollments; `DELETE
   /api/agent-enrollments/:id` revokes one, removing its SPIRE entries.
@@ -118,36 +125,42 @@ entitling the node's `strato-agent` to its SPIFFE ID — and returns a
   `{"networkControllerAgentId": "<agentId>"}` designates one. VM placement,
   VM start and site-pinned network creation refuse loudly in that state
   rather than accepting work that would never converge.
-- The join token is a one-time secret shown **once**, at creation time. It
-  is redeemed the first time `spire-agent` attests and is inert afterwards.
+- The enrollment token is shown **once** and stored only as a hash. Its first
+  successful exchange atomically consumes it before minting one SPIRE join
+  token, so a replay cannot create a second node credential. The installer
+  caches that winning bundle in root-only state so the same host can resume a
+  partial install without asking the control plane for another credential.
 - Enrollment fails if the control plane has no SPIRE server configured.
   There is no fallback: see [mTLS (SPIFFE/SPIRE)](#mtls-spiffe-spire) for
   the required settings.
+- Enrollments created before the one-token flow are not silently converted:
+  the control plane never stored enough secret material to reconstruct a
+  bootstrap bearer. A previously copied long command remains usable until its
+  original expiry; otherwise revoke and recreate the enrollment.
 
 ## One-command install
 
-The `bootstrapCommand` from the enrollment above is the install script,
-pre-filled:
+The `bootstrapCommand` from the enrollment above has one input:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-  | sudo bash -s -- \
-  --control-plane-url 'wss://strato.example.com/agent/ws' \
-  --agent-name 'hv-01' \
-  --spire-join-token '...' \
-  --spire-server-address 'strato.example.com:8085' \
-  --trust-domain 'strato.local'
+curl -fsSL https://strato.example.com/api/agent-enrollments/install \
+  | sudo bash -s -- 'enroll_v1_...'
 ```
 
-All five flags are required. `--agent-name` must match the name the
-enrollment was created for — the control plane resolves the enrollment row
-by name, and names are restricted to ASCII letters, digits, `-`, `_`, and
-`.`. `--control-plane-url` is the agent WebSocket endpoint, always `wss://`
-in a SPIRE deployment since Envoy terminates mTLS in front of it.
+The first exchange stores the winning bootstrap bundle at
+`/var/lib/strato/enrollment-bootstrap-v1` with mode `0600`. Rerunning the same
+command on that host reuses the original SPIRE join token; another host cannot
+use the consumed bearer and needs a newly created enrollment.
+
+The wrapper binds the command to the control-plane web origin, downloads the
+versioned installer, and exchanges the opaque token for the agent name,
+WebSocket endpoint, SPIRE address, trust domain, control-plane SPIFFE ID, and
+one-time SPIRE join token. The host no longer supplies or derives those values.
 
 On a fresh Linux host with nothing installed, it downloads the `strato-agent`
 and `spire-agent` binaries, installs the host dependencies (QEMU and libvirtd,
-swtpm for guest TPMs, and OVN/OVS for SDN networking), configures
+the client-only `ceph-common` RBD tools, swtpm for guest TPMs, and OVN/OVS for
+SDN networking), configures
 `/etc/libvirt/qemu.conf` for the agent's account and enables the libvirt socket,
 attests the node to SPIRE with the join token, writes `/etc/strato/config.toml`,
 brings up host telemetry, and enables `strato-agent.service` so the node
@@ -535,10 +548,12 @@ VM's spec — being what libvirt starts when the VM boots:
   persistent libvirt definition has changed, so the following start uses the
   requested count.
 
-Two host packages change what a node can be asked to run rather than how it
-runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
+Three host packages change what a node can be asked to run rather than how it
+runs: `ovmf` (the signed EDK2 firmware Secure Boot needs), `swtpm` (which
 backs guest TPM 2.0 devices — libvirt starts and supervises it per domain, so
-the agent never launches it itself). Without them the node stays registered and
+the agent never launches it itself), and `ceph-common` (the `rbd` client and
+krbd map/unmap frontend for external Ceph pools). `ceph-common` runs no Ceph
+daemon on the agent. Without them the node stays registered and
 useful, it simply never receives a placement that requires those features —
 see [Windows Guests](/guide/windows-guests).
 
@@ -582,22 +597,20 @@ Enrollment requires the control plane to have access to the SPIRE server
 registration API (`SPIRE_ENABLED=true` plus `SPIRE_SERVER_API_ADDRESS`,
 e.g. `unix:///run/spire/server/api.sock` on a shared socket volume);
 without it, `POST /api/agent-enrollments` fails. Creating an enrollment
-provisions the node in SPIRE:
+prepares the durable SPIRE workload grant:
 
-- a one-time **join token** for `spire-agent` node attestation, bound to
-  the stable node identity `spiffe://<trust-domain>/node/<name>`, and
 - a **workload registration entry** entitling the node's `strato-agent`
   to `spiffe://<trust-domain>/agent/<name>` (selectors configurable via
   `SPIRE_AGENT_SELECTORS`, default `unix:uid:0`).
 
 The API response (and the UI dialog) then includes a ready-to-paste
-bootstrap command that curls
-[`deploy/agent/install.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/install.sh)
-with the SPIRE flags: it downloads the `strato-agent` and `spire-agent`
-binaries, writes the spire-agent config, waits for the Workload API
-socket, starts the agent, and brings up host telemetry — one command per
-new hypervisor node. The join token is shown exactly once, at creation
-time.
+bootstrap command carrying only a hashed-at-rest enrollment bearer. The public
+wrapper downloads
+[`deploy/agent/install.sh`](https://github.com/samcat116/strato/blob/main/deploy/agent/install.sh),
+which exchanges that bearer for the server-owned configuration and a one-time
+join token, writes the spire-agent config, waits for the Workload API socket,
+starts the agent, and brings up host telemetry — one command per new
+hypervisor node.
 
 ### Host telemetry (Alloy)
 

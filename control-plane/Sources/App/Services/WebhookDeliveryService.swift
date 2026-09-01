@@ -66,12 +66,12 @@ final class WebhookDeliveryService: Sendable {
     init(app: Application) {
         self.app = app
         self.logger = app.logger
-        self.sweepIntervalSeconds = app.controlPlaneConfiguration.int(.webhookDeliveryIntervalSeconds)!
-        self.autoDisableDays = app.controlPlaneConfiguration.int(.webhookAutoDisableDays)!
+        self.sweepIntervalSeconds = app.controlPlaneConfiguration.int(.webhookDeliveryIntervalSeconds)
+        self.autoDisableDays = app.controlPlaneConfiguration.int(.webhookAutoDisableDays)
     }
 
     private var sweepEnabled: Bool {
-        app.controlPlaneConfiguration.bool(.webhookDeliveryEnabled)!
+        app.controlPlaneConfiguration.bool(.webhookDeliveryEnabled)
     }
 
     /// Backoff before attempt `attempt + 1`, doubling from 30s and capped at
@@ -229,11 +229,45 @@ final class WebhookDeliveryService: Sendable {
         }
 
         let now = Date()
+        let signingSecret: String
+        do {
+            signingSecret = try app.secretsEncryption.decrypt(subscription.signingSecret)
+        } catch let error as SecretsEncryptionError where error.isMissingKeyConfiguration {
+            // The control plane, not the customer's endpoint, is blocked. Keep
+            // the delivery pending without consuming an attempt or touching the
+            // subscription failure streak; the next sweep resumes by itself
+            // after the operator restores the key.
+            delivery.responseStatus = nil
+            delivery.lastError = error.reason
+            delivery.nextAttemptAt = now.addingTimeInterval(
+                Self.backoffSeconds(afterAttempts: 1))
+            try? await delivery.save(on: db)
+            logger.error(
+                "Webhook delivery blocked by secrets-encryption configuration",
+                metadata: [
+                    "deliveryId": .string(deliveryID.uuidString),
+                    "subscriptionId": .string(delivery.$subscription.id.uuidString),
+                    "error": .string(error.reason),
+                ])
+            return
+        } catch {
+            // Malformed ciphertext is durable row corruption, not a missing-key
+            // configuration fault. Keep ordinary failure visibility/accounting.
+            delivery.attempts += 1
+            delivery.lastAttemptAt = now
+            delivery.responseStatus = nil
+            try? await recordFailure(
+                delivery, subscriptionID: delivery.$subscription.id,
+                error: String("\(error)".prefix(500)), at: now, on: db)
+            return
+        }
+
         delivery.attempts += 1
         delivery.lastAttemptAt = now
 
         do {
-            let statusCode = try await post(delivery, subscription: subscription)
+            let statusCode = try await post(
+                delivery, subscription: subscription, signingSecret: signingSecret)
             delivery.responseStatus = statusCode
             if (200..<300).contains(statusCode) {
                 delivery.status = WebhookDeliveryStatus.succeeded.rawValue
@@ -268,11 +302,14 @@ final class WebhookDeliveryService: Sendable {
     }
 
     /// POST the frozen payload, returning the endpoint's HTTP status.
-    private func post(_ delivery: WebhookDelivery, subscription: WebhookSubscription) async throws -> Int {
-        let secret = try app.secretsEncryption.decrypt(subscription.signingSecret)
+    private func post(
+        _ delivery: WebhookDelivery,
+        subscription: WebhookSubscription,
+        signingSecret: String
+    ) async throws -> Int {
         let timestamp = Int(Date().timeIntervalSince1970)
         let signature = Self.signature(
-            payload: delivery.payload, timestamp: timestamp, secret: secret)
+            payload: delivery.payload, timestamp: timestamp, secret: signingSecret)
 
         var headers = HTTPHeaders()
         headers.add(name: "Content-Type", value: "application/json")

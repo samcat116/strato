@@ -283,7 +283,7 @@ public enum DomainXMLBuilder {
 
         let spec = input.spec
         let machine = spec.effectiveMachine
-        let hotplugBytes = MemoryHotplugPlan.alignedHotplugBytes(
+        let hotplugBytes = QEMUMemoryReservation.alignedHotplugBytes(
             spec: spec, architecture: input.architecture)
         let totalMemoryBytes = spec.memoryBytes + hotplugBytes
         // A spec decoded straight off the wire is not guaranteed to have
@@ -731,7 +731,7 @@ public enum DomainXMLBuilder {
             devices.append(
                 memoryDeviceNode(
                     sizeBytes: hotplugBytes,
-                    blockBytes: MemoryHotplugPlan.blockBytes(architecture: input.architecture),
+                    blockBytes: QEMUMemoryReservation.blockBytes(architecture: input.architecture),
                     requestedBytes: 0))
         }
 
@@ -823,7 +823,7 @@ public enum DomainXMLBuilder {
     public static func reservedHotplugPortCount(_ input: DomainXMLInput) -> Int {
         spareHotplugPortIndexes(
             input,
-            hotplugBytes: MemoryHotplugPlan.alignedHotplugBytes(
+            hotplugBytes: QEMUMemoryReservation.alignedHotplugBytes(
                 spec: input.spec, architecture: input.architecture)
         ).count
     }
@@ -877,19 +877,38 @@ public enum DomainXMLBuilder {
             driverFormat = DiskFormat.raw.rawValue
             source = DomainXMLNode("source", [("dev", path)])
             authentication = nil
-        case .rbd(let pool, let image, let user, let monHosts):
+        case .rbd(
+            let pool, let image, let namespace, let user, let monEndpoints, _,
+            let credentialId, let configPath):
             diskType = "network"
             driverFormat = DiskFormat.raw.rawValue
             var networkSource = DomainXMLNode(
-                "source", [("protocol", "rbd"), ("name", "\(pool)/\(image)")])
-            for monitor in monHosts {
+                "source",
+                [
+                    // Libvirt 11.6 added the three-component RBD image
+                    // specification used for non-default namespaces. There is
+                    // no RBD `namespace` source attribute (that spelling is
+                    // reserved for other network storage protocols), so Ceph
+                    // capability observation gates reachable libvirt 11.5
+                    // hosts out before this document can be scheduled there.
+                    ("protocol", "rbd"), ("name", "\(pool)/\(namespace)/\(image)"),
+                ])
+            for monitor in monEndpoints {
                 networkSource.append(rbdMonitorNode(monitor))
             }
+            // The config enforces msgr2 secure mode. The secret UUID is the
+            // project-scoped credential id, deterministically defined on every
+            // client agent before libvirt sees this document.
+            networkSource.append(DomainXMLNode("config", [("file", configPath)]))
             source = networkSource
             authentication =
                 DomainXMLNode(
                     "auth", [("username", user)],
-                    children: [DomainXMLNode("secret", [("type", "ceph"), ("usage", user)])])
+                    children: [
+                        DomainXMLNode(
+                            "secret",
+                            [("type", "ceph"), ("uuid", credentialId.uuidString.lowercased())])
+                    ])
         }
 
         var disk = DomainXMLNode("disk", [("type", diskType), ("device", "disk")])
@@ -930,6 +949,7 @@ public enum DomainXMLBuilder {
     /// Bracketed IPv6 and the common host:port spelling are split; an unbracketed
     /// IPv6 address remains a host with no invented port.
     private static func rbdMonitorNode(_ endpoint: String) -> DomainXMLNode {
+        let endpoint = endpoint.hasPrefix("v2:") ? String(endpoint.dropFirst(3)) : endpoint
         if endpoint.hasPrefix("["), let closing = endpoint.firstIndex(of: "]") {
             let name = String(endpoint[endpoint.index(after: endpoint.startIndex)..<closing])
             let remainder = endpoint[endpoint.index(after: closing)...]

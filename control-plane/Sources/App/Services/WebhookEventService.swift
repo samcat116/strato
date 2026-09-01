@@ -171,13 +171,6 @@ enum WebhookEvents {
 
     // MARK: - Operation completion (the chokepoint sources)
 
-    // There were three sources; there are two. `enqueueOperationCompletion`
-    // hung off `ResourceOperation.completeIfPending` and went with it
-    // (STR-152). The two below are the same guarantee moved to where the
-    // outcome is now decided — a resource's convergence, and the finalizer
-    // reap — and both still commit their outbox row in the transaction that
-    // writes the transition, which is what makes the event fire exactly once.
-
     /// Enqueue `operation.completed`/`operation.failed` for a lifecycle
     /// mutation whose outcome is now settled by the resource's own conditions
     /// (ADR 0001 stage 4, STR-147).

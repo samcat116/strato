@@ -211,6 +211,17 @@ struct ProjectsAPIService: APIProtocol {
             throw Abort(.conflict, reason: "Cannot delete project with sandboxes. Delete sandboxes first.")
         }
 
+        let cephAccessCount = try await CephProjectAccess.query(on: req.db)
+            .filter(\.$project.$id == projectID)
+            .count()
+        if cephAccessCount > 0 {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Cannot delete project with Ceph storage access. Delete its Ceph volumes and project access first."
+            )
+        }
+
         // IAM dual-write (issue #477): bindings have no FK to the nodes they
         // protect, so drop the project node's bindings with the row — and the
         // roles it owns (issue #605), which would otherwise be bindable
@@ -234,6 +245,16 @@ struct ProjectsAPIService: APIProtocol {
             // it. `vms.project_id` being RESTRICT backstops the *workload*
             // race below; nothing backstops this one, and closing it needs the
             // project row locked rather than merely read.
+            let cephAccessCount = try await CephProjectAccess.query(on: db)
+                .filter(\.$project.$id == projectID)
+                .count()
+            guard cephAccessCount == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Cannot delete project with Ceph storage access. Delete its Ceph volumes and project access first."
+                )
+            }
             try await ResourceBindingCleanup.revokeBindings(forDeletedProject: projectID, on: db)
 
             // A security group's owner-side FK cascades its rules, but a
@@ -264,8 +285,10 @@ struct ProjectsAPIService: APIProtocol {
             } catch let error as any DatabaseError where error.isConstraintFailure {
                 throw Abort(
                     .conflict,
-                    reason: "Cannot delete project: a VM or sandbox was created in it. "
-                        + "Delete or move its workloads first.")
+                    reason:
+                        "Cannot delete project: a VM, sandbox, or Ceph storage access was created in it. "
+                        + "Delete or move its workloads and remove Ceph project access first."
+                )
             }
             try await QuotaEnforcementService.resyncAndSaveReservations(
                 projectWideAncestorQuotas, on: db)
@@ -731,6 +754,16 @@ struct ProjectsAPIService: APIProtocol {
         to destination: ProjectDestination,
         on db: any Database
     ) async throws {
+        let cephAccessCount = try await CephProjectAccess.query(on: db)
+            .filter(\.$project.$id == projectID)
+            .count()
+        guard cephAccessCount == 0 else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Cannot transfer project with Ceph storage access. Delete its Ceph volumes and project access first."
+            )
+        }
         try await QuotaEnforcementService.lockProjectNetworkMutations(
             for: project, on: db)
         let sourceQuotas = try await QuotaEnforcementService.applicableProjectWideQuotas(

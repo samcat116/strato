@@ -44,9 +44,18 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     ) async throws -> VMNetworkInfo {
         logger.info(
             "Creating VM network with user-mode networking",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
-        let macAddress = config.macAddress ?? generateMACAddress()
+        let macAddress: String
+        if let configuredMAC = config.macAddress {
+            guard let parsedMAC = MACAddress(configuredMAC) else {
+                throw NetworkError.invalidConfiguration(
+                    "MAC address '\(configuredMAC)' is not a six-octet unicast address")
+            }
+            macAddress = parsedMAC.description
+        } else {
+            macAddress = generateMACAddress()
+        }
 
         // User-mode networking provides automatic DHCP: VMs get addresses in the
         // 10.0.2.0/24 range from QEMU's SLIRP, so no IP is allocated (or honored)
@@ -55,7 +64,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             vmId: vmId,
             networkName: config.networkName,
             portName: "user-\(vmId)-\(nicIndex)",
-            portUUID: nil,  // Not applicable for user-mode networking
+            portUUID: nil,
             attachment: .userMode,
             macAddress: macAddress,
             ipAddress: nil
@@ -64,7 +73,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         logger.info(
             "VM network created with user-mode networking",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "macAddress": .string(macAddress),
             ])
 
@@ -74,7 +83,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     func detachVMFromNetwork(vmId: String, nicIndex: Int, placement: NICPlacement) async throws {
         logger.info(
             "Detaching VM from user-mode network",
-            metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
+            metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
     }
 
     func reconcileNetworks(
@@ -109,7 +118,6 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     }
 
     private func generateMACAddress() -> String {
-        // Generate a unique MAC address with collision detection
         // Use QEMU's OUI (52:54:00) for better compatibility
         var macAddress: String
         var attempts = 0

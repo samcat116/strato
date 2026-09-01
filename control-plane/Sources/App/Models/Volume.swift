@@ -157,6 +157,18 @@ final class Volume: Model, @unchecked Sendable {
     @OptionalField(key: "attached_agent_id")
     var attachedAgentId: String?
 
+    /// Canonical shared-storage descriptor reported by the Ceph reconciler.
+    /// Local pools keep per-copy descriptors on `VolumeReplica`; Ceph has no
+    /// physical placement row for the control plane to mirror.
+    @OptionalField(key: "disk_attachment")
+    var diskAttachment: DiskAttachment?
+
+    /// The one Ceph client that executes this volume's lifecycle operations.
+    /// This is deliberately not data placement: any reachable site client may
+    /// attach the RBD image, and ownership can move without moving bytes.
+    @OptionalField(key: "reconciler_agent_id")
+    var reconcilerAgentId: String?
+
     // VM attachment (null when detached)
     @OptionalParent(key: "vm_id")
     var vm: VM?
@@ -229,6 +241,8 @@ final class Volume: Model, @unchecked Sendable {
         status: VolumeStatus = .creating,
         createdByID: UUID,
         poolID: UUID? = nil,
+        diskAttachment: DiskAttachment? = nil,
+        reconcilerAgentId: String? = nil,
         sourceImageID: UUID? = nil,
         sourceVolumeID: UUID? = nil
     ) {
@@ -248,6 +262,8 @@ final class Volume: Model, @unchecked Sendable {
         self.finalizers = []
         self.$createdBy.id = createdByID
         self.$pool.id = poolID
+        self.diskAttachment = diskAttachment
+        self.reconcilerAgentId = reconcilerAgentId
         if let sourceImageID = sourceImageID {
             self.$sourceImage.id = sourceImageID
         }
@@ -419,14 +435,16 @@ extension Volume {
 struct CreateVolumeRequest: Content, ValidatedRequestBody {
     var name: String
     let description: String?
-    /// Required: there is no default project (issue #1059). Optional here so
-    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
-    /// rather than a `Codable` decode failure that names neither.
+    /// Required by project resolution; optional at decode time so the API can
+    /// return a useful error.
     let projectId: UUID?
     /// Which of the project's environments the volume's bytes are charged to
     /// (STR-181). Omitted takes the project's default, exactly as VM and sandbox
     /// create do.
     let environment: String?
+    /// Omit for the seeded default local pool; existing clients retain exactly
+    /// their historical placement behavior.
+    let poolId: UUID?
     let sizeGB: Int  // Size in GB for user convenience
     let format: String?  // "qcow2" or "raw", defaults to qcow2
     let volumeType: String?  // "boot" or "data", defaults to data
@@ -434,6 +452,24 @@ struct CreateVolumeRequest: Content, ValidatedRequestBody {
     /// Absolute I/O ceilings (STR-19). Omit for uncapped.
     let iopsTotal: Int64?
     let bpsTotal: Int64?
+
+    init(
+        name: String, description: String?, projectId: UUID?, environment: String?,
+        sizeGB: Int, format: String?, volumeType: String?, sourceImageId: UUID?,
+        iopsTotal: Int64?, bpsTotal: Int64?, poolId: UUID? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.projectId = projectId
+        self.environment = environment
+        self.poolId = poolId
+        self.sizeGB = sizeGB
+        self.format = format
+        self.volumeType = volumeType
+        self.sourceImageId = sourceImageId
+        self.iopsTotal = iopsTotal
+        self.bpsTotal = bpsTotal
+    }
 
     mutating func validate() throws {
         name = try Validate.name(name)

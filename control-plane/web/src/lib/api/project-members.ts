@@ -7,7 +7,7 @@ import type {
   ProjectRole,
   ProjectVMPrincipal,
   VMProjectGrantResponse,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const projectMembersApi = {
   list(projectId: string, signal?: AbortSignal): Promise<ProjectMembers> {

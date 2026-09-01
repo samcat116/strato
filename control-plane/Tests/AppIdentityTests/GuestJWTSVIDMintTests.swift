@@ -42,28 +42,6 @@ struct GuestJWTSVIDMintTests {
             logger: app.logger)
     }
 
-    private func registerAgent(
-        on app: Application,
-        name: String = "mint-agent",
-        trustDomain: String = "strato.local"
-    ) async throws -> Agent {
-        let agent = Agent(
-            name: name,
-            trustDomain: trustDomain,
-            hostname: "\(name).test",
-            version: "1.0.0",
-            status: .online,
-            resources: AgentResources(
-                totalCPU: 8,
-                availableCPU: 8,
-                totalMemory: 1 << 33,
-                availableMemory: 1 << 33,
-                totalDisk: 1 << 40,
-                availableDisk: 1 << 40))
-        try await agent.save(on: app.db)
-        return agent
-    }
-
     private func fixture(on app: Application, installSPIRE: Bool = true) async throws -> Fixture {
         enableSPIRE(on: app)
         app.guestIdentityIssuanceConfig = GuestIdentityIssuanceConfig(
@@ -73,9 +51,18 @@ struct GuestJWTSVIDMintTests {
         let fake = FakeSPIREServerAPI()
         if installSPIRE { installFakeSPIRE(on: app, fake: fake) }
 
-        let agent = try await registerAgent(on: app)
         let builder = TestDataBuilder(db: app.db)
         let org = try await builder.createOrganization(name: "Mint Org")
+        let agentID = try await builder.registerAgent(
+            on: app,
+            named: "mint-agent",
+            hostname: "mint-agent.test",
+            resources: AgentResources(
+                totalCPU: 8, availableCPU: 8,
+                totalMemory: 1 << 33, availableMemory: 1 << 33,
+                totalDisk: 1 << 40, availableDisk: 1 << 40),
+            organizationScope: .organization(try org.requireID()))
+        let agent = try #require(try await Agent.find(UUID(uuidString: agentID), on: app.db))
         let project = try await builder.createProject(
             name: "Mint Project", description: "guest identity tests", organization: org)
         let vm = try await builder.createVM(name: "mint-vm", project: project)
@@ -160,9 +147,12 @@ struct GuestJWTSVIDMintTests {
     func rateLimitIsolation() async throws {
         try await withRunningMintApp { app, port in
             let first = try await fixture(on: app)
-            let secondAgent = try await registerAgent(on: app, name: "mint-agent-2")
             let builder = TestDataBuilder(db: app.db)
             let secondOrg = try await builder.createOrganization(name: "Second Mint Org")
+            let secondAgent = try await builder.createAgent(
+                named: "mint-agent-2",
+                hostname: "mint-agent-2.test",
+                organizationScope: .organization(try secondOrg.requireID()))
             let secondProject = try await builder.createProject(
                 name: "Second Mint Project",
                 description: "guest identity rate-limit tests",
@@ -335,7 +325,9 @@ struct GuestJWTSVIDMintTests {
     func crossOrgNameCollision() async throws {
         try await withRunningMintApp { app, port in
             let fixture = try await fixture(on: app)
-            let orgID = UUID()
+            let builder = TestDataBuilder(db: app.db)
+            let collisionOrg = try await builder.createOrganization(name: "Collision Mint Org")
+            let orgID = try collisionOrg.requireID()
             let orgDomain = "org-aaaaaaaaaaaa.strato.local"
             let pki = try TestPKI()
             app.spireService = SPIREService(
@@ -349,7 +341,11 @@ struct GuestJWTSVIDMintTests {
                         bundlePEM: pki.caPEM)
                 ]))
 
-            _ = try await registerAgent(on: app, name: "mint-agent", trustDomain: orgDomain)
+            _ = try await builder.createAgent(
+                named: "mint-agent",
+                trustDomain: orgDomain,
+                hostname: "mint-agent.test",
+                organizationScope: .organization(orgID))
             let response = try await mint(
                 app: app,
                 port: port,
@@ -424,7 +420,7 @@ private struct AbortErrorResponse: Decodable {
 private func withRunningMintApp(
     _ test: (Application, Int) async throws -> Void
 ) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         let outcome: Result<Void, any Error>
         do {

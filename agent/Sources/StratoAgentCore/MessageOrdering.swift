@@ -4,10 +4,8 @@ import StratoShared
 /// Serializes asynchronous work by key: items submitted with the same key run in strict
 /// FIFO submission order, while items with different keys run concurrently.
 ///
-/// Inbound control-plane frames are decoded on a single ordered pipeline and then handed
-/// here keyed by the resource they act on (VM id, volume id, …). This preserves per-resource
-/// ordering — so `create` is applied before `delete`, `attach` before `detach`, and `pause`
-/// before `resume` — without globally serializing unrelated operations behind one another.
+/// Inbound live streams and reconciliation work share this queue, so related work remains
+/// ordered without globally serializing unrelated resources.
 public actor SerialTaskQueue {
     /// The most recently enqueued task for each key. A newly enqueued item awaits the current
     /// tail before running, chaining items for a key into a FIFO.
@@ -19,16 +17,8 @@ public actor SerialTaskQueue {
 
     public init() {}
 
-    /// Submit `operation` to run once all previously enqueued work for `key` has completed.
-    /// Work for distinct keys is unordered relative to each other and may run concurrently.
-    public func enqueue(key: String, operation: @escaping @Sendable () async -> Void) {
-        enqueue(keys: [key], operation: operation)
-    }
-
     /// Submit `operation` to run once all previously enqueued work for *every* key in `keys`
-    /// has completed; `operation` then blocks all of those keys until it finishes. Used for
-    /// operations that touch more than one resource (e.g. a volume clone reads a source and
-    /// writes a target), so they serialize against every lane they participate in.
+    /// has completed; `operation` then blocks all of those keys until it finishes.
     ///
     /// Deadlock-free: the predecessor tails are snapshotted atomically inside the actor, so a
     /// task only ever waits on tasks submitted before it — dependencies form a DAG that
@@ -73,66 +63,39 @@ extension MessageEnvelope {
     public static let reconcileLane = "__strato_reconcile__"
 
     /// The serial lanes used to order this inbound frame relative to others.
-    ///
-    /// Frames acting on the same resource share a lane and are therefore applied in the order
-    /// they arrived; frames for unrelated resources get independent lanes and may proceed
-    /// concurrently. VM ids are normalized so equivalent UUID spellings share
-    /// a lane. Most frames yield a single lane; operations spanning two resources
-    /// (e.g. volume clone) yield both so they serialize against each participating lane.
     public var serializationKeys: [String] {
         Self.serializationKeys(type: type, payload: payload)
     }
 
     /// Compute the serial lanes for a frame of `type` with the given raw JSON `payload`.
     static func serializationKeys(type: MessageType, payload: Data) -> [String] {
-        let fields = try? WireProtocol.makeDecoder().decode(RoutingFields.self, from: payload)
-
-        let raws: [String?]
         switch type {
         case .desiredState:
-            // Full-fleet syncs diff quickly and fan per-VM work out onto the VM lanes, so
-            // they get their own lane: ordered among themselves, never stuck behind a VM.
-            raws = [Self.reconcileLane]
+            return [Self.reconcileLane]
         case .consoleConnect, .consoleDisconnect, .consoleData:
-            // Interactive console I/O is independent of a VM's lifecycle/reconcile work.
-            // Keep it on a dedicated per-VM console lane so opening/streaming the console
-            // is never serialized behind (or stuck waiting on) a slow VM operation, while
-            // still ordering console frames for the same VM among themselves.
-            raws = [fields?.vmId.map { "console:\($0)" }]
-        case .guestExecStart, .guestExecInput, .guestExecResize, .guestExecClose:
-            // Interactive exec I/O gets a per-session lane for the same reason as console
-            // frames: input/resize/close for a session are applied strictly after its start
-            // (which blocks on the guest spawning the process), while unrelated sessions —
-            // and the sandbox's own lifecycle work — proceed concurrently.
-            raws = [fields?.sessionId.map { "exec:\($0)" }]
+            return routingKey(in: payload, field: \.vmId, prefix: "console:")
+        case .guestExecStart, .guestExecInput, .guestExecResize, .guestExecClose,
+            .guestExecRecordedAck:
+            return routingKey(in: payload, field: \.sessionId, prefix: "exec:")
         default:
-            // Any other frame that names a VM shares that VM's lane. No inbound
-            // frame does today — the imperative VM and network messages went by
-            // wire v34 (STR-151), and the `success`/`error` ACKs that outlived
-            // them carry no resource and stopped being correlated at all
-            // (STR-152) — so this arm is currently reached only by frames with
-            // no `vmId`, which fall through to the unkeyed lane. It is kept
-            // because it is the rule for the *next* such frame, not a leftover
-            // of the last one.
-            raws = [fields?.vmId]
+            return [unkeyedSerializationLane]
         }
-
-        // Normalize UUIDs to canonical form so create/operation frames share a lane regardless
-        // of the casing the control plane used.
-        let keys = raws.compactMap { raw -> String? in
-            guard let raw, !raw.isEmpty else { return nil }
-            return UUID(uuidString: raw)?.uuidString ?? raw
-        }
-        return keys.isEmpty ? [unkeyedSerializationLane] : keys
     }
 
-    // The volume lane helper went with the last volume frame (wire v33): no
-    // inbound message names a volume any more, so nothing routes to it. The
-    // reconciler still uses `volume/<id>` lanes for its own work items — see
-    // `ReconcileWorkItem.laneKeys` — but those never come off the wire.
+    private static func routingKey(
+        in payload: Data,
+        field: KeyPath<RoutingFields, String?>,
+        prefix: String
+    ) -> [String] {
+        guard
+            let fields = try? WireProtocol.makeDecoder().decode(RoutingFields.self, from: payload),
+            let value = fields[keyPath: field],
+            !value.isEmpty
+        else { return [unkeyedSerializationLane] }
+        return [prefix + value]
+    }
 
-    /// Minimal projection of the possible resource-identifying fields across frame payloads,
-    /// decoded once for routing without paying for a full message decode.
+    /// Minimal projection decoded for the live-stream frames that need routing.
     private struct RoutingFields: Decodable {
         let vmId: String?
         let sessionId: String?

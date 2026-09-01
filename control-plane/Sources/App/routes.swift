@@ -51,6 +51,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: SiteController())
     // Agent-reported physical disks and operator OSD eligibility.
     try app.register(collection: StorageDeviceController())
+    // Bring-your-own Ceph cluster registration and project-scoped RBD pools.
+    try app.register(collection: CephStorageController())
 
     // SCIM controllers
     try app.register(collection: SCIMController())
@@ -70,6 +72,7 @@ func routes(_ app: Application) throws {
 
     // Network management controller
     try app.register(collection: NetworkController())
+    try app.register(collection: NetworkACLController())
 
     // Floating IPs: external address pools + VM NIC attachments (issue #344)
     try app.register(collection: FloatingIPController())

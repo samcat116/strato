@@ -4,7 +4,7 @@ import Vapor
 /// A NIC attached to a sandbox, the sandbox analogue of `VMNetworkInterface`
 /// (issue #416). Deliberately its own slim table rather than a generalization
 /// of the VM NIC — sandboxes are a parallel resource with their own lifecycle —
-/// but the shape mirrors the VM path so `IPAMService`, MAC generation, and
+/// but the shape mirrors the VM path so `IPAMService`, `MACAllocator`, and
 /// stable device naming are reused. v1 gives each sandbox exactly one NIC.
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
 /// receive IDs or immutable snapshots and reload their own instance.

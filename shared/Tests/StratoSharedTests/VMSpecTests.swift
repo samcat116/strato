@@ -135,16 +135,40 @@ struct VMSpecTests {
         #expect(try decodeJSON(VMSpec.self, from: json).metadataSource == .iso)
     }
 
-    @Test func attachmentCopiesPreserveCreateTimeGuestConfiguration() {
+    @Test func copyHelpersReplaceOnlyTheirOwnedFields() {
+        let volume = VolumeSpec(volumeId: Fixtures.uuidA, deviceName: .disk(0))
+        let network = NetworkSpec(network: "realized", networkId: Fixtures.uuidB)
         let spec = VMSpec(
-            cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil),
-            guestAgentEnabled: true, metadataSource: .imds)
-        #expect(spec.withVolumes([]).guestAgentEnabled)
-        #expect(spec.withNetworks([]).guestAgentEnabled)
-        #expect(spec.withSizing(from: spec).guestAgentEnabled)
-        #expect(spec.withVolumes([]).metadataSource == .imds)
-        #expect(spec.withNetworks([]).metadataSource == .imds)
-        #expect(spec.withSizing(from: spec).metadataSource == .imds)
+            cpus: 1, maxCpus: 2, memoryBytes: 1_024, maxMemoryBytes: 2_048,
+            balloonTargetBytes: 512, diskBytes: 10, boot: .disk(firmware: nil),
+            guestAgentEnabled: true, volumes: [volume], networks: [network], metadataSource: .imds)
+
+        let withoutVolumes = spec.withVolumes([])
+        #expect(withoutVolumes.volumes.isEmpty)
+        #expect(withoutVolumes.networks == [network])
+        #expect(withoutVolumes.guestAgentEnabled)
+
+        let withoutNetworks = spec.withNetworks([])
+        #expect(withoutNetworks.networks.isEmpty)
+        #expect(withoutNetworks.volumes.first?.volumeId == Fixtures.uuidA)
+        #expect(withoutNetworks.metadataSource == .imds)
+
+        let desired = VMSpec(
+            cpus: 2, maxCpus: 4, memoryBytes: 2_048, maxMemoryBytes: 4_096,
+            balloonTargetBytes: 1_024, diskBytes: 20, sharedMemory: true,
+            boot: .directKernel(kernel: "/different", initramfs: nil, cmdline: nil))
+        let resized = spec.withSizing(from: desired)
+        #expect(resized.cpus == 2)
+        #expect(resized.maxCpus == 4)
+        #expect(resized.memoryBytes == 2_048)
+        #expect(resized.maxMemoryBytes == 4_096)
+        #expect(resized.balloonTargetBytes == 1_024)
+        #expect(resized.diskBytes == 20)
+        #expect(!resized.sharedMemory)
+        #expect(resized.volumes.first?.volumeId == Fixtures.uuidA)
+        #expect(resized.networks == [network])
+        #expect(resized.guestAgentEnabled)
+        #expect(resized.metadataSource == .imds)
     }
 
     @Test func unknownMetadataSourceFailsDecode() {

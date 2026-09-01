@@ -307,8 +307,8 @@ enum SiteNetworkAuthority {
             logger.notice(
                 "Designated the site's network controller automatically (it had none)",
                 metadata: [
-                    "agentName": .string(agent.name),
-                    "agentId": .string(agentID.uuidString),
+                    "strato.agent.name": .string(agent.name),
+                    "strato.agent.id": .string(agentID.uuidString),
                     "site": .string(site.name),
                 ])
             Telemetry.recordSiteNetworkControllerUp(site: site.name, up: true)
@@ -317,7 +317,7 @@ enum SiteNetworkAuthority {
             logger.warning(
                 "Failed to auto-designate a network controller for the site",
                 metadata: [
-                    "agentName": .string(agent.name),
+                    "strato.agent.name": .string(agent.name),
                     "siteId": .string(siteID.uuidString),
                     "error": .string("\(error)"),
                 ])
@@ -330,11 +330,11 @@ enum SiteNetworkAuthority {
     ///
     /// Every condition `SiteController.updateSite` enforces is a property of
     /// the agent's current registration, and agents re-register on every
-    /// reconnect. A controller that comes back in user-mode, or on a
-    /// rolled-back pre-v4 binary, keeps the job while authoring nothing: its
-    /// peers still get `networks: [], authoritative: false` and park forever
-    /// (issue #833). Nothing else re-checks this — `designateIfUnset` only
-    /// looks at designations that are *unset*.
+    /// reconnect. A controller that comes back in user-mode keeps the job
+    /// while authoring nothing: its peers still get `networks: [],
+    /// authoritative: false` and park forever (issue #833). Nothing else
+    /// re-checks this — `designateIfUnset` only looks at designations that are
+    /// *unset*.
     ///
     /// Hands the job back only when the site has another eligible member.
     /// Clearing an irreplaceable designation would trade one silent failure for
@@ -371,8 +371,8 @@ enum SiteNetworkAuthority {
             logger.warning(
                 "Site network controller re-registered unable to author topology",
                 metadata: [
-                    "agentName": .string(agent.name),
-                    "agentId": .string(agentID.uuidString),
+                    "strato.agent.name": .string(agent.name),
+                    "strato.agent.id": .string(agentID.uuidString),
                     "site": .string(site.name),
                     "fault": .string(fault.phrase),
                     "eligiblePeers": .stringConvertible(eligiblePeers.count),
@@ -389,7 +389,7 @@ enum SiteNetworkAuthority {
             logger.warning(
                 "Cleared the site's network controller designation; an eligible member takes it on its next registration",
                 metadata: [
-                    "agentName": .string(agent.name),
+                    "strato.agent.name": .string(agent.name),
                     "site": .string(site.name),
                 ])
             return true
@@ -397,7 +397,7 @@ enum SiteNetworkAuthority {
             logger.warning(
                 "Failed to re-validate the site's network controller designation",
                 metadata: [
-                    "agentName": .string(agent.name),
+                    "strato.agent.name": .string(agent.name),
                     "siteId": .string(siteID.uuidString),
                     "error": .string("\(error)"),
                 ])

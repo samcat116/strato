@@ -2,6 +2,33 @@ import Foundation
 import HTTPTypes
 import OpenAPIRuntime
 
+/// Gives each generated mutation call one replay identity. This middleware is
+/// outside authentication in the client chain, so a token-refresh replay keeps
+/// the same key and body rather than becoming a second mutation.
+struct IdempotencyKeyMiddleware: ClientMiddleware {
+    private static let header = HTTPField.Name("Idempotency-Key")!
+
+    func intercept(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String,
+        next:
+            @concurrent @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (
+                HTTPResponse, HTTPBody?
+            )
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        guard ["POST", "PUT", "PATCH", "DELETE"].contains(request.method.rawValue) else {
+            return try await next(request, body, baseURL)
+        }
+        var keyed = request
+        if keyed.headerFields[Self.header] == nil {
+            keyed.headerFields[Self.header] = UUID().uuidString
+        }
+        return try await next(keyed, body, baseURL)
+    }
+}
+
 /// Signs every request with the context's access token and, on a 401, rotates
 /// the token pair once and replays the request.
 struct AuthenticationMiddleware: ClientMiddleware {

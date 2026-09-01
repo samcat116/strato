@@ -16,31 +16,14 @@ enum SandboxSpecBuilder {
     /// assembly could not load it, which yields no spec at all rather than a
     /// half-configured NIC.
     ///
-    /// `securityGroupIds` is the NIC's membership, from
-    /// `SandboxInterfaceSecurityGroup` (STR-102) — same contract as the VM
-    /// path, already gated on the receiving agent's protocol version by the
-    /// assembly.
+    /// `securityGroupIds` is the NIC's membership from
+    /// `SandboxInterfaceSecurityGroup` (STR-102), using the same contract as VMs.
+    /// `sendsMetadataPort` controls whether `metadataEnabled` is present.
     ///
-    /// `sendsMetadataPort` gates `metadataEnabled` on the receiving agent's protocol
-    /// version (STR-49), as on the VM path.
-    ///
-    /// `agentRealizesSandboxNICs` is the per-agent gate that replaced this
-    /// type's old fleet-wide `guestNetworkingSupported` constant (STR-103).
-    /// It is the receiving agent's advertised sandbox-networking capability:
-    /// OVN, the jailer barrier the NIC's namespace belongs to, and a guest
-    /// image whose init configures the interface from the config drive — none
-    /// of which any wire version implies, since the guest image is installed
-    /// separately from the agent binary.
-    ///
-    /// Withholding on a `false` is what makes the flag's arrival safe rather
-    /// than a fleet-wide outage. Sandbox NICs have been *allocated* since issue
-    /// #416 while never reaching the wire, so the first sync after this change
-    /// would otherwise hand a NIC to every sandbox on every host at once —
-    /// including hosts whose guest image predates the config drive's `network`
-    /// block, which refuse such a document and would fail every sandbox create
-    /// permanently. Placement (`SchedulerService`) keeps *new* networked
-    /// sandboxes off those hosts; this keeps the NIC off the wire for the ones
-    /// already there.
+    /// `agentRealizesSandboxNICs` is the receiving agent's advertised networking
+    /// capability: OVN, the jailer barrier, and a guest image that configures the
+    /// interface. Placement keeps new networked sandboxes off incapable hosts;
+    /// this guard withholds the NIC if an existing host lacks the capability.
     static func networkSpec(
         from interface: SandboxNetworkInterface?,
         network: LogicalNetwork?,

@@ -1,14 +1,14 @@
-/**
- * Catalog of subscribable webhook event types. Mirrors the backend's event
- * vocabulary; an empty `eventTypes` array on a subscription means all of them.
- */
+import type { CreateWebhookRequest } from "@/types/api";
+
+type WebhookEventType = NonNullable<CreateWebhookRequest["eventTypes"]>[number];
+
 export interface WebhookEventTypeInfo {
-  type: string;
+  type: WebhookEventType;
   label: string;
   description: string;
 }
 
-export const WEBHOOK_EVENT_TYPES: WebhookEventTypeInfo[] = [
+export const WEBHOOK_EVENT_TYPES = [
   {
     type: "operation.completed",
     label: "Operation completed",
@@ -39,7 +39,7 @@ export const WEBHOOK_EVENT_TYPES: WebhookEventTypeInfo[] = [
     label: "Quota threshold exceeded",
     description: "A quota pool crossed 80% or 100% of its limit.",
   },
-];
+] satisfies WebhookEventTypeInfo[];
 
 export function webhookEventLabel(type: string): string {
   return WEBHOOK_EVENT_TYPES.find((e) => e.type === type)?.label ?? type;
