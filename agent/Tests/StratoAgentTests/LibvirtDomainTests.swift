@@ -133,14 +133,18 @@ struct LibvirtDomainTests {
         #expect(flags & 64 == 0, "VIR_DOMAIN_UNDEFINE_KEEP_TPM must not be set")
     }
 
-    /// The domain document is written once and never rewritten, so a device
-    /// change that does not carry `CONFIG` silently un-happens at the guest's
-    /// next power cycle — with the control plane still showing it applied.
-    @Test("Device changes always reach the persistent definition")
-    func deviceFlagsAlwaysWriteConfig() {
+    /// The domain document is written once and never rewritten, so normal
+    /// device changes reach both definitions. Network detach uses the two
+    /// individual bits in sequence to make a partial result replayable.
+    @Test("Device flags distinguish live and persistent definitions")
+    func deviceFlagsDistinguishDefinitions() {
         // VIR_DOMAIN_AFFECT_LIVE (1) | VIR_DOMAIN_AFFECT_CONFIG (2).
+        #expect(LibvirtDomain.affectLive == 1)
         #expect(LibvirtDomain.affectLiveAndConfig == 1 | 2)
         #expect(LibvirtDomain.affectConfig == 2)
+        #expect(
+            LibvirtDomain.affectLive & 2 == 0,
+            "the replayable live detach must not depend on matching persistent state")
         #expect(
             LibvirtDomain.affectLiveAndConfig & 2 != 0,
             "a live-only hot-plug is lost at the guest's next power cycle")

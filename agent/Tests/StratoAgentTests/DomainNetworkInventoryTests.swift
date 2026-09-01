@@ -48,4 +48,44 @@ struct DomainNetworkInventoryTests {
             try DomainNetworkInventory.macAddresses(inDomainXML: "<domain><devices>")
         }
     }
+
+    @Test(
+        "network detach plans each live and persistent definition independently",
+        arguments: [
+            (live: true, config: true, expected: [DomainNetworkDetachScope.live, .config]),
+            (live: true, config: false, expected: [.live]),
+            (live: false, config: true, expected: [.config]),
+            (live: false, config: false, expected: []),
+        ])
+    func detachPlanRecoversPartialState(
+        live: Bool, config: Bool, expected: [DomainNetworkDetachScope]
+    ) throws {
+        let mac = "52:54:00:aa:bb:05"
+        let withInterface = """
+            <domain><devices>
+              <interface type='ethernet'><mac address='\(mac)'/></interface>
+            </devices></domain>
+            """
+        let withoutInterface = "<domain><devices/></domain>"
+        let plan = try DomainNetworkDetachPlan(
+            macAddress: mac,
+            liveDomainXML: live ? withInterface : withoutInterface,
+            inactiveDomainXML: config ? withInterface : withoutInterface)
+
+        #expect(plan.scopes == expected)
+    }
+
+    @Test("an inactive domain plans only persistent detach")
+    func inactiveDetachPlan() throws {
+        let plan = try DomainNetworkDetachPlan(
+            macAddress: "52:54:00:aa:bb:05",
+            liveDomainXML: nil,
+            inactiveDomainXML: """
+                <domain><devices>
+                  <interface type='ethernet'><mac address='52:54:00:aa:bb:05'/></interface>
+                </devices></domain>
+                """)
+
+        #expect(plan.scopes == [.config])
+    }
 }
