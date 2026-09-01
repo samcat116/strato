@@ -1402,19 +1402,38 @@ actor LibvirtService: HypervisorService {
                     "VM network hot-unplug requires a stable MAC address")
             }
             let dom = try await domain(vmId)
-            let present = try DomainNetworkInventory.macAddresses(
-                inDomainXML: try await domainXML(dom, vmId: vmId))
-            guard present.contains(mac) else {
+            let isLive = LibvirtDomain.holdsResources(
+                rawState: try await state(of: dom, vmId: vmId))
+            let liveDomainXML = isLive ? try await domainXML(dom, vmId: vmId) : nil
+            let persistentDomainXML = try await inactiveDomainXML(dom, vmId: vmId)
+            let plan = try DomainNetworkDetachPlan(
+                macAddress: mac,
+                liveDomainXML: liveDomainXML,
+                inactiveDomainXML: persistentDomainXML)
+            guard !plan.scopes.isEmpty else {
                 logger.info(
-                    "Network interface is already absent; treating the detach as a no-op",
+                    "Network interface is already absent from live and persistent definitions; treating the detach as a no-op",
                     metadata: ["vmId": .string(vmId), "mac": .string(mac)])
                 return
             }
-            let flags = try await deviceFlags(dom, vmId: vmId)
             let xml = DomainDeviceXML.detachNetwork(macAddress: mac)
-            try await call("libvirt-detach-network", vmId: vmId) { client, deadline in
-                try await client.domainDetachDeviceFlags(
-                    dom: dom, xml: xml, flags: flags, deadline: deadline)
+            for scope in plan.scopes {
+                let stage: String
+                let flags: UInt32
+                switch scope {
+                case .live:
+                    stage = "libvirt-detach-network-live"
+                    flags = LibvirtDomain.affectLive
+                case .config:
+                    stage = "libvirt-detach-network-config"
+                    flags = LibvirtDomain.affectConfig
+                }
+                try await call(stage, vmId: vmId) { client, deadline in
+                    try await client.domainDetachDeviceFlags(
+                        dom: dom, xml: xml, flags: flags, deadline: deadline)
+                }
+                try await waitForNetworkInterfaceAbsent(
+                    macAddress: mac, scope: scope, dom: dom, vmId: vmId)
             }
         }
     }
@@ -1972,8 +1991,8 @@ actor LibvirtService: HypervisorService {
     ///
     /// `flags: 0` asks for the *live* configuration of a running domain and the
     /// persistent one of an inactive domain — in both cases the description the
-    /// next command will act against. The two cannot drift here, because every
-    /// device change this driver makes carries `AFFECT_CONFIG`.
+    /// next command will act against. Network detach deliberately reads this
+    /// separately from `inactiveDomainXML` because those views may be split.
     private func domainXML(_ dom: Domain, vmId: String) async throws -> String {
         try await call("libvirt-dumpxml", vmId: vmId, seconds: StageBudget.statusQuerySeconds) {
             client, deadline in
@@ -1996,16 +2015,54 @@ actor LibvirtService: HypervisorService {
         }
     }
 
+    /// A detach RPC is acceptance, not convergence. In particular, QEMU can
+    /// still hold the TAP after libvirt has changed the persistent definition.
+    /// Do not let the reconciler tear host networking down until readback says
+    /// the addressed definition no longer contains the NIC.
+    private func waitForNetworkInterfaceAbsent(
+        macAddress: String,
+        scope: DomainNetworkDetachScope,
+        dom: Domain,
+        vmId: String
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(StageBudget.hypervisorControlSeconds)
+        while ContinuousClock.now < deadline {
+            if scope == .live {
+                let isLive = LibvirtDomain.holdsResources(
+                    rawState: try await state(of: dom, vmId: vmId))
+                if !isLive { return }
+            }
+            let xml: String
+            switch scope {
+            case .live:
+                xml = try await domainXML(dom, vmId: vmId)
+            case .config:
+                xml = try await inactiveDomainXML(dom, vmId: vmId)
+            }
+            if try !DomainNetworkInventory.macAddresses(inDomainXML: xml)
+                .contains(macAddress)
+            {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        let definition = scope == .live ? "live" : "persistent"
+        throw HypervisorServiceError.timeout(
+            "network interface \(macAddress) remained in VM \(vmId)'s \(definition) domain XML after detach")
+    }
+
     private func domainDisks(_ dom: Domain, vmId: String) async throws -> [DomainDisk] {
         try DomainDiskInventory.disks(inDomainXML: try await domainXML(dom, vmId: vmId))
     }
 
-    /// The flags a device change should carry for this domain.
+    /// The flags a combined device change should carry for this domain.
     ///
     /// `LIVE|CONFIG` for a domain that is up, `CONFIG` alone for one that is
     /// not: libvirt answers `VIR_ERR_OPERATION_INVALID` to a request that says
     /// it affects the live guest of an inactive domain. Both branches write the
-    /// definition, which is the half that survives a power cycle.
+    /// definition, which is the half that survives a power cycle. Network
+    /// detach does not use this helper: it converges each flag independently so
+    /// a half-applied operation is replayable.
     private func deviceFlags(_ dom: Domain, vmId: String) async throws -> UInt32 {
         LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId))
             ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
