@@ -981,27 +981,13 @@ actor Agent {
         guard let client = websocketClient else {
             throw AgentError.registrationFailed("WebSocket client was not initialized")
         }
-        let connectionGeneration = try await client.connect()
-
-        // Register with control plane
-        try await registerWithControlPlane()
-
-        // A registration response proves only that the control plane accepted
-        // the handshake. The socket can still close while replaying recorded
-        // commands or sending the observed-state baseline. Activate frontend-
-        // bound work only after all of that finishes on the same connection.
-        let connectionActivated = await restoreConnectionScopedState(
-            generation: connectionGeneration, attempt: nil)
-        let startupConnectionWasLost = reconnectState.consumeStartupConnectionLoss()
+        guard try await establishInitialControlPlaneConnection(client) else { return }
 
         // Heartbeats are driven by the WebSocket client's connection-scoped loop
         // (see WebSocketClient.startHeartbeat), so it stops firing while
         // disconnected and restarts on reconnect — no separate agent-side loop.
 
         isRunning = true
-        if !connectionActivated || startupConnectionWasLost {
-            await handleConnectionLost()
-        }
         logger.info("Agent started successfully")
 
         // Park until stop() (typically from a SIGINT/SIGTERM handler) or a
@@ -1017,6 +1003,55 @@ actor Agent {
         if let error = terminalError {
             throw error
         }
+    }
+
+    /// Establishes the first registered socket without treating a transient
+    /// control-plane outage as a fatal agent startup error. A socket close
+    /// fails the pending registration continuation immediately; this loop then
+    /// redials with the same bounded backoff used after startup.
+    private func establishInitialControlPlaneConnection(_ client: WebSocketClient) async throws -> Bool {
+        var delaySeconds = 1.0
+        let maxDelaySeconds = 30.0
+
+        while !shutdownRequested {
+            // Clear the previous attempt's edge before dialing. A close from a
+            // superseded WebSocket generation is filtered by WebSocketClient.
+            _ = reconnectState.consumeStartupConnectionLoss()
+
+            do {
+                let generation = try await client.connect()
+                try await registerWithControlPlane()
+
+                // A registration response proves only that the control plane
+                // accepted the handshake. Replay and baseline delivery must
+                // also finish on that same live connection.
+                guard
+                    await restoreConnectionScopedState(
+                        generation: generation, attempt: nil),
+                    !reconnectState.consumeStartupConnectionLoss()
+                else {
+                    throw AgentError.registrationFailed(
+                        "control-plane connection closed during startup registration")
+                }
+                return true
+            } catch AgentError.registrationRejected(let reason) {
+                throw AgentError.registrationRejected(reason)
+            } catch {
+                guard !shutdownRequested else { return false }
+                logger.warning(
+                    "Initial control-plane registration failed; retrying with backoff: \(error)")
+                await client.disconnect()
+                _ = reconnectState.consumeStartupConnectionLoss()
+                let jitter = Double.random(in: 0...(delaySeconds * 0.3))
+                do {
+                    try await Task.sleep(for: .seconds(delaySeconds + jitter))
+                } catch {
+                    return false
+                }
+                delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
+            }
+        }
+        return false
     }
 
     /// Wakes start() out of its run-forever suspension after an unrecoverable
@@ -1545,6 +1580,12 @@ actor Agent {
         registrationGeneration &+= 1
         let generation = registrationGeneration
         registrationContinuation = continuation
+        guard !reconnectState.connectionWasLostDuringStartup else {
+            takeRegistrationContinuation()?.resume(
+                throwing: AgentError.registrationFailed(
+                    "control-plane connection closed during registration"))
+            return
+        }
         registrationTimeoutTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled else { return }
@@ -2070,10 +2111,18 @@ actor Agent {
         // start while console/runtime/session teardown is still in progress.
         interactiveSessionFence.quiesce()
 
-        // Startup is still unwinding its initial registration. Remember the
-        // edge rather than starting a competing registration attempt; start()
-        // hands it to the ordinary reconnect loop after post-registration work
-        // has returned.
+        // A registration wait cannot outlive its socket. Failing it here lets
+        // either the startup retry loop or the steady-state reconnect loop
+        // redial immediately instead of parking until the 30-second timeout.
+        if let continuation = takeRegistrationContinuation() {
+            continuation.resume(
+                throwing: AgentError.registrationFailed(
+                    "control-plane connection closed during registration"))
+        }
+
+        // Startup owns its retry loop until one fully restored connection is
+        // ready. Remember the edge so a close before the wait was armed, or
+        // after its response was dequeued, still invalidates that attempt.
         guard isRunning else {
             reconnectState.recordStartupConnectionLoss()
             return
