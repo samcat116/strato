@@ -30,15 +30,24 @@ extension Agent {
         }
     }
 
-    private func routeInboundMessage(_ frame: InboundWebSocketFrame) async {
-        await routeInboundMessage(frame.envelope, wireByteCount: frame.byteCount)
+    private func routeInboundMessage(_ frame: ControlPlaneInboundFrame) async {
+        let envelope = frame.envelope
+        await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
+            guard let self,
+                await self.websocketClient?.isCurrentConnection(frame.generation) == true
+            else { return }
+            await self.handleMessage(
+                envelope,
+                sourceGeneration: frame.generation,
+                wireByteCount: frame.byteCount)
+        }
     }
 
     /// Route a decoded inbound frame onto its per-resource serial lane. Frames for the same
     /// resource run in arrival order; frames for unrelated resources run concurrently.
-    func routeInboundMessage(_ envelope: MessageEnvelope, wireByteCount: Int? = nil) async {
+    func routeInboundMessage(_ envelope: MessageEnvelope) async {
         await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
-            await self?.handleMessage(envelope, wireByteCount: wireByteCount)
+            await self?.handleMessage(envelope)
         }
     }
 
@@ -61,7 +70,11 @@ extension Agent {
         return message
     }
 
-    func handleMessage(_ envelope: MessageEnvelope, wireByteCount: Int? = nil) async {
+    func handleMessage(
+        _ envelope: MessageEnvelope,
+        sourceGeneration: ControlPlaneWebSocketState.Generation? = nil,
+        wireByteCount: Int? = nil
+    ) async {
         do {
             switch envelope.type {
             case .agentRegisterResponse:
@@ -275,7 +288,7 @@ extension Agent {
                     envelope,
                     as: GuestExecStartMessage.self,
                     wireByteCount: wireByteCount)
-                await handleGuestExecStart(message)
+                await handleGuestExecStart(message, sourceGeneration: sourceGeneration)
             case .guestExecInput:
                 let message = try decodeInboundMessage(
                     envelope,
@@ -294,6 +307,9 @@ extension Agent {
                     as: GuestExecCloseMessage.self,
                     wireByteCount: wireByteCount)
                 await handleGuestExecClose(message)
+            case .guestExecRecordedAck:
+                let message = try envelope.decode(as: GuestExecRecordedAckMessage.self)
+                await handleGuestExecRecordedAck(message)
             // No sandbox lifecycle frames remain either: `sandbox_restore`
             // became `DesiredSandboxState.restore` at wire v34 (STR-151), and
             // capture/delete/export became desired artifacts at v33 (STR-150).
@@ -1118,7 +1134,31 @@ extension Agent {
         await observedStateTrigger?.signal()
     }
 
-    func handleGuestExecStart(_ message: GuestExecStartMessage) async {
+    func handleGuestExecStart(
+        _ message: GuestExecStartMessage,
+        sourceGeneration: ControlPlaneWebSocketState.Generation?
+    ) async {
+        if message.sessionKind == .interactive {
+            guard let sourceGeneration else {
+                logger.debug(
+                    "Discarding interactive guest exec start without a control-plane connection generation",
+                    metadata: ["sessionId": .string(message.sessionId)])
+                return
+            }
+            guard interactiveSessionFence.accepts(generation: sourceGeneration) else {
+                if await websocketClient?.isCurrentConnection(sourceGeneration) == true {
+                    await sendGuestExecClosed(
+                        sessionId: message.sessionId,
+                        reason: "interactive guest exec is unavailable while agent registration completes")
+                } else {
+                    logger.debug(
+                        "Discarding interactive guest exec start from an inactive control-plane connection",
+                        metadata: ["sessionId": .string(message.sessionId)])
+                }
+                return
+            }
+        }
+
         logger.info(
             "Guest exec start request received",
             metadata: [
@@ -1126,6 +1166,7 @@ extension Agent {
                 LogMetadata.guestResourceIDKey(for: message.resourceKind): .string(
                     message.resourceId),
                 "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
+                "guestExecSessionKind": .string(message.sessionKind.rawValue),
                 "tty": .stringConvertible(message.tty),
             ])
 
@@ -1133,16 +1174,31 @@ extension Agent {
             command: message.command, env: message.env, workingDir: message.workingDir,
             tty: message.tty, rows: message.rows, cols: message.cols)
 
-        guard guestExecSessionKinds[message.sessionId] == nil else {
+        if let existing = guestExecSessions[message.sessionId] {
+            if existing.sessionKind == .recorded, message.sessionKind == .recorded,
+                let snapshot = await vmExecSessionManager.recordedSessionSnapshot(
+                    sessionId: message.sessionId)
+            {
+                await sendRecordedExecState(snapshot)
+                return
+            }
             await sendGuestExecClosed(
                 sessionId: message.sessionId, reason: "exec session already exists")
+            return
+        }
+
+        guard message.sessionKind == .interactive || message.resourceKind == .virtualMachine else {
+            await sendGuestExecClosed(
+                sessionId: message.sessionId,
+                reason: "recorded guest exec is supported only for virtual machines")
             return
         }
 
         // Register the route before starting. A guest can emit exec_started
         // immediately; pre-registration keeps a terminal event racing the
         // handshake from leaving a stale route behind.
-        guestExecSessionKinds[message.sessionId] = message.resourceKind
+        guestExecSessions[message.sessionId] = GuestExecSessionRoute(
+            resourceKind: message.resourceKind, sessionKind: message.sessionKind)
         let continuation = sandboxExecEventsContinuation
         let sessionId = message.sessionId
         do {
@@ -1167,7 +1223,8 @@ extension Agent {
                 let vmId = message.resourceId
                 let cid = placement.vsockCID
                 try await vmExecSessionManager.startExec(
-                    placement: placement, sessionId: sessionId, request: request,
+                    placement: placement, sessionId: sessionId,
+                    sessionKind: message.sessionKind, request: request,
                     placementIsCurrent: { [weak self] in
                         await self?.isCurrentVMExecPlacement(vmId: vmId, vsockCID: cid) == true
                     }
@@ -1176,7 +1233,6 @@ extension Agent {
                 }
             }
         } catch {
-            guestExecSessionKinds.removeValue(forKey: sessionId)
             logger.error(
                 "Failed to start guest exec session",
                 metadata: [
@@ -1186,7 +1242,20 @@ extension Agent {
                     "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
-            await sendGuestExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+            if message.sessionKind == .recorded {
+                let retained = await vmExecSessionManager.retainRecordedStartFailure(
+                    sessionId: sessionId, reason: error.localizedDescription)
+                if retained {
+                    await sendNextRecordedExecTerminalState()
+                } else {
+                    guestExecSessions.removeValue(forKey: sessionId)
+                    await sendGuestExecClosed(
+                        sessionId: sessionId, reason: error.localizedDescription)
+                }
+            } else {
+                guestExecSessions.removeValue(forKey: sessionId)
+                await sendGuestExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+            }
         }
     }
 
@@ -1198,6 +1267,12 @@ extension Agent {
     }
 
     func handleGuestExecInput(_ message: GuestExecInputMessage) async {
+        if guestExecSessions[message.sessionId]?.sessionKind == .recorded {
+            logger.warning(
+                "Ignoring interactive input for a recorded guest exec session",
+                metadata: ["sessionId": .string(message.sessionId)])
+            return
+        }
         if message.data != nil && message.rawData == nil {
             // The payload is present but not decodable base64: the stream is
             // corrupt, and forwarding nothing would silently swallow
@@ -1214,7 +1289,7 @@ extension Agent {
             return
         }
         do {
-            switch guestExecSessionKinds[message.sessionId] {
+            switch guestExecSessions[message.sessionId]?.resourceKind {
             case .sandbox:
                 guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
                 try await runtime.sendExecInput(
@@ -1238,8 +1313,14 @@ extension Agent {
     }
 
     func handleGuestExecResize(_ message: GuestExecResizeMessage) async {
+        if guestExecSessions[message.sessionId]?.sessionKind == .recorded {
+            logger.warning(
+                "Ignoring resize for a recorded guest exec session",
+                metadata: ["sessionId": .string(message.sessionId)])
+            return
+        }
         do {
-            switch guestExecSessionKinds[message.sessionId] {
+            switch guestExecSessions[message.sessionId]?.resourceKind {
             case .sandbox:
                 guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
                 try await runtime.resizeExec(
@@ -1272,17 +1353,23 @@ extension Agent {
         // The control plane already tore its side down; closing is terminal
         // and needs no reply. Guest-side, this kills the exec process group if
         // exec_exit has not arrived.
-        await closeGuestExec(sessionId: message.sessionId)
+        await closeGuestExec(sessionId: message.sessionId, reason: message.reason)
     }
 
-    func closeGuestExec(sessionId: String) async {
-        switch guestExecSessionKinds.removeValue(forKey: sessionId) {
+    func closeGuestExec(sessionId: String, reason: String? = nil) async {
+        guard let route = guestExecSessions[sessionId] else { return }
+        switch route.resourceKind {
         case .sandbox:
+            guestExecSessions.removeValue(forKey: sessionId)
             await sandboxRuntime?.closeExec(sessionId: sessionId)
         case .virtualMachine:
-            await vmExecSessionManager.closeExec(sessionId: sessionId)
-        case nil:
-            return
+            if route.sessionKind == .interactive {
+                guestExecSessions.removeValue(forKey: sessionId)
+            }
+            await vmExecSessionManager.closeExec(sessionId: sessionId, reason: reason)
+            if route.sessionKind == .recorded {
+                await sendNextRecordedExecTerminalState()
+            }
         }
     }
 
@@ -1292,12 +1379,30 @@ extension Agent {
     func sendGuestExecEvent(
         sessionId: String, resourceKind: GuestResourceKind, event: SandboxExecEvent
     ) async {
-        if case .exited = event {
-            if guestExecSessionKinds[sessionId] == resourceKind {
-                guestExecSessionKinds.removeValue(forKey: sessionId)
+        guard let route = guestExecSessions[sessionId], route.resourceKind == resourceKind else {
+            return
+        }
+
+        if route.sessionKind == .recorded {
+            switch event {
+            case .started:
+                if let snapshot = await vmExecSessionManager.recordedSessionSnapshot(
+                    sessionId: sessionId)
+                {
+                    await sendRecordedExecState(snapshot)
+                }
+            case .exited, .closed:
+                await sendNextRecordedExecTerminalState()
+            case .output:
+                return
             }
-        } else if case .closed = event, guestExecSessionKinds[sessionId] == resourceKind {
-            guestExecSessionKinds.removeValue(forKey: sessionId)
+            return
+        }
+
+        if case .exited = event {
+            guestExecSessions.removeValue(forKey: sessionId)
+        } else if case .closed = event {
+            guestExecSessions.removeValue(forKey: sessionId)
         }
         guard let websocketClient else {
             // No control-plane socket: the event (possibly the session's
@@ -1332,6 +1437,76 @@ extension Agent {
                     "error": .string(error.localizedDescription),
                 ])
         }
+    }
+
+    func sendRecordedExecState(_ snapshot: RecordedVMExecSessionSnapshot) async {
+        guard let websocketClient else { return }
+        do {
+            try await websocketClient.sendMessage(
+                GuestExecRecordedStateMessage(
+                    sessionId: snapshot.sessionId,
+                    revision: snapshot.revision,
+                    status: snapshot.status,
+                    rawStdout: snapshot.stdout,
+                    rawStderr: snapshot.stderr,
+                    exitCode: snapshot.exitCode,
+                    reason: snapshot.reason,
+                    truncated: snapshot.truncated))
+        } catch {
+            let level: Logger.Level =
+                (error as? WebSocketClientError)?.isNotConnected == true ? .debug : .warning
+            logger.log(
+                level: level,
+                "Could not offer recorded VM command state; it remains retained for replay",
+                metadata: [
+                    "sessionId": .string(snapshot.sessionId),
+                    "status": .string(snapshot.status.rawValue),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    func replayRecordedExecSessionsAfterRegistration() async {
+        let running = await vmExecSessionManager.recordedSessionSnapshots()
+            .filter { !$0.isTerminal }
+        for snapshot in running {
+            await sendRecordedExecState(snapshot)
+        }
+        await sendNextRecordedExecTerminalState()
+    }
+
+    func sendNextRecordedExecTerminalState() async {
+        guard !recordedResultSendInProgress else { return }
+        recordedResultSendInProgress = true
+        defer { recordedResultSendInProgress = false }
+
+        while let snapshot = await vmExecSessionManager.recordedTerminalSnapshot(
+            after: lastOfferedRecordedResultSessionId)
+        {
+            lastOfferedRecordedResultSessionId = snapshot.sessionId
+            await sendRecordedExecState(snapshot)
+            guard
+                await vmExecSessionManager.recordedSessionSnapshot(
+                    sessionId: snapshot.sessionId) == nil
+            else {
+                return
+            }
+        }
+        lastOfferedRecordedResultSessionId = nil
+    }
+
+    func handleGuestExecRecordedAck(_ message: GuestExecRecordedAckMessage) async {
+        guard
+            await vmExecSessionManager.acknowledgeRecordedSession(
+                sessionId: message.sessionId)
+        else {
+            logger.debug(
+                "Ignoring recorded VM command ACK without retained terminal state",
+                metadata: ["sessionId": .string(message.sessionId)])
+            return
+        }
+        guestExecSessions.removeValue(forKey: message.sessionId)
+        await sendNextRecordedExecTerminalState()
     }
 
     func sendGuestExecClosed(sessionId: String, reason: String?) async {

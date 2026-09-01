@@ -119,6 +119,10 @@ extension Application {
         // STR-79: durable captured VM command state with cold output payloads.
         migrations.add(CreateVMCommandExecutions())
 
+        // STR-260: failed recorded commands may expose bounded partial output
+        // without inventing a guest exit code.
+        migrations.add(AllowPartialVMCommandResults())
+
         // STR-84: append-only guest command and interactive execution facts.
         migrations.add(AddVMGuestExecutionAudit())
 

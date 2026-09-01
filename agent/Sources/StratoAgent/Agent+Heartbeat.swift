@@ -19,68 +19,119 @@ import Glibc
 extension Agent {
     // MARK: - Reconnection
 
-    /// Called by the WebSocket client when the connection to the control plane drops
-    /// unexpectedly. Starts a single reconnection loop (guarded against duplicates).
     func handleConnectionLost() async {
-        guard isRunning else { return }
-        guard reconnectTask == nil else {
-            logger.debug("Reconnection already in progress; ignoring duplicate signal")
+        guard !shutdownRequested else { return }
+
+        interactiveSessionFence.quiesce()
+        if let continuation = takeRegistrationContinuation() {
+            continuation.resume(
+                throwing: AgentError.registrationFailed(
+                    "control-plane connection closed during registration"))
+        }
+
+        guard isRunning else {
+            reconnectState.recordStartupConnectionLoss()
             return
         }
 
-        logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+        let disposition = reconnectState.recordConnectionLoss()
+        switch disposition {
+        case .startLoop:
+            logger.warning("Lost connection to control plane; beginning reconnection with backoff")
+        case .loopAlreadyActive:
+            logger.warning(
+                "Control-plane connection dropped during reconnect recovery; the active loop will retry")
+        }
 
-        // The control plane tears down this agent's console sessions when our
-        // socket drops (otherwise browser terminals freeze), and browsers must
-        // re-establish once we reconnect. Close our side's console pty channels
-        // now so they don't leak — the eventual browser-socket close on the
-        // control plane no-ops on the already-deleted session and never sends
-        // us a disconnect for them.
-        await consoleSocketManager?.disconnectAll()
-
-        // Quiesce sandbox streams for the gap (issue #423): live exec sessions
-        // end (their frontends are unreachable and the control plane cannot
-        // close them over a dead socket), and log follows suspend so workload
-        // output waits in the guest ring buffers instead of being consumed
-        // toward a socket that cannot deliver it. Registration restarts the
-        // follows.
-        await sandboxRuntime?.controlPlaneDisconnected()
-        await vmExecSessionManager.closeAll(reason: "control plane disconnected")
-        guestExecSessionKinds.removeAll()
-
+        await quiesceConnectionScopedState()
+        guard disposition == .startLoop else { return }
+        guard isRunning else {
+            reconnectState.finishLoop()
+            return
+        }
         reconnectTask = Task { [weak self] in
             await self?.runReconnectLoop()
         }
     }
 
-    /// Repeatedly attempts to reconnect to the control plane with exponential backoff
-    /// and jitter, re-registering on success. Runs until reconnected or the agent stops.
+    func quiesceConnectionScopedState() async {
+        interactiveSessionFence.quiesce()
+        await consoleSocketManager?.disconnectAll()
+        await sandboxRuntime?.controlPlaneDisconnected()
+        await vmExecSessionManager.closeInteractive(reason: "control plane disconnected")
+        guestExecSessions = guestExecSessions.filter { $0.value.sessionKind == .recorded }
+    }
+
+    func restoreConnectionScopedState(
+        generation: ControlPlaneWebSocketState.Generation,
+        attempt: ControlPlaneReconnectState.Attempt?
+    ) async -> Bool {
+        guard await connectionRecoveryIsCurrent(generation: generation, attempt: attempt) else {
+            await quiesceConnectionScopedState()
+            return false
+        }
+        await sandboxRuntime?.controlPlaneConnected()
+        guard await connectionRecoveryIsCurrent(generation: generation, attempt: attempt) else {
+            await quiesceConnectionScopedState()
+            return false
+        }
+        await vmExecSessionManager.resumeInteractive()
+        guard await connectionRecoveryIsCurrent(generation: generation, attempt: attempt) else {
+            await quiesceConnectionScopedState()
+            return false
+        }
+        interactiveSessionFence.activate(generation: generation)
+        return true
+    }
+
+    func connectionRecoveryIsCurrent(
+        generation: ControlPlaneWebSocketState.Generation,
+        attempt: ControlPlaneReconnectState.Attempt?
+    ) async -> Bool {
+        guard !shutdownRequested,
+            await websocketClient?.isCurrentConnection(generation) == true
+        else { return false }
+        if let attempt {
+            return isRunning && reconnectState.canFinish(attempt)
+        }
+        return !reconnectState.connectionWasLostDuringStartup
+    }
+
     func runReconnectLoop() async {
-        defer { reconnectTask = nil }
+        defer {
+            reconnectState.finishLoop()
+            reconnectTask = nil
+        }
 
         var delaySeconds = 1.0
         let maxDelaySeconds = 30.0
-
         while isRunning {
-            // Backoff with jitter to avoid thundering-herd reconnects across many agents.
             let jitter = Double.random(in: 0...(delaySeconds * 0.3))
             do {
                 try await Task.sleep(for: .seconds(delaySeconds + jitter))
             } catch {
-                return  // cancelled (agent stopping)
+                return
             }
-
             guard isRunning else { return }
 
+            let attempt = reconnectState.beginAttempt()
             do {
-                try await websocketClient?.connect()
+                guard let websocketClient else {
+                    throw WebSocketClientError.notConnected
+                }
+                let generation = try await websocketClient.connect()
                 try await registerWithControlPlane()
+                guard
+                    await restoreConnectionScopedState(
+                        generation: generation, attempt: attempt)
+                else {
+                    logger.warning(
+                        "Control-plane connection dropped before reconnect recovery completed; retrying")
+                    continue
+                }
                 logger.info("Successfully reconnected and re-registered with control plane")
                 return
             } catch AgentError.registrationRejected(let reason) {
-                // The control plane explicitly rejected this agent's identity —
-                // retrying with the same SVID can never succeed, so exit with
-                // instructions instead of hammering a rejected identity.
                 logger.error("Registration rejected by control plane: \(reason)")
                 logger.error(
                     "Verify the SPIRE registration entry for this agent's SPIFFE ID, and that the control plane trusts the same trust domain."
@@ -91,10 +142,6 @@ extension Agent {
                 return
             } catch {
                 logger.error("Reconnection attempt failed, will retry: \(error)")
-                // Tear down any half-open socket from this attempt (connect succeeded
-                // but registration failed or timed out) so the next attempt starts
-                // from a clean state instead of stacking connections. disconnect()
-                // marks the close intentional, so it won't trigger a second loop.
                 await websocketClient?.disconnect()
                 delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
             }
@@ -141,6 +188,7 @@ extension Agent {
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
+        await sendNextRecordedExecTerminalState()
         // The beat is already on the wire before this bounded host probe runs,
         // so a slow lsblk cannot make the control plane mark the agent offline.
         _ = await storageDeviceInventory.refreshForHeartbeat()

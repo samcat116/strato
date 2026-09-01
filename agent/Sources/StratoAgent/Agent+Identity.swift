@@ -345,17 +345,14 @@ extension Agent {
         self.assignedAgentID = assignedId
         logger.info("Registration complete, assigned ID: \(assignedId)")
 
+        await replayRecordedExecSessionsAfterRegistration()
+
         // Give the control plane a fresh baseline right away — it will also
         // serve us its desired state on the first poll, and the two together
         // converge any drift accumulated while disconnected.
         _ = await storageDeviceInventory.refreshForRegistration()
         await sendObservedStateReport()
 
-        // Resume sandbox log shipping suspended while disconnected (issue
-        // #423): follows pick up from their seq checkpoints, so output the
-        // workloads produced during the gap ships from the guest ring buffers
-        // now. Idempotent on the initial registration.
-        await self.sandboxRuntime?.controlPlaneConnected()
     }
 
     /// Parks the given continuation as the pending registration wait and arms a
@@ -374,6 +371,12 @@ extension Agent {
         registrationGeneration &+= 1
         let generation = registrationGeneration
         registrationContinuation = continuation
+        guard !reconnectState.connectionWasLostDuringStartup else {
+            takeRegistrationContinuation()?.resume(
+                throwing: AgentError.registrationFailed(
+                    "control-plane connection closed during registration"))
+            return
+        }
         registrationTimeoutTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled else { return }

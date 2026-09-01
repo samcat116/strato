@@ -46,6 +46,11 @@ enum AgentError: Error, LocalizedError {
 }
 
 actor Agent {
+    struct GuestExecSessionRoute: Sendable {
+        let resourceKind: GuestResourceKind
+        let sessionKind: GuestExecSessionKind
+    }
+
     let initialAgentID: String  // ID used for registration (hostname or CLI arg)
     var assignedAgentID: String?  // UUID assigned by control plane after registration
     // The URL to dial. It carries no credential — the agent authenticates with
@@ -80,6 +85,8 @@ actor Agent {
     var storageBackends: StorageBackendRegistry?
     var consoleSocketManager: ConsoleSocketManager?
     var reconnectTask: Task<Void, Never>?
+    var reconnectState = ControlPlaneReconnectState()
+    var interactiveSessionFence = ControlPlaneInteractiveSessionFence()
     var isRunning = false
     // Set once a graceful shutdown has been requested (e.g. by a signal
     // handler calling stop()). Guards start() against parking if stop() ran
@@ -101,8 +108,8 @@ actor Agent {
     // `inboundContinuation` in arrival order; `messageConsumerTask` drains the stream and
     // routes each frame onto a per-resource serial lane in `messageQueue`, so operations on
     // the same VM/volume are applied in the order the control plane sent them (issue #179).
-    nonisolated let inboundMessages: AsyncStream<InboundWebSocketFrame>
-    nonisolated let inboundContinuation: AsyncStream<InboundWebSocketFrame>.Continuation
+    nonisolated let inboundMessages: AsyncStream<ControlPlaneInboundFrame>
+    nonisolated let inboundContinuation: AsyncStream<ControlPlaneInboundFrame>.Continuation
     let messageQueue = SerialTaskQueue()
     var messageConsumerTask: Task<Void, Never>?
 
@@ -178,7 +185,9 @@ actor Agent {
     // QEMU VM exec sessions use the same guest protocol as sandboxes but reach
     // it through the host kernel's AF_VSOCK transport (STR-82).
     let vmExecSessionManager: VMExecSessionManager
-    var guestExecSessionKinds: [String: GuestResourceKind] = [:]
+    var guestExecSessions: [String: GuestExecSessionRoute] = [:]
+    var recordedResultSendInProgress = false
+    var lastOfferedRecordedResultSessionId: String?
 
     // Virtual size per volume, so the reconciler can tell a volume that needs
     // growing from one that is already the size the sync asks for (STR-148).
@@ -513,7 +522,7 @@ actor Agent {
         self.metadataHopLimit = metadataHopLimit
         self.vmExecSessionManager = VMExecSessionManager(logger: logger)
 
-        let (stream, continuation) = AsyncStream.makeStream(of: InboundWebSocketFrame.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: ControlPlaneInboundFrame.self)
         self.inboundMessages = stream
         self.inboundContinuation = continuation
 

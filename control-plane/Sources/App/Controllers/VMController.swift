@@ -1192,6 +1192,7 @@ struct VMController: RouteCollection {
                 GuestExecStartMessage(
                     resourceKind: .virtualMachine,
                     resourceId: vmID.uuidString,
+                    sessionKind: .recorded,
                     sessionId: executionID.uuidString,
                     command: run.command,
                     env: run.env,

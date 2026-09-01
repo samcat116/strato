@@ -470,12 +470,10 @@ extension Agent {
             spiffePinning: controlPlanePinning,
             inboundContinuation: inboundContinuation)
 
-        if let client = websocketClient {
-            try await client.connect()
+        guard let client = websocketClient else {
+            throw AgentError.registrationFailed("WebSocket client was not initialized")
         }
-
-        // Register with control plane
-        try await registerWithControlPlane()
+        guard try await establishInitialControlPlaneConnection(client) else { return }
 
         // Heartbeats are driven by the WebSocket client's connection-scoped loop
         // (see WebSocketClient.startHeartbeat), so it stops firing while
@@ -497,6 +495,45 @@ extension Agent {
         if let error = terminalError {
             throw error
         }
+    }
+
+    /// Establishes the first registered socket without treating a transient
+    /// control-plane outage as a fatal agent startup error.
+    func establishInitialControlPlaneConnection(_ client: WebSocketClient) async throws -> Bool {
+        var delaySeconds = 1.0
+        let maxDelaySeconds = 30.0
+
+        while !shutdownRequested {
+            _ = reconnectState.consumeStartupConnectionLoss()
+            do {
+                let generation = try await client.connect()
+                try await registerWithControlPlane()
+                guard
+                    await restoreConnectionScopedState(generation: generation, attempt: nil),
+                    !reconnectState.consumeStartupConnectionLoss()
+                else {
+                    throw AgentError.registrationFailed(
+                        "control-plane connection closed during startup registration")
+                }
+                return true
+            } catch AgentError.registrationRejected(let reason) {
+                throw AgentError.registrationRejected(reason)
+            } catch {
+                guard !shutdownRequested else { return false }
+                logger.warning(
+                    "Initial control-plane registration failed; retrying with backoff: \(error)")
+                await client.disconnect()
+                _ = reconnectState.consumeStartupConnectionLoss()
+                let jitter = Double.random(in: 0...(delaySeconds * 0.3))
+                do {
+                    try await Task.sleep(for: .seconds(delaySeconds + jitter))
+                } catch {
+                    return false
+                }
+                delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
+            }
+        }
+        return false
     }
 
     /// Wakes start() out of its run-forever suspension after an unrecoverable
@@ -526,6 +563,7 @@ extension Agent {
 
         reconnectTask?.cancel()
         reconnectTask = nil
+        reconnectState.finishLoop()
 
         networkConnectTask?.cancel()
         networkConnectTask = nil
@@ -561,7 +599,7 @@ extension Agent {
         // End VM exec channels before stopping their event pump. Closing a
         // channel before exec_exit is also the guest-side process-group kill.
         await vmExecSessionManager.closeAll(reason: "agent stopping")
-        guestExecSessionKinds.removeAll()
+        guestExecSessions.removeAll()
 
         // Stop the sandbox exec/log pumps the same way.
         sandboxExecEventsContinuation.finish()
