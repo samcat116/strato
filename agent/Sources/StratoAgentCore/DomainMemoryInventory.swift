@@ -12,9 +12,8 @@ import FoundationXML
 ///
 /// - the **boot** size, which is the floor a virtio-mem resize works up from —
 ///   only the region above it is plug/unpluggable;
-/// - the memory **device's** size and block size, which are what makes an
-///   update fragment match the device already present rather than describe a
-///   different one;
+/// - the memory **device's** size, block size and complete live element, so an
+///   update can retain the identity libvirt assigned to the existing device;
 /// - whether there is a memory device at all.
 ///
 /// The process driver kept the equivalent in `vmSpawnSizing`, a dictionary keyed by
@@ -64,11 +63,23 @@ public struct DomainMemoryLayout: Sendable, Equatable {
         public let blockBytes: Int64
         /// `<target><requested>` — how much of the region is plugged in now.
         public let requestedBytes: Int64
+        /// The complete `<memory>` element read from the domain, including
+        /// identity libvirt assigned when it defined the device.
+        ///
+        /// An update must change this element in place rather than reconstruct
+        /// it from the sizing fields above: the live XML also carries the
+        /// device's `<alias>` and `<address>`, and libvirt uses those to find
+        /// the device that `virDomainUpdateDeviceFlags` should update.
+        public let deviceXML: String
 
-        public init(sizeBytes: Int64, blockBytes: Int64, requestedBytes: Int64) {
+        public init(
+            sizeBytes: Int64, blockBytes: Int64, requestedBytes: Int64,
+            deviceXML: String
+        ) {
             self.sizeBytes = sizeBytes
             self.blockBytes = blockBytes
             self.requestedBytes = requestedBytes
+            self.deviceXML = deviceXML
         }
     }
 
@@ -135,9 +146,25 @@ public enum DomainMemoryInventory {
         guard let maximum = delegate.memory else {
             throw DomainInventoryError.unparseable("the domain document declares no memory size")
         }
+        if let refusal = delegate.deviceRefusal {
+            throw DomainInventoryError.unparseable(refusal)
+        }
+        let deviceNodes = delegate.virtioMemDevices
+        let virtioMem: DomainMemoryLayout.VirtioMem?
+        if let parsed = delegate.virtioMem {
+            guard deviceNodes.count == 1 else {
+                throw DomainInventoryError.unparseable(
+                    "the domain declares \(deviceNodes.count) virtio-mem devices; expected exactly one")
+            }
+            virtioMem = DomainMemoryLayout.VirtioMem(
+                sizeBytes: parsed.sizeBytes, blockBytes: parsed.blockBytes,
+                requestedBytes: parsed.requestedBytes, deviceXML: deviceNodes[0].render())
+        } else {
+            virtioMem = nil
+        }
         return DomainMemoryLayout(
             maximumBytes: maximum, memoryDeviceBytes: delegate.memoryDeviceBytes,
-            virtioMem: delegate.virtioMem)
+            virtioMem: virtioMem)
     }
 
     /// A libvirt memory value in its declared unit, as bytes.
@@ -175,10 +202,29 @@ public enum DomainMemoryInventory {
 ///
 /// `<currentMemory>` is deliberately not collected — see `DomainMemoryLayout`
 /// for why it is not the boot size.
+private struct ParsedVirtioMem {
+    let sizeBytes: Int64
+    let blockBytes: Int64
+    let requestedBytes: Int64
+}
+
 private final class MemoryCollector: NSObject, XMLParserDelegate {
+    /// One element inside a selected virtio-mem subtree. Unlike
+    /// `DomainXMLNode.parse`, this stack is empty everywhere else in the domain,
+    /// so unrelated application metadata can contain CDATA or mixed content
+    /// without making an ordinary resize impossible.
+    private struct DeviceFrame {
+        let name: String
+        let attributes: [DomainXMLAttribute]
+        var children: [DomainXMLNode] = []
+        var text = ""
+    }
+
     private(set) var memory: Int64?
     private(set) var memoryDeviceBytes: Int64 = 0
-    private(set) var virtioMem: DomainMemoryLayout.VirtioMem?
+    private(set) var virtioMem: ParsedVirtioMem?
+    private(set) var virtioMemDevices: [DomainXMLNode] = []
+    private(set) var deviceRefusal: String?
 
     private var path: [String] = []
     private var text: String?
@@ -191,12 +237,24 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
     private var deviceSize: Int64?
     private var deviceBlock: Int64?
     private var deviceRequested: Int64?
+    private var deviceFrames: [DeviceFrame] = []
 
     func parser(
         _ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
         qualifiedName: String?, attributes: [String: String] = [:]
     ) {
         defer { path.append(elementName) }
+
+        if !deviceFrames.isEmpty
+            || (elementName == "memory" && path.last == "devices"
+                && attributes["model"] == "virtio-mem")
+        {
+            let orderedAttributes = attributes.keys.sorted().map {
+                DomainXMLAttribute(name: $0, value: attributes[$0] ?? "")
+            }
+            deviceFrames.append(
+                DeviceFrame(name: elementName, attributes: orderedAttributes))
+        }
 
         if elementName == "memory", path.last == "devices" {
             inMemoryDevice = true
@@ -220,21 +278,31 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        guard text != nil else { return }
-        text? += string
+        if text != nil {
+            text? += string
+        }
+        if !deviceFrames.isEmpty {
+            deviceFrames[deviceFrames.count - 1].text += string
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard !deviceFrames.isEmpty, let text = String(data: CDATABlock, encoding: .utf8) else { return }
+        deviceFrames[deviceFrames.count - 1].text += text
     }
 
     func parser(
         _ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
         qualifiedName: String?
     ) {
+        finishDeviceElement(named: elementName)
         path.removeLast()
 
         if elementName == "memory", path.last == "devices" {
             if let size = deviceSize {
                 memoryDeviceBytes += size
                 if isVirtioMem, let block = deviceBlock, block > 0 {
-                    virtioMem = DomainMemoryLayout.VirtioMem(
+                    virtioMem = ParsedVirtioMem(
                         sizeBytes: size, blockBytes: block, requestedBytes: deviceRequested ?? 0)
                 }
             }
@@ -256,5 +324,30 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
         case "requested" where inMemoryDevice: deviceRequested = value
         default: break
         }
+    }
+
+    private func finishDeviceElement(named elementName: String) {
+        guard let frame = deviceFrames.popLast() else { return }
+
+        var text: String?
+        if frame.children.isEmpty {
+            text = frame.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : frame.text
+        } else if !frame.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            recordDeviceRefusal("mixed content in <\(frame.name)>, which this cannot re-emit")
+        }
+
+        let node = DomainXMLNode(
+            frame.name, frame.attributes.map { ($0.name, Optional($0.value)) }, text: text,
+            children: frame.children)
+        if deviceFrames.isEmpty {
+            virtioMemDevices.append(node)
+        } else {
+            deviceFrames[deviceFrames.count - 1].children.append(node)
+        }
+    }
+
+    private func recordDeviceRefusal(_ what: String) {
+        guard deviceRefusal == nil else { return }
+        deviceRefusal = "the virtio-mem device contains \(what)"
     }
 }

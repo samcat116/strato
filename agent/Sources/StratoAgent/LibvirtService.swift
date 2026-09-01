@@ -1727,9 +1727,7 @@ actor LibvirtService: HypervisorService {
         }
         guard requested != virtioMem.requestedBytes else { return }
 
-        let xml = DomainDeviceXML.memoryDevice(
-            sizeBytes: virtioMem.sizeBytes, blockBytes: virtioMem.blockBytes,
-            requestedBytes: requested)
+        let xml = try DomainDeviceXML.memoryDevice(virtioMem, requestedBytes: requested)
         let flags = live ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
         try await call("libvirt-resize-memory", vmId: vmId) { client, deadline in
             try await client.domainUpdateDeviceFlags(

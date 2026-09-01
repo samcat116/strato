@@ -475,17 +475,13 @@ public enum DomainRedefinition {
         }
         // A *new* device is `DomainXMLBuilder.memoryDeviceNode`, whose `<node>`
         // is 0 — the cell the builder writes — and libvirt refuses a backend for
-        // a guest node that does not exist. Retargeting it at the cell instead
-        // would not help: `DomainDeviceXML.memoryDevice` builds the resize
-        // fragment from the same function and matches libvirt's device by
-        // identity, so a device on node 1 would be one no later resize could
-        // find. Refusing keeps both honest. Strato writes no such document; nor
+        // a guest node that does not exist. Strato writes no such document; nor
         // does it write `<qemu:commandline>`, which `parse` survives on purpose.
         let cellID = cells?.first?.attribute("id") ?? "0"
         if size > 0, existing == nil, cellID != "0" {
             refusals.append(
                 "the domain's only NUMA cell is node \(cellID) rather than node 0, and a memory device "
-                    + "this pass added would name a node no later resize could match")
+                    + "this pass added would name the nonexistent node 0")
             return .unchanged
         }
 
