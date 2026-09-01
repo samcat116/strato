@@ -142,9 +142,9 @@ public protocol HypervisorService: Actor, Sendable {
     ///   - spec: The desired spec this boot is converging on
     func redefineVM(vmId: String, spec: VMSpec) async throws
 
-    /// Converges a persistent backend's disk boot metadata before a stopped VM
-    /// boots. Backends that rebuild their VM from the current spec on every
-    /// spawn have no stored definition and use the default no-op.
+    /// Converges a persistent backend's disk boot metadata before the VM's next
+    /// start or restart. Backends that rebuild their VM from the current spec
+    /// on every spawn have no stored definition and use the default no-op.
     ///
     /// Unlike `redefineVM`, this is required rather than best effort: booting
     /// after a failed rewrite can make a VM start from the wrong volume while

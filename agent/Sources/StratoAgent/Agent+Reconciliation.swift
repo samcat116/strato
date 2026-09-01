@@ -563,10 +563,7 @@ extension Agent: ReconcileActuator {
             case .delete:
                 try await reconcileDelete(item)
             case .reboot:
-                try await reconcileService(for: item.id).rebootVM(vmId: item.id)
-                await sendVMLog(
-                    vmId: item.id, level: .info, eventType: .operation,
-                    message: "VM restarted by reconciliation", operation: "reboot")
+                try await reconcileReboot(item)
             case .restore:
                 try await reconcileRestore(item)
             case .attach, .detach, .export:
@@ -604,10 +601,10 @@ extension Agent: ReconcileActuator {
     /// was captured with; "stop and start it to widen" holds for its *next*
     /// boot, the one with no restore outstanding.
     ///
-    /// A stored-definition update that *fails* is logged rather than thrown — the backend
-    /// contract says best effort, because a VM that comes up with the ceiling it
-    /// already had is the status quo, while a VM that does not come up is a
-    /// regression.
+    /// A capacity update that *fails* is logged rather than thrown — that
+    /// backend contract is best effort, because a VM that comes up with the
+    /// ceiling it already had is the status quo. Persistent disk boot order is
+    /// converged separately and is required before `bootVM`.
     func reconcileBoot(_ item: ReconcileWorkItem) async throws {
         let service = try reconcileService(for: item.id)
         guard let desired = item.desired,
@@ -691,7 +688,7 @@ extension Agent: ReconcileActuator {
             // boot metadata even though its desired volumes are ordered. This
             // migration must succeed before boot; otherwise libvirt can start
             // the VM from the wrong volume while reconciliation reports success.
-            if !item.steps.contains(.create), !item.steps.contains(.restore) {
+            if !item.steps.contains(.create) {
                 try await service.convergeDiskBootOrder(
                     vmId: item.id, volumes: desired.spec.volumes)
             }
@@ -738,6 +735,23 @@ extension Agent: ReconcileActuator {
         } else {
             capacityAdmissionLedger.release(claim)
         }
+    }
+
+    /// Applies persistent disk boot metadata before asking the backend to
+    /// restart. Libvirt deliberately restarts from the persistent definition,
+    /// because its live hot-plug fragments cannot change the boot metadata of a
+    /// guest that has already started.
+    func reconcileReboot(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desired else {
+            throw HypervisorServiceError.invalidConfiguration("reboot work item without a desired VM spec")
+        }
+        let service = try reconcileService(for: item.id)
+        try await service.convergeDiskBootOrder(
+            vmId: item.id, volumes: desired.spec.volumes)
+        try await service.rebootVM(vmId: item.id)
+        await sendVMLog(
+            vmId: item.id, level: .info, eventType: .operation,
+            message: "VM restarted by reconciliation", operation: "reboot")
     }
 
     /// Load a checkpoint back into an existing VM (STR-151).

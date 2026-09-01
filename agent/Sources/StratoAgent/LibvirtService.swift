@@ -759,16 +759,13 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// Repairs disk boot metadata in a stopped domain created by an older
-    /// agent. This is separate from the best-effort capacity rewrite above:
-    /// failure must keep the VM stopped so it cannot boot from the wrong disk.
+    /// Repairs disk boot metadata in the persistent definition, including while
+    /// its live domain is running. This is separate from the best-effort
+    /// capacity rewrite above: failure must prevent the next start or restart
+    /// so the VM cannot boot from the wrong disk.
     func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws {
         try await perform("converge-disk-boot-order", vmId: vmId) {
             let dom = try await domain(vmId)
-            guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
-                return
-            }
-
             guard
                 let persistentXML = try DomainRedefinition.applyingBootOrder(
                     toInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
@@ -782,7 +779,7 @@ actor LibvirtService: HypervisorService {
                 try await client.domainDefineXML(xml: persistentXML, deadline: deadline)
             }
             logger.info(
-                "Updated the persistent libvirt disk boot order before boot",
+                "Updated the persistent libvirt disk boot order for the next start",
                 metadata: ["strato.vm.id": .string(vmId)])
         }
     }
@@ -955,32 +952,22 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// Reboots the guest, treating a domain that is already down as satisfying
-    /// the request.
+    /// Restarts the guest from its persistent definition.
     ///
-    /// That is not leniency, it is STR-151's semantics: a reboot is an edge
-    /// nonce, consumed by being *performed or superseded*, and a stop or a boot
-    /// supersedes it. `virDomainReboot` answers `VIR_ERR_OPERATION_INVALID` on
-    /// an inactive domain, so a reboot that lands in the window just after the
-    /// guest powered itself off would otherwise fail the lane and strand the
-    /// nonce — while the reconciler is about to boot the VM anyway, which is
-    /// the very thing the request wanted.
+    /// `virDomainReboot` continues the live instance and therefore preserves
+    /// the boot metadata it had when it started. That is wrong after a live disk
+    /// attachment changes the persistent order: the CONFIG definition is ready
+    /// for the next boot, but the live device fragments intentionally have no
+    /// `<boot>` elements. A bounded graceful shutdown followed by `domainCreate`
+    /// makes the reboot consume the repaired persistent definition. Both calls
+    /// already treat a domain that crossed the boundary concurrently as having
+    /// satisfied that half of the restart.
     func rebootVM(vmId: String) async throws {
-        try await perform("reboot", vmId: vmId) {
-            let dom = try await domain(vmId)
-            logger.info("Rebooting libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
-            do {
-                try await call("libvirt-reboot", vmId: vmId) { client, deadline in
-                    try await client.domainReboot(dom: dom, flags: 0, deadline: deadline)
-                }
-            } catch let error where LibvirtFailure.isOperationInvalid(error) {
-                guard try await satisfied(dom, vmId: vmId, by: { !LibvirtDomain.holdsResources(rawState: $0) })
-                else { throw error }
-                logger.info(
-                    "libvirt domain is already down; the reboot is superseded by the boot that follows",
-                    metadata: ["strato.vm.id": .string(vmId)])
-            }
-        }
+        logger.info(
+            "Restarting libvirt domain from its persistent definition",
+            metadata: ["strato.vm.id": .string(vmId)])
+        try await shutdownVM(vmId: vmId)
+        try await bootVM(vmId: vmId)
     }
 
     func pauseVM(vmId: String) async throws {
