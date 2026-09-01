@@ -1,0 +1,26 @@
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_01730cdafc8446::t_1184dfd27d266e 762-765,955,957-964,966-970
+  s_01730cdafc8446::t_db2b717b814e1c 782
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_01730cdafc8446::t_1184dfd27d266e 145-147
+agent/Sources/StratoAgent/Agent+Reconciliation.swift
+  s_01730cdafc8446::t_db2b717b814e1c 604-607
+  s_01730cdafc8446::t_1184dfd27d266e 566,691,740-754
+  s_01730cdafc8446::t_eae5430748906e 755-756
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "f6fa7706eda89e12bb35586b2916094abc3cecfd",
+  "prompts": {},
+  "sessions": {
+    "s_01730cdafc8446": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-d8cf-7de3-97c1-67f2dad45e55",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
