@@ -76,6 +76,28 @@ extension Agent {
                         }
                     },
                     probe: { await LibvirtProbe.probe() }))
+
+            let cephVersionCache = NodeDependencyProbeCache<String?>()
+            registry.append(
+                CephClientNodeDependencyModule(
+                    version: {
+                        await cephVersionCache.value(maxAge: 300) {
+                            await DependencyVersionProbe.version(
+                                candidates: [CephRBDStorageBackend.defaultRBDPath],
+                                arguments: ["--version"])
+                        }
+                    },
+                    libvirt: { await LibvirtProbe.probe() },
+                    qemuAttachmentsEnabled: hypervisorType == .qemu,
+                    functional: {
+                        let files = FileManager.default
+                        guard files.isExecutableFile(atPath: CephRBDStorageBackend.defaultRBDPath) else {
+                            return .unhealthy(
+                                "Ceph RBD client is not executable",
+                                code: .missingBinary)
+                        }
+                        return .healthy
+                    }))
             #endif
 
             if effectiveNetworkMode == .ovn {

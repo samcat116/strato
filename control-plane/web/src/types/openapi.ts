@@ -1041,6 +1041,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectID}/storage-pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List storage pools available to a project
+         * @description Returns the deployment's local default pool followed by the Ceph pools configured with a project-scoped namespace and cephx identity for this project. Credentials are never included. Requires project membership.
+         */
+        get: operations["listProjectStoragePools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/volumes/{volumeId}": {
         parameters: {
             query?: never;
@@ -4075,6 +4098,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sites/{siteId}/ceph-cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a site's external Ceph cluster
+         * @description Returns the bring-your-own Ceph cluster registered for this site. Credential material and its internal secret reference are never returned. STR-155 does not yet schedule observer probes, so health is `unknown` and capacity/usage timestamps are absent until a later observation path is added. Requires `read` on the site.
+         */
+        get: operations["getSiteCephCluster"];
+        /**
+         * Update a site's external Ceph client configuration
+         * @description Replaces monitor endpoints and observer client name. The cluster FSID is immutable. Monitor endpoints must use msgr2 (`v2:host:port` or `v2:[IPv6]:port`, port 1 through 65535). `keyring` may be omitted to retain the current secret, but changing `clientName` requires a replacement containing exactly one matching client section and one nonempty `key =` entry. Requires `manage` on the site.
+         */
+        put: operations["updateSiteCephCluster"];
+        /**
+         * Register an external Ceph cluster for a site
+         * @description Registers an existing Ceph cluster. Strato agents act only as clients; this does not bootstrap or manage any Ceph daemon. The submitted monitor endpoints must use msgr2 (`v2:host:port` or `v2:[IPv6]:port`, port 1 through 65535). The observer keyring must have exactly one section matching `clientName` and exactly one nonempty `key =` entry; it is encrypted at rest and never returned. Requires `manage` on the site.
+         */
+        post: operations["createSiteCephCluster"];
+        /**
+         * Remove a site's external Ceph cluster registration
+         * @description Deletes the cluster registration and its observer credential. Refused while any project access configuration still refers to the cluster. This never modifies the external Ceph cluster. Requires `manage` on the site.
+         */
+        delete: operations["deleteSiteCephCluster"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites/{siteId}/ceph-cluster/projects/{projectID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a project's scoped Ceph access for a site
+         * @description Returns the project's Ceph client identity and storage pool, without credential material or internal secret references. Requires `read` on the site and membership in the project.
+         */
+        get: operations["getSiteCephProjectAccess"];
+        /**
+         * Configure a project's scoped Ceph access for a site
+         * @description Creates or replaces the project's Ceph client identity, RBD pool, and namespace. `keyring` is required when creating the configuration and whenever the cephx identity, pool, namespace, or credential changes. It must contain exactly one matching section, one key, and only the exact namespace-scoped mon/mgr/osd RBD caps. Replacing an existing credential also requires `cephxRevoked: true`, confirming that the operator revoked it in the external cluster. Credentials, identity, pool, and namespace are immutable while volumes exist. Requires `manage` on the site and project policy administration.
+         */
+        put: operations["upsertSiteCephProjectAccess"];
+        post?: never;
+        /**
+         * Remove a project's scoped Ceph access for a site
+         * @description Deletes the project storage pool, cephx credential, and access record, and permanently records an agent-cleanup tombstone for the retired credential. Refused while any volume still belongs to the pool. Strato cannot revoke cephx in the external cluster, so callers must first do that out of band and confirm it with `cephxRevoked=true`. Requires `manage` on the site and project policy administration.
+         */
+        delete: operations["deleteSiteCephProjectAccess"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sites/{siteId}/agents/{agentId}": {
         parameters: {
             query?: never;
@@ -5734,6 +5825,11 @@ export interface components {
             imageId?: string;
             /** Format: uuid */
             projectId: string;
+            /**
+             * Format: uuid
+             * @description Storage pool for the managed boot volume. Omit to preserve the deployment's local default. A Ceph pool must belong to this project and constrains VM placement to fresh Ceph-client agents in its site; its bytes consume no agent-local disk reservation.
+             */
+            poolId?: string;
             environment?: string;
             cpu?: number;
             /**
@@ -6349,6 +6445,11 @@ export interface components {
             description?: string;
             /** Format: uuid */
             projectId: string;
+            /**
+             * Format: uuid
+             * @description Storage pool for the new volume. Omit to use the deployment's local default pool. The selected pool must be available to the project; Ceph pools accept only `raw` volumes.
+             */
+            poolId?: string;
             /** @description Which of the project's environments the volume's bytes are charged to. Omit for the project's default, as VM and sandbox create do. */
             environment?: string;
             sizeGB: number;
@@ -6506,8 +6607,23 @@ export interface components {
             rbd: {
                 pool: string;
                 image: string;
+                /** @description Project-scoped RBD namespace containing the image. */
+                namespace: string;
+                /** @description Ceph client username without the `client.` prefix. */
                 user: string;
-                monHosts: string[];
+                monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+                /**
+                 * Format: uuid
+                 * @description Strato identity of the external Ceph cluster.
+                 */
+                clusterId: string;
+                /**
+                 * Format: uuid
+                 * @description Stable identity of the project-scoped credential and the deterministic libvirt secret UUID. This is not secret material.
+                 */
+                credentialId: string;
+                /** @description Deterministic agent-local path to the generated secure Ceph client configuration. The keyring itself is never carried in this attachment. */
+                configPath: string;
             };
         };
         VolumeSnapshot: {
@@ -8674,6 +8790,119 @@ export interface components {
             /** Format: date-time */
             usedAt?: string | null;
         };
+        /** @description Client configuration for an existing Ceph cluster. `keyring` is an observer credential used for cluster health and capacity probes; it is encrypted at rest, never returned, and never used for project volume I/O. */
+        CreateExternalCephClusterRequest: {
+            /**
+             * Format: uuid
+             * @description The external Ceph cluster's immutable FSID.
+             */
+            fsid: string;
+            /** @description Messenger-v2 monitor endpoints. Each entry is `v2:host:port` or `v2:[IPv6]:port`, with a port from 1 through 65535. */
+            monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+            /** @description Observer cephx identity, including the `client.` prefix. */
+            clientName: string;
+            /** @description Complete keyring whose only section is exactly `[<clientName>]` (where `<clientName>` is this request's `clientName`) and which has exactly one nonempty `key = ...` entry in that section. Accepted only on this write and never represented in a response. */
+            keyring: string;
+        };
+        /** @description Full replacement of the mutable Ceph client configuration. Omit `keyring` to retain the current secret. A replacement keyring is required when changing `clientName`. */
+        UpdateExternalCephClusterRequest: {
+            /** @description Messenger-v2 monitor endpoints. Each entry is `v2:host:port` or `v2:[IPv6]:port`, with a port from 1 through 65535. */
+            monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+            /** @description Observer cephx identity, including the `client.` prefix. */
+            clientName: string;
+            /** @description Replacement keyring whose only section is exactly `[<clientName>]` (where `<clientName>` is this request's `clientName`) and which has exactly one nonempty `key = ...` entry in that section. Omit to retain the current secret; required when changing `clientName`. */
+            keyring?: string;
+        };
+        /** @description Project-isolated RBD access. `keyring` is required when creating this configuration and whenever identity, pool, namespace, or credential changes; omit it on metadata-only updates to retain the current secret. The cephx identity must be scoped exactly to the supplied pool and namespace. Replacing an existing credential requires external cephx revocation and `cephxRevoked: true`. */
+        UpsertCephProjectAccessRequest: {
+            /** @description Project-scoped cephx identity, including `client.`. */
+            clientName: string;
+            /** @description Complete keyring whose only section is exactly `[<clientName>]` (where `<clientName>` is this request's `clientName`) and which has exactly one nonempty `key = ...` entry in that section, exactly `caps mon = "profile rbd"`, and exactly namespace-scoped `caps mgr` and `caps osd` RBD profiles for the supplied pool and namespace. No other capability services are accepted. Required on create and whenever identity, pool, namespace, or credential changes; never returned. */
+            keyring?: string;
+            /** @description Required and true when replacing an existing credential. Confirms that an operator already revoked the old cephx credential in the external cluster. Ignored on create and metadata-only updates. */
+            cephxRevoked?: boolean;
+            /** @description User-facing name of the Strato storage pool. */
+            storagePoolName: string;
+            /** @description Existing Ceph RBD pool containing this project's images. */
+            cephPoolName: string;
+            /** @description RBD namespace dedicated to this project. It is fixed after the first volume exists. */
+            namespace: string;
+        };
+        /** @description Public external-cluster metadata. Secret material and internal secret references are deliberately absent. This phase stores observer credentials but does not yet run health/capacity probes, so observation fields remain unknown/absent. */
+        CephClusterResponse: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            siteId: string;
+            /** Format: uuid */
+            fsid: string;
+            /** @description False for a bring-your-own cluster registered here. */
+            managed: boolean;
+            monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+            /** @description Observer cephx identity; never a project volume identity. */
+            clientName: string;
+            /** @description Whether encrypted observer credential material is stored. */
+            hasCredential: boolean;
+            health: components["schemas"]["CephClusterHealth"];
+            /** Format: int64 */
+            capacityBytes?: number;
+            /** Format: int64 */
+            usedBytes?: number;
+            /** Format: date-time */
+            observedAt?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /**
+         * @description Last observed health of the external Ceph cluster. Always `unknown` in STR-155 because observer probing is intentionally deferred.
+         * @enum {string}
+         */
+        CephClusterHealth: "unknown" | "ok" | "warning" | "error";
+        /** @description A Ceph messenger-v2 monitor endpoint: `v2:host:port` for a hostname or IPv4 address, or `v2:[IPv6]:port` for an IPv6 address. The port must be from 1 through 65535. */
+        CephMonitorEndpoint: string;
+        /** @description Project-scoped Ceph identity and its storage pool. The keyring and its internal secret reference are never returned. */
+        CephProjectAccessResponse: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            clusterId: string;
+            /** Format: uuid */
+            projectId: string;
+            clientName: string;
+            /** @description Whether encrypted project credential material is stored. */
+            hasCredential: boolean;
+            storagePool: components["schemas"]["StoragePoolResponse"];
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /** @description Public storage-pool metadata. Local implementation details and all credential material are omitted. */
+        StoragePoolResponse: {
+            /** Format: uuid */
+            id?: string;
+            name: string;
+            mode: components["schemas"]["StoragePoolMode"];
+            /** Format: uuid */
+            siteId?: string;
+            /** Format: uuid */
+            cephClusterId?: string;
+            /** Format: uuid */
+            cephProjectAccessId?: string;
+            cephPoolName?: string;
+            cephNamespace?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /**
+         * @description How a storage pool makes volume data available to agents.
+         * @enum {string}
+         */
+        StoragePoolMode: "local" | "replicated" | "ceph";
         /** @description An availability zone: the agents that share one OVN deployment, so a logical network pinned to the site can span its nodes. */
         SiteDetail: {
             /** Format: uuid */
@@ -11982,6 +12211,33 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listProjectStoragePools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The storage pools available to the project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoragePoolResponse"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getVolume: {
@@ -17464,6 +17720,206 @@ export interface operations {
             path: {
                 /** @description The site's id. */
                 siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's registered Ceph cluster. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephClusterResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateExternalCephClusterRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated Ceph cluster. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephClusterResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    createSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateExternalCephClusterRequest"];
+            };
+        };
+        responses: {
+            /** @description The registered Ceph cluster. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephClusterResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getSiteCephProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's scoped Ceph access and storage pool. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephProjectAccessResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    upsertSiteCephProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertCephProjectAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description The configured project access and storage pool. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephProjectAccessResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteSiteCephProjectAccess: {
+        parameters: {
+            query: {
+                /** @description Must be true to confirm the retired cephx credential was revoked in the external Ceph cluster before Strato deletes its copy. */
+                cephxRevoked: true;
+            };
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
             };
             cookie?: never;
         };

@@ -27,6 +27,9 @@ enum VMCreationWorkflow {
             let cpu: Int?
             let memory: Int64?
             let disk: Int64?
+            /// Storage pool for the managed boot volume. Omission preserves
+            /// the seeded default-local behavior.
+            let poolId: UUID?
             // Hot-add ceilings (issue #568). Fixed for the life of a running
             // hypervisor process, so they are chosen here and only raised by
             // a stop/start. Default to the boot sizing, i.e. no headroom.
@@ -146,6 +149,9 @@ enum VMCreationWorkflow {
             resourceKind: "VMs"
         )
         let projectId = try project.requireID()
+        let bootPool = try await StoragePool.resolveForCreate(
+            requestedPoolID: createRequest.poolId, projectID: projectId, on: req.db)
+        let bootPoolID = try bootPool.requireID()
 
         // NIC logical networks are resolved inside the create transaction
         // (`LogicalNetworkService.resolveForWorkloadCreate`), scoped to this
@@ -345,15 +351,8 @@ enum VMCreationWorkflow {
         let userID = try user.requireID()
 
         // A VM's boot disk is a first-class managed volume from its first
-        // committed state. Pool selection is not public yet, so it uses the
-        // same seeded local pool as an explicit volume create.
-        let bootPool = try await StoragePool.defaultPool(on: req.db)
-        guard bootPool.mode == .local else {
-            throw Abort(
-                .conflict,
-                reason: "Storage pool '\(bootPool.name)' is not supported for VM boot volumes")
-        }
-        let bootPoolID = try bootPool.requireID()
+        // committed state. Explicit Ceph selection is project-scoped above;
+        // omission still selects the seeded local pool exactly as before.
 
         // Reserve quota and persist the VM and its create record in one
         // transaction: enforcement checks, both inserts, creator grants, and
@@ -507,7 +506,8 @@ enum VMCreationWorkflow {
                         projectID: projectId,
                         environment: environment,
                         size: vm.disk,
-                        format: vm.hypervisorType == .firecracker ? .raw : .qcow2,
+                        format: bootPool.mode == .ceph || vm.hypervisorType == .firecracker
+                            ? .raw : .qcow2,
                         volumeType: .boot,
                         status: .creating,
                         createdByID: userID,

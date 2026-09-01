@@ -95,19 +95,16 @@ extension Agent {
                         "volume \(parentId) is attached to VM \(holderID), which is not confirmed shut down")
                 }
             }
-            let backend = try requireStorageBackend()
-            guard let disk = try await backend.listVolumes()[parentId] else {
+            let backend = try await requireStorageBackend(
+                volumeId: parentId, volumeStorage: desired.volumeStorage)
+            guard let disk = try await backend.inspectVolume(volumeId: parentId) else {
                 // The volume may be mid-create in this very sync; a dependency
                 // wait burns no attempt and retries on the next one.
                 throw SnapshotConvergenceError.sourceNotReady(
                     "volume \(parentId) is not present on this host yet")
             }
-            guard case .file(let diskPath, _) = disk else {
-                throw SnapshotConvergenceError.unsupported(
-                    "the filesystem snapshot backend cannot capture \(disk)")
-            }
             let path = try await backend.createSnapshot(
-                volumeId: parentId, snapshotId: snapshotId, volumePath: diskPath)
+                volumeId: parentId, snapshotId: snapshotId, attachment: disk)
             facts = ObservedSnapshotFacts(
                 sizeBytes: Self.fileSizeBytes(at: path),
                 storagePath: path,
@@ -147,6 +144,7 @@ extension Agent {
 
         snapshotRecords[desired.snapshotId] = SnapshotRecord(
             snapshotId: desired.snapshotId, kind: desired.kind, parentId: desired.parentId,
+            volumeStorage: desired.kind == .volumeSnapshot ? desired.volumeStorage : nil,
             facts: facts)
         persistSnapshotRecords()
         logger.info(
@@ -191,7 +189,13 @@ extension Agent {
         // bytes that are already gone confirms cleanly rather than failing.
         switch kind {
         case .volumeSnapshot:
-            try await requireStorageBackend().deleteSnapshot(
+            let backend = try await requireStorageBackend(
+                volumeId: parentId.uuidString,
+                volumeStorage: VolumeSnapshotStorageRouting.resolve(
+                    desiredStorage: item.desiredSnapshot?.volumeStorage,
+                    recordedStorage: snapshotRecords[snapshotId]?.volumeStorage,
+                    currentParentStorage: desiredVolumeStates[parentId.uuidString]?.storage))
+            try await backend.deleteSnapshot(
                 volumeId: parentId.uuidString, snapshotId: snapshotId.uuidString)
         case .vmCheckpoint:
             guard let service = getHypervisorServiceForVM(vmId: parentId.uuidString) else {
@@ -317,14 +321,22 @@ extension Agent {
         return size.int64Value
     }
 
-    func requireStorageBackend() throws -> any StorageBackend {
-        guard let storageBackend else {
+    func requireStorageBackend(
+        volumeId: String? = nil, desired: DesiredVolumeState? = nil,
+        volumeStorage: DesiredVolumeStorage? = nil
+    ) async throws -> any StorageBackend {
+        guard let storageBackends else {
             // A host with no storage backend can never grow one by retrying,
             // and the control plane only places volumes on QEMU-capable agents,
             // so this is a misconfiguration to surface rather than retry.
             throw VolumeConvergenceError.unsupported("storage backend not available on this agent")
         }
-        return storageBackend
+        let storage =
+            volumeStorage
+            ?? desired?.storage
+            ?? volumeId.flatMap { desiredVolumeStates[$0]?.storage }
+            ?? .local
+        return try await storageBackends.backend(for: storage)
     }
 
     func volumeReconcileCreate(_ item: ReconcileWorkItem) async throws {
@@ -338,7 +350,7 @@ extension Agent {
             throw VolumeConvergenceError.blocked(
                 "managed volume \(item.id) has historical bytes that could not be adopted: \(adoptionFailure)")
         }
-        let backend = try requireStorageBackend()
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
 
         // The create strategy is read only here, when the volume does not yet
         // exist. A present volume never re-runs it, which is what makes a
@@ -351,15 +363,19 @@ extension Agent {
             }
             // The control plane guarantees the source is on this agent, so the
             // path comes from our own inventory rather than the wire.
-            guard let source = try await backend.listVolumes()[sourceId] else {
+            guard let sourceDesired = desiredVolumeStates[sourceId] else {
+                throw VolumeConvergenceError.sourceNotReady(
+                    "source volume \(sourceId) has no desired storage configuration")
+            }
+            guard sourceDesired.storage == desired.storage else {
+                throw VolumeConvergenceError.unsupported(
+                    "cross-backend volume clones are not supported")
+            }
+            guard let source = try await backend.inspectVolume(volumeId: sourceId) else {
                 // Genuinely a dependency, not a failure: the source may still
                 // be converging earlier in this same sync.
                 throw VolumeConvergenceError.sourceNotReady(
                     "source volume \(sourceId) is not present on this agent yet")
-            }
-            guard case .file(let sourcePath, _) = source else {
-                throw VolumeConvergenceError.unsupported(
-                    "the filesystem clone path cannot use \(source)")
             }
             if let holder = recordedVolumeAttachments()[sourceId] {
                 guard desired.source?.sourceVMId?.uuidString == holder.vmId else {
@@ -376,7 +392,7 @@ extension Agent {
                 }
             }
             attachment = try await backend.cloneVolume(
-                sourceVolumeId: sourceId, sourcePath: sourcePath, targetVolumeId: item.id)
+                sourceVolumeId: sourceId, sourceAttachment: source, targetVolumeId: item.id)
         case DesiredVolumeSource.image:
             guard let imageInfo = desired.source?.imageInfo,
                 let artifactKind = desired.source?.artifactKind
@@ -393,9 +409,7 @@ extension Agent {
 
         // A cloned or image-backed volume inherits the source's size, which may
         // be smaller than what was asked for; the next sync plans the grow.
-        if case .file(let path, _) = attachment {
-            volumeSizes[item.id] = try? await backend.volumeInfo(volumePath: path).virtualSize
-        }
+        volumeSizes[item.id] = try? await backend.volumeInfo(attachment: attachment).virtualSize
         logger.info(
             "Volume converged into existence",
             metadata: [
@@ -409,13 +423,9 @@ extension Agent {
         guard let desired = item.desiredVolume else {
             throw VolumeConvergenceError.unsupported("volume resize requires a desired entry")
         }
-        let backend = try requireStorageBackend()
-        guard let disk = try await backend.listVolumes()[item.id] else {
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        guard let disk = try await backend.inspectVolume(volumeId: item.id) else {
             throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
-        }
-        guard case .file(let diskPath, _) = disk else {
-            throw VolumeConvergenceError.unsupported(
-                "the filesystem resize path cannot use \(disk)")
         }
         // The planner's cached size, not a fresh `qemu-img info` (STR-199).
         //
@@ -428,14 +438,14 @@ extension Agent {
         // reporting the size in the first place. The cache is authoritative
         // because every write path records the size it produced; the probe
         // behind it fires once per volume, not once per attempt.
-        guard let current = await volumeVirtualSize(volumeId: item.id, path: diskPath) else {
+        guard let current = await volumeVirtualSize(volumeId: item.id, attachment: disk) else {
             // Blocked rather than transient: an image whose size cannot be read
             // is not one to grow on a guess, and this is how the refusal
             // reaches an operator instead of the item running no steps and
             // recording the generation as converged.
             throw VolumeConvergenceError.blocked(
-                "cannot read the current size of volume \(item.id) at \(diskPath), so its size "
-                    + "cannot be converged; check the image with `qemu-img info`")
+                "cannot read the current size of volume \(item.id), so its size cannot be converged; "
+                    + "check the backing image with its storage client")
         }
         guard desired.sizeBytes >= current else {
             // Shrinking a disk image truncates the guest's filesystem. There is
@@ -492,13 +502,14 @@ extension Agent {
                             + "has no online grow path")
                 }
             }
-            try await backend.resizeVolume(volumePath: diskPath, newSizeBytes: desired.sizeBytes)
+            try await backend.resizeVolume(attachment: disk, newSizeBytes: desired.sizeBytes)
         }
         volumeSizes[item.id] = desired.sizeBytes
     }
 
     func volumeReconcileDelete(_ item: ReconcileWorkItem) async throws {
-        let backend = try requireStorageBackend()
+        let backend = try await requireStorageBackend(
+            volumeId: item.id, desired: item.desiredVolume)
         // Unplug before removing the bytes, or a running guest keeps an open
         // handle on a file that no longer exists. Best effort: a VM that is
         // already gone leaves nothing to unplug.
@@ -515,8 +526,8 @@ extension Agent {
         guard let desired = item.desiredVolume, let attachment = desired.attachment else {
             throw VolumeConvergenceError.unsupported("volume attach requires a desired attachment")
         }
-        let backend = try requireStorageBackend()
-        guard let disk = try await backend.listVolumes()[item.id] else {
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        guard let disk = try await backend.inspectVolume(volumeId: item.id) else {
             throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
         }
         let vmId = attachment.vmId.uuidString
@@ -528,6 +539,9 @@ extension Agent {
             // control plane would show an operator.
             throw VolumeConvergenceError.sourceNotReady(
                 "VM \(vmId) is not present on this agent yet")
+        }
+        if entry.hypervisorType == .qemu {
+            try await backend.prepareAttachmentForQEMU(disk)
         }
 
         // Record first, then hot-plug. A crash in between leaves a recorded
@@ -621,24 +635,44 @@ extension Agent {
     /// image materialization finishes, so absence is a retryable dependency;
     /// retaining a nil or control-plane-stale attachment would recreate the legacy
     /// path-only boot behavior this contract replaces.
-    func specWithRealizedVolumeAttachments(_ spec: VMSpec, vmId: String) async throws -> VMSpec {
-        let backend = try requireStorageBackend()
-        let inventory = try await backend.listVolumes()
-        let volumes = try spec.volumes.map { volume -> VolumeSpec in
+    func specWithRealizedVolumeAttachments(
+        _ spec: VMSpec, vmId: String, hypervisorType: HypervisorType
+    ) async throws -> VMSpec {
+        var volumes: [VolumeSpec] = []
+        for volume in spec.volumes {
             let volumeId = volume.volumeId.uuidString
-            guard let disk = inventory[volumeId] else {
+            guard let desired = desiredVolumeStates[volumeId] else {
+                throw VolumeConvergenceError.sourceNotReady(
+                    "managed volume \(volumeId) for VM \(vmId) has no desired storage configuration")
+            }
+            let backend = try await requireStorageBackend(volumeId: volumeId, desired: desired)
+            guard let disk = try await backend.inspectVolume(volumeId: volumeId) else {
                 throw VolumeConvergenceError.sourceNotReady(
                     "managed volume \(volumeId) for VM \(vmId) is not present on this agent yet")
             }
-            return VolumeSpec(
-                volumeId: volume.volumeId,
-                deviceName: volume.deviceName,
-                attachment: disk,
-                readonly: volume.readonly,
-                bootOrder: volume.bootOrder,
-                ioLimits: volume.ioLimits)
+            if hypervisorType == .qemu {
+                try await backend.prepareAttachmentForQEMU(disk)
+            }
+            volumes.append(
+                VolumeSpec(
+                    volumeId: volume.volumeId,
+                    deviceName: volume.deviceName,
+                    attachment: disk,
+                    readonly: volume.readonly,
+                    bootOrder: volume.bootOrder,
+                    ioLimits: volume.ioLimits))
         }
         return spec.withVolumes(volumes)
+    }
+
+    func prepareQEMUStorageAttachments(_ spec: VMSpec) async throws {
+        for volume in spec.volumes {
+            guard let attachment = volume.attachment else { continue }
+            let volumeId = volume.volumeId.uuidString
+            let backend = try await requireStorageBackend(
+                volumeId: volumeId, desired: desiredVolumeStates[volumeId])
+            try await backend.prepareAttachmentForQEMU(attachment)
+        }
     }
 
     func reconcileCreate(_ item: ReconcileWorkItem) async throws {
@@ -648,7 +682,8 @@ extension Agent {
         guard let service = getHypervisorService(for: desired.hypervisorType) else {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
-        let realizedSpec = try await specWithRealizedVolumeAttachments(desired.spec, vmId: item.id)
+        let realizedSpec = try await specWithRealizedVolumeAttachments(
+            desired.spec, vmId: item.id, hypervisorType: desired.hypervisorType)
         let creationMetadata = await metadataForHypervisorCreate(desired)
 
         let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
@@ -928,7 +963,8 @@ extension Agent {
         service: any HypervisorService
     ) async throws -> (spec: VMSpec, interfaces: [String]) {
         let targetSpec = entry.spec.withNetworks(desired.spec.networks)
-        let realizedSpec = try await specWithRealizedVolumeAttachments(targetSpec, vmId: item.id)
+        let realizedSpec = try await specWithRealizedVolumeAttachments(
+            targetSpec, vmId: item.id, hypervisorType: .firecracker)
         let metadata = await metadataForHypervisorCreate(desired)
 
         // These TAPs already exist. Reassert each attachment individually so a
@@ -1002,8 +1038,14 @@ extension Agent {
                 // about the removal here.
                 if adoption == .processGone, let service {
                     // Nothing is running from this VM's disks, so its whole
-                    // directory — boot disk included — goes with it.
-                    await service.reclaimVMDirectory(vmId: item.id)
+                    // directory — boot disk included — goes with it. A
+                    // Firecracker adoption acquired the durable krbd mapping,
+                    // so use its throwing delete path before forgetting it.
+                    if entry.hypervisorType == .firecracker {
+                        try await service.deleteVM(vmId: item.id)
+                    } else {
+                        await service.reclaimVMDirectory(vmId: item.id)
+                    }
                 } else {
                     logger.warning(
                         "Deleting an orphaned VM this agent could not re-adopt; any surviving hypervisor process and the VM's files must be cleaned up manually",

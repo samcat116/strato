@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction } from "react";
 import {
   ChevronLeft,
   ChevronRight,
+  Database,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -64,6 +65,7 @@ interface SitesTableProps {
   deletingSiteId?: string;
   onCreate: () => void;
   onEdit: (site: Site) => void;
+  onCephStorage: (site: Site) => void;
   onDelete: (site: Site) => void;
 }
 
@@ -83,6 +85,7 @@ export function SitesTable({
   deletingSiteId,
   onCreate,
   onEdit,
+  onCephStorage,
   onDelete,
 }: SitesTableProps) {
   return (
@@ -220,6 +223,9 @@ export function SitesTable({
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => onEdit(site)}>
                             <Pencil className="mr-2 h-4 w-4" />Edit site
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => onCephStorage(site)}>
+                            <Database className="mr-2 h-4 w-4" />Ceph storage
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem variant="destructive" onClick={() => onDelete(site)}>

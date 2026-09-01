@@ -267,6 +267,32 @@ struct OrganizationController: RouteCollection {
                 + "still contain VMs or sandboxes. Delete or move those workloads first.")
     }
 
+    /// External-Ceph access is intentionally RESTRICT rather than cascading:
+    /// deleting it is a credential-revocation workflow, not ordinary project
+    /// cleanup. Name the projects before the FK does so an organization delete
+    /// never misreports this as a VM or sandbox conflict.
+    private static func requireNoCephStorageAccess(
+        inProjects projectIDs: [UUID], on db: Database
+    ) async throws {
+        guard !projectIDs.isEmpty else { return }
+        let blocking = Set(
+            try await CephProjectAccess.query(on: db)
+                .filter(\.$project.$id ~~ projectIDs)
+                .all()
+                .map { $0.$project.id })
+        guard !blocking.isEmpty else { return }
+        let names = try await Project.query(on: db)
+            .filter(\.$id ~~ Array(blocking))
+            .all()
+            .map(\.name)
+            .sorted()
+        throw Abort(
+            .conflict,
+            reason: "Cannot delete organization: \(names.joined(separator: ", ")) "
+                + "still have external Ceph storage access. Delete their Ceph volumes and "
+                + "project access first.")
+    }
+
     func delete(req: Request) async throws -> HTTPStatus {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
@@ -314,6 +340,7 @@ struct OrganizationController: RouteCollection {
         // updates because those are not inside the transaction and would
         // otherwise persist through a failed delete.
         try await Self.requireNoWorkloads(inProjects: cascadedProjectIDs, on: req.db)
+        try await Self.requireNoCephStorageAccess(inProjects: cascadedProjectIDs, on: req.db)
 
         // Update users who have this as current organization
         let usersWithCurrentOrg = try await User.query(on: req.db)
@@ -345,8 +372,9 @@ struct OrganizationController: RouteCollection {
             } catch let error as any DatabaseError where error.isConstraintFailure {
                 throw Abort(
                     .conflict,
-                    reason: "Cannot delete organization: its projects still contain VMs or sandboxes. "
-                        + "Delete or move those workloads first.")
+                    reason: "Cannot delete organization: its projects still contain VMs, sandboxes, "
+                        + "or external Ceph storage access. Delete or move the workloads and revoke "
+                        + "Ceph project access first.")
             }
             // The trust domain row deliberately outlives the organization: it
             // is the instruction to destroy the org's CA, and the reconciler

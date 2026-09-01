@@ -319,10 +319,11 @@ extension Agent: ReconcileActuator {
     func observedVolumePresence() async -> [String: VolumePresence]? {
         // No storage backend is an *answer*: such a host holds no volumes, and
         // the control plane never places one on it.
-        guard let storageBackend else { return [:] }
+        guard let storageBackends else { return [:] }
         let inventory: [String: DiskAttachment]
         do {
-            inventory = try await storageBackend.listVolumes()
+            inventory = try await storageBackends.inventory(
+                desiredVolumes: Array(desiredVolumeStates.values))
         } catch {
             // Nil, not `[:]`. An empty inventory is authoritative to everything
             // downstream — the reconciler would plan a create for every volume
@@ -339,12 +340,7 @@ extension Agent: ReconcileActuator {
         var presence: [String: VolumePresence] = [:]
         for (volumeId, disk) in inventory {
             let attachment = attachments[volumeId]
-            let sizeBytes: Int64?
-            if case .file(let path, _) = disk {
-                sizeBytes = await volumeVirtualSize(volumeId: volumeId, path: path)
-            } else {
-                sizeBytes = volumeSizes[volumeId]
-            }
+            let sizeBytes = await volumeVirtualSize(volumeId: volumeId, attachment: disk)
             presence[volumeId] = .managed(
                 ObservedVolumeFacts(
                     attachment: disk,
@@ -365,7 +361,7 @@ extension Agent: ReconcileActuator {
         desiredVolumeStates = Dictionary(
             desiredVolumes.map { ($0.volumeId.uuidString, $0) },
             uniquingKeysWith: { first, _ in first })
-        guard let storageBackend else { return }
+        guard let storageBackend, let storageBackends else { return }
         var formats: [UUID: DiskFormat] = [:]
         for volume in desiredVolumes {
             formats[volume.volumeId] = DiskFormat(rawValue: volume.format)
@@ -390,7 +386,7 @@ extension Agent: ReconcileActuator {
 
         var inventory: [String: DiskAttachment]
         do {
-            inventory = try await storageBackend.listVolumes()
+            inventory = try await storageBackends.inventory(desiredVolumes: desiredVolumes)
         } catch {
             // `observedVolumePresence` will report the authoritative inventory
             // as unreadable and skip this half of convergence.
@@ -401,6 +397,7 @@ extension Agent: ReconcileActuator {
             for volume in desiredVM.spec.volumes where inventory[volume.volumeId.uuidString] == nil {
                 guard case .file(let existingPath, _) = volume.attachment else { continue }
                 let volumeId = volume.volumeId.uuidString
+                guard desiredVolumeStates[volumeId]?.storage == .local else { continue }
                 guard let format = formats[volume.volumeId] else {
                     volumeAdoptionFailures[volumeId] =
                         "managed volume \(volumeId) has no supported desired format"
@@ -456,11 +453,13 @@ extension Agent: ReconcileActuator {
     /// a guess. What nil must *not* do is pass silently — an item that runs no
     /// steps records its generation as applied, which is how an unreadable
     /// volume used to report a grow it never attempted as converged (STR-199).
-    func volumeVirtualSize(volumeId: String, path: String) async -> Int64? {
+    func volumeVirtualSize(volumeId: String, attachment: DiskAttachment) async -> Int64? {
         if let cached = volumeSizes[volumeId] { return cached }
-        guard let storageBackend else { return nil }
+        guard let storageBackends else { return nil }
         do {
-            let info = try await storageBackend.volumeInfo(volumePath: path)
+            let storage = desiredVolumeStates[volumeId]?.storage ?? .local
+            let storageBackend = try await storageBackends.backend(for: storage)
+            let info = try await storageBackend.volumeInfo(attachment: attachment)
             volumeSizes[volumeId] = info.virtualSize
             return info.virtualSize
         } catch {
@@ -614,6 +613,10 @@ extension Agent: ReconcileActuator {
             observedVolumes: observedVolumes)
         {
             throw DependencyPendingError(reason)
+        }
+
+        if desired.hypervisorType == .qemu {
+            try await prepareQEMUStorageAttachments(current.spec)
         }
 
         let raw = await rawHostCapacitySnapshot()

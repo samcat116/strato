@@ -175,6 +175,15 @@ extension Agent {
             )
         }
         self.storageBackend = storageBackend
+        let cephImageSource = imageCacheService
+        let cephLogger = logger
+        self.storageBackends = StorageBackendRegistry(
+            local: storageBackend,
+            makeCeph: { configuration in
+                CephRBDStorageBackend(
+                    logger: cephLogger, configuration: configuration,
+                    imageSource: cephImageSource)
+            })
 
         if isSimulationMode {
             // One mock backend per hypervisor type, so the agent is eligible for
@@ -252,6 +261,7 @@ extension Agent {
             hypervisorServices[.firecracker] = FirecrackerService(
                 logger: logger,
                 storage: storageBackend,
+                diskRealizer: KRBDDiskRealizer(),
                 imageSource: imageCacheService,
                 vmStoragePath: vmStoragePath,
                 firecrackerBinaryPath: firecrackerBinaryPath,

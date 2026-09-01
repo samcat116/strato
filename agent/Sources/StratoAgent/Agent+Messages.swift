@@ -229,6 +229,9 @@ extension Agent {
                 // copy of user data (STR-148). Snapshots carry the same nil
                 // contract.
                 await reconciler?.apply(message)
+                // Revocations are durable tombstones. Apply them after this
+                // sync's ordinary storage work has been enqueued.
+                await applyCephCredentialRevocations(message)
                 // The guest-facing listeners, after the reconciler rather than
                 // beside the network reconcile above (STR-56). Both orderings
                 // are needed and only this one has both: `reconcileNetworks`
@@ -317,6 +320,92 @@ extension Agent {
             }
         } catch {
             WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
+        }
+    }
+
+    /// Applies append-only Ceph credential tombstones from one desired-state
+    /// sync. Each cleanup is independent so one failure cannot block unrelated
+    /// desired state or a different credential's retry.
+    func applyCephCredentialRevocations(_ message: DesiredStateMessage) async {
+        guard let storageBackends, !message.cephCredentialRevocations.isEmpty else { return }
+
+        let activeStorages =
+            message.volumes.map(\.storage)
+            + message.snapshots.compactMap(\.volumeStorage)
+        let activeAttachments = message.vms.flatMap { vm in
+            vm.spec.volumes.compactMap(\.attachment)
+        }
+
+        for revocation in message.cephCredentialRevocations {
+            let clusterId = revocation.clusterId
+            let credentialId = revocation.credentialId
+            guard
+                !StorageBackendRegistry.referencesCredential(
+                    clusterId: clusterId, credentialId: credentialId,
+                    storages: activeStorages, attachments: activeAttachments)
+            else {
+                logger.warning(
+                    "Deferring Ceph credential revocation because this sync still references it",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+                continue
+            }
+
+            var runtimeCleanupSucceeded = true
+            do {
+                try await storageBackends.revokeCephCredential(
+                    clusterId: clusterId, credentialId: credentialId,
+                    activeStorages: activeStorages, activeAttachments: activeAttachments)
+            } catch {
+                runtimeCleanupSucceeded = false
+                logger.error(
+                    "Ceph credential cleanup failed and will retry on the next desired-state sync",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+            }
+
+            desiredVolumeStates = desiredVolumeStates.filter { _, desired in
+                guard case .ceph(let configuration) = desired.storage else { return true }
+                return configuration.clusterId != clusterId
+                    || configuration.credentialId != credentialId
+            }
+
+            if snapshotInventoryUnreadable {
+                logger.error(
+                    "Ceph credential was denied but snapshot records remain unreadable and could not be scrubbed",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+                continue
+            }
+            let scrubbed = SnapshotRecordCredentialScrubber.removing(
+                clusterId: clusterId, credentialId: credentialId, from: snapshotRecords)
+            if scrubbed != snapshotRecords {
+                guard snapshotRecordStore.save(scrubbed) else {
+                    logger.error(
+                        "Ceph credential was denied but snapshot records could not be scrubbed",
+                        metadata: [
+                            "clusterId": .string(clusterId.uuidString),
+                            "credentialId": .string(credentialId.uuidString),
+                        ])
+                    continue
+                }
+                snapshotRecords = scrubbed
+            }
+
+            if runtimeCleanupSucceeded {
+                logger.info(
+                    "Applied permanent Ceph credential revocation",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+            }
         }
     }
 

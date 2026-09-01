@@ -7,6 +7,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { KpiCard, reservedPercent } from "@/components/overview";
+import { CephStorageDialog } from "@/components/sites/ceph-storage-dialog";
 import { Button } from "@/components/ui/button";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { useResourceList } from "@/components/ui/resource-list-controls";
@@ -83,6 +84,7 @@ export default function SitesPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSite, setEditingSite] = useState<Site | null>(null);
+  const [cephSite, setCephSite] = useState<Site | null>(null);
   const [form, setForm] = useState<SiteFormState>(EMPTY_FORM);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["sites"] });
@@ -405,7 +407,16 @@ export default function SitesPage() {
         deletingSiteId={deleteSite.variables}
         onCreate={openCreate}
         onEdit={openEdit}
+        onCephStorage={setCephSite}
         onDelete={handleDelete}
+      />
+
+      <CephStorageDialog
+        site={cephSite}
+        open={cephSite !== null}
+        onOpenChange={(open) => {
+          if (!open) setCephSite(null);
+        }}
       />
 
       <SiteFormDialog

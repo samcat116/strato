@@ -77,6 +77,7 @@ actor Agent {
     var networkService: (any NetworkServiceProtocol)?
     var imageCacheService: ImageCacheService?
     var storageBackend: (any StorageBackend)?
+    var storageBackends: StorageBackendRegistry?
     var consoleSocketManager: ConsoleSocketManager?
     var reconnectTask: Task<Void, Never>?
     var isRunning = false
