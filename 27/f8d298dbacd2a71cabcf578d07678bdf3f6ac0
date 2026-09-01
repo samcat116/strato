@@ -1,0 +1,113 @@
+agent/Tests/StratoAgentTests/CloudInitUserDataDocumentTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 19-51,97-98,100-108,130-162
+  s_077a86d6d40679::t_bacfc2a0aef6fe 163
+agent/Sources/StratoAgentCore/AgentLogLevel.swift
+  s_077a86d6d40679::t_67374eb6a59584 73,77-83
+  s_077a86d6d40679::t_28f1c1654c7404 84-85
+control-plane/Sources/App/Middleware/RequestLogMetadataMiddleware.swift
+  s_077a86d6d40679::t_67374eb6a59584 1,18-20
+agent/Sources/StratoAgentCore/DesiredStatePoller.swift
+  s_077a86d6d40679::t_67374eb6a59584 43-60,71-82,88,93-94,100-105,111-116,123,130,160,165,176,182-191,197,199-208,211-218,220,224-226,230,234,237-241,245-287,290-308
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_077a86d6d40679::t_67374eb6a59584 422-425,427-431,460-463,549-552,559-572
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_077a86d6d40679::t_67374eb6a59584 8-23,1424-1452,1454,2013-2014,2037-2072,2077,2082-2084
+agent/Sources/StratoAgentCore/LibvirtDomain.swift
+  s_077a86d6d40679::t_67374eb6a59584 249-256,270
+agent/Tests/StratoAgentTests/DomainNetworkDetachConvergenceTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 1-64
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 567-658,861-914
+  s_077a86d6d40679::t_c05ea720e5e75d 915
+agent/Tests/StratoAgentTests/LoggingTestSupport.swift
+  s_077a86d6d40679::t_67374eb6a59584 1-18
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_077a86d6d40679::t_67374eb6a59584 268-269
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_077a86d6d40679::t_67374eb6a59584 8,43-47,49-50,52-53
+  s_077a86d6d40679::t_78b5c25c51796b 15-23,48,51
+  s_3c8cb79c69ff83::t_2a64da3a6bac2f 24,54-55
+control-plane/Sources/App/Middleware/SecretSafeErrorLogPathMiddleware.swift
+  s_077a86d6d40679::t_67374eb6a59584 1-19
+control-plane/Tests/AppPlatformTests/LoggingContractTests.swift
+  s_077a86d6d40679::t_cec66ed5e86ade 38,98,101-104,108-109,128-130
+  s_077a86d6d40679::t_67374eb6a59584 1-37,39-97,99-100,105-107,110-127,131-180
+agent/Package.swift
+  s_077a86d6d40679::t_67374eb6a59584 26
+control-plane/Tests/AppPlatformTests/LoggingTestSupport.swift
+  s_077a86d6d40679::t_67374eb6a59584 1-27
+docs/adr/0005-agent-drives-libvirt-not-qemu.md
+  s_077a86d6d40679::t_67374eb6a59584 96-104
+control-plane/Package.swift
+  s_077a86d6d40679::t_67374eb6a59584 39,182
+control-plane/Sources/App/Controllers/VMController.swift
+  s_077a86d6d40679::t_67374eb6a59584 690,715-719,724-730,818-822,825-828,833,911-942,1053-1055,1062,1072,1074-1082
+control-plane/Tests/AppIAMTests/VMAuthorizationTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 22,35,127-170
+  s_077a86d6d40679::t_eecd7abb601ba4 171
+shared/Package.swift
+  s_077a86d6d40679::t_67374eb6a59584 30,67
+cli/Package.swift
+  s_077a86d6d40679::t_67374eb6a59584 14
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_077a86d6d40679::t_a350127bd479cb 150
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_077a86d6d40679::t_67374eb6a59584 436
+agent/Tests/StratoAgentTests/LibvirtDomainTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 136-140,142,145-147
+agent/Tests/StratoAgentTests/WireMessageLoggingTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 111-113,226-232,254-256
+agent/Tests/StratoAgentTests/AgentLogLevelTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 1,55-56,63-65,67-73,75,77-81,83-87
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 7,10-24,126-201,570-610
+  s_077a86d6d40679::t_e5c6af33b4e2b1 611
+agent/Sources/StratoAgentCore/DomainNetworkDetachPlan.swift
+  s_077a86d6d40679::t_67374eb6a59584 1-38
+agent/Sources/StratoAgent/Agent.swift
+  s_077a86d6d40679::t_67374eb6a59584 427,484
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_077a86d6d40679::t_723b1fb14caf4e 258,324
+  s_077a86d6d40679::t_67374eb6a59584 482-493
+control-plane/Sources/App/Middleware/RequestLoggingMiddleware.swift
+  s_077a86d6d40679::t_59aa97caaf3bee 5-7,18,29,67-77,80-85,87-88,93-95,113
+control-plane/Sources/App/Middleware/MetricsMiddleware.swift
+  s_077a86d6d40679::t_fa912fce36e401 30
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_077a86d6d40679::t_67374eb6a59584 58-63,88,132-134,148,167-168,203-206,229-231
+SwiftFirecracker/Package.swift
+  s_077a86d6d40679::t_67374eb6a59584 16
+agent/Tests/StratoAgentTests/DomainNetworkInventoryTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 51-90
+agent/Tests/StratoAgentTests/DesiredStatePollerTests.swift
+  s_077a86d6d40679::t_67374eb6a59584 4,13-14,67-86,89-91,96-97,109,124,148-150,153,165-166,186,207,222,225,239,242,259-261,263-264,286-288,292,308,316-489,494-496,509-546
+  s_077a86d6d40679::t_3443fbdf54e04f 547
+agent/Sources/StratoAgentCore/CoalescingTrigger.swift
+  s_077a86d6d40679::t_67374eb6a59584 39-43
+docs/architecture/agent.md
+  s_077a86d6d40679::t_67374eb6a59584 100-116,654-660
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "27f8d298dbacd2a71cabcf578d07678bdf3f6ac0",
+  "prompts": {},
+  "sessions": {
+    "s_077a86d6d40679": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-7f59-7941-a8a0-7ac6a6126488",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_3c8cb79c69ff83": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eec77b7e-2d11-4a9b-8f6f-5437cc9446bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
