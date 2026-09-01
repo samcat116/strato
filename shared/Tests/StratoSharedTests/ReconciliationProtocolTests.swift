@@ -191,7 +191,8 @@ struct ReconciliationProtocolTests {
                     observedGeneration: 0,
                     convergencePhase: "downloading image",
                     lastError: "previous attempt: disk full",
-                    failedGeneration: 3
+                    failedGeneration: 3,
+                    failureClassification: .blocked
                 ),
             ],
             resources: AgentResources(
@@ -210,6 +211,8 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[1].convergencePhase == "downloading image")
         #expect(decoded.vms[1].lastError == "previous attempt: disk full")
         #expect(decoded.vms[1].failedGeneration == 3)
+        #expect(decoded.vms[1].failureClassification == .blocked)
+        #expect(decoded.vms[0].failureClassification == nil)
         // No qga probe: guestInfo stays nil rather than a fabricated empty.
         #expect(decoded.vms[0].guestInfo == nil)
     }
@@ -414,7 +417,8 @@ struct ReconciliationProtocolTests {
         // would have it sweep the site's rows.
         let nonAuthoritative = """
             {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
-             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[]}
+             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[],
+             "cephCredentialRevocations":[]}
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))

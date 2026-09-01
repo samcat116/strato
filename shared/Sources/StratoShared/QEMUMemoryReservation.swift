@@ -20,6 +20,17 @@ public enum QEMUMemoryReservation {
         return requested - (requested % block)
     }
 
+    /// The realizable hot-plug region requested by a VM spec. The architecture
+    /// is the guest's: QEMU derives virtio-mem's block size from its page size.
+    public static func alignedHotplugBytes(
+        spec: VMSpec, architecture: CPUArchitecture
+    ) -> Int64 {
+        alignedHotplugBytes(
+            memoryBytes: spec.memoryBytes,
+            maxMemoryBytes: spec.maxMemoryBytes,
+            architecture: architecture)
+    }
+
     public static func reservedBytes(
         memoryBytes: Int64, maxMemoryBytes: Int64, architecture: CPUArchitecture
     ) -> Int64 {

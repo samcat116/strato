@@ -14,7 +14,6 @@ final class LoadBalancerControllerTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -81,7 +80,7 @@ final class LoadBalancerControllerTests {
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(),
                 logicalNetworkID: try remoteBackendNetwork.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                macAddress: MACAllocator.generateCandidate().description)
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
                 interfaceID: try nic.requireID(),

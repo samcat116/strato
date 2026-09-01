@@ -1,6 +1,6 @@
 import { api } from "./client";
 import { listAllPages } from "./pagination";
-import type { StorageDevice, UpdateStorageDeviceRequest } from "@/types/api";
+import type { StorageDevice, UpdateStorageDeviceRequest } from "@/types/api-contracts";
 
 export interface StorageDeviceFilters {
   organizationId?: string;

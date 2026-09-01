@@ -1,4 +1,5 @@
 "use client";
+import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
 import Link from "next/link";
@@ -62,7 +63,7 @@ export function ProjectsTable({
 
   const handleDelete = async (project: Project) => {
     if (
-      !window.confirm(
+      !await confirmAction(
         `Delete project "${project.name}"? This cannot be undone. Projects with VMs cannot be deleted.`
       )
     ) {

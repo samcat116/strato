@@ -8,7 +8,7 @@ import type {
   AgentEnrollment,
   AgentUpdateResult,
   CreateAgentEnrollmentRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const agentsApi = {
   list(organizationId?: string, signal?: AbortSignal): Promise<Agent[]> {

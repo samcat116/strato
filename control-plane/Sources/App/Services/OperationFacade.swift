@@ -407,17 +407,12 @@ enum OperationFacade {
 
 // MARK: - Response DTO
 
-/// Wire shape of an operation. `vmId` is a deprecated compatibility alias for
-/// `resourceId`. It remains populated during its deprecation cycle, but is
-/// optional in the contract so clients can stop depending on it;
-/// `resourceKind`/`resourceId` are the canonical target fields.
-///
-/// Lifecycle operations are synthesized over `resource_events` plus resource
-/// conditions. Captured VM commands use a dedicated durable record and may
-/// populate `result`; clients poll both through this one shape.
+/// Wire shape of an operation. Lifecycle operations are synthesized over
+/// `resource_events` plus resource conditions. Captured VM commands use a
+/// dedicated durable record and may populate `result`; clients poll both
+/// through this one shape.
 struct OperationResponse: Content {
     let id: UUID?
-    let vmId: UUID?
     let resourceKind: OperationResourceKind
     let resourceId: UUID
     let kind: VMOperationKind
@@ -439,7 +434,6 @@ struct OperationResponse: Content {
         result: VMCommandResultResponse? = nil
     ) {
         self.id = id
-        self.vmId = resourceID
         self.resourceKind = resourceKind
         self.resourceId = resourceID
         self.kind = kind
@@ -454,6 +448,6 @@ struct OperationResponse: Content {
 struct VMCommandResultResponse: Content {
     let stdout: String
     let stderr: String
-    let exitCode: Int
+    let exitCode: Int?
     let truncated: Bool
 }

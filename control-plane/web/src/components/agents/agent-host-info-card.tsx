@@ -8,13 +8,13 @@ import type { Agent } from "@/types/api";
 // Host memory can be reported in host-info; fall back to the scheduler's total
 // so the card still shows a value for pre-host-info agents. `undefined` in,
 // `undefined` out, so the row drops out of the card entirely.
-function formatHostMemory(bytes: number | undefined): string | undefined {
+function formatHostMemory(bytes: number | null | undefined): string | undefined {
   return bytes == null ? undefined : formatCapacity(bytes);
 }
 
 function formatCores(
-  physical: number | undefined,
-  logical: number | undefined,
+  physical: number | null | undefined,
+  logical: number | null | undefined,
 ): string | undefined {
   const parts: string[] = [];
   if (physical != null) parts.push(`${physical} physical`);
@@ -22,7 +22,7 @@ function formatCores(
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
-function formatBoot(bootTime: string | undefined): string | undefined {
+function formatBoot(bootTime: string | null | undefined): string | undefined {
   if (!bootTime) return undefined;
   const boot = new Date(bootTime);
   const ms = Date.now() - boot.getTime();
@@ -46,17 +46,17 @@ export function AgentHostInfoCard({ agent }: { agent: Agent }) {
   // fields Strato has always had, so the card is useful even before an agent
   // re-registers with a host-info-capable build.
   const rows: { label: string; value: string | undefined }[] = [
-    { label: "CPU", value: host?.cpuModel },
-    { label: "CPU vendor", value: host?.cpuVendor },
+    { label: "CPU", value: host?.cpuModel ?? undefined },
+    { label: "CPU vendor", value: host?.cpuVendor ?? undefined },
     { label: "Cores", value: formatCores(host?.physicalCoreCount, host?.logicalCoreCount) },
     { label: "Architecture", value: agent.architecture },
     {
       label: "Memory",
       value: formatHostMemory(host?.totalMemoryBytes ?? agent.resources.totalMemory),
     },
-    { label: "Machine model", value: host?.machineModel },
+    { label: "Machine model", value: host?.machineModel ?? undefined },
     { label: "Operating system", value: host?.osName ?? agent.operatingSystem },
-    { label: "Kernel", value: host?.kernelVersion },
+    { label: "Kernel", value: host?.kernelVersion ?? undefined },
     {
       label: "Networking",
       value:

@@ -44,11 +44,22 @@ use in code, tests, docs, and review. Architecture-level maps live in
   moved to the resource event.
 
 - **Accept** — the atomic first half of a mutation, `ResourceMutation.accept`:
-  lock the resource row, apply its desired-state (or spec) change, stamp the
-  **convergence deadline**, and append the **resource event**, all in one
-  transaction. There is deliberately no double-submit `409`: desired state is
-  level-triggered, so two overlapping writes leave the last one standing and
-  the row lock is what serializes them.
+  reserve any caller idempotency key, lock the resource row, apply its
+  desired-state (or spec) change, stamp the **convergence deadline**, append the
+  **resource event**, and complete the key with the accepted identity, all in
+  one transaction. There is deliberately no overlapping-mutation `409`:
+  desired state is level-triggered, so two distinct writes leave the last one
+  standing and the row lock is what serializes them.
+
+- **Idempotency claim** — one short-lived `idempotency_keys` row that maps an
+  authenticated actor plus opaque `Idempotency-Key` to the request digest and
+  accepted resource/mutation identity. The reservation is the first write in
+  the mutation transaction, so an in-flight duplicate waits at PostgreSQL's
+  unique index before it can mutate; completion is the last write, so commit
+  exposes the mutation and replay identity together and rollback exposes
+  neither. Same key plus a different method, request target, or canonical JSON
+  body is `422`. Claims expire after 24 hours and are swept; unlike the
+  append-only resource event, they are a replay cache, not an audit trail.
 
 - **Dispatch strategy** — how an accepted mutation reaches the agent:
   - *state sync* — the desired state is already written; ring the agent's
@@ -339,6 +350,23 @@ use in code, tests, docs, and review. Architecture-level maps live in
   is written, and the URI never moves.
 
 ## Networking
+
+- **Network ACL (NACL)** — optional, ordered **network-scoped** allow/deny
+  policy attached to a logical switch. Its intent is stateless: ingress and
+  egress rules are authored independently, lower rule numbers win, and each
+  direction defaults to deny. For a new flow, an ACL allow only passes the
+  packet onward to the applicable NIC security groups; it is not an override.
+
+- **Security group** — stateful, **NIC-scoped** allow policy attached through
+  OVN port groups. A NIC may join several groups; their `allow-related` rules
+  collectively admit a connection and the site-wide managed-port group supplies
+  the default drop. Security groups are not ordered tenant deny lists.
+
+- **OVN established-flow boundary** — once a security-group `allow-related`
+  verdict tracks a connection, OVN does not re-evaluate that established return
+  traffic through a switch ACL. Network ACL policy remains stateless in its own
+  rule construction, but this backend cannot provide AWS-exact independent
+  return-path filtering for an already established security-group flow.
 
 - **Chassis service foot** — the per-network pair of things every hypervisor
   builds for a link-local service its guests use: one OVN `localport` on the

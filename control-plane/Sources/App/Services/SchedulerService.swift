@@ -41,8 +41,7 @@ struct SchedulableAgent: Sendable {
     /// Whether the agent initialized its guest-facing metadata listener
     /// supervisor. Overlay networking alone does not imply this capability.
     let supportsMetadataService: Bool
-    /// Site (availability zone) the agent belongs to; nil for site-less agents.
-    let siteID: UUID?
+    let siteID: UUID
     /// Whether this agent can run sandbox workloads (issue #415): it
     /// advertised the sandbox runtime at registration.
     let supportsSandboxWorkloads: Bool
@@ -73,7 +72,7 @@ struct SchedulableAgent: Sendable {
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
         supportsMetadataService: Bool = false,
-        siteID: UUID? = nil,
+        siteID: UUID,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false,
@@ -204,15 +203,6 @@ struct VMPlacementRequirements: Sendable {
     /// a host-backed virtio-vsock device. Hard constraint: without it the VM
     /// cannot start.
     let requiresVsock: Bool
-    /// Whether the VM asks for UEFI Secure Boot. Hard constraint on the wire
-    /// protocol only — any agent that understands the machine profile can
-    /// resolve a signed firmware set (or fail the create loudly if its host
-    /// has none).
-    /// Whether the VM asks for a graphics console (issue #566). Hard
-    /// constraint on the wire protocol: a pre-v23 agent decodes the spec,
-    /// ignores the field, and boots the guest headless while the API reports a
-    /// display — the same silent degradation the machine profile is gated on.
-
     init(
         cpu: Int,
         memory: Int64,
@@ -361,12 +351,13 @@ final class SchedulerService: Sendable {
     /// listener capability because an OVN host can disable that service or
     /// fail one of its startup prerequisites.
     static func placementRequirements(
-        for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil
+        for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil,
+        diskBytes: Int64? = nil
     ) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
-            disk: vm.disk,
+            disk: diskBytes ?? vm.disk,
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
             requiresInterVMNetworking: vm.metadataSource == .imds,
@@ -536,14 +527,9 @@ final class SchedulerService: Sendable {
             throw SchedulerError.noAvailableAgents
         }
 
-        // Site pinning is categorical — a network pinned to a site exists only
-        // in that site's OVN deployment, so agents elsewhere (or site-less)
-        // can never satisfy it, regardless of capacity. Two further member
-        // exclusions: agents that last registered below the site-authority
-        // protocol (sync assembly keeps them on legacy per-node scoping, so
-        // the VM's switch would land in a private local NB), and agents
-        // without overlay networking (user-mode/SLIRP hosts never attach to
-        // the site's OVN fabric at all).
+        // A network pinned to a site exists only in that site's OVN
+        // deployment. User-mode agents in the site are still ineligible
+        // because they never attach to its OVN fabric.
         let siteMatched: [SchedulableAgent]
         if let requiredSiteID = requirements.siteID {
             siteMatched = online.filter {

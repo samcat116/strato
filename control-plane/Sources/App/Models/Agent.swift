@@ -87,20 +87,10 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Parent(key: "site_id")
     var site: Site
 
-    /// Wire protocol version the agent last registered with; nil for rows that
-    /// predate this column. Sync assembly keys site topology authority on it:
-    /// a pre-v4 agent ignores `networksAuthoritative` and would misread a
-    /// non-authoritative empty sync as a full L3 teardown, so it must stay on
-    /// legacy per-node scoping even when assigned to a site.
-    @OptionalField(key: "wire_protocol_version")
-    var wireProtocolVersion: Int?
-
     /// Whether the agent advertised the sandbox runtime at its last
     /// registration (issue #415): Firecracker + KVM usable and the sandbox
     /// guest base image present on its disk. The scheduler gates sandbox
-    /// placement on this explicit signal (combined with a v5+ wire protocol) —
-    /// never on the protocol version alone, which a runtime-less build also
-    /// speaks.
+    /// placement on this explicit signal.
     @Field(key: "sandbox_capable")
     var sandboxCapable: Bool
 
@@ -108,22 +98,15 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// its last registration (STR-103): OVN networking, the jailer barrier, and
     /// an installed guest image that brings the interface up from the config
     /// drive. Strictly stronger than `sandboxCapable`, and separately reported
-    /// because the guest image is a separately distributed artifact — no wire
-    /// version and no other capability implies it.
-    ///
-    /// Read twice: the scheduler refuses to place a sandbox that has a NIC on a
-    /// host without it, and desired-state assembly withholds
-    /// `SandboxSpec.network` from such a host — which is what makes a mixed
-    /// fleet safe to upgrade, since every sandbox NIC ever allocated has been
-    /// waiting control-plane-side for this flag to exist.
+    /// because the guest image is distributed separately. The scheduler refuses
+    /// new networked sandboxes on a host without it, and desired-state assembly
+    /// withholds `SandboxSpec.network` from existing workloads there.
     @Field(key: "sandbox_networking_capable")
     var sandboxNetworkingCapable: Bool
 
     /// Whether the agent advertised a usable `swtpm` at its last registration
-    /// (issue #565), which is what lets it give a guest a TPM 2.0. The
-    /// scheduler gates vTPM placement on this signal combined with a v17+ wire
-    /// protocol — a v17 build on a host without swtpm understands the field but
-    /// cannot realize it.
+    /// (issue #565), which is what lets it give a guest a TPM 2.0. The scheduler
+    /// gates vTPM placement on this signal.
     @Field(key: "tpm_capable")
     var tpmCapable: Bool
 
@@ -136,8 +119,8 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// the DHCP option that points guests at the resolver is authored once per
     /// network by the topology authority, while the listener is per chassis, so
     /// one incapable host in a site would give that network DNS that works
-    /// until a VM lands somewhere else. Defaults false, so a fleet stays on the
-    /// old behavior until every agent has re-registered and proved otherwise.
+    /// until a VM lands somewhere else. Defaults false so an unreported
+    /// capability never enables DNS.
     @Field(key: "resolver_capable")
     var resolverCapable: Bool
 
@@ -276,6 +259,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         trustDomain: String = PlatformTrustDomain.current,
         hostname: String,
         version: String,
+        siteID: UUID,
         status: AgentStatus = .offline,
         resources: AgentResources,
         architecture: CPUArchitecture? = nil,
@@ -295,6 +279,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.trustDomain = trustDomain
         self.hostname = hostname
         self.version = version
+        self.$site.id = siteID
         self.status = status
         self.totalCPU = resources.totalCPU
         self.totalMemory = resources.totalMemory
@@ -353,8 +338,7 @@ enum AgentStatus: String, Codable, CaseIterable, Sendable {
 }
 
 /// Who assigned an agent's `updateDesiredVersion` (STR-145). Both sources feed
-/// the same declarative field — there is only one update path since wire v28 —
-/// but they differ in who may reset the assignment.
+/// the same declarative field but differ in who may reset the assignment.
 enum AgentUpdateAssignmentSource: String, Codable, Sendable {
     /// The fleet auto-update sweep, advancing enrolled agents to the
     /// deployment's target version one at a time.
@@ -420,6 +404,7 @@ extension Agent {
     static func from(
         registration: AgentRegisterMessage,
         name: String,
+        siteID: UUID,
         trustDomain: String = PlatformTrustDomain.current
     ) -> Agent {
         let agent = Agent(
@@ -427,6 +412,7 @@ extension Agent {
             trustDomain: trustDomain,
             hostname: registration.hostname,
             version: registration.version,
+            siteID: siteID,
             status: .connecting,
             resources: registration.resources,
             architecture: registration.architecture,

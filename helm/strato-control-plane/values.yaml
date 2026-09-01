@@ -4,9 +4,11 @@
 
 # Control-plane replicas. Counts above 1 are supported: mutations ring a
 # contentless doorbell over Valkey and whichever replica holds the agent's
-# parked poll acts on it, all durable state lives in PostgreSQL, and rolling
-# deploys just cause agents to reconnect to surviving replicas. Valkey is
-# required either way; see docs/architecture/multi-replica.md.
+# parked poll acts on it, and all durable state lives in PostgreSQL. Deployment
+# replacement deliberately uses Recreate, not RollingUpdate: STR-275 moved
+# advisory locks into PostgreSQL's disjoint two-int keyspace, so a legacy and a
+# current binary must never serve the same database together. Valkey is required
+# either way; see docs/architecture/multi-replica.md.
 replicaCount: 1
 
 image:
@@ -251,7 +253,7 @@ affinity: {}
 # Extra environment variables for the control-plane container. Standard
 # container-env entries rendered through tpl. Use this for settings without a
 # dedicated chart value,
-# e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, SCHEDULING_STRATEGY,
+# e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, WEBHOOK_*, SCHEDULING_STRATEGY,
 # STRATO_DEFAULT_NETWORK_*, REQUEST_LOGGING. (Image storage has dedicated
 # values — see strato.imageStorage.)
 # extraEnv:
@@ -268,9 +270,9 @@ extraEnv: []
 strato:
   logLevel: info
 
-  # Git commit SHA this image was built from, surfaced on /health/* as gitSHA.
-  # Defaults to the image tag / chart appVersion when left empty; set to the full
-  # commit SHA in CI for precise build identification.
+  # Optional Git commit SHA override, surfaced on /health/* as gitSHA. Published
+  # images already bake in their full SHA, so the chart leaves STRATO_GIT_SHA
+  # unset when this is empty. Set it for custom images that lack baked identity.
   gitSHA: ""
 
   # Where the control plane keeps VM image bytes (uploaded disks, kernels,
@@ -314,7 +316,6 @@ strato:
       secretAccessKey: ""
 
   database:
-    host: ""  # Will be set from PostgreSQL subchart if enabled
     port: 5432
     name: vapor_database
     username: vapor_username
@@ -365,14 +366,16 @@ strato:
   # who could invite anyone — so this is safe to disable from the start.
   selfRegistrationEnabled: true
 
-  # At-rest encryption of stored secrets (OIDC client secrets, SSF stream
-  # auth tokens) — STRATO_SECRET_ENCRYPTION_KEY. Optional: when unset the
-  # control plane warns and stores them unencrypted. Point existingSecret at
-  # a Secret holding a 32-byte key (hex or base64; `openssl rand -hex 32`).
-  # Losing the key makes stored secrets unreadable (re-enter them to recover).
+  # At-rest encryption of recoverable stored secrets. Point existingSecret at
+  # a Secret whose `key` entry holds the primary 32-byte hex/base64 key. During
+  # rotation, set `previousKeysKey` to an entry containing comma-separated
+  # decrypt-only keys. Remove that entry only after every table reports
+  # rewrapped=0 and unopenable=0. External Secret data changes do not restart
+  # pods; trigger and complete a control-plane rollout after each change.
   secretEncryption:
     existingSecret: ""
     key: "encryption-key"
+    previousKeysKey: ""
 
   # External hostname for agent WebSocket connections. When Gateway API is
   # enabled, this also supplies the default web, agents, and SPIRE SNI hosts;
@@ -507,6 +510,8 @@ opentelemetry:
   metrics:
     enabled: true
   logs:
+    # The control plane always logs to its local console/stdout sink. Enabling
+    # this adds OTLP export as a second sink; it never replaces console output.
     enabled: true
   traces:
     enabled: true

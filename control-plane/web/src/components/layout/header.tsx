@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { CommandPalette } from "./command-palette";
 import { Sidebar } from "./sidebar";
 import { pageTitle } from "./nav";
@@ -27,6 +27,9 @@ export function Header() {
       <Dialog open={navigationOpen} onOpenChange={setNavigationOpen}>
         <DialogContent className="left-0 top-0 h-screen w-[280px] max-w-[85vw] translate-x-0 translate-y-0 rounded-none p-0">
           <DialogTitle className="sr-only">Navigation</DialogTitle>
+          <DialogDescription className="sr-only">
+            Main application navigation
+          </DialogDescription>
           <Sidebar
             className="h-full w-full border-r-0"
             onNavigate={() => setNavigationOpen(false)}

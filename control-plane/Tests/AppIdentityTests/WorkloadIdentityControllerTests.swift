@@ -55,7 +55,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Non-admins are forbidden")
     func nonAdminForbidden() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeNonAdmin(on: app.db)
             try await app.test(.GET, "/api/workload-identity") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -67,7 +67,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Unauthenticated requests are rejected")
     func unauthenticatedRejected() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await app.test(.GET, "/api/workload-identity") { res in
                 #expect(res.status == .unauthorized)
             }
@@ -78,7 +78,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Reports not-enabled with empty collections when SPIRE is unconfigured")
     func disabledWhenUnconfigured() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             try await app.test(.GET, "/api/workload-identity") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -97,7 +97,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Warns when SPIRE is enabled but the registration API is unconfigured")
     func warnsWhenRegistrationAPIMissing() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             // SPIRE is enabled, but no registration service (no
             // SPIRE_SERVER_API_ADDRESS), so entries/nodes can't be read.
@@ -125,7 +125,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Projects SPIRE entries, node attestation, and federated domains")
     func projectsSPIREData() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             let fake = FakeSPIREServerAPI()
             await fake.setEntries([
@@ -249,7 +249,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Degrades to entry-derived domains when the federation API fails")
     func federationDegradesOnFailure() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             let fake = FakeSPIREServerAPI()
             await fake.setEntries([
@@ -288,7 +288,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Merges static (entry-derived) federation domains the API omits")
     func mergesStaticFederationDomains() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             let fake = FakeSPIREServerAPI()
             // An entry federates with two domains; only one has a dynamic
@@ -341,7 +341,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Treats a JWT-only peer bundle as synced")
     func jwtOnlyBundleIsSynced() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             let fake = FakeSPIREServerAPI()
             await fake.setFederationRelationships([
@@ -374,7 +374,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Projects SVID issuance counts from the metrics provider")
     func projectsIssuanceMetrics() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
             app.spireIssuanceMetrics = FakeIssuanceMetricsProvider(
@@ -395,7 +395,7 @@ final class WorkloadIdentityControllerTests: BaseTestCase {
 
     @Test("Issuance stays unavailable and warns when the metrics provider fails")
     func issuanceDegradesOnFailure() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             let token = try await makeAdmin(on: app.db)
             installFakeSPIRE(on: app, fake: FakeSPIREServerAPI())
             app.spireIssuanceMetrics = FakeIssuanceMetricsProvider(counts: nil)

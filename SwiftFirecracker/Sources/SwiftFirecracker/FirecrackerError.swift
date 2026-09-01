@@ -2,40 +2,36 @@ import Foundation
 
 /// Errors that can occur when interacting with Firecracker
 public enum FirecrackerError: Error, Sendable {
-    /// The Firecracker socket is not connected
     case notConnected
 
-    /// The VM was not found
     case vmNotFound(String)
 
-    /// The VM is already running
     case vmAlreadyRunning(String)
 
-    /// HTTP request failed
+    case vmTeardownInProgress(String)
+
     case httpError(statusCode: Int, message: String)
 
-    /// Failed to connect to the Firecracker socket
     case connectionFailed(String)
 
-    /// Socket path is invalid or inaccessible
     case invalidSocketPath(String)
 
-    /// Timeout waiting for operation
     case timeout(String)
 
-    /// Failed to serialize request body
     case serializationError(String)
 
-    /// Failed to deserialize response body
     case deserializationError(String)
 
-    /// Firecracker binary not found
     case binaryNotFound(String)
 
-    /// Failed to spawn Firecracker process
     case processSpawnFailed(String)
 
-    /// VM is in an invalid state for the requested operation
+    case processInspectionFailed(String)
+
+    case processSignalFailed(String)
+
+    case processExitUnconfirmed(String)
+
     case invalidState(current: String, expected: String)
 
 }
@@ -49,6 +45,8 @@ extension FirecrackerError: LocalizedError {
             return "VM not found: \(id)"
         case .vmAlreadyRunning(let id):
             return "VM is already running: \(id)"
+        case .vmTeardownInProgress(let id):
+            return "VM teardown is already in progress: \(id)"
         case .httpError(let statusCode, let message):
             return "HTTP error \(statusCode): \(message)"
         case .connectionFailed(let message):
@@ -65,6 +63,12 @@ extension FirecrackerError: LocalizedError {
             return "Firecracker binary not found or not executable at: \(path)"
         case .processSpawnFailed(let message):
             return "Failed to spawn Firecracker process: \(message)"
+        case .processInspectionFailed(let message):
+            return "Failed to inspect Firecracker processes: \(message)"
+        case .processSignalFailed(let message):
+            return "Failed to signal Firecracker process: \(message)"
+        case .processExitUnconfirmed(let message):
+            return "Could not confirm Firecracker process exit: \(message)"
         case .invalidState(let current, let expected):
             return "Invalid VM state: current=\(current), expected=\(expected)"
         }

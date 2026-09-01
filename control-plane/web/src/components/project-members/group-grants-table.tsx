@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import {
@@ -37,7 +39,7 @@ export function GroupGrantsTable({
   const [pendingId, setPendingId] = useState<string | null>(null);
 
   const handleRevoke = async (grant: ProjectGroupGrant) => {
-    if (!window.confirm(`Revoke ${grant.name}'s access to this project?`)) {
+    if (!await confirmAction(`Revoke ${grant.name}'s access to this project?`)) {
       return;
     }
     setPendingId(grant.groupId);

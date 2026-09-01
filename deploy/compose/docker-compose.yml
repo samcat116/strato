@@ -316,6 +316,8 @@ services:
       # Optional so .env files generated before it existed keep working — the
       # control plane warns and stores plaintext when it's unset.
       STRATO_SECRET_ENCRYPTION_KEY: ${STRATO_SECRET_ENCRYPTION_KEY:-}
+      # Comma-separated decrypt-only keys used while rotating the primary.
+      STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS: ${STRATO_SECRET_ENCRYPTION_KEYS_PREVIOUS:-}
       WEBAUTHN_RELYING_PARTY_ID: ${WEBAUTHN_RELYING_PARTY_ID}
       WEBAUTHN_RELYING_PARTY_NAME: ${WEBAUTHN_RELYING_PARTY_NAME:-Strato}
       WEBAUTHN_RELYING_PARTY_ORIGIN: ${WEBAUTHN_RELYING_PARTY_ORIGIN}
@@ -336,6 +338,14 @@ services:
       # terminator in front of nginx (the HTTPS topology). setup.sh sets it from
       # the origin scheme; too low buckets every client behind the outer proxy.
       RATE_LIMIT_TRUSTED_PROXY_HOPS: ${RATE_LIMIT_TRUSTED_PROXY_HOPS:-1}
+      # Durable user-managed webhook delivery. The interval is the idle polling
+      # delay; while work is due, every replica claims fair batches for up to the
+      # per-pass budget. A subscription that reaches its pending ceiling sheds
+      # its oldest pending rows into visible `dropped` history.
+      WEBHOOK_DELIVERY_ENABLED: ${WEBHOOK_DELIVERY_ENABLED:-true}
+      WEBHOOK_DELIVERY_INTERVAL_SECONDS: ${WEBHOOK_DELIVERY_INTERVAL_SECONDS:-15}
+      WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS: ${WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS:-30}
+      WEBHOOK_AUTO_DISABLE_DAYS: ${WEBHOOK_AUTO_DISABLE_DAYS:-3}
       # Public browser origin used to build OIDC redirect URIs (SSO login
       # callback, post-logout redirect). OIDC login refuses to start without it
       # in production. Set by setup.sh; defaults to CONTROL_PLANE_URL (the
@@ -364,7 +374,10 @@ services:
       IMAGE_S3_SECRET_ACCESS_KEY: ${IMAGE_S3_SECRET_ACCESS_KEY:-}
       IMAGE_S3_SESSION_TOKEN: ${IMAGE_S3_SESSION_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      OTEL_METRICS_ENABLED: "false"
+      # Compose has no bundled control-plane OTLP collector, but operators may
+      # point OTEL_EXPORTER_OTLP_ENDPOINT at one and opt in through `.env`.
+      OTEL_METRICS_ENABLED: ${OTEL_METRICS_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-localhost:4317}
       OTEL_LOGS_ENABLED: "false"
       OTEL_TRACES_ENABLED: "false"
       # VM console logs and log queries for the UI. Loki never leaves the
@@ -484,6 +497,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # Request-time rendering fetches the session and initial organization /
+      # project scope directly instead of making the browser discover them in
+      # sequence after hydration. Browser API calls still travel through nginx.
+      STRATO_API_URL: http://control-plane:8080
       # Gravatar profile pictures. Enabled here sends a hash of each user's email
       # to gravatar.com; set STRATO_GRAVATAR_ENABLED=false in .env to keep the UI
       # free of third-party requests and show initials instead.

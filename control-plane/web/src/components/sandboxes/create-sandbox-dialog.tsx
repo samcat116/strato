@@ -113,32 +113,33 @@ export function CreateSandboxDialog({
     const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API field is named `memory`
     const env = parseEnv(formData.env);
     const ttl = parseInt(formData.ttlSeconds, 10);
+    const payload = {
+      name: formData.name.trim(),
+      image: formData.image.trim(),
+      projectId,
+      cpus: parseInt(formData.cpus, 10) || 1,
+      memory: (parseInt(formData.memory, 10) || 1) * GB,
+      entrypoint: parseArgv(formData.entrypoint),
+      cmd: parseArgv(formData.cmd),
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+      workingDir: formData.workingDir.trim() || undefined,
+      ...(Number.isFinite(ttl) && ttl > 0 ? { ttlSeconds: ttl } : {}),
+      // Both omitted without a network: the server rejects
+      // `securityGroupIds` with no NIC to attach them to, and omitting them
+      // *with* a network means the project's default group rather than none.
+      ...(formData.networkId
+        ? {
+            networkId: formData.networkId,
+            ...(securityGroupIds.length > 0 ? { securityGroupIds } : {}),
+          }
+        : {}),
+    };
     // Creation is asynchronous: the server accepts the request and returns
     // the sandbox with the generation it is converging on, which the
     // MutationWatcher follows and reports on completion.
     await run({
-      request: () =>
-        sandboxesApi.create({
-          name: formData.name.trim(),
-          image: formData.image.trim(),
-          projectId,
-          cpus: parseInt(formData.cpus, 10) || 1,
-          memory: (parseInt(formData.memory, 10) || 1) * GB,
-          entrypoint: parseArgv(formData.entrypoint),
-          cmd: parseArgv(formData.cmd),
-          ...(Object.keys(env).length > 0 ? { env } : {}),
-          workingDir: formData.workingDir.trim() || undefined,
-          ...(Number.isFinite(ttl) && ttl > 0 ? { ttlSeconds: ttl } : {}),
-          // Both omitted without a network: the server rejects
-          // `securityGroupIds` with no NIC to attach them to, and omitting them
-          // *with* a network means the project's default group rather than none.
-          ...(formData.networkId
-            ? {
-                networkId: formData.networkId,
-                ...(securityGroupIds.length > 0 ? { securityGroupIds } : {}),
-              }
-            : {}),
-        }),
+      intentKey: JSON.stringify(["POST", "/api/sandboxes", payload]),
+      request: (idempotencyKey) => sandboxesApi.create(payload, idempotencyKey),
       watch: {
         kind: "create",
         resourceKind: "sandbox",

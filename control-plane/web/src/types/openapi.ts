@@ -420,7 +420,7 @@ export interface paths {
         put?: never;
         /**
          * Run a captured command in a virtual machine
-         * @description Requires `vm:runCommand`. Accepts a non-interactive guest command and returns an operation immediately. Poll the operation until terminal; a succeeded operation includes stdout, stderr, and the process exit code. Captured output is limited to 1 MiB across both streams.
+         * @description Requires `vm:runCommand`. Accepts a non-interactive guest command and returns an operation immediately. Poll the operation until terminal; a succeeded operation includes stdout, stderr, and the process exit code. A failed operation can include bounded partial stdout and stderr with `truncated: true`; `exitCode` is omitted when no authoritative guest exit was received. Captured output is limited to 1 MiB across both streams.
          */
         post: operations["runVMCommand"];
         delete?: never;
@@ -1041,6 +1041,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectID}/storage-pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List storage pools available to a project
+         * @description Returns the deployment's local default pool followed by the Ceph pools configured with a project-scoped namespace and cephx identity for this project. Credentials are never included. Requires project membership.
+         */
+        get: operations["listProjectStoragePools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/volumes/{volumeId}": {
         parameters: {
             query?: never;
@@ -1290,6 +1313,82 @@ export interface paths {
         post?: never;
         /** Delete a logical network */
         delete: operations["deleteNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/networks/{networkId}/acl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a network's stateless ACL
+         * @description Returns the optional ACL attached to this logical network. A network without an ACL returns 404 and remains unaffected by network-level filtering.
+         */
+        get: operations["getNetworkACL"];
+        put?: never;
+        /**
+         * Attach an empty stateless ACL to a network
+         * @description A network ACL is optional and is never backfilled. Creating one with no rules immediately defaults both ingress and egress IP traffic to deny.
+         */
+        post: operations["createNetworkACL"];
+        /**
+         * Remove a network's stateless ACL
+         * @description Removes network-level filtering and all of its rules. Security groups attached to workload NICs continue to apply.
+         */
+        delete: operations["deleteNetworkACL"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/networks/{networkId}/acl/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add an ordered rule to a network ACL
+         * @description Rules are immutable; edit by deleting and recreating. Rule numbers are unique within each direction, and the lowest matching number wins. At most 100 rules may be attached to one network ACL.
+         */
+        post: operations["createNetworkACLRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/networks/{networkId}/acl/rules/{ruleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+                /** @description The network ACL rule's id. */
+                ruleId: components["parameters"]["NetworkACLRuleID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a rule from a network ACL */
+        delete: operations["deleteNetworkACLRule"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3753,19 +3852,59 @@ export interface paths {
         };
         /**
          * List agent enrollments
-         * @description Outstanding and redeemed node enrollments. The SPIRE join token is never echoed here — it is returned exactly once, from the create endpoint. Enrollments with no organization scope are visible to system admins only.
+         * @description Outstanding and redeemed node enrollments. The bootstrap token is never echoed here — it is returned exactly once, from the create endpoint. SPIRE join tokens are minted only when the host redeems that bootstrap token. Enrollments with no organization scope are visible to system admins only.
          */
         get: operations["listAgentEnrollments"];
         put?: never;
         /**
          * Enroll a hypervisor node
-         * @description Provisions the node in SPIRE (join token + workload entry) and returns a copy-paste `bootstrapCommand` that installs `strato-agent` and `spire-agent`, attests the node, and points it at this control plane.
+         * @description Prepares the node's workload grant in SPIRE and returns a copy-paste `bootstrapCommand` that installs `strato-agent` and `spire-agent`, attests the node, and points it at this control plane.
          *
-         *     This is an operator-facing call authenticated with a normal user credential; the agent it provisions subsequently authenticates only with its SPIFFE/SPIRE X.509 SVID over mTLS. The response's `spire.joinToken` is a one-time bearer secret and is never returned again.
+         *     This is an operator-facing call authenticated with a normal user credential. The response's `bootstrapToken` is stored only as a hash; the host redeems it to mint a just-in-time SPIRE join token and fetch every server-selected identity and network value. The installed agent subsequently authenticates only with its SPIFFE/SPIRE X.509 SVID over mTLS.
          *
          *     Requires `manage_agents` on the target organization scope (system admins always pass), plus `manage` on the required `siteId`. One enrollment per agent name: revoke the existing one before re-enrolling.
          */
         post: operations["createAgentEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-enrollments/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the agent enrollment installer wrapper
+         * @description Returns a small shell wrapper bound to this control-plane origin. Pipe it to `sudo bash -s -- <bootstrap-token>`; the wrapper downloads the versioned agent installer and supplies the private bootstrap exchange URL internally.
+         */
+        get: operations["getAgentEnrollmentInstaller"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-enrollments/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redeem an agent enrollment token
+         * @description Exchanges an `enroll_v1_` bearer token for the server-selected agent bootstrap bundle and a freshly minted one-time SPIRE join token. The bearer is atomically consumed before SPIRE mints the credential, so concurrent or later replays receive 401. The installer caches the winning bundle in root-only local state for same-host recovery.
+         */
+        post: operations["redeemAgentEnrollment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3954,6 +4093,74 @@ export interface paths {
          * @description Refused with `409` while any agent, logical network, or floating IP pool still references the site. Requires `manage` on the site.
          */
         delete: operations["deleteSite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites/{siteId}/ceph-cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a site's external Ceph cluster
+         * @description Returns the bring-your-own Ceph cluster registered for this site. Credential material and its internal secret reference are never returned. STR-155 does not yet schedule observer probes, so health is `unknown` and capacity/usage timestamps are absent until a later observation path is added. Requires `read` on the site.
+         */
+        get: operations["getSiteCephCluster"];
+        /**
+         * Update a site's external Ceph client configuration
+         * @description Replaces monitor endpoints and observer client name. The cluster FSID is immutable. Monitor endpoints must use msgr2 (`v2:host:port` or `v2:[IPv6]:port`, port 1 through 65535). `keyring` may be omitted to retain the current secret, but changing `clientName` requires a replacement containing exactly one matching client section and one nonempty `key =` entry. Requires `manage` on the site.
+         */
+        put: operations["updateSiteCephCluster"];
+        /**
+         * Register an external Ceph cluster for a site
+         * @description Registers an existing Ceph cluster. Strato agents act only as clients; this does not bootstrap or manage any Ceph daemon. The submitted monitor endpoints must use msgr2 (`v2:host:port` or `v2:[IPv6]:port`, port 1 through 65535). The observer keyring must have exactly one section matching `clientName` and exactly one nonempty `key =` entry; it is encrypted at rest and never returned. Requires `manage` on the site.
+         */
+        post: operations["createSiteCephCluster"];
+        /**
+         * Remove a site's external Ceph cluster registration
+         * @description Deletes the cluster registration and its observer credential. Refused while any project access configuration still refers to the cluster. This never modifies the external Ceph cluster. Requires `manage` on the site.
+         */
+        delete: operations["deleteSiteCephCluster"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites/{siteId}/ceph-cluster/projects/{projectID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a project's scoped Ceph access for a site
+         * @description Returns the project's Ceph client identity and storage pool, without credential material or internal secret references. Requires `read` on the site and membership in the project.
+         */
+        get: operations["getSiteCephProjectAccess"];
+        /**
+         * Configure a project's scoped Ceph access for a site
+         * @description Creates or replaces the project's Ceph client identity, RBD pool, and namespace. `keyring` is required when creating the configuration and whenever the cephx identity, pool, namespace, or credential changes. It must contain exactly one matching section, one key, and only the exact namespace-scoped mon/mgr/osd RBD caps. Replacing an existing credential also requires `cephxRevoked: true`, confirming that the operator revoked it in the external cluster. Credentials, identity, pool, and namespace are immutable while volumes exist. Requires `manage` on the site and project policy administration.
+         */
+        put: operations["upsertSiteCephProjectAccess"];
+        post?: never;
+        /**
+         * Remove a project's scoped Ceph access for a site
+         * @description Deletes the project storage pool, cephx credential, and access record, and permanently records an agent-cleanup tombstone for the retired credential. Refused while any volume still belongs to the pool. Strato cannot revoke cephx in the external cluster, so callers must first do that out of band and confirm it with `cephxRevoked=true`. Requires `manage` on the site and project policy administration.
+         */
+        delete: operations["deleteSiteCephProjectAccess"];
         options?: never;
         head?: never;
         patch?: never;
@@ -5361,7 +5568,7 @@ export interface paths {
         };
         /**
          * List a webhook's recent deliveries
-         * @description Requires organization admin — delivery payloads carry operational detail from any project in the organization. Newest first. Terminal deliveries are pruned after the history retention window.
+         * @description Requires organization admin — delivery payloads carry operational detail from any project in the organization. Most recently updated first. Terminal deliveries are pruned after the history retention window.
          */
         get: operations["listWebhookDeliveries"];
         put?: never;
@@ -5390,7 +5597,7 @@ export interface paths {
         put?: never;
         /**
          * Re-enqueue a delivery
-         * @description Requires organization admin. Resets a terminal (succeeded or dead) delivery to pending with a fresh attempt budget; the delivery sweep posts it again.
+         * @description Requires organization admin. Resets a terminal (succeeded, dead, or dropped) delivery to pending with a fresh attempt budget; the delivery sweep posts it again.
          */
         post: operations["redeliverWebhookDelivery"];
         delete?: never;
@@ -5551,12 +5758,6 @@ export interface components {
         ResourceOperation: {
             /** Format: uuid */
             id?: string;
-            /**
-             * Format: uuid
-             * @deprecated
-             * @description Deprecated compatibility alias equal to `resourceId`; it remains populated during its deprecation cycle, but clients must use `resourceKind`/`resourceId` instead.
-             */
-            vmId?: string;
             resourceKind: components["schemas"]["OperationResourceKind"];
             /** Format: uuid */
             resourceId: string;
@@ -5579,7 +5780,9 @@ export interface components {
         VMCommandResult: {
             stdout: string;
             stderr: string;
-            exitCode: number;
+            /** @description The guest-reported process exit code. Omitted when execution failed or closed before an authoritative exec-exit event was recorded. */
+            exitCode?: number;
+            /** @description True when the result may be incomplete because output exceeded the combined 1 MiB capture limit or the session closed without an authoritative exec-exit event. */
             truncated: boolean;
         };
         /**
@@ -5618,6 +5821,11 @@ export interface components {
             imageId?: string;
             /** Format: uuid */
             projectId: string;
+            /**
+             * Format: uuid
+             * @description Storage pool for the managed boot volume. Omit to preserve the deployment's local default. A Ceph pool must belong to this project and constrains VM placement to fresh Ceph-client agents in its site; its bytes consume no agent-local disk reservation.
+             */
+            poolId?: string;
             environment?: string;
             cpu?: number;
             /**
@@ -6233,6 +6441,11 @@ export interface components {
             description?: string;
             /** Format: uuid */
             projectId: string;
+            /**
+             * Format: uuid
+             * @description Storage pool for the new volume. Omit to use the deployment's local default pool. The selected pool must be available to the project; Ceph pools accept only `raw` volumes.
+             */
+            poolId?: string;
             /** @description Which of the project's environments the volume's bytes are charged to. Omit for the project's default, as VM and sandbox create do. */
             environment?: string;
             sizeGB: number;
@@ -6390,8 +6603,23 @@ export interface components {
             rbd: {
                 pool: string;
                 image: string;
+                /** @description Project-scoped RBD namespace containing the image. */
+                namespace: string;
+                /** @description Ceph client username without the `client.` prefix. */
                 user: string;
-                monHosts: string[];
+                monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+                /**
+                 * Format: uuid
+                 * @description Strato identity of the external Ceph cluster.
+                 */
+                clusterId: string;
+                /**
+                 * Format: uuid
+                 * @description Stable identity of the project-scoped credential and the deterministic libvirt secret UUID. This is not secret material.
+                 */
+                credentialId: string;
+                /** @description Deterministic agent-local path to the generated secure Ceph client configuration. The keyring itself is never carried in this attachment. */
+                configPath: string;
             };
         };
         VolumeSnapshot: {
@@ -6525,6 +6753,64 @@ export interface components {
             primaryDnsZoneId?: string;
             /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will — the network's resolver is off, its site cannot run one, or it has no address yet. Absent for a network with no attached zone, which has nothing to fail to deliver. */
             zoneResolutionWarning?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /**
+         * @description Traffic direction at the logical network boundary.
+         * @enum {string}
+         */
+        NetworkACLRuleDirection: "ingress" | "egress";
+        /**
+         * @description Address family the rule matches.
+         * @enum {string}
+         */
+        NetworkACLRuleEthertype: "ipv4" | "ipv6";
+        /**
+         * @description Stateless network-layer verdict. An allow must still pass the applicable NIC security groups.
+         * @enum {string}
+         */
+        NetworkACLRuleAction: "allow" | "deny";
+        CreateNetworkACLRuleRequest: {
+            /** @description Evaluation order within the direction; lower numbers win. */
+            ruleNumber: number;
+            direction: components["schemas"]["NetworkACLRuleDirection"];
+            ethertype: components["schemas"]["NetworkACLRuleEthertype"];
+            action: components["schemas"]["NetworkACLRuleAction"];
+            /**
+             * @description tcp, udp, or icmp; absent matches any IP protocol.
+             * @enum {string}
+             */
+            protocolName?: "tcp" | "udp" | "icmp";
+            /** @description tcp/udp: first destination port. icmp: ICMP type, limited to 255. */
+            portRangeMin?: number;
+            /** @description tcp/udp: last destination port. icmp: ICMP code, limited to 255. */
+            portRangeMax?: number;
+            /** @description Required source CIDR for ingress or destination CIDR for egress; its address family must match ethertype. */
+            remoteCIDR: string;
+            description?: string;
+        };
+        NetworkACLRule: components["schemas"]["CreateNetworkACLRuleRequest"] & {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        /** @description Ordered network-level policy. New traffic must satisfy this ACL and the applicable NIC security groups. OVN does not re-evaluate return traffic already tracked by a stateful security-group allow-related connection, so this backend is not an exact AWS stateless return-path model. */
+        NetworkACL: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            networkId: string;
+            /**
+             * Format: int64
+             * @description Monotonic full-policy generation.
+             */
+            generation: number;
+            /** @description Complete rule set, ordered by direction and ascending rule number. Each direction has an implicit default deny. */
+            rules: components["schemas"]["NetworkACLRule"][];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -8448,7 +8734,7 @@ export interface components {
             /** @description Unique agent name, restricted to characters SPIRE accepts in a SPIFFE ID path segment. */
             agentName: string;
             /**
-             * @description Lifetime of the enrollment and its SPIRE join token.
+             * @description Lifetime of the bootstrap bearer and the maximum expiry of any SPIRE join token minted from it.
              * @default 1
              */
             expirationHours: number;
@@ -8462,7 +8748,7 @@ export interface components {
             /** Format: uuid */
             organizationalUnitId?: string | null;
         };
-        /** @description A newly created enrollment. Returned only from the create endpoint, because it carries one-time SPIRE node-attestation material. */
+        /** @description A newly created enrollment. Returned only from the create endpoint, because it carries the one-time bootstrap bearer. */
         AgentEnrollmentDetail: {
             /** Format: uuid */
             id: string;
@@ -8470,21 +8756,16 @@ export interface components {
             spiffeId: string;
             /** Format: date-time */
             expiresAt: string;
-            spire: components["schemas"]["SPIREProvisioning"];
-            /** @description Copy-paste one-liner that installs strato-agent and spire-agent, attests the node with the join token, and points it at this control plane's mTLS listener. */
+            /** @description The server-selected SPIFFE trust domain for this agent. */
+            trustDomain: string;
+            /** @description The server-selected SPIRE node-attestation address. */
+            spireServerAddress: string;
+            /** @description Short-lived bearer shown once and stored only as a hash. It carries no configuration; the installer exchanges it for the bootstrap bundle. */
+            bootstrapToken: string;
+            /** @description Copy-paste one-liner that installs strato-agent and spire-agent, redeems the bootstrap token, attests the node with the resulting join token, and points it at this control plane's mTLS listener. */
             bootstrapCommand: string;
         };
-        /** @description SPIRE material handed back once, at enrollment creation. `joinToken` is a one-time bearer secret that is never persisted or re-exposed. */
-        SPIREProvisioning: {
-            joinToken: string;
-            /** Format: date-time */
-            joinTokenExpiresAt: string;
-            spiffeId: string;
-            nodeId: string;
-            trustDomain: string;
-            serverAddress: string;
-        };
-        /** @description List-safe view of an enrollment. Deliberately omits the whole `spire` block: the join token is shown exactly once, at creation time. */
+        /** @description List-safe view of an enrollment. Deliberately omits the bootstrap token, which is shown exactly once at creation time. */
         AgentEnrollmentListItem: {
             /** Format: uuid */
             id: string;
@@ -8494,7 +8775,7 @@ export interface components {
             expiresAt: string;
             /** @description Whether the named agent has registered. */
             isUsed: boolean;
-            /** @description Unused and not yet expired. */
+            /** @description Has a bootstrap credential, unused and not yet expired. */
             isValid: boolean;
             /** Format: uuid */
             organizationId?: string | null;
@@ -8505,6 +8786,119 @@ export interface components {
             /** Format: date-time */
             usedAt?: string | null;
         };
+        /** @description Client configuration for an existing Ceph cluster. `keyring` is an observer credential used for cluster health and capacity probes; it is encrypted at rest, never returned, and never used for project volume I/O. */
+        CreateExternalCephClusterRequest: {
+            /**
+             * Format: uuid
+             * @description The external Ceph cluster's immutable FSID.
+             */
+            fsid: string;
+            /** @description Messenger-v2 monitor endpoints. Each entry is `v2:host:port` or `v2:[IPv6]:port`, with a port from 1 through 65535. */
+            monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+            /** @description Observer cephx identity, including the `client.` prefix. */
+            clientName: string;
+            /** @description Complete keyring whose only section is exactly `[<clientName>]` (where `<clientName>` is this request's `clientName`) and which has exactly one nonempty `key = ...` entry in that section. Accepted only on this write and never represented in a response. */
+            keyring: string;
+        };
+        /** @description Full replacement of the mutable Ceph client configuration. Omit `keyring` to retain the current secret. A replacement keyring is required when changing `clientName`. */
+        UpdateExternalCephClusterRequest: {
+            /** @description Messenger-v2 monitor endpoints. Each entry is `v2:host:port` or `v2:[IPv6]:port`, with a port from 1 through 65535. */
+            monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+            /** @description Observer cephx identity, including the `client.` prefix. */
+            clientName: string;
+            /** @description Replacement keyring whose only section is exactly `[<clientName>]` (where `<clientName>` is this request's `clientName`) and which has exactly one nonempty `key = ...` entry in that section. Omit to retain the current secret; required when changing `clientName`. */
+            keyring?: string;
+        };
+        /** @description Project-isolated RBD access. `keyring` is required when creating this configuration and whenever identity, pool, namespace, or credential changes; omit it on metadata-only updates to retain the current secret. The cephx identity must be scoped exactly to the supplied pool and namespace. Replacing an existing credential requires external cephx revocation and `cephxRevoked: true`. */
+        UpsertCephProjectAccessRequest: {
+            /** @description Project-scoped cephx identity, including `client.`. */
+            clientName: string;
+            /** @description Complete keyring whose only section is exactly `[<clientName>]` (where `<clientName>` is this request's `clientName`) and which has exactly one nonempty `key = ...` entry in that section, exactly `caps mon = "profile rbd"`, and exactly namespace-scoped `caps mgr` and `caps osd` RBD profiles for the supplied pool and namespace. No other capability services are accepted. Required on create and whenever identity, pool, namespace, or credential changes; never returned. */
+            keyring?: string;
+            /** @description Required and true when replacing an existing credential. Confirms that an operator already revoked the old cephx credential in the external cluster. Ignored on create and metadata-only updates. */
+            cephxRevoked?: boolean;
+            /** @description User-facing name of the Strato storage pool. */
+            storagePoolName: string;
+            /** @description Existing Ceph RBD pool containing this project's images. */
+            cephPoolName: string;
+            /** @description RBD namespace dedicated to this project. It is fixed after the first volume exists. */
+            namespace: string;
+        };
+        /** @description Public external-cluster metadata. Secret material and internal secret references are deliberately absent. This phase stores observer credentials but does not yet run health/capacity probes, so observation fields remain unknown/absent. */
+        CephClusterResponse: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            siteId: string;
+            /** Format: uuid */
+            fsid: string;
+            /** @description False for a bring-your-own cluster registered here. */
+            managed: boolean;
+            monEndpoints: components["schemas"]["CephMonitorEndpoint"][];
+            /** @description Observer cephx identity; never a project volume identity. */
+            clientName: string;
+            /** @description Whether encrypted observer credential material is stored. */
+            hasCredential: boolean;
+            health: components["schemas"]["CephClusterHealth"];
+            /** Format: int64 */
+            capacityBytes?: number;
+            /** Format: int64 */
+            usedBytes?: number;
+            /** Format: date-time */
+            observedAt?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /**
+         * @description Last observed health of the external Ceph cluster. Always `unknown` in STR-155 because observer probing is intentionally deferred.
+         * @enum {string}
+         */
+        CephClusterHealth: "unknown" | "ok" | "warning" | "error";
+        /** @description A Ceph messenger-v2 monitor endpoint: `v2:host:port` for a hostname or IPv4 address, or `v2:[IPv6]:port` for an IPv6 address. The port must be from 1 through 65535. */
+        CephMonitorEndpoint: string;
+        /** @description Project-scoped Ceph identity and its storage pool. The keyring and its internal secret reference are never returned. */
+        CephProjectAccessResponse: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            clusterId: string;
+            /** Format: uuid */
+            projectId: string;
+            clientName: string;
+            /** @description Whether encrypted project credential material is stored. */
+            hasCredential: boolean;
+            storagePool: components["schemas"]["StoragePoolResponse"];
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /** @description Public storage-pool metadata. Local implementation details and all credential material are omitted. */
+        StoragePoolResponse: {
+            /** Format: uuid */
+            id?: string;
+            name: string;
+            mode: components["schemas"]["StoragePoolMode"];
+            /** Format: uuid */
+            siteId?: string;
+            /** Format: uuid */
+            cephClusterId?: string;
+            /** Format: uuid */
+            cephProjectAccessId?: string;
+            cephPoolName?: string;
+            cephNamespace?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /**
+         * @description How a storage pool makes volume data available to agents.
+         * @enum {string}
+         */
+        StoragePoolMode: "local" | "replicated" | "ceph";
         /** @description An availability zone: the agents that share one OVN deployment, so a logical network pinned to the site can span its nodes. */
         SiteDetail: {
             /** Format: uuid */
@@ -9810,12 +10204,15 @@ export interface components {
             subscriptionId: string;
             /**
              * Format: uuid
-             * @description Shared across the fan-out of one event to many subscriptions; consumers dedupe on it (delivery is at-least-once).
+             * @description Shared across the fan-out of one event to many subscriptions. A claimed POST can repeat after a crash, so consumers dedupe on this id. Rows shed at the pending ceiling receive no further attempt.
              */
             eventId: string;
             eventType: string;
-            /** @enum {string} */
-            status: "pending" | "succeeded" | "dead";
+            /**
+             * @description `dropped` means the row was intentionally removed from pending work to enforce the subscription's ceiling. It receives no further POST, but its attempt history can include earlier failed POSTs.
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "dead" | "dropped";
             attempts: number;
             /**
              * Format: date-time
@@ -9831,7 +10228,7 @@ export interface components {
             deliveredAt?: string;
             /** Format: date-time */
             createdAt?: string;
-            /** @description The exact JSON body posted, frozen at enqueue time. */
+            /** @description The exact JSON body prepared for delivery, frozen at enqueue time. */
             payload: string;
         };
         /** @description The RFC 8935 error envelope returned by the push-delivery endpoint. Unlike the rest of the API this is not the standard Strato `Error` body. */
@@ -9987,6 +10384,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+        IdempotencyKey: string;
         /** @description The virtual machine's id. */
         VMID: string;
         /** @description The VM network interface's id. */
@@ -10013,6 +10412,8 @@ export interface components {
         VolumeSnapshotID: string;
         /** @description The network's id. */
         NetworkID: string;
+        /** @description The network ACL rule's id. */
+        NetworkACLRuleID: string;
         /** @description The load balancer's id. */
         LoadBalancerID: string;
         /** @description The load balancer listener's id. */
@@ -10121,6 +10522,10 @@ export interface components {
         AuditUserIdQuery: string;
         /** @description Return only events scoped to this organization. */
         AuditOrganizationIdQuery: string;
+        /** @description Return only events for this canonical resource type (for example, `vms`). */
+        AuditResourceTypeQuery: string;
+        /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+        AuditResourceIdQuery: string;
         /** @description Return only events served via the system-admin bypass. */
         AuditAdminOnlyQuery: boolean;
         /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */
@@ -10319,7 +10724,10 @@ export interface operations {
     createVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -10367,7 +10775,10 @@ export interface operations {
     updateVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10407,7 +10818,10 @@ export interface operations {
     deleteVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10485,7 +10899,10 @@ export interface operations {
     startVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10531,7 +10948,10 @@ export interface operations {
     attachVMNetworkInterface: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10555,7 +10975,10 @@ export interface operations {
     detachVMNetworkInterface: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10576,7 +10999,10 @@ export interface operations {
     retryVMNetworkInterfaceMutation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10597,7 +11023,10 @@ export interface operations {
     stopVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10617,7 +11046,10 @@ export interface operations {
     restartVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10637,7 +11069,10 @@ export interface operations {
     pauseVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10657,7 +11092,10 @@ export interface operations {
     resumeVM: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10799,7 +11237,10 @@ export interface operations {
     createVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10823,7 +11264,10 @@ export interface operations {
     deleteVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10845,7 +11289,10 @@ export interface operations {
     restoreVMSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];
@@ -10922,7 +11369,10 @@ export interface operations {
     createSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -11000,7 +11450,10 @@ export interface operations {
     deleteSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11020,7 +11473,10 @@ export interface operations {
     startSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11040,7 +11496,10 @@ export interface operations {
     stopSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11060,7 +11519,10 @@ export interface operations {
     restartSandbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11202,7 +11664,10 @@ export interface operations {
     createSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11226,7 +11691,10 @@ export interface operations {
     deleteSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11248,7 +11716,10 @@ export interface operations {
     restoreSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11270,7 +11741,10 @@ export interface operations {
     exportSandboxSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The sandbox's id. */
                 sandboxID: components["parameters"]["SandboxID"];
@@ -11719,7 +12193,10 @@ export interface operations {
     createVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -11733,6 +12210,33 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listProjectStoragePools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The storage pools available to the project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoragePoolResponse"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getVolume: {
@@ -11796,7 +12300,10 @@ export interface operations {
     deleteVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11816,7 +12323,10 @@ export interface operations {
     attachVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11840,7 +12350,10 @@ export interface operations {
     detachVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11860,7 +12373,10 @@ export interface operations {
     resizeVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11884,7 +12400,10 @@ export interface operations {
     setVolumeIOLimits: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11908,7 +12427,10 @@ export interface operations {
     createVolumeSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11932,7 +12454,10 @@ export interface operations {
     cloneVolume: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -11988,7 +12513,10 @@ export interface operations {
     deleteVolumeSnapshot: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The volume's id. */
                 volumeId: components["parameters"]["VolumeID"];
@@ -12141,6 +12669,133 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getNetworkACL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The network ACL and its complete ordered rule set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkACL"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createNetworkACL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The created empty network ACL. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkACL"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteNetworkACL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createNetworkACLRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateNetworkACLRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description The created network ACL rule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkACLRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteNetworkACLRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The network's id. */
+                networkId: components["parameters"]["NetworkID"];
+                /** @description The network ACL rule's id. */
+                ruleId: components["parameters"]["NetworkACLRuleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listLoadBalancers: {
@@ -16584,7 +17239,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The enrollment, including one-time SPIRE material. */
+            /** @description The enrollment, including the one-time bootstrap token. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16607,6 +17262,67 @@ export interface operations {
                 };
             };
             /** @description SPIRE is not configured on this control plane, so no node can be enrolled. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getAgentEnrollmentInstaller: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A shell installer wrapper. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/x-shellscript": string;
+                };
+            };
+        };
+    };
+    redeemAgentEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned, line-oriented bootstrap data consumed by install.sh. The first line is `STRATO_AGENT_BOOTSTRAP_V1`; the remaining six lines are base64-encoded values. */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.strato.agent-bootstrap.v1": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description SPIRE could not mint a node-attestation token. The bootstrap bearer remains consumed; revoke and recreate the enrollment. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The enrollment's SPIRE instance is unavailable. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -17004,6 +17720,206 @@ export interface operations {
             path: {
                 /** @description The site's id. */
                 siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's registered Ceph cluster. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephClusterResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateExternalCephClusterRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated Ceph cluster. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephClusterResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    createSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateExternalCephClusterRequest"];
+            };
+        };
+        responses: {
+            /** @description The registered Ceph cluster. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephClusterResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteSiteCephCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getSiteCephProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's scoped Ceph access and storage pool. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephProjectAccessResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    upsertSiteCephProjectAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertCephProjectAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description The configured project access and storage pool. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CephProjectAccessResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteSiteCephProjectAccess: {
+        parameters: {
+            query: {
+                /** @description Must be true to confirm the retired cephx credential was revoked in the external Ceph cluster before Strato deletes its copy. */
+                cephxRevoked: true;
+            };
+            header?: never;
+            path: {
+                /** @description The site's id. */
+                siteId: components["parameters"]["SiteID"];
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
             };
             cookie?: never;
         };
@@ -18118,6 +19034,10 @@ export interface operations {
                 userID?: components["parameters"]["AuditUserIdQuery"];
                 /** @description Return only events scoped to this organization. */
                 organizationID?: components["parameters"]["AuditOrganizationIdQuery"];
+                /** @description Return only events for this canonical resource type (for example, `vms`). */
+                resourceType?: components["parameters"]["AuditResourceTypeQuery"];
+                /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+                resourceID?: components["parameters"]["AuditResourceIdQuery"];
                 /** @description Return only events served via the system-admin bypass. */
                 adminOnly?: components["parameters"]["AuditAdminOnlyQuery"];
                 /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */
@@ -18155,6 +19075,10 @@ export interface operations {
                 eventType?: components["parameters"]["AuditEventTypeQuery"];
                 /** @description Return only events attributed to this user. */
                 userID?: components["parameters"]["AuditUserIdQuery"];
+                /** @description Return only events for this canonical resource type (for example, `vms`). */
+                resourceType?: components["parameters"]["AuditResourceTypeQuery"];
+                /** @description Return only events for this resource identifier. VM UUIDs are canonicalized. */
+                resourceID?: components["parameters"]["AuditResourceIdQuery"];
                 /** @description Return only events served via the system-admin bypass. */
                 adminOnly?: components["parameters"]["AuditAdminOnlyQuery"];
                 /** @description Lower bound on `createdAt`. ISO8601 (with or without fractional seconds) or epoch seconds; an unparseable value is treated as unbounded rather than matching nothing. */

@@ -31,5 +31,20 @@ public enum DiskAttachment: Codable, Equatable, Sendable {
     /// A host block device, such as a krbd or LVM mapping.
     case blockDevice(path: String)
     /// A native RADOS Block Device opened by a network-capable hypervisor.
-    case rbd(pool: String, image: String, user: String, monHosts: [String])
+    ///
+    /// These are canonical, non-secret coordinates. `clusterId` distinguishes
+    /// clusters that happen to use the same pool and image names;
+    /// `credentialId` is also the deterministic libvirt secret UUID; and
+    /// `configPath` points at the durable client configuration materialized on
+    /// every eligible agent. The keyring itself never travels in an attachment.
+    case rbd(
+        pool: String,
+        image: String,
+        namespace: String,
+        user: String,
+        monEndpoints: [String],
+        clusterId: UUID,
+        credentialId: UUID,
+        configPath: String
+    )
 }

@@ -40,7 +40,7 @@ struct SchemaMigratorTests {
 
             // Sanity: the schema really was built, not just left empty.
             let applied = try await MigrationLog.query(on: second.db).count()
-            #expect(applied == 1)
+            #expect(applied > 0)
             #expect(try await User.query(on: second.db).count() == 0)
         } catch {
             try? await first.asyncShutdown()
@@ -59,36 +59,31 @@ struct SchemaMigratorTests {
         let holder = try await Application.makeForTesting(database: databaseName, owningDatabase: false)
         let waiter = try await Application.makeForTesting(database: databaseName, owningDatabase: true)
 
-        // `withConnection`'s closure is @Sendable and `any Error` is not, so the
+        // The lock body's closure is @Sendable and `any Error` is not, so the
         // failure comes back as its rendered description rather than the value.
         let thrown: LockAttempt
         do {
-            thrown = try await holder.db.withConnection { held in
-                let sql = try #require(held as? any SQLDatabase)
-                _ = try await sql.raw(
-                    "SELECT pg_advisory_lock(hashtext(\(bind: SchemaMigrator.lockName)))"
-                ).all()
-
+            thrown = try await AdvisoryLock.withSessionLock(
+                .singleton(.schemaMigration),
+                on: holder.db,
+                timeout: .seconds(1),
+                pollInterval: .milliseconds(25),
+                logger: holder.logger
+            ) { _ in
                 var attempt = LockAttempt(isSchemaMigrationError: false, description: nil)
                 do {
-                    try await waiter.db.withConnection { waiting in
-                        _ = try await SchemaMigrator.acquireLock(
-                            on: waiting,
-                            timeout: 1,
-                            poll: 0.2,
-                            logger: waiter.logger
-                        )
-                    }
+                    try await SchemaMigrator.withMigrationLock(
+                        on: waiter.db,
+                        timeout: 1,
+                        poll: 0.2,
+                        logger: waiter.logger
+                    ) { _ in }
                 } catch {
                     attempt = LockAttempt(
                         isSchemaMigrationError: error is SchemaMigrationError,
                         description: (error as? SchemaMigrationError)?.description ?? "\(error)"
                     )
                 }
-
-                _ = try await sql.raw(
-                    "SELECT pg_advisory_unlock(hashtext(\(bind: SchemaMigrator.lockName)))"
-                ).all()
                 return attempt
             }
         } catch {

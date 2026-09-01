@@ -96,6 +96,60 @@ struct Ext4ImageBuilderTests {
         #expect(!FileManager.default.fileExists(atPath: imagePath))
     }
 
+    @Test("ENOSPC while pre-sizing the image is blocked")
+    func truncateENOSPC() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let tree = try makeTree(in: dir)
+        let imagePath = dir + "/rootfs.ext4"
+
+        let builder = Ext4ImageBuilder(
+            mkfsPath: "/bin/ls",
+            logger: Logger(label: "test"),
+            prepareImage: { _, _ in throw POSIXError(.ENOSPC) }
+        )
+        do {
+            try await builder.buildImage(fromTree: tree, at: imagePath)
+            Issue.record("expected insufficientDiskSpace")
+        } catch let error as OCIError {
+            guard case .insufficientDiskSpace = error else {
+                Issue.record("expected insufficientDiskSpace, got \(error)")
+                return
+            }
+            #expect(error.failureClassification == .blocked)
+        }
+        #expect(!FileManager.default.fileExists(atPath: imagePath))
+    }
+
+    @Test("mkfs ENOSPC is blocked")
+    func mkfsENOSPC() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let tree = try makeTree(in: dir)
+        let imagePath = dir + "/rootfs.ext4"
+
+        let builder = Ext4ImageBuilder(
+            mkfsPath: "/bin/ls",
+            logger: Logger(label: "test"),
+            runSubprocess: { _, _ in
+                ProcessResult(
+                    terminationStatus: 1, standardOutput: Data(),
+                    standardError: Data("No space left on device".utf8))
+            }
+        )
+        do {
+            try await builder.buildImage(fromTree: tree, at: imagePath)
+            Issue.record("expected insufficientDiskSpace")
+        } catch let error as OCIError {
+            guard case .insufficientDiskSpace = error else {
+                Issue.record("expected insufficientDiskSpace, got \(error)")
+                return
+            }
+            #expect(error.failureClassification == .blocked)
+        }
+        #expect(!FileManager.default.fileExists(atPath: imagePath))
+    }
+
     @Test("a missing mkfs.ext4 is a permanent host misconfiguration")
     func missingMkfs() async throws {
         let dir = try makeTempDir()

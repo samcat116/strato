@@ -35,7 +35,6 @@ final class CrossOrgBindingTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let homeOrg = try await builder.createOrganization(name: "XOrg Home")

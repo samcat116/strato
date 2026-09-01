@@ -68,6 +68,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
         let rows: Int?
         let cols: Int?
         let outputMode: GuestExecOutputMode
+        /// Immutable VM-only attribution retained until every asynchronous
+        /// lifecycle fact has been emitted. Sandbox exec deliberately leaves
+        /// this nil and never produces `vm.exec.*` audit events.
+        let auditContext: VMGuestExecutionAuditContext?
         let createdAt: Date
         let expiresAt: Date
     }
@@ -79,6 +83,9 @@ final class GuestExecSessionManager: @unchecked Sendable {
         let agentKey: String
         let userId: String
         let outputMode: GuestExecOutputMode
+        let auditContext: VMGuestExecutionAuditContext?
+        var agentConfirmedStarted: Bool
+        var agentConfirmedStartedAt: Date?
         let attachedAt: Date
     }
 
@@ -91,6 +98,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
     /// Mint a pending session for a validated exec request. Returns the
     /// session (including `expiresAt`) for the 201 response.
     func createPendingSession(
+        sessionId: String = UUID().uuidString,
         resourceKind: GuestResourceKind,
         resourceId: String,
         agentKey: String,
@@ -102,10 +110,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         rows: Int?,
         cols: Int?,
         outputMode: GuestExecOutputMode = .raw,
+        auditContext: VMGuestExecutionAuditContext? = nil,
         now: Date = Date()
     ) -> PendingExecSession {
         let session = PendingExecSession(
-            sessionId: UUID().uuidString,
+            sessionId: sessionId,
             resourceKind: resourceKind,
             resourceId: resourceId,
             agentKey: agentKey,
@@ -117,6 +126,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
             rows: rows,
             cols: cols,
             outputMode: outputMode,
+            auditContext: auditContext,
             createdAt: now,
             expiresAt: now.addingTimeInterval(Self.pendingSessionTTL)
         )
@@ -129,10 +139,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
         app.logger.info(
             "Guest exec session created",
             metadata: [
-                "sessionId": .string(session.sessionId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(session.sessionId),
                 "resourceKind": .string(resourceKind.rawValue),
-                "resourceId": .string(resourceId),
-                "agentKey": .string(agentKey),
+                LogMetadata.guestResourceIDKey(for: resourceKind): .string(resourceId),
+                "strato.agent.identity": .string(agentKey),
             ])
 
         return session
@@ -195,6 +205,9 @@ final class GuestExecSessionManager: @unchecked Sendable {
                 agentKey: pending.agentKey,
                 userId: pending.userId,
                 outputMode: pending.outputMode,
+                auditContext: pending.auditContext,
+                agentConfirmedStarted: false,
+                agentConfirmedStartedAt: nil,
                 attachedAt: now
             )
             if let websocket {
@@ -209,10 +222,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         app.logger.info(
             "Guest exec session attached",
             metadata: [
-                "sessionId": .string(sessionId),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                 "resourceKind": .string(session.resourceKind.rawValue),
-                "resourceId": .string(session.resourceId),
-                "agentKey": .string(session.agentKey),
+                LogMetadata.guestResourceIDKey(for: session.resourceKind): .string(
+                    session.resourceId),
+                "strato.agent.identity": .string(session.agentKey),
             ])
 
         return session
@@ -220,24 +234,23 @@ final class GuestExecSessionManager: @unchecked Sendable {
 
     // MARK: - Session lifecycle
 
-    /// Remove an attached session (browser gone, exec ended, or start failed).
-    func removeSession(sessionId: String) {
-        lock.withLock {
-            guard let session = sessions.removeValue(forKey: sessionId) else { return }
-            frontendConnections.removeValue(forKey: sessionId)
-            let resourceKey = ResourceKey(kind: session.resourceKind, id: session.resourceId)
-            resourceSessions[resourceKey]?.remove(sessionId)
-            if resourceSessions[resourceKey]?.isEmpty == true {
-                resourceSessions.removeValue(forKey: resourceKey)
-            }
-            app.logger.info(
-                "Guest exec session removed",
-                metadata: [
-                    "sessionId": .string(sessionId),
-                    "resourceKind": .string(session.resourceKind.rawValue),
-                    "resourceId": .string(session.resourceId),
-                ])
-        }
+    /// End an attached session from a control-plane-owned terminal path (start
+    /// delivery failure or browser/operator termination). The locked removal is
+    /// the idempotency claim: whichever terminal path takes the session first is
+    /// the only one allowed to append `vm.exec.ended`.
+    func endSession(
+        sessionId: String,
+        outcome: VMGuestExecutionAudit.ExecEndOutcome,
+        exitCode: Int? = nil,
+        reason: String? = nil,
+        timestamp: Date? = nil
+    ) async {
+        guard let removed = removeSession(sessionId: sessionId, timestamp: timestamp) else { return }
+        await recordEnded(
+            removed,
+            outcome: outcome,
+            exitCode: exitCode,
+            reason: reason)
     }
 
     /// Get attached session info.
@@ -261,35 +274,49 @@ final class GuestExecSessionManager: @unchecked Sendable {
     /// browser gets a terminal error frame and a close — instead of a
     /// silently frozen terminal — and pending sessions that could never
     /// start are dropped.
-    func closeAllSessions(forAgent agentKey: String, reason: String) {
-        let closed: [(sessionId: String, websocket: WebSocket?)] = lock.withLock {
-            for (sessionId, pending) in pendingSessions where pending.agentKey == agentKey {
+    func closeAllSessions(
+        forAgent agentKey: String,
+        reason: String,
+        timestamp: Date? = nil
+    ) async {
+        let closed: [RemovedExecSession] = lock.withLock {
+            let pendingSessionIds = pendingSessions.values
+                .filter { $0.agentKey == agentKey }
+                .map(\.sessionId)
+            for sessionId in pendingSessionIds {
                 pendingSessions.removeValue(forKey: sessionId)
             }
-            var closed: [(String, WebSocket?)] = []
-            for (sessionId, session) in sessions where session.agentKey == agentKey {
-                sessions.removeValue(forKey: sessionId)
-                let websocket = frontendConnections.removeValue(forKey: sessionId)
-                let resourceKey = ResourceKey(kind: session.resourceKind, id: session.resourceId)
-                resourceSessions[resourceKey]?.remove(sessionId)
-                if resourceSessions[resourceKey]?.isEmpty == true {
-                    resourceSessions.removeValue(forKey: resourceKey)
+            var closed: [RemovedExecSession] = []
+            let attachedSessionIds = sessions.values
+                .filter { $0.agentKey == agentKey }
+                .map(\.sessionId)
+            for sessionId in attachedSessionIds {
+                if let removed = removeSessionLocked(
+                    sessionId: sessionId, timestamp: timestamp)
+                {
+                    closed.append(removed)
                 }
-                closed.append((sessionId, websocket))
             }
             return closed
         }
 
-        for (sessionId, websocket) in closed {
+        // User-facing teardown is independent of audit availability. Close every
+        // browser first, then enqueue the append-only facts after the lock and
+        // session side effects are complete.
+        for removed in closed {
             app.logger.info(
                 "Closed guest exec session: agent disconnected",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(agentKey),
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(removed.session.sessionId),
+                    "strato.agent.identity": .string(agentKey),
                 ])
-            guard let websocket else { continue }
-            websocket.send(Self.controlFrame(BrowserControlFrame(type: "error", message: reason)))
-            _ = websocket.close(code: .normalClosure)
+            guard let websocket = removed.websocket else { continue }
+            Self.sendControlFrameAndClose(
+                BrowserControlFrame(type: "error", message: reason), to: websocket)
+        }
+        for removed in closed {
+            await recordEnded(removed, outcome: .disconnected, reason: reason)
         }
     }
 
@@ -300,6 +327,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         let message = GuestExecStartMessage(
             resourceKind: session.resourceKind,
             resourceId: session.resourceId,
+            sessionKind: .interactive,
             sessionId: session.sessionId,
             command: session.command,
             env: session.env,
@@ -345,12 +373,49 @@ final class GuestExecSessionManager: @unchecked Sendable {
     // MARK: - Agent → browser
 
     /// The exec process spawned: tell the browser it may start sending input.
-    func handleStarted(sessionId: String, fromAgentKey agentKey: String) {
-        guard
-            let connection = frontendConnection(
-                sessionId: sessionId, fromAgentKey: agentKey, event: "started")
-        else { return }
-        connection.websocket.send(Self.controlFrame(BrowserControlFrame(type: "ready")))
+    func handleStarted(
+        sessionId: String,
+        fromAgentKey agentKey: String,
+        timestamp: Date? = nil
+    ) async {
+        let transition = claimAgentConfirmedStart(
+            sessionId: sessionId, fromAgentKey: agentKey, timestamp: timestamp)
+        switch transition {
+        case .started(let session, let websocket):
+            if let websocket {
+                Self.sendControlFrame(BrowserControlFrame(type: "ready"), to: websocket)
+            }
+            if let context = session.auditContext,
+                let startedAt = session.agentConfirmedStartedAt
+            {
+                let auditRecord = VMGuestExecutionAudit.makeExecStartedRecord(
+                    context,
+                    timestamp: startedAt)
+                await app.audit.recordFailOpen(auditRecord)
+            }
+        case .duplicate:
+            app.logger.debug(
+                "Ignoring duplicate guest exec started event",
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
+        case .unknown:
+            app.logger.debug(
+                "Guest exec started for unknown session",
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
+        case .wrongAgent(let expectedAgentKey):
+            logWrongAgent(
+                event: "started",
+                sessionId: sessionId,
+                reportingAgentKey: agentKey,
+                expectedAgentKey: expectedAgentKey)
+        }
     }
 
     /// Output bytes from the exec process. Raw sessions retain the browser
@@ -386,7 +451,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
             default:
                 app.logger.warning(
                     "Dropping guest exec output with unknown stream",
-                    metadata: ["sessionId": .string(sessionId), "stream": .string(stream)])
+                    metadata: [
+                        "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                        "stream": .string(stream),
+                    ])
                 return
             }
             var frame = [UInt8]()
@@ -398,35 +466,74 @@ final class GuestExecSessionManager: @unchecked Sendable {
     }
 
     /// The exec process ended: report the exit code and close normally.
-    func handleExit(sessionId: String, fromAgentKey agentKey: String, exitCode: Int) {
-        guard
-            let connection = frontendConnection(
-                sessionId: sessionId, fromAgentKey: agentKey, event: "exit")
-        else {
-            removeSessionIfOwned(sessionId: sessionId, byAgentKey: agentKey)
-            return
+    func handleExit(
+        sessionId: String,
+        fromAgentKey agentKey: String,
+        exitCode: Int,
+        timestamp: Date? = nil
+    ) async {
+        switch removeSession(
+            sessionId: sessionId, ownedBy: agentKey, timestamp: timestamp)
+        {
+        case .removed(let removed):
+            if let websocket = removed.websocket {
+                Self.sendControlFrameAndClose(
+                    BrowserControlFrame(type: "exit", exitCode: exitCode), to: websocket)
+            }
+            await recordEnded(removed, outcome: .exited, exitCode: exitCode)
+        case .unknown:
+            app.logger.debug(
+                "Guest exec exit for unknown session",
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
+        case .wrongAgent(let expectedAgentKey):
+            logWrongAgent(
+                event: "exit",
+                sessionId: sessionId,
+                reportingAgentKey: agentKey,
+                expectedAgentKey: expectedAgentKey)
         }
-        connection.websocket.send(
-            Self.controlFrame(BrowserControlFrame(type: "exit", exitCode: exitCode)))
-        _ = connection.websocket.close(code: .normalClosure)
-        removeSession(sessionId: sessionId)
     }
 
     /// The exec session ended without an exit code (spawn failure, vsock
     /// died, sandbox stopped): report the error and close.
-    func handleClosed(sessionId: String, fromAgentKey agentKey: String, reason: String?) {
-        guard
-            let connection = frontendConnection(
-                sessionId: sessionId, fromAgentKey: agentKey, event: "closed")
-        else {
-            removeSessionIfOwned(sessionId: sessionId, byAgentKey: agentKey)
-            return
+    func handleClosed(
+        sessionId: String,
+        fromAgentKey agentKey: String,
+        reason: String?,
+        timestamp: Date? = nil
+    ) async {
+        switch removeSession(
+            sessionId: sessionId, ownedBy: agentKey, timestamp: timestamp)
+        {
+        case .removed(let removed):
+            let message = reason ?? "exec session closed by agent"
+            if let websocket = removed.websocket {
+                Self.sendControlFrameAndClose(
+                    BrowserControlFrame(type: "error", message: message), to: websocket)
+            }
+            await recordEnded(
+                removed,
+                outcome: removed.session.agentConfirmedStarted ? .disconnected : .refused,
+                reason: message)
+        case .unknown:
+            app.logger.debug(
+                "Guest exec closed for unknown session",
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"),
+                    "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
+        case .wrongAgent(let expectedAgentKey):
+            logWrongAgent(
+                event: "closed",
+                sessionId: sessionId,
+                reportingAgentKey: agentKey,
+                expectedAgentKey: expectedAgentKey)
         }
-        let message = reason ?? "exec session closed by agent"
-        connection.websocket.send(
-            Self.controlFrame(BrowserControlFrame(type: "error", message: message)))
-        _ = connection.websocket.close(code: .normalClosure)
-        removeSession(sessionId: sessionId)
     }
 
     // MARK: - Private helpers
@@ -440,6 +547,133 @@ final class GuestExecSessionManager: @unchecked Sendable {
         let outputMode: GuestExecOutputMode
     }
 
+    private struct RemovedExecSession {
+        let session: AttachedExecSession
+        let websocket: WebSocket?
+        let endedAt: Date
+    }
+
+    private enum AgentConfirmedStartTransition {
+        case started(AttachedExecSession, WebSocket?)
+        case duplicate
+        case unknown
+        case wrongAgent(expectedAgentKey: String)
+    }
+
+    private enum OwnedSessionRemoval {
+        case removed(RemovedExecSession)
+        case unknown
+        case wrongAgent(expectedAgentKey: String)
+    }
+
+    private func claimAgentConfirmedStart(
+        sessionId: String,
+        fromAgentKey agentKey: String,
+        timestamp: Date?
+    ) -> AgentConfirmedStartTransition {
+        lock.withLock {
+            guard var session = sessions[sessionId] else { return .unknown }
+            guard session.agentKey == agentKey else {
+                return .wrongAgent(expectedAgentKey: session.agentKey)
+            }
+            guard !session.agentConfirmedStarted else { return .duplicate }
+            session.agentConfirmedStarted = true
+            session.agentConfirmedStartedAt = timestamp ?? Date()
+            sessions[sessionId] = session
+            return .started(session, frontendConnections[sessionId])
+        }
+    }
+
+    private func removeSession(
+        sessionId: String,
+        timestamp: Date?
+    ) -> RemovedExecSession? {
+        lock.withLock {
+            removeSessionLocked(sessionId: sessionId, timestamp: timestamp)
+        }
+    }
+
+    private func removeSession(
+        sessionId: String,
+        ownedBy agentKey: String,
+        timestamp: Date?
+    ) -> OwnedSessionRemoval {
+        lock.withLock {
+            guard let session = sessions[sessionId] else { return .unknown }
+            guard session.agentKey == agentKey else {
+                return .wrongAgent(expectedAgentKey: session.agentKey)
+            }
+            guard
+                let removed = removeSessionLocked(
+                    sessionId: sessionId, timestamp: timestamp)
+            else { return .unknown }
+            return .removed(removed)
+        }
+    }
+
+    /// Must be called while holding `lock`.
+    private func removeSessionLocked(
+        sessionId: String,
+        timestamp: Date?
+    ) -> RemovedExecSession? {
+        guard let session = sessions.removeValue(forKey: sessionId) else { return nil }
+        let observedAt = timestamp ?? Date()
+        let endedAt: Date
+        if let startedAt = session.agentConfirmedStartedAt {
+            endedAt = max(observedAt, startedAt.addingTimeInterval(0.000_001))
+        } else {
+            endedAt = observedAt
+        }
+        let websocket = frontendConnections.removeValue(forKey: sessionId)
+        let resourceKey = ResourceKey(kind: session.resourceKind, id: session.resourceId)
+        resourceSessions[resourceKey]?.remove(sessionId)
+        if resourceSessions[resourceKey]?.isEmpty == true {
+            resourceSessions.removeValue(forKey: resourceKey)
+        }
+        app.logger.info(
+            "Guest exec session removed",
+            metadata: [
+                "strato.session.kind": .string("guest_exec"),
+                "strato.session.id": .string(sessionId),
+                "resourceKind": .string(session.resourceKind.rawValue),
+                LogMetadata.guestResourceIDKey(for: session.resourceKind): .string(
+                    session.resourceId),
+            ])
+        return RemovedExecSession(session: session, websocket: websocket, endedAt: endedAt)
+    }
+
+    private func recordEnded(
+        _ removed: RemovedExecSession,
+        outcome: VMGuestExecutionAudit.ExecEndOutcome,
+        exitCode: Int? = nil,
+        reason: String? = nil
+    ) async {
+        guard let context = removed.session.auditContext else { return }
+        let auditRecord = VMGuestExecutionAudit.makeExecEndedRecord(
+            context,
+            outcome: outcome,
+            exitCode: exitCode,
+            reason: reason,
+            timestamp: removed.endedAt)
+        await app.audit.recordFailOpen(auditRecord)
+    }
+
+    private func logWrongAgent(
+        event: String,
+        sessionId: String,
+        reportingAgentKey: String,
+        expectedAgentKey: String
+    ) {
+        app.logger.warning(
+            "Dropping guest exec \(event) from an agent that does not own the session",
+            metadata: [
+                "strato.session.kind": .string("guest_exec"),
+                "strato.session.id": .string(sessionId),
+                "strato.agent.identity": .string(reportingAgentKey),
+                "strato.agent.session.identity": .string(expectedAgentKey),
+            ])
+    }
+
     private func frontendConnection(
         sessionId: String, fromAgentKey agentKey: String, event: String
     ) -> FrontendConnection? {
@@ -449,16 +683,19 @@ final class GuestExecSessionManager: @unchecked Sendable {
         guard let session else {
             app.logger.debug(
                 "Guest exec \(event) for unknown session",
-                metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
+                metadata: [
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                ])
             return nil
         }
         guard session.agentKey == agentKey else {
             app.logger.warning(
                 "Dropping guest exec \(event) from an agent that does not own the session",
                 metadata: [
-                    "sessionId": .string(sessionId),
-                    "agentKey": .string(agentKey),
-                    "sessionAgentName": .string(session.agentKey),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                    "strato.agent.identity": .string(agentKey),
+                    "strato.agent.session.identity": .string(session.agentKey),
                 ])
             return nil
         }
@@ -478,19 +715,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
         websocket.send(data)
         app.logger.debug(
             "Sent exec close for unknown session back to reporting agent",
-            metadata: ["sessionId": .string(sessionId), "agentKey": .string(agentKey)])
-    }
-
-    /// Remove a session on a terminal agent event when no browser socket is
-    /// bound (unit tests, or the browser already went away), still requiring
-    /// the reporting agent to own the session.
-    private func removeSessionIfOwned(sessionId: String, byAgentKey agentKey: String) {
-        let owned = lock.withLock {
-            sessions[sessionId]?.agentKey == agentKey
-        }
-        if owned {
-            removeSession(sessionId: sessionId)
-        }
+            metadata: [
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
+                "strato.agent.identity": .string(agentKey),
+            ])
     }
 
     /// JSON control frame sent to the browser as a text message.
@@ -511,6 +739,20 @@ final class GuestExecSessionManager: @unchecked Sendable {
         return text
     }
 
+    /// Queue browser delivery without awaiting socket I/O. Lifecycle audit
+    /// must not depend on whether a broken browser can accept its final frame.
+    private static func sendControlFrame(_ frame: BrowserControlFrame, to websocket: WebSocket) {
+        websocket.send(controlFrame(frame))
+    }
+
+    private static func sendControlFrameAndClose(
+        _ frame: BrowserControlFrame,
+        to websocket: WebSocket
+    ) {
+        sendControlFrame(frame, to: websocket)
+        _ = websocket.close(code: .normalClosure)
+    }
+
     /// Must be called while holding `lock`.
     private func sweepExpiredPendingLocked(now: Date) {
         for (sessionId, pending) in pendingSessions where pending.expiresAt <= now {
@@ -518,9 +760,10 @@ final class GuestExecSessionManager: @unchecked Sendable {
             app.logger.debug(
                 "Expired unattached guest exec session",
                 metadata: [
-                    "sessionId": .string(sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     "resourceKind": .string(pending.resourceKind.rawValue),
-                    "resourceId": .string(pending.resourceId),
+                    LogMetadata.guestResourceIDKey(for: pending.resourceKind): .string(
+                        pending.resourceId),
                 ])
         }
     }
@@ -532,7 +775,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
             app.logger.error(
                 "Agent WebSocket not found for guest exec message",
-                metadata: ["agentKey": .string(agentKey)])
+                metadata: ["strato.agent.identity": .string(agentKey)])
             throw GuestExecSessionError.agentNotConnected(agentKey)
         }
 

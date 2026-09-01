@@ -55,6 +55,23 @@ END;
 $$;
 
 
+--
+-- Name: release_mac_address_allocation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.release_mac_address_allocation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    DELETE FROM public.mac_address_allocations
+    WHERE mac_address = lower(OLD.mac_address)
+      AND owner_kind = TG_ARGV[0]
+      AND owner_id = OLD.id;
+    RETURN OLD;
+END;
+$$;
+
+
 
 
 --
@@ -576,6 +593,19 @@ CREATE TABLE public.logical_networks (
 
 
 --
+-- Name: mac_address_allocations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.mac_address_allocations (
+    mac_address text NOT NULL,
+    owner_kind text NOT NULL,
+    owner_id uuid NOT NULL,
+    created_at timestamp with time zone,
+    CONSTRAINT ck_mac_address_allocations_owner_kind CHECK ((owner_kind = ANY (ARRAY['vm'::text, 'sandbox'::text])))
+);
+
+
+--
 -- Name: oauth_device_authorizations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1069,6 +1099,72 @@ CREATE TABLE public.ssf_streams (
 
 
 --
+-- Name: stored_secrets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stored_secrets (
+    id uuid PRIMARY KEY,
+    purpose text NOT NULL,
+    encrypted_value text NOT NULL,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    CONSTRAINT ck_stored_secrets_purpose CHECK ((purpose = ANY (ARRAY['ceph_cluster_observer_keyring'::text, 'ceph_project_keyring'::text])))
+);
+
+
+--
+-- Name: ceph_clusters; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ceph_clusters (
+    id uuid PRIMARY KEY,
+    site_id uuid NOT NULL,
+    fsid text NOT NULL,
+    managed boolean NOT NULL,
+    mon_endpoints text[] NOT NULL,
+    client_name text NOT NULL,
+    keyring_secret_ref uuid NOT NULL,
+    health text NOT NULL,
+    capacity_bytes bigint,
+    used_bytes bigint,
+    observed_at timestamp with time zone,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    CONSTRAINT ck_ceph_clusters_external CHECK ((managed = false)),
+    CONSTRAINT ck_ceph_clusters_health CHECK ((health = ANY (ARRAY['unknown'::text, 'ok'::text, 'warning'::text, 'error'::text]))),
+    CONSTRAINT ck_ceph_clusters_mon_endpoints CHECK ((cardinality(mon_endpoints) > 0)),
+    CONSTRAINT ck_ceph_clusters_capacity CHECK ((((capacity_bytes IS NULL) OR (capacity_bytes >= 0)) AND ((used_bytes IS NULL) OR (used_bytes >= 0)) AND ((capacity_bytes IS NULL) OR (used_bytes IS NULL) OR (used_bytes <= capacity_bytes))))
+);
+
+
+--
+-- Name: ceph_project_accesses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ceph_project_accesses (
+    id uuid PRIMARY KEY,
+    cluster_id uuid NOT NULL,
+    project_id uuid NOT NULL,
+    client_name text NOT NULL,
+    keyring_secret_ref uuid NOT NULL,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone
+);
+
+
+--
+-- Name: ceph_credential_revocations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ceph_credential_revocations (
+    id uuid PRIMARY KEY,
+    site_id uuid NOT NULL,
+    cluster_id uuid NOT NULL,
+    credential_id uuid NOT NULL,
+    created_at timestamp with time zone
+);
+
+
 -- Name: storage_pools; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1079,10 +1175,16 @@ CREATE TABLE public.storage_pools (
     replication_factor bigint NOT NULL,
     member_agent_ids text[] NOT NULL,
     backing text NOT NULL,
+    site_id uuid,
+    ceph_cluster_id uuid,
+    ceph_project_access_id uuid,
+    ceph_pool_name text,
+    ceph_namespace text,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     CONSTRAINT ck_storage_pools_backing_enum CHECK ((backing = ANY (ARRAY['filesystem'::text, 'zfs'::text]))),
-    CONSTRAINT ck_storage_pools_mode_enum CHECK ((mode = ANY (ARRAY['local'::text, 'replicated'::text])))
+    CONSTRAINT ck_storage_pools_mode_enum CHECK ((mode = ANY (ARRAY['local'::text, 'replicated'::text, 'ceph'::text]))),
+    CONSTRAINT ck_storage_pools_ceph_shape CHECK ((((mode = 'ceph'::text) AND (site_id IS NOT NULL) AND (ceph_cluster_id IS NOT NULL) AND (ceph_project_access_id IS NOT NULL) AND (ceph_pool_name IS NOT NULL) AND (ceph_namespace IS NOT NULL)) OR ((mode <> 'ceph'::text) AND (site_id IS NULL) AND (ceph_cluster_id IS NULL) AND (ceph_project_access_id IS NULL) AND (ceph_pool_name IS NULL) AND (ceph_namespace IS NULL))))
 );
 
 
@@ -1314,6 +1416,9 @@ CREATE TABLE public.vms (
     metadata_enabled boolean DEFAULT true NOT NULL,
     last_error_at timestamp with time zone,
     divergence_detected_at timestamp with time zone,
+    desired_state_assembly_error text,
+    desired_state_assembly_error_generation bigint,
+    desired_state_assembly_error_at timestamp with time zone,
     CONSTRAINT ck_vms_console_mode_enum CHECK ((console_mode = ANY (ARRAY['Off'::text, 'Pty'::text, 'Tty'::text, 'File'::text, 'Socket'::text, 'Null'::text]))),
     CONSTRAINT ck_vms_description_length CHECK ((char_length(description) <= 4096)),
     CONSTRAINT ck_vms_desired_status_enum CHECK ((desired_status = ANY (ARRAY['Running'::text, 'Shutdown'::text, 'Paused'::text, 'Absent'::text]))),
@@ -1400,6 +1505,8 @@ CREATE TABLE public.volumes (
     updated_at timestamp with time zone,
     pool_id uuid,
     attached_agent_id text,
+    disk_attachment jsonb,
+    reconciler_agent_id text,
     desired_status text DEFAULT 'Present'::text NOT NULL,
     generation bigint DEFAULT 0 NOT NULL,
     observed_generation bigint DEFAULT 0 NOT NULL,
@@ -1438,10 +1545,12 @@ CREATE TABLE public.webhook_deliveries (
     status text DEFAULT 'pending'::text NOT NULL,
     attempts bigint DEFAULT 0 NOT NULL,
     next_attempt_at timestamp with time zone NOT NULL,
+    claimed_until timestamp with time zone,
     last_attempt_at timestamp with time zone,
     response_status bigint,
     last_error text,
     delivered_at timestamp with time zone,
+    enqueued_at timestamp with time zone DEFAULT now(),
     created_at timestamp with time zone,
     updated_at timestamp with time zone
 );
@@ -1684,6 +1793,22 @@ ALTER TABLE ONLY public.images
 
 ALTER TABLE ONLY public.logical_networks
     ADD CONSTRAINT logical_networks_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: mac_address_allocations mac_address_allocations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mac_address_allocations
+    ADD CONSTRAINT mac_address_allocations_pkey PRIMARY KEY (mac_address);
+
+
+--
+-- Name: mac_address_allocations uq_mac_address_allocations_owner; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mac_address_allocations
+    ADD CONSTRAINT uq_mac_address_allocations_owner UNIQUE (owner_kind, owner_id);
 
 
 --
@@ -2159,6 +2284,14 @@ ALTER TABLE ONLY public.sandbox_network_interfaces
 
 
 --
+-- Name: sandbox_network_interfaces uq_sandbox_network_interfaces_mac_address; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sandbox_network_interfaces
+    ADD CONSTRAINT uq_sandbox_network_interfaces_mac_address UNIQUE (mac_address);
+
+
+--
 -- Name: scim_external_ids uq:scim_external_ids.organization_id+scim_external_ids.resource; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2260,6 +2393,14 @@ ALTER TABLE ONLY public.vm_interface_security_groups
 
 ALTER TABLE ONLY public.vm_network_interfaces
     ADD CONSTRAINT "uq:vm_network_interfaces.vm_id+vm_network_interfaces.device_nam" UNIQUE (vm_id, device_name);
+
+
+--
+-- Name: vm_network_interfaces uq_vm_network_interfaces_mac_address; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.vm_network_interfaces
+    ADD CONSTRAINT uq_vm_network_interfaces_mac_address UNIQUE (mac_address);
 
 
 --
@@ -2752,6 +2893,39 @@ CREATE INDEX idx_volume_snapshots_agent_id ON public.volume_snapshots USING btre
 CREATE INDEX idx_volume_snapshots_project_id ON public.volume_snapshots USING btree (project_id);
 
 
+CREATE UNIQUE INDEX uq_ceph_clusters_site ON public.ceph_clusters USING btree (site_id);
+
+
+CREATE UNIQUE INDEX uq_ceph_clusters_fsid ON public.ceph_clusters USING btree (fsid);
+
+
+CREATE UNIQUE INDEX uq_ceph_clusters_secret ON public.ceph_clusters USING btree (keyring_secret_ref);
+
+
+CREATE UNIQUE INDEX uq_ceph_project_accesses_cluster_project ON public.ceph_project_accesses USING btree (cluster_id, project_id);
+
+
+CREATE UNIQUE INDEX uq_ceph_project_accesses_secret ON public.ceph_project_accesses USING btree (keyring_secret_ref);
+
+
+CREATE UNIQUE INDEX uq_ceph_project_accesses_cluster_client ON public.ceph_project_accesses USING btree (cluster_id, client_name);
+
+
+CREATE UNIQUE INDEX uq_ceph_credential_revocations_identity ON public.ceph_credential_revocations USING btree (cluster_id, credential_id);
+
+
+CREATE INDEX idx_ceph_credential_revocations_site ON public.ceph_credential_revocations USING btree (site_id, created_at, id);
+
+
+CREATE UNIQUE INDEX uq_storage_pools_ceph_project_access ON public.storage_pools USING btree (ceph_project_access_id) WHERE (ceph_project_access_id IS NOT NULL);
+
+
+CREATE UNIQUE INDEX uq_storage_pools_ceph_namespace ON public.storage_pools USING btree (ceph_cluster_id, ceph_namespace) WHERE (mode = 'ceph'::text);
+
+
+CREATE INDEX idx_volumes_reconciler_agent_id ON public.volumes USING btree (reconciler_agent_id) WHERE (reconciler_agent_id IS NOT NULL);
+
+
 --
 -- Name: idx_volumes_transitional; Type: INDEX; Schema: public; Owner: -
 --
@@ -2781,10 +2955,38 @@ CREATE INDEX idx_webhook_deliveries_due ON public.webhook_deliveries USING btree
 
 
 --
+-- Name: idx_webhook_deliveries_pending_subscription_due; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_pending_subscription_due ON public.webhook_deliveries USING btree (subscription_id, next_attempt_at, created_at, id) WHERE (status = 'pending'::text);
+
+
+--
+-- Name: idx_webhook_deliveries_pending_subscription_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_pending_subscription_created ON public.webhook_deliveries USING btree (subscription_id, created_at, id) WHERE (status = 'pending'::text);
+
+
+--
 -- Name: idx_webhook_deliveries_subscription; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_webhook_deliveries_subscription ON public.webhook_deliveries USING btree (subscription_id, created_at);
+
+
+--
+-- Name: idx_webhook_deliveries_subscription_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_subscription_updated ON public.webhook_deliveries USING btree (subscription_id, updated_at DESC, created_at DESC);
+
+
+--
+-- Name: idx_webhook_deliveries_terminal_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_terminal_updated ON public.webhook_deliveries USING btree (updated_at) WHERE (status <> 'pending'::text);
 
 
 --
@@ -2939,6 +3141,20 @@ CREATE UNIQUE INDEX uq_vm_interface_addresses_network_address ON public.vm_inter
 --
 
 CREATE TRIGGER trg_resource_events_append_only BEFORE DELETE OR UPDATE ON public.resource_events FOR EACH ROW EXECUTE FUNCTION public.resource_events_reject_row_change();
+
+
+--
+-- Name: sandbox_network_interfaces trg_sandbox_network_interfaces_release_mac; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_sandbox_network_interfaces_release_mac AFTER DELETE ON public.sandbox_network_interfaces FOR EACH ROW EXECUTE FUNCTION public.release_mac_address_allocation('sandbox');
+
+
+--
+-- Name: vm_network_interfaces trg_vm_network_interfaces_release_mac; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_vm_network_interfaces_release_mac AFTER DELETE ON public.vm_network_interfaces FOR EACH ROW EXECUTE FUNCTION public.release_mac_address_allocation('vm');
 
 
 --
@@ -3638,6 +3854,69 @@ ALTER TABLE ONLY public.volume_snapshots
 
 
 --
+-- Name: volumes volumes_created_by_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.storage_pools
+    ADD CONSTRAINT storage_pools_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id) ON DELETE RESTRICT;
+
+
+ALTER TABLE ONLY public.storage_pools
+    ADD CONSTRAINT storage_pools_ceph_cluster_id_fkey FOREIGN KEY (ceph_cluster_id) REFERENCES public.ceph_clusters(id) ON DELETE RESTRICT;
+
+
+ALTER TABLE ONLY public.storage_pools
+    ADD CONSTRAINT storage_pools_ceph_project_access_id_fkey FOREIGN KEY (ceph_project_access_id) REFERENCES public.ceph_project_accesses(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ceph_clusters ceph_clusters_site_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ceph_clusters
+    ADD CONSTRAINT ceph_clusters_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ceph_clusters ceph_clusters_keyring_secret_ref_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ceph_clusters
+    ADD CONSTRAINT ceph_clusters_keyring_secret_ref_fkey FOREIGN KEY (keyring_secret_ref) REFERENCES public.stored_secrets(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ceph_project_accesses ceph_project_accesses_cluster_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ceph_project_accesses
+    ADD CONSTRAINT ceph_project_accesses_cluster_id_fkey FOREIGN KEY (cluster_id) REFERENCES public.ceph_clusters(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ceph_project_accesses ceph_project_accesses_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ceph_project_accesses
+    ADD CONSTRAINT ceph_project_accesses_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ceph_project_accesses ceph_project_accesses_keyring_secret_ref_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ceph_project_accesses
+    ADD CONSTRAINT ceph_project_accesses_keyring_secret_ref_fkey FOREIGN KEY (keyring_secret_ref) REFERENCES public.stored_secrets(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ceph_credential_revocations ceph_credential_revocations_site_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ceph_credential_revocations
+    ADD CONSTRAINT ceph_credential_revocations_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id) ON DELETE CASCADE;
+
+
 -- Name: volumes volumes_created_by_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 

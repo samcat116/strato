@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import {
@@ -33,7 +35,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
 
   const handleRevoke = async (key: APIKey) => {
     if (
-      !window.confirm(
+      !await confirmAction(
         `Revoke API key "${key.name}"? Any client using it will immediately lose access. This cannot be undone.`
       )
     ) {

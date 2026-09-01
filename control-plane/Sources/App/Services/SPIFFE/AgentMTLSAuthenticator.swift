@@ -97,7 +97,8 @@ enum AgentMTLSAuthenticator {
                     return nil
                 }
                 req.logger.debug(
-                    "Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(claimedID.uri)])
+                    "Extracted SPIFFE ID from XFCC",
+                    metadata: ["strato.agent.identity": .string(claimedID.uri)])
                 return (claimedID, verified.organizationID)
             } catch {
                 req.logger.error(
@@ -107,7 +108,9 @@ enum AgentMTLSAuthenticator {
             }
         }
 
-        req.logger.debug("Extracted SPIFFE ID from XFCC", metadata: ["spiffeID": .string(claimedID.uri)])
+        req.logger.debug(
+            "Extracted SPIFFE ID from XFCC",
+            metadata: ["strato.agent.identity": .string(claimedID.uri)])
         return (claimedID, await spireService.organization(forTrustDomain: claimedID.trustDomain))
     }
 

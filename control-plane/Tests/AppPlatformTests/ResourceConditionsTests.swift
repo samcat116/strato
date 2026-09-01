@@ -22,7 +22,6 @@ final class ResourceConditionsTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -56,28 +55,16 @@ final class ResourceConditionsTests {
         named agentName: String,
         hypervisorType: HypervisorType
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: agentName,
+        try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: agentName,
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             hypervisors: [
                 HypervisorSupport(
                     type: hypervisorType, available: true, accelerated: true,
                     capabilities: .capabilities(for: hypervisorType))
             ],
-            protocolVersion: WireProtocol.currentVersion,
-            sandboxCapable: hypervisorType == .firecracker
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: agentName,
-            organizationScope: orgID.map { .organization($0) })
-        return agentUUID.uuidString
+            sandboxCapable: hypervisorType == .firecracker)
     }
 
     private func report(
@@ -127,6 +114,160 @@ final class ResourceConditionsTests {
             createdByID: try user.requireID()
         )
         try await subscription.save(on: app.db)
+    }
+
+    @Test("A blocked failure becomes terminal when its convergence deadline expires")
+    func blockedFailureFinalizesAtDeadline() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "blocked-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "blocked-agent", hypervisorType: .qemu)
+            vm.hypervisorId = agentId
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.shutdown)
+            vm.extendConvergenceDeadline(by: 120)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            let reason =
+                "agent `hv-03` has 2 vCPUs available; this operation requires 8 additional vCPUs"
+            let blocked = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 0,
+                        lastError: reason, failedGeneration: vm.generation,
+                        failureClassification: .blocked)
+                ])
+            await app.agentService.applyObservedStateReport(
+                blocked, fromAgentKey: agentKey("blocked-agent"))
+
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.generation == 1)
+            #expect(refreshed.conditions.degraded?.reason == reason)
+            #expect(try await self.mutationOutcomes(app: app).isEmpty)
+
+            refreshed.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await refreshed.save(on: app.db)
+            await app.agentMaintenance.sweepStuckConvergence()
+
+            let finalized = try #require(await VM.find(vm.id, on: app.db))
+            #expect(finalized.desiredStatus == .shutdown)
+            #expect(finalized.generation == 2)
+            #expect(finalized.convergenceDeadline == nil)
+            #expect(finalized.conditions.degraded?.reason == reason)
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+
+            await app.agentMaintenance.sweepStuckConvergence()
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+        }
+    }
+
+    @Test("A terminal failure after a blocked retry finalizes the same generation")
+    func terminalFailureAfterBlockedRetryFinalizesGeneration() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "blocked-then-terminal-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "blocked-then-terminal-agent", hypervisorType: .qemu)
+            vm.hypervisorId = agentId
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.shutdown)
+            vm.extendConvergenceDeadline(by: 120)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            let blocked = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 0,
+                        lastError: "host capacity is temporarily exhausted",
+                        failedGeneration: vm.generation, failureClassification: .blocked)
+                ])
+            await app.agentService.applyObservedStateReport(
+                blocked, fromAgentKey: agentKey("blocked-then-terminal-agent"))
+
+            let afterBlocked = try #require(await VM.find(vm.id, on: app.db))
+            #expect(afterBlocked.desiredStatus == .running)
+            #expect(afterBlocked.generation == 1)
+            #expect(afterBlocked.convergenceDeadline != nil)
+            #expect(try await self.mutationOutcomes(app: app).isEmpty)
+
+            let terminalReason = "image manifest has no entry for this architecture"
+            let terminal = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 0,
+                        lastError: terminalReason, failedGeneration: vm.generation,
+                        failureClassification: .permanent)
+                ])
+            await app.agentService.applyObservedStateReport(
+                terminal, fromAgentKey: agentKey("blocked-then-terminal-agent"))
+
+            let finalized = try #require(await VM.find(vm.id, on: app.db))
+            #expect(finalized.desiredStatus == .shutdown)
+            #expect(finalized.generation == 2)
+            #expect(finalized.convergenceDeadline == nil)
+            #expect(finalized.conditions.degraded?.reason == terminalReason)
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+
+            await app.agentService.applyObservedStateReport(
+                terminal, fromAgentKey: agentKey("blocked-then-terminal-agent"))
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+        }
+    }
+
+    @Test("A stale timeout snapshot cannot overwrite a committed success")
+    func timeoutSnapshotCannotOverwriteCommittedSuccess() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "timeout-race-vm", project: project)
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.shutdown)
+            vm.observedGeneration = 0
+            vm.lastError = "host capacity is temporarily exhausted"
+            vm.failedGeneration = vm.generation
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            let staleTimeoutSnapshot = try #require(await VM.find(vm.id, on: app.db))
+            let successfulReport = try #require(await VM.find(vm.id, on: app.db))
+            successfulReport.setStatus(.running)
+            successfulReport.observedGeneration = successfulReport.generation
+            _ = successfulReport.recordTimestampedConvergence(
+                phase: nil, lastError: nil, failedGeneration: nil)
+            #expect(
+                try await ResourceConvergence.recordSuccess(successfulReport, on: app.db)
+                    == .recorded)
+
+            let timeoutOutcome = try await ResourceConvergence.recordExpiredDeadline(
+                staleTimeoutSnapshot, mutation: .boot,
+                now: Date(), timeoutReason: "Timed out while converging", on: app.db)
+
+            #expect(timeoutOutcome == .alreadyRecorded)
+            let final = try #require(await VM.find(vm.id, on: app.db))
+            #expect(final.desiredStatus == .running)
+            #expect(final.status == .running)
+            #expect(final.generation == 1)
+            #expect(final.observedGeneration == 1)
+            #expect(final.failedGeneration == nil)
+            #expect(final.lastError == nil)
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.completed"])
+        }
     }
 
     // MARK: - Derivation

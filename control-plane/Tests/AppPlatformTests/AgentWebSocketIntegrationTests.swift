@@ -22,6 +22,25 @@ import AppTestSupport
 @Suite("Agent WebSocket Integration", .serialized)
 struct AgentWebSocketIntegrationTests {
 
+    @Test("Recorded command output is excluded from raw trace previews regardless of JSON key order")
+    func recordedCommandStateSuppressesTracePreview() throws {
+        let state = GuestExecRecordedStateMessage(
+            sessionId: UUID().uuidString,
+            revision: 1,
+            status: .running,
+            rawStdout: Data(repeating: 65, count: 1_024),
+            rawStderr: Data(),
+            truncated: false)
+        let envelope = try MessageEnvelope(message: state)
+        let payloadFirstText =
+            #"{"payload":"\#(envelope.payload.base64EncodedString())","type":"guest_exec_recorded_state"}"#
+
+        #expect(!payloadFirstText.prefix(64).contains(MessageType.guestExecRecordedState.rawValue))
+        #expect(
+            AgentWebSocketController.rawTextPreview(
+                for: payloadFirstText, envelopeType: envelope.type) == nil)
+    }
+
     /// New agents take their owning organization from their enrollment row.
     private func makeOrg(app: Application) async throws -> Organization {
         let org = Organization(name: "WS Org", description: "org for WS tests")
@@ -68,6 +87,7 @@ struct AgentWebSocketIntegrationTests {
             let enrollment = AgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                bootstrapTokenHash: AgentEnrollment.hashBootstrapToken("enroll_v1_test"),
                 expirationHours: 1,
                 siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
@@ -89,11 +109,12 @@ struct AgentWebSocketIntegrationTests {
             #expect(agent.$organization.id == org.id)
             #expect(agent.$site.id == site.id)
 
-            // The enrollment is marked used, but survives: unlike a single-use
-            // token it is not consumed by being redeemed.
+            // The scope record survives, while registration consumes the
+            // bootstrap bearer by erasing its hash.
             let reloaded = try #require(try await AgentEnrollment.find(enrollment.id, on: app.db))
             #expect(reloaded.isUsed == true)
             #expect(reloaded.usedAt != nil)
+            #expect(reloaded.bootstrapTokenHash == nil)
 
             try await client.close()
         }
@@ -108,10 +129,15 @@ struct AgentWebSocketIntegrationTests {
 
             let agentName = "agent-buffered"
             let org = try await self.makeOrg(app: app)
+            let site = Site(
+                name: "ws-buffered-dc",
+                organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
             let enrollment = AgentEnrollment(
                 agentName: agentName,
                 spiffeID: "spiffe://strato.local/agent/\(agentName)",
                 expirationHours: 1,
+                siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
             try await enrollment.save(on: app.db)
 
@@ -343,7 +369,7 @@ struct AgentWebSocketIntegrationTests {
 /// ephemeral loopback port, and hand the bound port to the test. The server and
 /// application are always torn down, even if the test body throws.
 private func withRunningApp(_ test: (Application, Int) async throws -> Void) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         do {
             guard let port = app.http.server.shared.localAddress?.port else {

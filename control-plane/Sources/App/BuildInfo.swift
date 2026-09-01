@@ -10,12 +10,12 @@ import Vapor
 enum BuildInfo {
     /// Human-readable version (e.g. a git tag or chart appVersion). "dev" when unset.
     static func version(configuration: ControlPlaneConfiguration) -> String {
-        configuration.string(.stratoVersion)!
+        configuration.requiredString(.stratoVersion)
     }
 
     /// Git commit SHA the binary was built from. "unknown" when unset.
     static func gitSHA(configuration: ControlPlaneConfiguration) -> String {
-        configuration.string(.stratoGitSHA)!
+        configuration.requiredString(.stratoGitSHA)
     }
 }
 
@@ -81,8 +81,8 @@ struct InstanceIdentity: Sendable {
     /// Vapor environment name (development, production, testing, …).
     let environment: String
 
-    init(environment: String) {
-        self.instanceId = UUID()
+    init(instanceId: UUID = UUID(), environment: String) {
+        self.instanceId = instanceId
         self.startedAt = Date()
         self.environment = environment
     }

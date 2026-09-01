@@ -42,23 +42,15 @@ struct DesiredStatePollTests {
         siteID: UUID? = nil,
         organizationID: UUID? = nil
     ) async throws -> Agent {
-        let agent = Agent(
-            name: name,
+        try await TestDataBuilder(db: app.db).createAgent(
+            named: name,
             hostname: "\(name).test",
-            version: "1.0.0",
-            status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 1 << 33, availableMemory: 1 << 33,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            )
-        )
-        if let siteID {
-            agent.$site.id = siteID
-        }
-        agent.$organization.id = organizationID
-        try await agent.save(on: app.db)
-        return agent
+                totalDisk: 1 << 40, availableDisk: 1 << 40),
+            siteID: siteID,
+            organizationScope: organizationID.map(OrganizationScope.organization))
     }
 
     private func poll(
@@ -166,6 +158,33 @@ struct DesiredStatePollTests {
 
             #expect(response.status == .ok)
             #expect(try self.decodeSync(response).vms.isEmpty)
+        }
+    }
+
+    @Test("A poison VM is omitted from a 200 response instead of failing the host poll")
+    func poisonVMStillReturns200() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createUser(
+                username: "poison-poll-owner", email: "poison-poll-owner@example.com")
+            let org = try await builder.createOrganization(name: "Poison Poll Org")
+            let project = try await builder.createProject(
+                name: "Poison Poll Project", description: "poll isolation", organization: org)
+            let site = try await builder.placementSite(for: project)
+            let agent = try await self.registerAgentRow(
+                app: app, name: "poll-agent", siteID: try site.requireID(),
+                organizationID: try org.requireID())
+            let poison = try await builder.createVM(name: "poison-poll-vm", project: project)
+            poison.hypervisorId = try agent.requireID().uuidString
+            try await poison.save(on: app.db)
+
+            let response = try await self.poll(app: app, port: port)
+
+            #expect(response.status == .ok)
+            #expect(try self.decodeSync(response).vms.isEmpty)
+            let reloaded = try #require(try await VM.find(poison.id, on: app.db))
+            #expect(reloaded.conditions.degraded?.reason.contains("cannot be assembled") == true)
         }
     }
 
@@ -429,7 +448,7 @@ struct DesiredStatePollTests {
 /// A real bound HTTP server, needed for the XFCC provenance check (which
 /// demands a loopback remote address).
 private func withRunningPollApp(_ test: (Application, Int) async throws -> Void) async throws {
-    try await withApp { app in
+    try await withTestApp { app in
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
 
         // `defer` cannot hold an `await`, so the outcome is captured and

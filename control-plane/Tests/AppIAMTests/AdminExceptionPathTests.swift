@@ -27,7 +27,6 @@ final class AdminExceptionPathTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
             try await test(app, TestDataBuilder(db: app.db))
         } catch {
@@ -45,23 +44,18 @@ final class AdminExceptionPathTests {
     }
 
     private func makeAgent(_ app: Application, name: String, org: Organization) async throws -> Agent {
-        let agent = Agent(
-            name: name,
+        try await TestDataBuilder(db: app.db).createAgent(
+            named: name,
             hostname: "hv.example",
             version: "1.0.0",
             status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 16_000_000_000, availableMemory: 16_000_000_000,
-                totalDisk: 100_000_000_000, availableDisk: 100_000_000_000
-            ),
+                totalDisk: 100_000_000_000, availableDisk: 100_000_000_000),
             architecture: .x86_64,
-            lastHeartbeat: Date()
-        )
-        agent.organizationScope = .organization(try org.requireID())
-        agent.wireProtocolVersion = WireProtocol.currentVersion
-        try await agent.save(on: app.db)
-        return agent
+            lastHeartbeat: Date(),
+            organizationScope: .organization(try org.requireID()))
     }
 
     // MARK: - Guardrails bind admin list endpoints

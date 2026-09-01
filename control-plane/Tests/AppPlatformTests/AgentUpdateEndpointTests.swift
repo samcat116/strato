@@ -27,7 +27,6 @@ final class AgentUpdateEndpointTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             // System admin: agent update authorization itself is covered by
@@ -57,11 +56,10 @@ final class AgentUpdateEndpointTests {
         org: Organization,
         online: Bool = true,
         version: String = "1.0.0",
-        wireProtocolVersion: Int = WireProtocol.currentVersion,
         operatingSystem: String? = "linux"
     ) async throws -> Agent {
-        let agent = Agent(
-            name: "hv-update-\(UUID().uuidString.prefix(8))",
+        let agent = try await TestDataBuilder(db: app.db).createAgent(
+            named: "hv-update-\(UUID().uuidString.prefix(8))",
             hostname: "hv.example",
             version: version,
             status: online ? .online : .offline,
@@ -71,11 +69,9 @@ final class AgentUpdateEndpointTests {
                 totalDisk: 100_000_000_000, availableDisk: 100_000_000_000
             ),
             architecture: .x86_64,
-            lastHeartbeat: online ? Date() : Date(timeIntervalSinceNow: -3600)
-        )
-        agent.wireProtocolVersion = wireProtocolVersion
+            lastHeartbeat: online ? Date() : Date(timeIntervalSinceNow: -3600),
+            organizationScope: .organization(try org.requireID()))
         agent.operatingSystem = operatingSystem
-        agent.organizationScope = .organization(try org.requireID())
         try await agent.save(on: app.db)
         return agent
     }

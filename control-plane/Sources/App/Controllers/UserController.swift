@@ -100,13 +100,13 @@ struct UserController: RouteCollection {
     /// whether an account is the bootstrap account serializes: this endpoint
     /// and `App bootstrap`, across replicas.
     ///
-    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
-    /// transaction ends (see `IPAMService.lockAllocations` for the same
-    /// pattern). Registration is rare and rate-limited, so the contention this
-    /// adds is nil.
+    /// PostgreSQL-only: `pg_advisory_xact_lock` is held until the enclosing
+    /// transaction ends (see `IPAMService.lockNetworkAllocations` for the same
+    /// pattern). Unsupported database dialects fail rather than admitting a
+    /// race. Registration is rare and rate-limited, so contention is negligible.
     static func lockRegistration(on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: "user-registration")))").run()
+        try await AdvisoryLock.acquireTransactionLock(
+            .singleton(.userRegistration), on: db)
     }
 
     /// Whether the login page should offer account creation, and whether doing
@@ -1170,7 +1170,7 @@ extension UserController {
     /// URL), so the `/claim` page and the passkey ceremony share an origin. The
     /// frontend may still rebuild the link from `window.location.origin`.
     static func claimURL(for token: String, configuration: ControlPlaneConfiguration) -> String {
-        let base = configuration.string(.webauthnRelyingPartyOrigin)!
+        let base = configuration.requiredString(.webauthnRelyingPartyOrigin)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return "\(base)/claim?token=\(token)"
     }

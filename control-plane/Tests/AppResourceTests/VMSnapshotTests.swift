@@ -24,7 +24,6 @@ final class VMSnapshotTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -61,18 +60,12 @@ final class VMSnapshotTests {
         app: Application,
         vm: VM,
         supportsSnapshots: Bool = true,
-        status: VMStatus = .running,
-        wireProtocolVersion: Int = WireProtocol.currentVersion
+        status: VMStatus = .running
     ) async throws -> String {
-        let message = AgentRegisterMessage(
-            agentId: "checkpoint-agent",
+        let agentID = try await TestDataBuilder(db: app.db).registerAgent(
+            on: app,
+            named: "checkpoint-agent",
             hostname: "test-host",
-            version: "1.0.0",
-            resources: AgentResources(
-                totalCPU: 16, availableCPU: 16,
-                totalMemory: 1 << 34, availableMemory: 1 << 34,
-                totalDisk: 1 << 40, availableDisk: 1 << 40
-            ),
             hypervisors: [
                 HypervisorSupport(
                     type: .qemu,
@@ -86,15 +79,9 @@ final class VMSnapshotTests {
                         requiresDirectKernelBoot: false,
                         maxVCPUs: 1024,
                         maxMemory: 16 * 1024 * 1024 * 1024 * 1024))
-            ],
-            protocolVersion: wireProtocolVersion
-        )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
-        let agentUUID = try await app.agentService.registerAgent(
-            message, agentName: "checkpoint-agent",
-            organizationScope: orgID.map { .organization($0) })
+            ])
 
-        vm.hypervisorId = agentUUID.uuidString
+        vm.hypervisorId = agentID
         vm.setStatus(status)
         vm.observedGeneration = 1
         vm.generation = 1
@@ -102,7 +89,7 @@ final class VMSnapshotTests {
         // movement in a test is something the checkpoint path did.
         if status == .running { vm.desiredStatus = .running }
         try await vm.save(on: app.db)
-        return agentUUID.uuidString
+        return agentID
     }
 
     /// Inserts a ready checkpoint directly, for the delete/restore paths that

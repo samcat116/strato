@@ -367,11 +367,10 @@ public struct DesiredVolumeAttachment: Codable, Sendable, Equatable {
 /// Mirrors `DesiredVMState` semantics exactly: level-triggered,
 /// generation-guarded, safe to drop or replay.
 ///
-/// Two fields are deliberately absent. There is no `poolId`, because nothing
-/// on the agent consumes a pool — placement is expressed by *which agent's
-/// sync the entry appears in*, and a second encoding of it is a thing that can
-/// drift. There is no `storagePath`, because the agent owns path layout; the
-/// path travels the other way, on the observed report.
+/// There is no `poolId`: an agent consumes the typed `storage` configuration,
+/// not the control-plane pool row that produced it. There is no `storagePath`,
+/// because the selected backend owns realization; its attachment travels the
+/// other way on the observed report.
 public struct DesiredVolumeState: Codable, Sendable {
     public let volumeId: UUID
     public let desiredStatus: DesiredVolumeStatus
@@ -390,6 +389,11 @@ public struct DesiredVolumeState: Codable, Sendable {
     /// volume, not the sync. Immutable after create — a mismatch is a
     /// permanent failure, never a silent conversion.
     public let format: String
+    /// Backend-specific realization configuration. Local volumes preserve the
+    /// historical agent-owned path layout; Ceph volumes carry a complete,
+    /// project-scoped client configuration so any eligible site agent can
+    /// converge the same RBD image.
+    public let storage: DesiredVolumeStorage
     /// How to fill a volume that does not exist yet. Nil means blank.
     public let source: DesiredVolumeSource?
     /// Nil means the volume should be detached.
@@ -410,6 +414,7 @@ public struct DesiredVolumeState: Codable, Sendable {
         generation: Int64,
         sizeBytes: Int64,
         format: String,
+        storage: DesiredVolumeStorage = .local,
         source: DesiredVolumeSource? = nil,
         attachment: DesiredVolumeAttachment? = nil,
         ioLimits: VolumeIOLimits? = nil
@@ -419,9 +424,34 @@ public struct DesiredVolumeState: Codable, Sendable {
         self.generation = generation
         self.sizeBytes = sizeBytes
         self.format = format
+        self.storage = storage
         self.source = source
         self.attachment = attachment
         self.ioLimits = ioLimits
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case volumeId, desiredStatus, generation, sizeBytes, format, storage
+        case source, attachment, ioLimits
+    }
+
+    /// Agent manifests written before wire v53 contain no storage field. They
+    /// can only describe filesystem-backed volumes, so the one safe meaning is
+    /// `.local`; every new wire producer emits the field explicitly.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            volumeId: try container.decode(UUID.self, forKey: .volumeId),
+            desiredStatus: try container.decode(DesiredVolumeStatus.self, forKey: .desiredStatus),
+            generation: try container.decode(Int64.self, forKey: .generation),
+            sizeBytes: try container.decode(Int64.self, forKey: .sizeBytes),
+            format: try container.decode(String.self, forKey: .format),
+            storage: try container.decodeIfPresent(DesiredVolumeStorage.self, forKey: .storage)
+                ?? .local,
+            source: try container.decodeIfPresent(DesiredVolumeSource.self, forKey: .source),
+            attachment: try container.decodeIfPresent(
+                DesiredVolumeAttachment.self, forKey: .attachment),
+            ioLimits: try container.decodeIfPresent(VolumeIOLimits.self, forKey: .ioLimits))
     }
 }
 
@@ -532,6 +562,20 @@ public struct DesiredAgentUpdate: Codable, Sendable {
 /// with a `DesiredWorkloadTombstone` (or an ordinary `.absent` entry). Before
 /// that, the whole safety of a host's workloads rested on the assembler's
 /// `WHERE` clause returning a complete list.
+/// A permanent instruction to remove one retired Ceph runtime credential from
+/// an agent. It is append-only and intentionally has no generation or expiry:
+/// current, re-enrolled, and future clients in the cluster's site all receive
+/// the same tombstone, making cleanup idempotent across outages and reinstalls.
+public struct DesiredCephCredentialRevocation: Codable, Sendable, Equatable {
+    public let clusterId: UUID
+    public let credentialId: UUID
+
+    public init(clusterId: UUID, credentialId: UUID) {
+        self.clusterId = clusterId
+        self.credentialId = credentialId
+    }
+}
+
 public struct DesiredStateMessage: WebSocketMessage {
     public var type: MessageType { .desiredState }
     public let requestId: String
@@ -593,6 +637,11 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// says which. An empty list authoritatively means this host should retain
     /// no snapshot artifacts.
     public let snapshots: [DesiredSnapshotState]
+    /// Retired Ceph secret/config identities this site must never retain.
+    /// Unlike workload desired state this ledger is append-only: an empty list
+    /// means there are no recorded revocations for this site, never that an
+    /// agent should forget ones it already applied.
+    public let cephCredentialRevocations: [DesiredCephCredentialRevocation]
     /// The DNS zones the receiving agent should realize into the OVN `DNS`
     /// table (STR-39): every zone attached to a network whose topology this
     /// agent authors, with the zone's full effective record set.
@@ -618,6 +667,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         tombstones: [DesiredWorkloadTombstone] = [],
         volumes: [DesiredVolumeState] = [],
         snapshots: [DesiredSnapshotState] = [],
+        cephCredentialRevocations: [DesiredCephCredentialRevocation] = [],
         dnsZones: [DesiredDNSZone]? = nil
     ) {
         self.requestId = requestId
@@ -632,6 +682,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.tombstones = tombstones
         self.volumes = volumes
         self.snapshots = snapshots
+        self.cephCredentialRevocations = cephCredentialRevocations
         self.dnsZones = dnsZones
     }
 
@@ -708,6 +759,71 @@ public struct DesiredSecurityGroup: Codable, Sendable, Equatable {
     public let rules: [DesiredSecurityGroupRule]
 
     public init(id: UUID, generation: Int64, rules: [DesiredSecurityGroupRule]) {
+        self.id = id
+        self.generation = generation
+        self.rules = rules
+    }
+}
+
+// MARK: - Desired Network ACLs
+
+/// One ordered, stateless rule in a network-level ACL (STR-33).
+///
+/// Rules are evaluated independently for ingress and egress in ascending
+/// `ruleNumber` order. The topology-authority agent owns the mapping from that
+/// stable API ordering to OVN tiers and priorities; the wire deliberately does
+/// not expose backend-specific priority values.
+public struct DesiredNetworkACLRule: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let ruleNumber: Int
+    /// "ingress" (`to-lport`) or "egress" (`from-lport`).
+    public let direction: String
+    /// "ipv4" or "ipv6".
+    public let ethertype: String
+    /// "allow" or "deny". These are policy verdicts, not raw OVN actions.
+    public let action: String
+    /// "tcp", "udp", or "icmp"; nil matches any IP protocol.
+    public let protocolName: String?
+    /// Destination ports for TCP/UDP, or ICMP type/code.
+    public let portRangeMin: Int?
+    public let portRangeMax: Int?
+    /// Source CIDR for ingress, destination CIDR for egress.
+    public let remoteCIDR: String
+
+    public init(
+        id: UUID,
+        ruleNumber: Int,
+        direction: String,
+        ethertype: String,
+        action: String,
+        protocolName: String? = nil,
+        portRangeMin: Int? = nil,
+        portRangeMax: Int? = nil,
+        remoteCIDR: String
+    ) {
+        self.id = id
+        self.ruleNumber = ruleNumber
+        self.direction = direction
+        self.ethertype = ethertype
+        self.action = action
+        self.protocolName = protocolName
+        self.portRangeMin = portRangeMin
+        self.portRangeMax = portRangeMax
+        self.remoteCIDR = remoteCIDR
+    }
+}
+
+/// The one network ACL attached to a logical network.
+///
+/// The control plane bumps `generation` for every rule mutation. The agent
+/// realizes the whole ordered rule set as one fail-closed replacement, never as
+/// an imperative per-rule edit.
+public struct DesiredNetworkACL: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let generation: Int64
+    public let rules: [DesiredNetworkACLRule]
+
+    public init(id: UUID, generation: Int64, rules: [DesiredNetworkACLRule]) {
         self.id = id
         self.generation = generation
         self.rules = rules
@@ -988,6 +1104,11 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// Native OVN load balancers whose VIP belongs to this network. Nil means
     /// a pre-v43 control plane has no opinion; an empty array is authoritative.
     public let loadBalancers: [DesiredLoadBalancer]?
+    /// The network-level ACL attached to this switch (STR-33). The schema
+    /// permits at most one entry, while the collection shape preserves the
+    /// desired-state distinction between no opinion (`nil`) and authoritative
+    /// absence (`[]`), which tells the agent to remove managed switch ACLs.
+    public let networkACLs: [DesiredNetworkACL]?
 
     public init(
         networkId: UUID,
@@ -1007,7 +1128,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         resolverAddresses: [String]? = nil,
         generation: Int64,
         floatingIPs: [DesiredFloatingIP]? = nil,
-        loadBalancers: [DesiredLoadBalancer]? = nil
+        loadBalancers: [DesiredLoadBalancer]? = nil,
+        networkACLs: [DesiredNetworkACL]? = nil
     ) {
         self.networkId = networkId
         self.name = name
@@ -1027,6 +1149,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.generation = generation
         self.floatingIPs = floatingIPs
         self.loadBalancers = loadBalancers
+        self.networkACLs = networkACLs
     }
 }
 
@@ -1146,6 +1269,18 @@ public struct DesiredDNSZone: Codable, Sendable, Equatable {
 
 // MARK: - Observed VM State
 
+/// How the agent will treat a reported convergence failure on later syncs.
+///
+/// Optional on observed resource entries for wire compatibility: an older
+/// agent does not send it, and the control plane must keep its historical
+/// terminal-failure behavior in that case. `waitingOnDependency` never reaches
+/// an observed error at all, so it has no wire case.
+public enum ObservedFailureClassification: String, Codable, Sendable {
+    case transient
+    case permanent
+    case blocked
+}
+
 /// One VM's state as actually observed on an agent.
 public struct ObservedVMState: Codable, Sendable {
     public let vmId: UUID
@@ -1171,6 +1306,10 @@ public struct ObservedVMState: Codable, Sendable {
     /// generation's work item runs) would fail a brand-new operation before
     /// the agent ever attempted it.
     public let failedGeneration: Int64?
+    /// The agent-side retry category for this failure. Only `.blocked` tells
+    /// the control plane to retain the desired state while surfacing the error;
+    /// nil is the legacy terminal behavior for reports from older agents.
+    public let failureClassification: ObservedFailureClassification?
     /// What the QEMU guest agent reported about this VM's guest OS, if the
     /// agent has a recent successful probe (issue #563). Nil for VMs without
     /// qga, still booting, hung, or on agents/hypervisors that don't probe it —
@@ -1197,6 +1336,7 @@ public struct ObservedVMState: Codable, Sendable {
         convergencePhase: String? = nil,
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil,
         guestInfo: GuestInfo? = nil,
         memoryStats: VMMemoryStats? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
@@ -1207,6 +1347,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
         self.guestInfo = guestInfo
         self.memoryStats = memoryStats
         self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds
@@ -1231,6 +1372,9 @@ public struct ObservedSandboxState: Codable, Sendable {
     /// The generation whose convergence produced `lastError` (see
     /// `ObservedVMState.failedGeneration` for why the control plane needs it).
     public let failedGeneration: Int64?
+    /// Retry semantics for `lastError`; see
+    /// `ObservedVMState.failureClassification`.
+    public let failureClassification: ObservedFailureClassification?
     /// Exit code of the workload once it has ended (`status == .exited`), as
     /// reported by the guest agent over vsock. Nil while running, when the
     /// sandbox was stopped by request rather than by the workload ending, or
@@ -1244,6 +1388,7 @@ public struct ObservedSandboxState: Codable, Sendable {
         convergencePhase: String? = nil,
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil,
         exitCode: Int? = nil
     ) {
         self.sandboxId = sandboxId
@@ -1252,6 +1397,7 @@ public struct ObservedSandboxState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
         self.exitCode = exitCode
     }
 }
@@ -1259,7 +1405,7 @@ public struct ObservedSandboxState: Codable, Sendable {
 // MARK: - Observed Volume State
 
 /// One volume's state as actually observed on an agent (ADR 0001 stage 5,
-/// STR-148). Field semantics for the convergence quartet match
+/// STR-148). Field semantics for the convergence metadata match
 /// `ObservedVMState` — see the doc comments there.
 ///
 /// `sizeBytes` was deliberately absent until STR-199, on the grounds that
@@ -1319,6 +1465,9 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// The generation whose convergence produced `lastError` (see
     /// `ObservedVMState.failedGeneration` for why the control plane needs it).
     public let failedGeneration: Int64?
+    /// Retry semantics for `lastError`; see
+    /// `ObservedVMState.failureClassification`.
+    public let failureClassification: ObservedFailureClassification?
     /// The I/O ceilings this agent has actually applied (STR-19) — an *echo*,
     /// not a derivation, and the only thing that distinguishes "capped" from
     /// "ignored".
@@ -1345,6 +1494,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         convergencePhase: String? = nil,
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil,
         ioLimits: VolumeIOLimits? = nil
     ) {
         self.volumeId = volumeId
@@ -1356,6 +1506,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
         self.ioLimits = ioLimits
     }
 }

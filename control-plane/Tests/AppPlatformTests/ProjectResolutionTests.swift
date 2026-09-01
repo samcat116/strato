@@ -52,7 +52,6 @@ final class ProjectResolutionTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(
@@ -262,18 +261,8 @@ final class ProjectResolutionTests {
         }
     }
 
-    /// Resolution for the five infrastructure creates now reads *nothing* off
-    /// the user — `authorizedProjectForCreate` lost its `User` parameter with
-    /// the fallback it existed to seed. So an explicit project works with no
-    /// current organization at all, which is what pins that removal: put the
-    /// parameter back and this test still passes, but delete the check the
-    /// evaluator makes and it fails.
-    ///
-    /// VM and sandbox are excluded on purpose, and not because they resolve
-    /// differently: `AuthorizationMiddleware` gates the `/api/vms` and
-    /// `/api/sandboxes` *collections* against the caller's current organization
-    /// and refuses with `403 "No current organization set"` before any handler
-    /// runs. That is unchanged here.
+    /// Infrastructure creates authorize their explicit project directly. VM
+    /// and sandbox collection middleware separately requires a current organization.
     @Test("An explicitly named project needs no current organization")
     func explicitProjectNeedsNoCurrentOrganization() async throws {
         try await withProjectResolutionApp { fixture in

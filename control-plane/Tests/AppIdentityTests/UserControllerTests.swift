@@ -34,7 +34,7 @@ final class UserControllerTests: BaseTestCase {
     /// the tier-1 `platform-user-self` policy.
     @Test("index returns only your own record for non-admins")
     func testIndexReturnsOnlySelfForNonAdmin() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             _ = try await makeUser(on: app.db, username: "other", email: "other@example.com")
 
@@ -50,7 +50,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("index succeeds for system admins")
     func testIndexAllowedForAdmin() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let admin = try await makeUser(
                 on: app.db, username: "admin", email: "admin@example.com", isSystemAdmin: true
@@ -70,7 +70,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("show is allowed for self")
     func testShowSelf() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.GET, "/api/users/\(testUser.id!)") { req in
@@ -85,7 +85,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("show another user is forbidden for non-admins")
     func testShowOtherForbidden() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let other = try await makeUser(
                 on: app.db, username: "other", email: "other@example.com"
@@ -101,7 +101,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("show another user is allowed for system admins")
     func testShowOtherAllowedForAdmin() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let admin = try await makeUser(
                 on: app.db, username: "admin", email: "admin@example.com", isSystemAdmin: true
@@ -119,7 +119,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("update self is allowed")
     func testUpdateSelf() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
 
             try await app.test(.PUT, "/api/users/\(testUser.id!)") { req in
@@ -135,7 +135,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("update another user is forbidden for non-admins")
     func testUpdateOtherForbidden() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let other = try await makeUser(
                 on: app.db, username: "other", email: "other@example.com"
@@ -158,7 +158,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("delete another user is forbidden for non-admins")
     func testDeleteOtherForbidden() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let other = try await makeUser(
                 on: app.db, username: "other", email: "other@example.com"
@@ -178,7 +178,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("delete another user is allowed for system admins")
     func testDeleteOtherAllowedForAdmin() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let admin = try await makeUser(
                 on: app.db, username: "admin", email: "admin@example.com", isSystemAdmin: true
@@ -217,7 +217,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("deleting a user leaves their volume, its replica, and its bindings, with attribution nulled")
     func testDeleteLeavesCreatedVolume() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let (admin, creator, project) = try await makeCreatorFixture(on: app.db)
 
@@ -258,7 +258,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("deleting a user leaves their image row and its object-store bytes")
     func testDeleteLeavesUploadedImage() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let (admin, creator, project) = try await makeCreatorFixture(on: app.db)
 
@@ -293,7 +293,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("a user who created snapshots, webhooks and SSF streams is deletable and they all survive")
     func testDeleteLeavesOtherCreatedResources() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let (admin, creator, project) = try await makeCreatorFixture(on: app.db)
             let builder = TestDataBuilder(db: app.db)
@@ -350,7 +350,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("delete is refused while a volume the user created is attached to a VM")
     func testDeleteRefusedWhileVolumeAttached() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let (admin, creator, project) = try await makeCreatorFixture(on: app.db)
             let builder = TestDataBuilder(db: app.db)
@@ -379,7 +379,7 @@ final class UserControllerTests: BaseTestCase {
 
     @Test("delete is refused while the user's SCIM tokens exist, and succeeds once they are gone")
     func testDeleteRefusedWhileSCIMTokensExist() async throws {
-        try await withApp { app in
+        try await withTestApp { app in
             try await setupCommonTestData(on: app.db)
             let (admin, creator, _) = try await makeCreatorFixture(on: app.db)
 

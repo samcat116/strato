@@ -3,16 +3,13 @@ import Foundation
 /// Block device (drive) configuration
 /// Maps to PUT /drives/{drive_id} API endpoint
 public struct Drive: Codable, Sendable {
-    /// Unique identifier for the drive
     let driveId: String
 
     /// Path to the disk image file (raw or qcow2 via vhost-user-blk)
     let pathOnHost: String
 
-    /// Whether the drive is read-only
     let isReadOnly: Bool
 
-    /// Whether this is the root device
     let isRootDevice: Bool
 
     enum CodingKeys: String, CodingKey {
@@ -34,7 +31,6 @@ public struct Drive: Codable, Sendable {
         self.isRootDevice = isRootDevice
     }
 
-    /// Creates a root drive configuration
     public static func rootDrive(
         id: String = "rootfs",
         path: String,
@@ -48,7 +44,6 @@ public struct Drive: Codable, Sendable {
         )
     }
 
-    /// Creates a data drive configuration
     public static func dataDrive(
         id: String,
         path: String,

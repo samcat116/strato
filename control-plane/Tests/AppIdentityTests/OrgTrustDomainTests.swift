@@ -21,7 +21,6 @@ final class OrgTrustDomainTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             try await test(app)
         } catch {
             try await app.shutdownForTesting()
@@ -383,14 +382,14 @@ final class OrgTrustDomainTests {
             let domainA = "org-aaaaaaaaaaaa.strato.local"
             let domainB = "org-bbbbbbbbbbbb.strato.local"
 
-            let idA = try await app.agentService.registerAgent(
-                Self.registration(name: "agent-1"),
-                identity: AgentIdentity(trustDomain: domainA, name: "agent-1"),
+            let idAString = try await builder.registerAgent(
+                on: app, named: "agent-1", trustDomain: domainA,
                 organizationScope: .organization(try orgA.requireID()))
-            let idB = try await app.agentService.registerAgent(
-                Self.registration(name: "agent-1"),
-                identity: AgentIdentity(trustDomain: domainB, name: "agent-1"),
+            let idBString = try await builder.registerAgent(
+                on: app, named: "agent-1", trustDomain: domainB,
                 organizationScope: .organization(try orgB.requireID()))
+            let idA = try #require(UUID(uuidString: idAString))
+            let idB = try #require(UUID(uuidString: idBString))
 
             // Two rows, not one row re-registered: a name-keyed lookup would
             // have found org A's agent and handed org B's registration to it.
@@ -432,11 +431,14 @@ final class OrgTrustDomainTests {
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Inherit Org")
             let orgID = try org.requireID()
+            let site = Site(name: "Inherit Site", organizationScope: .organization(orgID))
+            try await site.save(on: app.db)
 
             let agentID = try await app.agentService.registerAgent(
                 Self.registration(name: "inheriting"),
                 identity: AgentIdentity(trustDomain: "org-dddddddddddd.strato.local", name: "inheriting"),
-                identityOrganizationID: orgID)
+                identityOrganizationID: orgID,
+                siteID: try site.requireID())
 
             let row = try #require(try await Agent.find(agentID, on: app.db))
             #expect(row.$organization.id == orgID)
@@ -450,11 +452,15 @@ final class OrgTrustDomainTests {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Teardown Org")
+            let site = Site(
+                name: "Teardown Site", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
 
             let agentID = try await app.agentService.registerAgent(
                 Self.registration(name: "teardown-agent"),
                 identity: AgentIdentity(
                     trustDomain: PlatformTrustDomain.current, name: "teardown-agent"),
+                siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
 
             let row = try #require(try await Agent.find(agentID, on: app.db))

@@ -6,20 +6,16 @@
 # networking), attests this node to SPIRE, writes the agent config, and starts
 # everything under systemd. Designed to be curled and piped:
 #
-#   curl -fsSL https://raw.githubusercontent.com/samcat116/strato/main/deploy/agent/install.sh \
-#     | sudo bash -s -- \
-#     --control-plane-url 'wss://cp.example.com/agent/ws' \
-#     --agent-name 'hv-01' \
-#     --spire-join-token '...' \
-#     --spire-server-address 'cp.example.com:8085' \
-#     --trust-domain 'strato.local'
+#   curl -fsSL https://cp.example.com/api/agent-enrollments/install \
+#     | sudo bash -s -- 'enroll_v1_...'
 #
 # That invocation is exactly what the Strato UI emits when you enroll a node
 # (Agents -> Enroll node, or POST /api/agent-enrollments): enrollment
-# provisions the node in SPIRE and hands back this command with the join token
-# filled in. Agents authenticate to the control plane ONLY by SPIFFE X.509 SVID
-# over mTLS, so all five flags above are required — there is no token join and
-# no unauthenticated path.
+# prepares the node in SPIRE and hands back this command with one short-lived
+# enrollment token. The wrapper fixes the control-plane origin; this installer
+# redeems the token for the agent name, SPIRE join token and every other
+# server-owned value. Agents authenticate after installation ONLY by SPIFFE
+# X.509 SVID over mTLS — the enrollment bearer is bootstrap-only.
 #
 # Unless --no-telemetry, the script also installs Grafana Alloy +
 # spiffe-helper, which push node metrics and journal logs to the control
@@ -33,7 +29,11 @@
 #
 # Linux only: spire-agent, systemd, and KVM all are.
 #
-# Flags (all five below are required):
+# Enrollment flags (normally supplied by the public wrapper above):
+#   --enrollment-token TOK       Short-lived token returned by enrollment
+#   --enrollment-api-url URL     Control-plane bootstrap exchange endpoint
+#
+# Explicit bootstrap flags (legacy/manual alternative to an enrollment token):
 #   --control-plane-url URL  Agent WebSocket endpoint (ws:// or wss://; always
 #                            wss:// in a SPIRE deployment, since Envoy
 #                            terminates mTLS in front of the control plane)
@@ -84,6 +84,9 @@ set -euo pipefail
 
 CONTROL_PLANE_URL=""
 AGENT_NAME=""
+ENROLLMENT_TOKEN=""
+ENROLLMENT_API_URL=""
+EXPLICIT_BOOTSTRAP_VALUES=0
 VERSION="latest"
 REPO="samcat116/strato"
 BIN_DIR="/usr/local/bin"
@@ -109,6 +112,11 @@ AGENT_USER="root"
 # regression fixed in 11.5. Ubuntu 24.04 ships 10.0.0 and is therefore not a
 # supported hypervisor host; 26.04 ships 12.0.0.
 LIBVIRT_MIN_VERSION="11.5.0"
+# Local QEMU disks retain the 11.5 floor above. Libvirt learned the
+# `pool/namespace/image` source name required by project-scoped RBD in 11.6;
+# the agent's Ceph dependency probe keeps that capability dark on a reachable
+# older daemon, while a host with no libvirt can still serve Firecracker/krbd.
+LIBVIRT_NAMESPACED_RBD_MIN_VERSION="11.6.0"
 LIBVIRT_QEMU_CONF=/etc/libvirt/qemu.conf
 
 # SPIRE / telemetry. Versions are pinned for reproducible installs: SPIRE
@@ -129,6 +137,7 @@ COREDNS_VERSION="1.12.0"
 
 STRATO_CONF_DIR=/etc/strato
 STRATO_STATE_DIR=/var/lib/strato
+ENROLLMENT_CACHE_FILE="$STRATO_STATE_DIR/enrollment-bootstrap-v1"
 CONFIG_FILE="$STRATO_CONF_DIR/config.toml"
 UNIT_FILE=/etc/systemd/system/strato-agent.service
 
@@ -149,8 +158,10 @@ die() { echo "error: $*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --control-plane-url) CONTROL_PLANE_URL="$2"; shift 2 ;;
-    --agent-name)       AGENT_NAME="$2"; shift 2 ;;
+    --enrollment-token)   ENROLLMENT_TOKEN="$2"; shift 2 ;;
+    --enrollment-api-url) ENROLLMENT_API_URL="$2"; shift 2 ;;
+    --control-plane-url) CONTROL_PLANE_URL="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
+    --agent-name)       AGENT_NAME="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
     --version)          VERSION="$2"; shift 2 ;;
     --repo)             REPO="$2"; shift 2 ;;
     --bin-dir)          BIN_DIR="$2"; shift 2 ;;
@@ -161,12 +172,12 @@ while [ $# -gt 0 ]; do
     --no-systemd)       USE_SYSTEMD=0; shift ;;
     --skip-preflight)   RUN_PREFLIGHT=0; shift ;;
     --sandbox-guest)    INSTALL_SANDBOX_GUEST=1; shift ;;
-    --spire-join-token)      JOIN_TOKEN="$2"; shift 2 ;;
-    --spire-server-address)  SPIRE_SERVER_ADDRESS="$2"; shift 2 ;;
-    --trust-domain)          TRUST_DOMAIN="$2"; shift 2 ;;
+    --spire-join-token)      JOIN_TOKEN="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
+    --spire-server-address)  SPIRE_SERVER_ADDRESS="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
+    --trust-domain)          TRUST_DOMAIN="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
     --trust-bundle)          TRUST_BUNDLE="$2"; shift 2 ;;
     --enable-guest-identity) ENABLE_GUEST_IDENTITY=1; shift ;;
-    --control-plane-spiffe-id) CONTROL_PLANE_SPIFFE_ID="$2"; shift 2 ;;
+    --control-plane-spiffe-id) CONTROL_PLANE_SPIFFE_ID="$2"; EXPLICIT_BOOTSTRAP_VALUES=1; shift 2 ;;
     --no-telemetry)          INSTALL_TELEMETRY=0; shift ;;
     --ingest-url)            INGEST_URL="$2"; shift 2 ;;
     --spire-version)         SPIRE_VERSION="${2#v}"; shift 2 ;;
@@ -176,6 +187,92 @@ while [ $# -gt 0 ]; do
     *)                  die "unknown option: $1 (see --help)" ;;
   esac
 done
+
+decode_bootstrap_value() {
+  local decoded
+  if decoded="$(printf '%s' "$1" | base64 --decode 2>/dev/null)"; then
+    printf '%s' "$decoded"
+  elif decoded="$(printf '%s' "$1" | base64 -D 2>/dev/null)"; then
+    # BSD base64 (useful when exercising the parser from a macOS dev host).
+    printf '%s' "$decoded"
+  else
+    die "the control plane returned malformed bootstrap configuration"
+  fi
+}
+
+redeem_enrollment() {
+  [ "$EXPLICIT_BOOTSTRAP_VALUES" -eq 0 ] \
+    || die "--enrollment-token cannot be combined with explicit agent, SPIRE, or control-plane values"
+  [ -n "$ENROLLMENT_API_URL" ] \
+    || die "--enrollment-api-url is required with --enrollment-token (use the install command returned by Strato)"
+  case "$ENROLLMENT_API_URL" in
+    https://*|http://localhost:*|http://127.0.0.1:*|http://localhost/*|http://127.0.0.1/*) ;;
+    *) die "--enrollment-api-url must use HTTPS (plain HTTP is allowed only for localhost)" ;;
+  esac
+
+  local response fetched_from_server=0
+  response="$(mktemp /tmp/strato-agent-bootstrap.XXXXXX)"
+  chmod 600 "$response"
+  log "Fetching server-selected enrollment configuration"
+  if curl -fsS -X POST \
+      -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
+      -H 'Accept: application/vnd.strato.agent-bootstrap.v1' \
+      "$ENROLLMENT_API_URL" -o "$response"; then
+    fetched_from_server=1
+  elif [ -f "$ENROLLMENT_CACHE_FILE" ]; then
+    local cached_token
+    IFS= read -r cached_token < "$ENROLLMENT_CACHE_FILE"
+    if [ "$cached_token" != "$ENROLLMENT_TOKEN" ]; then
+      rm -f "$response"
+      die "the enrollment token was rejected and this host's cached enrollment belongs to another token"
+    fi
+    tail -n +2 "$ENROLLMENT_CACHE_FILE" > "$response"
+    warn "the bootstrap exchange was unavailable or already consumed; resuming from this host's root-only cache"
+  else
+    rm -f "$response"
+    die "the enrollment token was rejected or the control plane could not issue bootstrap configuration"
+  fi
+
+  local -a fields
+  mapfile -t fields < "$response"
+  rm -f "$response"
+  [ "${#fields[@]}" -eq 7 ] && [ "${fields[0]}" = "STRATO_AGENT_BOOTSTRAP_V1" ] \
+    || die "the control plane returned an unsupported bootstrap response"
+
+  CONTROL_PLANE_URL="$(decode_bootstrap_value "${fields[1]}")"
+  AGENT_NAME="$(decode_bootstrap_value "${fields[2]}")"
+  JOIN_TOKEN="$(decode_bootstrap_value "${fields[3]}")"
+  SPIRE_SERVER_ADDRESS="$(decode_bootstrap_value "${fields[4]}")"
+  TRUST_DOMAIN="$(decode_bootstrap_value "${fields[5]}")"
+  CONTROL_PLANE_SPIFFE_ID="$(decode_bootstrap_value "${fields[6]}")"
+
+  # The server issues exactly one join credential. Persist that winning bundle
+  # with the consumed bearer so rerunning the same command on this host reuses
+  # it instead of asking the control plane to mint an independent credential.
+  # This is recovery state, not an authentication path: another host has no
+  # access to this root-owned file, and the server rejects every replay.
+  if [ "$fetched_from_server" -eq 1 ]; then
+    local cache_tmp=""
+    if install -d "$STRATO_STATE_DIR" \
+        && cache_tmp="$(mktemp "${ENROLLMENT_CACHE_FILE}.XXXXXX")"; then
+      chmod 600 "$cache_tmp"
+      {
+        printf '%s\n' "$ENROLLMENT_TOKEN"
+        printf '%s\n' "${fields[@]}"
+      } > "$cache_tmp"
+      mv -f "$cache_tmp" "$ENROLLMENT_CACHE_FILE"
+    else
+      [ -z "$cache_tmp" ] || rm -f "$cache_tmp"
+      warn "could not persist the root-only bootstrap cache; this install cannot be resumed with the consumed token"
+    fi
+  fi
+}
+
+if [ -n "$ENROLLMENT_TOKEN" ]; then
+  redeem_enrollment
+elif [ -n "$ENROLLMENT_API_URL" ]; then
+  die "--enrollment-api-url requires --enrollment-token"
+fi
 
 case "$NETWORK_MODE" in
   ovn|user) ;;
@@ -493,9 +590,12 @@ apt_packages() {
     qemu_system="qemu-system-x86"
     firmware="ovmf"
   fi
-  # Base: disk tooling (qemu-img), the qemu-system for this arch, UEFI firmware
-  # for disk-image boot, glib (QEMUKit links it), and socat.
-  local pkgs=(qemu-utils "$qemu_system" "$firmware" libglib2.0-0 socat ca-certificates)
+  # Base: local disk tooling (qemu-img), the Ceph RBD client used by external
+  # pool backends, the qemu-system for this arch, UEFI firmware for disk-image
+  # boot, glib (QEMUKit links it), and socat. ceph-common installs both `rbd`
+  # and the krbd userspace map/unmap frontend; it does not install or start a
+  # monitor, manager, or OSD.
+  local pkgs=(qemu-utils ceph-common "$qemu_system" "$firmware" libglib2.0-0 socat ca-certificates)
   # libvirtd is the second daemon the agent drives VMs through: the daemon
   # itself plus virsh, which both this script's preflight and the agent's use
   # to prove qemu:///system is reachable and new enough. swtpm backs guest
@@ -810,6 +910,9 @@ preflight() {
   PREFLIGHT_OK=1
   log "Host preflight:"
   check_present "qemu-img" "install qemu-utils" command -v qemu-img
+  check_present "rbd (Ceph client)" \
+    "install ceph-common; without it this host does not advertise Ceph-backed volumes" \
+    command -v rbd
   if [ "$OS" = "linux" ]; then
     check_present "/dev/kvm (hardware acceleration)" \
       "no KVM — hardware acceleration off; VMs fall back to slow emulation" check_kvm
@@ -828,6 +931,11 @@ preflight() {
       echo "           reliably from ${LIBVIRT_MIN_VERSION}. Ubuntu 24.04 ships 10.0.0 and is not a supported"
       echo "           hypervisor host; use Ubuntu 26.04 (libvirt 12.0.0) or another distro at ${LIBVIRT_MIN_VERSION}+."
       PREFLIGHT_OK=0
+    elif [ -n "$LIBVIRT_VERSION" ] \
+      && ! version_ge "$LIBVIRT_VERSION" "$LIBVIRT_NAMESPACED_RBD_MIN_VERSION"; then
+      echo "    [NOTE] libvirt ${LIBVIRT_VERSION} supports local QEMU disks, but namespaced RBD QEMU"
+      echo "           attachment needs ${LIBVIRT_NAMESPACED_RBD_MIN_VERSION}+; this agent keeps Ceph placement dark."
+      echo "           Firecracker/krbd-only Ceph hosts do not require libvirt."
     fi
     check_present "QEMU firmware descriptors (/usr/share/qemu/firmware)" \
       "install ovmf/qemu-efi-aarch64; without the JSON descriptors libvirt cannot autoselect UEFI firmware" \
@@ -1376,12 +1484,12 @@ if [ "$USE_SYSTEMD" -eq 1 ]; then
   # re-running this installer to move a node to a new control plane is exactly
   # when that matters. `restart` starts a stopped unit and restarts a running
   # one, covering fresh installs and reinstalls alike.
+  # Finish every fallible companion-unit operation before the agent can attest
+  # and register. Alloy buffers until the SVID files appear.
+  enable_telemetry
   log "Starting strato-agent"
   systemctl enable strato-agent.service
   systemctl restart strato-agent.service
-  # After the agent so the node is attested before the first pushes; harmless
-  # either way — Alloy buffers and retries until its SVID files appear.
-  enable_telemetry
   log "Done. Follow along with: journalctl -fu strato-agent"
 else
   log "Install complete (no systemd unit installed). Start the agent with:"

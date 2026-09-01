@@ -20,6 +20,29 @@ public enum SandboxJailerMode: String, Sendable, Codable, CaseIterable {
     case disabled
 }
 
+/// A jailer UID range that cannot safely be represented without wrapping or
+/// entering the host's conventional system/login-user space.
+public enum SandboxJailerConfigError: Error, LocalizedError, Equatable, Sendable {
+    case invalidUIDBase(UInt32)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidUIDBase(let base):
+            return "sandbox jailer uid base \(base) must be at least "
+                + "\(SandboxJailerConfig.minimumUIDBase) and leave room for "
+                + "\(SandboxJailerConfig.uidCount) ids without wrapping"
+        }
+    }
+}
+
+public enum SandboxJailPlanError: Error, LocalizedError, Equatable, Sendable {
+    case rootIdentity
+
+    public var errorDescription: String? {
+        "a sandbox jail plan cannot use uid/gid 0 or uid_t(-1)"
+    }
+}
+
 /// The agent-level jailer settings, resolved from config + defaults.
 public struct SandboxJailerConfig: Sendable, Equatable {
     public let jailerBinaryPath: String
@@ -27,8 +50,7 @@ public struct SandboxJailerConfig: Sendable, Equatable {
     /// a full writable rootfs copy per sandbox, so it defaults under the VM
     /// storage path rather than the jailer's tiny `/srv/jailer` default.
     public let chrootBaseDir: String
-    /// First uid/gid of the per-sandbox range (see `SandboxJailPlan` for the
-    /// derivation).
+    /// First uid/gid of the range new sandbox identities are allocated from.
     public let uidBase: UInt32
     /// Absolute path of the iproute2 `ip` binary, resolved once at start
     /// (`SandboxJailerResolver.resolveIPBinaryPath`). Invoked directly — a
@@ -48,10 +70,23 @@ public struct SandboxJailerConfig: Sendable, Equatable {
     /// `uidBase`.
     public static let uidCount: UInt32 = 65536
 
+    /// Keep jail identities out of the 16-bit system/login-user space even
+    /// before the host-specific passwd/group/subid preflight runs.
+    public static let minimumUIDBase: UInt32 = 65_536
+
+    /// Highest base whose inclusive last UID (`base + uidCount - 1`) stays
+    /// below `UInt32.max`, which POSIX APIs reserve as `(uid_t)-1`. Kept
+    /// explicit so neither configuration nor a direct public initializer can
+    /// silently wrap or allocate the sentinel.
+    public static let maximumUIDBase: UInt32 = UInt32.max - uidCount
+
     public init(
         jailerBinaryPath: String, chrootBaseDir: String, uidBase: UInt32, ipBinaryPath: String? = nil,
         tcBinaryPath: String? = nil
-    ) {
+    ) throws {
+        guard uidBase >= Self.minimumUIDBase, uidBase <= Self.maximumUIDBase else {
+            throw SandboxJailerConfigError.invalidUIDBase(uidBase)
+        }
         self.jailerBinaryPath = jailerBinaryPath
         self.chrootBaseDir = chrootBaseDir
         self.uidBase = uidBase
@@ -125,20 +160,18 @@ public enum SandboxJailerResolver {
     }
 }
 
-/// The fully-derived jail layout for one sandbox: uid/gid, chroot paths, the
+/// The jail layout for one sandbox: an explicitly allocated uid/gid, chroot paths, the
 /// in-jail names the Firecracker API sees and their host-side views, the
 /// network-namespace name, and the cgroup memory ceiling.
 ///
-/// Pure and deterministic — derived only from the sandbox id and the jailer
-/// config — so create, adoption after an agent restart, and teardown always
-/// agree on every path without persisting anything.
+/// Paths remain deterministic from the sandbox id and jailer config. Identity
+/// does not: the caller must supply the manifest-backed allocation, which
+/// makes accidental hash collisions impossible on every new-create path.
 public struct SandboxJailPlan: Sendable, Equatable {
     public let sandboxId: String
-    /// The unprivileged uid/gid the jailed Firecracker drops to: `uidBase +
-    /// (FNV-1a-64(sandboxId) % uidCount)`, never colliding with uid 0. A
-    /// stateless hash keeps the mapping stable across agent restarts; two
-    /// sandboxes sharing a slot (rare at 2^16) weakens only their *mutual*
-    /// isolation, never the host boundary.
+    /// The manifest-backed, host-unique identity the jailed Firecracker drops
+    /// to. UID 0 and uid_t(-1) are never valid assignments. GID intentionally
+    /// matches UID.
     public let uid: UInt32
     public let gid: UInt32
     /// The per-sandbox jail directory (`<base>/<exec name>/<id>`) — the whole
@@ -169,16 +202,50 @@ public struct SandboxJailPlan: Sendable, Equatable {
     public static let snapshotMemoryPathInJail = "/snapshots/memory.snap"
     public static let snapshotVmstatePathInJail = "/snapshots/vmstate.snap"
 
-    public init(sandboxId: String, config: SandboxJailerConfig, firecrackerBinaryPath: String) {
+    public init(
+        sandboxId: String,
+        jailUID: UInt32,
+        config: SandboxJailerConfig,
+        firecrackerBinaryPath: String
+    ) throws {
+        guard jailUID != 0, jailUID != UInt32.max else {
+            throw SandboxJailPlanError.rootIdentity
+        }
         self.sandboxId = sandboxId
-        let slot = UInt32(Self.fnv1a64(sandboxId) % UInt64(SandboxJailerConfig.uidCount))
-        let id = config.uidBase &+ slot
-        self.uid = id == 0 ? 1 : id
+        self.uid = jailUID
         self.gid = self.uid
-        let execName = URL(fileURLWithPath: firecrackerBinaryPath).lastPathComponent
-        self.jailDirectory = "\(config.chrootBaseDir)/\(execName)/\(sandboxId)"
+        self.jailDirectory = Self.jailDirectory(
+            sandboxId: sandboxId,
+            chrootBaseDir: config.chrootBaseDir,
+            firecrackerBinaryPath: firecrackerBinaryPath)
         self.jailRoot = jailDirectory + "/root"
         self.netnsName = Self.netnsName(sandboxId: sandboxId)
+    }
+
+    /// The historical hash assignment used by manifests written before
+    /// `VMManifestEntry.jailUID`. Kept only for one-time legacy adoption; new
+    /// identities must come from `SandboxJailUIDAllocator`.
+    public static func legacyUID(sandboxId: String, uidBase: UInt32) throws -> UInt32 {
+        // Preserve the pre-STR-290 arithmetic exactly, including wrapping an
+        // old directly-constructed/high configured base and mapping a wrapped
+        // zero to 1. This helper is migration-only; new ranges are validated
+        // before the allocator is constructed.
+        guard uidBase > 0 else {
+            throw SandboxJailerConfigError.invalidUIDBase(uidBase)
+        }
+        let slot = UInt32(fnv1a64(sandboxId) % UInt64(SandboxJailerConfig.uidCount))
+        let id = uidBase &+ slot
+        guard id != UInt32.max else { throw SandboxJailPlanError.rootIdentity }
+        return id == 0 ? 1 : id
+    }
+
+    /// Deterministic jail directory used by legacy-owner recovery and cleanup
+    /// paths that do not yet have (or do not need) an identity assignment.
+    public static func jailDirectory(
+        sandboxId: String, chrootBaseDir: String, firecrackerBinaryPath: String
+    ) -> String {
+        let execName = URL(fileURLWithPath: firecrackerBinaryPath).lastPathComponent
+        return "\(chrootBaseDir)/\(execName)/\(sandboxId)"
     }
 
     /// The namespace name for a sandbox, derived from its id **alone**.
@@ -241,8 +308,8 @@ public struct SandboxJailPlan: Sendable, Equatable {
         HostMemoryController.isAvailable(readFile: readFile)
     }
 
-    /// Fixed FNV-1a 64 (not Swift's per-process-seeded `Hasher`), so uid
-    /// derivation is stable across agent restarts.
+    /// Fixed FNV-1a 64 (not Swift's per-process-seeded `Hasher`) retained only
+    /// for the one-time legacy assignment above.
     private static func fnv1a64(_ input: String) -> UInt64 {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in input.utf8 {

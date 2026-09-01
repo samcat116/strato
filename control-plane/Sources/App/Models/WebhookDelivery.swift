@@ -9,6 +9,9 @@ enum WebhookDeliveryStatus: String, Codable, Sendable {
     case succeeded
     /// Every attempt failed; only a manual redeliver revives it.
     case dead
+    /// Removed from pending work because this subscription exceeded its ceiling;
+    /// no further POST is attempted, though a retry row can retain earlier attempts.
+    case dropped
 }
 
 /// One pending or attempted webhook POST: the transactional-outbox row of
@@ -27,8 +30,9 @@ final class WebhookDelivery: Model, @unchecked Sendable {
     @Parent(key: "subscription_id")
     var subscription: WebhookSubscription
 
-    /// Shared across the fan-out of one event to many subscriptions;
-    /// consumers dedupe on it (delivery is at-least-once).
+    /// Shared across the fan-out of one event to many subscriptions. A claimed
+    /// POST can repeat after a crash, so consumers dedupe on this id. Rows
+    /// explicitly shed at the pending ceiling receive no further attempt.
     @Field(key: "event_id")
     var eventID: UUID
 
@@ -48,6 +52,12 @@ final class WebhookDelivery: Model, @unchecked Sendable {
     @Field(key: "next_attempt_at")
     var nextAttemptAt: Date
 
+    /// Explicit delivery-attempt lease. Together with the legacy
+    /// `nextAttemptAt` deadline, this lets backlog shedding exclude active
+    /// claims during both current-version and rolling-version operation.
+    @OptionalField(key: "claimed_until")
+    var claimedUntil: Date?
+
     @OptionalField(key: "last_attempt_at")
     var lastAttemptAt: Date?
 
@@ -60,6 +70,12 @@ final class WebhookDelivery: Model, @unchecked Sendable {
 
     @OptionalField(key: "delivered_at")
     var deliveredAt: Date?
+
+    /// The immutable enqueue time presented through the delivery API. During
+    /// the `dropped` rollout, `created_at` is also a compatibility retention
+    /// anchor for older replicas, so it can advance when pending work is shed.
+    @Timestamp(key: "enqueued_at", on: .create)
+    var enqueuedAt: Date?
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
@@ -124,7 +140,7 @@ struct WebhookDeliveryResponse: Content {
         self.responseStatus = delivery.responseStatus
         self.lastError = delivery.lastError
         self.deliveredAt = delivery.deliveredAt
-        self.createdAt = delivery.createdAt
+        self.createdAt = delivery.enqueuedAt ?? delivery.createdAt
         self.payload = delivery.payload
     }
 }

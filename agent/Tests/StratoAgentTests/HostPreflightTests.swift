@@ -34,6 +34,168 @@ struct HostPreflightTests {
         )
     }
 
+    private func cleanSandboxJailerUIDRange(
+        mode: SandboxJailerMode = .required,
+        uidBase: UInt32 = 100_000
+    ) -> HostPreflight.SandboxJailerUIDRangeInputs {
+        HostPreflight.SandboxJailerUIDRangeInputs(
+            mode: mode,
+            uidBase: uidBase,
+            passwd: .contents("root:x:0:0:root:/root:/bin/sh\n"),
+            group: .contents("root:x:0:\n"),
+            subuid: .missing,
+            subgid: .missing
+        )
+    }
+
+    // MARK: - Sandbox jail uid/gid range
+
+    @Test("A clean jail uid/gid range passes and is exposed on the report")
+    func cleanSandboxJailerUIDRangePasses() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.sandboxJailerUIDRange = cleanSandboxJailerUIDRange()
+        let report = HostPreflight.run(inputs)
+
+        let check = try #require(report.check(.sandboxJailerUIDRange))
+        #expect(check.passed)
+        #expect(check.severity == .gating)
+        #expect(report.sandboxJailerUIDRangeReady)
+        #expect(report.sandboxJailerUIDRangeFailureDetail == nil)
+    }
+
+    @Test("A passwd uid inside the jail range fails")
+    func sandboxJailerUIDRangeRejectsPasswdUID() {
+        var inputs = cleanSandboxJailerUIDRange()
+        inputs.passwd = .contents("root:x:0:0:root:/root:/bin/sh\noperator:x:100000:1000::/home/operator:/bin/sh\n")
+
+        let check = HostPreflight.checkSandboxJailerUIDRange(inputs)
+        #expect(!check.passed)
+        #expect(check.detail?.contains("/etc/passwd entry 'operator' uses uid 100000") == true)
+    }
+
+    @Test("A group gid inside the jail range fails")
+    func sandboxJailerUIDRangeRejectsGroupGID() {
+        var inputs = cleanSandboxJailerUIDRange()
+        inputs.group = .contents("root:x:0:\nsandbox-operators:x:165535:\n")
+
+        let check = HostPreflight.checkSandboxJailerUIDRange(inputs)
+        #expect(!check.passed)
+        #expect(check.detail?.contains("/etc/group entry 'sandbox-operators' uses gid 165535") == true)
+    }
+
+    @Test("An intersecting subuid delegation fails")
+    func sandboxJailerUIDRangeRejectsSubuidOverlap() {
+        var inputs = cleanSandboxJailerUIDRange()
+        // The delegation begins below the jail range but includes its first id.
+        inputs.subuid = .contents("operator:99999:2\n")
+
+        let check = HostPreflight.checkSandboxJailerUIDRange(inputs)
+        #expect(!check.passed)
+        #expect(check.detail?.contains("/etc/subuid delegates uids 99999..<100001") == true)
+    }
+
+    @Test("An intersecting subgid delegation fails")
+    func sandboxJailerUIDRangeRejectsSubgidOverlap() {
+        var inputs = cleanSandboxJailerUIDRange()
+        // The delegation includes the jail range's final id and extends above it.
+        inputs.subgid = .contents("operator:165535:2\n")
+
+        let check = HostPreflight.checkSandboxJailerUIDRange(inputs)
+        #expect(!check.passed)
+        #expect(check.detail?.contains("/etc/subgid delegates gids 165535..<165537") == true)
+    }
+
+    @Test("Subordinate ranges touching either boundary without intersecting pass")
+    func sandboxJailerUIDRangeUsesHalfOpenIntervals() {
+        var inputs = cleanSandboxJailerUIDRange()
+        inputs.subuid = .contents("before:34464:65536\n")
+        inputs.subgid = .contents("after:165536:65536\n")
+
+        #expect(HostPreflight.checkSandboxJailerUIDRange(inputs).passed)
+    }
+
+    @Test("A range conflict is gating in required mode and advisory in auto mode")
+    func sandboxJailerUIDRangeSeverityFollowsMode() {
+        var required = cleanSandboxJailerUIDRange(mode: .required)
+        required.passwd = .contents("operator:x:100042:1000::/home/operator:/bin/sh\n")
+        let requiredCheck = HostPreflight.checkSandboxJailerUIDRange(required)
+        #expect(!requiredCheck.passed)
+        #expect(requiredCheck.severity == .gating)
+
+        var auto = required
+        auto.mode = .auto
+        let autoCheck = HostPreflight.checkSandboxJailerUIDRange(auto)
+        #expect(!autoCheck.passed)
+        #expect(autoCheck.severity == .advisory)
+    }
+
+    @Test("The full preflight report preserves required versus auto range severity")
+    func sandboxJailerUIDRangeSeveritySurvivesFullPreflight() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var requiredInputs = passingInputs(root: root)
+        var requiredRange = cleanSandboxJailerUIDRange(mode: .required)
+        requiredRange.subuid = .contents("operator:100000:65536\n")
+        requiredInputs.sandboxJailerUIDRange = requiredRange
+        let requiredReport = HostPreflight.run(requiredInputs)
+        let requiredCheck = try #require(requiredReport.check(.sandboxJailerUIDRange))
+        #expect(requiredCheck.severity == .gating)
+        #expect(!requiredCheck.passed)
+        #expect(!requiredReport.sandboxJailerUIDRangeReady)
+
+        var autoInputs = passingInputs(root: root)
+        var autoRange = requiredRange
+        autoRange.mode = .auto
+        autoInputs.sandboxJailerUIDRange = autoRange
+        let autoReport = HostPreflight.run(autoInputs)
+        let autoCheck = try #require(autoReport.check(.sandboxJailerUIDRange))
+        #expect(autoCheck.severity == .advisory)
+        #expect(!autoCheck.passed)
+        #expect(!autoReport.sandboxJailerUIDRangeReady)
+    }
+
+    @Test("Missing optional subordinate-id files are clean, but required identity files are not")
+    func sandboxJailerUIDRangeDistinguishesMissingFiles() {
+        var inputs = cleanSandboxJailerUIDRange()
+        inputs.subuid = .missing
+        inputs.subgid = .missing
+        #expect(HostPreflight.checkSandboxJailerUIDRange(inputs).passed)
+
+        inputs.passwd = .missing
+        let check = HostPreflight.checkSandboxJailerUIDRange(inputs)
+        #expect(!check.passed)
+        #expect(check.detail?.contains("required /etc/passwd is missing") == true)
+    }
+
+    @Test("Unreadable identity databases fail closed instead of looking absent")
+    func sandboxJailerUIDRangeRejectsUnreadableFiles() {
+        var required = cleanSandboxJailerUIDRange()
+        required.group = .unreadable("permission denied")
+        let requiredCheck = HostPreflight.checkSandboxJailerUIDRange(required)
+        #expect(!requiredCheck.passed)
+        #expect(requiredCheck.detail?.contains("cannot read required /etc/group: permission denied") == true)
+
+        var optional = cleanSandboxJailerUIDRange()
+        optional.subuid = .unreadable("permission denied")
+        let optionalCheck = HostPreflight.checkSandboxJailerUIDRange(optional)
+        #expect(!optionalCheck.passed)
+        #expect(optionalCheck.detail?.contains("cannot read /etc/subuid: permission denied") == true)
+    }
+
+    @Test("Malformed identity records fail closed")
+    func sandboxJailerUIDRangeRejectsMalformedRecords() {
+        var inputs = cleanSandboxJailerUIDRange()
+        inputs.subgid = .contents("operator:not-a-number:65536\n")
+
+        let check = HostPreflight.checkSandboxJailerUIDRange(inputs)
+        #expect(!check.passed)
+        #expect(check.detail?.contains("cannot parse subordinate gid range on /etc/subgid line 1") == true)
+    }
+
     // MARK: - Directory checks
 
     @Test("Owned directories are created with intermediate directories and probed writable")
@@ -431,6 +593,27 @@ struct HostPreflightTests {
         #expect(gated[0].available)
         #expect(gated[1].available == false)
         #expect(gated[1].unavailabilityReason?.contains("cannot create") == true)
+    }
+
+    @Test("Unavailable pidfds gate Firecracker with a host remediation")
+    func unavailablePIDFDGatesFirecracker() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.firecrackerSocketDirectory = "\(root)/firecracker"
+        inputs.firecrackerPIDFDSupport = .unavailable("pidfd_open failed with errno 38")
+        let report = HostPreflight.run(inputs)
+        let check = try #require(report.check(.firecrackerPIDFDSupport))
+        #expect(!check.passed)
+        #expect(check.detail?.contains("Linux kernel 5.3 or newer") == true)
+
+        let firecracker = HypervisorSupport(
+            type: .firecracker, available: true, accelerated: true,
+            capabilities: .firecracker)
+        let gated = try #require(report.gate([firecracker]).first)
+        #expect(!gated.available)
+        #expect(gated.unavailabilityReason == check.detail)
     }
 
     // MARK: - libvirt

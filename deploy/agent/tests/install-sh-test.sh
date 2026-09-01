@@ -10,8 +10,8 @@
 #
 # Covers helpers with real logic and real consequences: the qemu.conf writer
 # (which edits a 0600 root-owned file that can hold VNC/TLS secrets), the
-# version comparison behind the libvirt floor, and the default-off SPIRE
-# delegate grant.
+# version comparison behind the libvirt floor, the default-off SPIRE delegate
+# grant, and the one-token bootstrap response parser.
 #
 #   bash deploy/agent/tests/install-sh-test.sh
 
@@ -40,6 +40,14 @@ check() {
   fi
 }
 
+file_mode() {
+  if stat -c %a "$1" >/dev/null 2>&1; then
+    stat -c %a "$1"
+  else
+    stat -f %Lp "$1"
+  fi
+}
+
 extract_function() {
   local name="$1" body
   body="$(sed -n "/^${name}()/,/^}/p" "$INSTALL_SH")"
@@ -61,12 +69,82 @@ HARNESS="$WORK_DIR/harness.sh"
   echo 'set -uo pipefail'
   echo 'log() { :; }'
   echo 'warn() { :; }'
+  echo 'die() { echo "error: $*" >&2; exit 1; }'
+  extract_function decode_bootstrap_value
+  extract_function redeem_enrollment
   extract_function set_qemu_conf_key
   extract_function version_ge
   extract_function render_spire_guest_identity_config
+  extract_function apt_packages
 } > "$HARNESS"
 # shellcheck source=/dev/null
 . "$HARNESS"
+
+# --- redeem_enrollment ------------------------------------------------------
+# A fresh host has no jq or Strato binary yet. Pin the line protocol and prove
+# the parser fills every formerly pasted value without evaluating shell text.
+
+echo "redeem_enrollment: one token derives every bootstrap value"
+BOOTSTRAP_FIXTURE="$WORK_DIR/bootstrap.txt"
+{
+  echo STRATO_AGENT_BOOTSTRAP_V1
+  printf '%s' 'wss://agents.example.com/agent/ws' | base64
+  printf '%s' 'hv-01' | base64
+  printf '%s' 'join-token-value' | base64
+  printf '%s' 'spire.example.com:443' | base64
+  printf '%s' 'org-a.example.com' | base64
+  printf '%s' 'spiffe://platform.example.com/control-plane' | base64
+} > "$BOOTSTRAP_FIXTURE"
+STUB_DIR="$WORK_DIR/bin"
+mkdir -p "$STUB_DIR"
+cat > "$STUB_DIR/curl" << 'EOF'
+#!/usr/bin/env bash
+[ "${CURL_SHOULD_FAIL:-0}" -eq 0 ] || exit 22
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    cp "$BOOTSTRAP_FIXTURE" "$2"
+    exit 0
+  fi
+  shift
+done
+exit 2
+EOF
+chmod +x "$STUB_DIR/curl"
+
+export ENROLLMENT_TOKEN=enroll_v1_test
+export ENROLLMENT_API_URL=https://cp.example.com/api/agent-enrollments/bootstrap
+export EXPLICIT_BOOTSTRAP_VALUES=0
+CONTROL_PLANE_URL=""
+AGENT_NAME=""
+JOIN_TOKEN=""
+SPIRE_SERVER_ADDRESS=""
+TRUST_DOMAIN=""
+CONTROL_PLANE_SPIFFE_ID=""
+STRATO_STATE_DIR="$WORK_DIR/state"
+ENROLLMENT_CACHE_FILE="$STRATO_STATE_DIR/enrollment-bootstrap-v1"
+export BOOTSTRAP_FIXTURE
+PATH="$STUB_DIR:$PATH" redeem_enrollment
+check "control-plane URL comes from the exchange" \
+  'wss://agents.example.com/agent/ws' "$CONTROL_PLANE_URL"
+check "agent name comes from the exchange" hv-01 "$AGENT_NAME"
+check "SPIRE join token comes from the exchange" join-token-value "$JOIN_TOKEN"
+check "SPIRE address comes from the exchange" spire.example.com:443 "$SPIRE_SERVER_ADDRESS"
+check "trust domain comes from the exchange" org-a.example.com "$TRUST_DOMAIN"
+check "control-plane identity comes from the exchange" \
+  spiffe://platform.example.com/control-plane "$CONTROL_PLANE_SPIFFE_ID"
+check "the winning bundle is cached with its consumed token" \
+  enroll_v1_test "$(head -n 1 "$ENROLLMENT_CACHE_FILE")"
+check "the bootstrap recovery cache is root-only" 600 "$(file_mode "$ENROLLMENT_CACHE_FILE")"
+
+CONTROL_PLANE_URL=""
+AGENT_NAME=""
+JOIN_TOKEN=""
+SPIRE_SERVER_ADDRESS=""
+TRUST_DOMAIN=""
+CONTROL_PLANE_SPIFFE_ID=""
+CURL_SHOULD_FAIL=1 PATH="$STUB_DIR:$PATH" redeem_enrollment
+check "a rerun on the same host reuses the original agent name" hv-01 "$AGENT_NAME"
+check "a rerun on the same host reuses the original join token" join-token-value "$JOIN_TOKEN"
 
 # --- set_qemu_conf_key -------------------------------------------------------
 # Returns 0 when the file changed, 1 when it already agreed. Callers use that to
@@ -96,7 +174,7 @@ chmod 600 "$STOCK"
 STOCK_COMMENTS="$(grep '^#' "$STOCK")"
 check "first run reports a change" changed "$(write_keys "$STOCK")"
 check "re-run is a no-op (no daemon restart)" unchanged "$(write_keys "$STOCK")"
-check "0600 mode survives the append path" 600 "$(stat -c %a "$STOCK")"
+check "0600 mode survives the append path" 600 "$(file_mode "$STOCK")"
 check "the agent's uid is written" 'user = "root"' "$(grep '^user' "$STOCK")"
 check "dynamic_ownership is left on" 'dynamic_ownership = 1' "$(grep '^dynamic_ownership' "$STOCK")"
 # Verbatim, not a count: those lines are the documentation an operator reads, and
@@ -121,7 +199,7 @@ chmod 600 "$WRONG"
 # must carry the original 0600 across rather than inherit whatever the caller's
 # umask would give a fresh temp file — under a strict umask that bug hides.
 check "the wrong values are corrected" changed "$(umask 022; write_keys "$WRONG")"
-check "0600 mode survives the rewrite path" 600 "$(stat -c %a "$WRONG")"
+check "0600 mode survives the rewrite path" 600 "$(file_mode "$WRONG")"
 check "dynamic_ownership = 0 is turned back on" 'dynamic_ownership = 1' "$(grep '^dynamic_ownership' "$WRONG")"
 check "AppArmor is left enabled" 'security_driver = "apparmor"' "$(grep '^security_driver' "$WRONG")"
 check "and then it settles" unchanged "$(write_keys "$WRONG")"
@@ -159,6 +237,23 @@ check "11.4.99 does not clear it"                  no  "$(ge 11.4.99 11.5.0)"
 check "9.10.0 compares numerically, not lexically" no  "$(ge 9.10.0 11.5.0)"
 check "a non-numeric version is refused"           no  "$(ge abc 11.5.0)"
 check "an empty version is refused"                no  "$(ge '' 11.5.0)"
+
+# --- apt_packages -----------------------------------------------------------
+# External Ceph is a client-only feature, but every installed host needs the
+# userspace `rbd` frontend before it can truthfully advertise that capability.
+
+echo "apt_packages: Ceph client tooling"
+# shellcheck disable=SC2034  # read by apt_packages, sourced from install.sh
+ARCH=x86_64
+# shellcheck disable=SC2034  # read by apt_packages, sourced from install.sh
+NETWORK_MODE=user
+# shellcheck disable=SC2034  # read by apt_packages, sourced from install.sh
+INSTALL_TELEMETRY=0
+PACKAGES="$(apt_packages)"
+check "ceph-common is installed exactly once" 1 \
+  "$(printf '%s\n' "$PACKAGES" | grep -cx ceph-common)"
+check "namespaced RBD keeps its separate libvirt 11.6 floor" 1 \
+  "$(grep -c '^LIBVIRT_NAMESPACED_RBD_MIN_VERSION="11.6.0"$' "$INSTALL_SH")"
 
 # --- render_spire_guest_identity_config -------------------------------------
 # Enabling this widens the node's trust boundary, so absence is as important as

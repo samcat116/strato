@@ -281,7 +281,7 @@ struct AgentGuestIdentityController: RouteCollection {
             req.logger.error(
                 "SPIRE failed to mint a guest JWT-SVID",
                 metadata: [
-                    "agentId": .string(agentID.uuidString),
+                    "strato.agent.id": .string(agentID.uuidString),
                     "spiffeId": .string(registeredSPIFFEID),
                     "audiences": .string(audiences.joined(separator: ",")),
                     "error": .string("\(error)"),
@@ -320,7 +320,7 @@ struct AgentGuestIdentityController: RouteCollection {
         req.logger.info(
             "Minted guest JWT-SVID",
             metadata: [
-                "agentId": .string(agentID.uuidString),
+                "strato.agent.id": .string(agentID.uuidString),
                 "spiffeId": .string(svid.spiffeID),
                 "audiences": .string(audiences.joined(separator: ",")),
                 "expiresAt": .string(svid.expiresAt.ISO8601Format()),
@@ -403,11 +403,15 @@ struct AgentGuestIdentityController: RouteCollection {
     ) async -> GuestIdentityRefusal {
         Telemetry.recordGuestIdentityMint(outcome: refusal.rawValue)
         var logMetadata: Logger.Metadata = [
-            "agentId": .string(agentID?.uuidString ?? authenticatedAgent.identity.key),
-            "vmId": .string(resourceID),
+            "strato.vm.id": .string(resourceID),
             "reason": .string(refusal.rawValue),
             "audiences": .string(audiences.joined(separator: ",")),
         ]
+        if let agentID {
+            logMetadata["strato.agent.id"] = .string(agentID.uuidString)
+        } else {
+            logMetadata["strato.agent.identity"] = .string(authenticatedAgent.identity.key)
+        }
         if let spiffeID { logMetadata["spiffeId"] = .string(spiffeID) }
         if let ttlSeconds { logMetadata["ttlSeconds"] = .stringConvertible(ttlSeconds) }
         if let expiresAt { logMetadata["expiresAt"] = .string(expiresAt.ISO8601Format()) }

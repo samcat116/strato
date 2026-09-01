@@ -16,7 +16,6 @@ final class HierarchyIntegrationTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
 

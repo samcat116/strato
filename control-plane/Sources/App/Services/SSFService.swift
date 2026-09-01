@@ -371,11 +371,11 @@ actor SSFService {
     // MARK: - Poll sweep lifecycle
 
     private var pollIntervalSeconds: Int {
-        app.controlPlaneConfiguration.int(.ssfPollIntervalSeconds)!
+        app.controlPlaneConfiguration.int(.ssfPollIntervalSeconds)
     }
 
     private var pollSweepEnabled: Bool {
-        app.controlPlaneConfiguration.bool(.ssfPollEnabled)!
+        app.controlPlaneConfiguration.bool(.ssfPollEnabled)
     }
 
     /// Arm the periodic poll sweep. Called once from the boot lifecycle.
