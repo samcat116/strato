@@ -73,6 +73,30 @@ struct DomainMemoryInventoryTests {
         #expect(layout.virtioMem?.requestedBytes == 1 * Self.gib)
     }
 
+    /// Application metadata is opaque to the memory inventory. Parsing the
+    /// whole domain through the redefiner's intentionally strict tree parser
+    /// would reject both constructs here before it ever reached the ordinary
+    /// virtio-mem device (PR #1344 review).
+    @Test("unrelated mixed and CDATA metadata does not block device identity")
+    func unrelatedApplicationMetadata() throws {
+        let metadata = """
+                  <metadata>
+                    <app:state xmlns:app='urn:strato:test'>before<app:value/>after</app:state>
+                    <app:opaque xmlns:app='urn:strato:test'><![CDATA[<opaque>&value]]></app:opaque>
+                  </metadata>
+            """
+        let domain = Self.domain(Self.virtioMemDevice).replacingOccurrences(
+            of: "  <maxMemory", with: metadata + "\n  <maxMemory")
+
+        let layout = try DomainMemoryInventory.memoryLayout(inDomainXML: domain)
+        let virtioMem = try #require(layout.virtioMem)
+        let fragment = try DomainDeviceXML.memoryDevice(
+            virtioMem, requestedBytes: 3 * Self.gib)
+
+        #expect(fragment.contains("<alias name='virtiomem0'/>") == true)
+        #expect(fragment.contains("<address bus='0x05'") == true)
+    }
+
     /// `<memory>` under `<domain>` is the domain's total and `<memory>` under
     /// `<devices>` is a device; reading one as the other would make a VM with
     /// no headroom look like it had 8 GiB of it.

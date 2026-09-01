@@ -146,9 +146,10 @@ public enum DomainMemoryInventory {
         guard let maximum = delegate.memory else {
             throw DomainInventoryError.unparseable("the domain document declares no memory size")
         }
-        let deviceNodes = try DomainXMLNode.parse(xml).child(named: "devices")?.children.filter {
-            $0.name == "memory" && $0.attribute("model") == "virtio-mem"
-        } ?? []
+        if let refusal = delegate.deviceRefusal {
+            throw DomainInventoryError.unparseable(refusal)
+        }
+        let deviceNodes = delegate.virtioMemDevices
         let virtioMem: DomainMemoryLayout.VirtioMem?
         if let parsed = delegate.virtioMem {
             guard deviceNodes.count == 1 else {
@@ -208,9 +209,22 @@ private struct ParsedVirtioMem {
 }
 
 private final class MemoryCollector: NSObject, XMLParserDelegate {
+    /// One element inside a selected virtio-mem subtree. Unlike
+    /// `DomainXMLNode.parse`, this stack is empty everywhere else in the domain,
+    /// so unrelated application metadata can contain CDATA or mixed content
+    /// without making an ordinary resize impossible.
+    private struct DeviceFrame {
+        let name: String
+        let attributes: [DomainXMLAttribute]
+        var children: [DomainXMLNode] = []
+        var text = ""
+    }
+
     private(set) var memory: Int64?
     private(set) var memoryDeviceBytes: Int64 = 0
     private(set) var virtioMem: ParsedVirtioMem?
+    private(set) var virtioMemDevices: [DomainXMLNode] = []
+    private(set) var deviceRefusal: String?
 
     private var path: [String] = []
     private var text: String?
@@ -223,12 +237,24 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
     private var deviceSize: Int64?
     private var deviceBlock: Int64?
     private var deviceRequested: Int64?
+    private var deviceFrames: [DeviceFrame] = []
 
     func parser(
         _ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
         qualifiedName: String?, attributes: [String: String] = [:]
     ) {
         defer { path.append(elementName) }
+
+        if !deviceFrames.isEmpty
+            || (elementName == "memory" && path.last == "devices"
+                && attributes["model"] == "virtio-mem")
+        {
+            let orderedAttributes = attributes.keys.sorted().map {
+                DomainXMLAttribute(name: $0, value: attributes[$0] ?? "")
+            }
+            deviceFrames.append(
+                DeviceFrame(name: elementName, attributes: orderedAttributes))
+        }
 
         if elementName == "memory", path.last == "devices" {
             inMemoryDevice = true
@@ -252,14 +278,24 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        guard text != nil else { return }
-        text? += string
+        if text != nil {
+            text? += string
+        }
+        if !deviceFrames.isEmpty {
+            deviceFrames[deviceFrames.count - 1].text += string
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard !deviceFrames.isEmpty, let text = String(data: CDATABlock, encoding: .utf8) else { return }
+        deviceFrames[deviceFrames.count - 1].text += text
     }
 
     func parser(
         _ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?,
         qualifiedName: String?
     ) {
+        finishDeviceElement(named: elementName)
         path.removeLast()
 
         if elementName == "memory", path.last == "devices" {
@@ -288,5 +324,30 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
         case "requested" where inMemoryDevice: deviceRequested = value
         default: break
         }
+    }
+
+    private func finishDeviceElement(named elementName: String) {
+        guard let frame = deviceFrames.popLast() else { return }
+
+        var text: String?
+        if frame.children.isEmpty {
+            text = frame.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : frame.text
+        } else if !frame.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            recordDeviceRefusal("mixed content in <\(frame.name)>, which this cannot re-emit")
+        }
+
+        let node = DomainXMLNode(
+            frame.name, frame.attributes.map { ($0.name, Optional($0.value)) }, text: text,
+            children: frame.children)
+        if deviceFrames.isEmpty {
+            virtioMemDevices.append(node)
+        } else {
+            deviceFrames[deviceFrames.count - 1].children.append(node)
+        }
+    }
+
+    private func recordDeviceRefusal(_ what: String) {
+        guard deviceRefusal == nil else { return }
+        deviceRefusal = "the virtio-mem device contains \(what)"
     }
 }

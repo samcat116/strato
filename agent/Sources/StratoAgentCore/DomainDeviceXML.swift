@@ -93,12 +93,14 @@ public enum DomainDeviceXML {
 
         var changedRequested = false
         guard
-            node.editChild(named: "target", { target in
-                changedRequested = target.editChild(named: "requested") { requested in
-                    requested.setAttribute("unit", "KiB")
-                    requested.setText(String(requestedBytes / 1024))
-                }
-            }), changedRequested
+            node.editChild(
+                named: "target",
+                { target in
+                    changedRequested = target.editChild(named: "requested") { requested in
+                        requested.setAttribute("unit", "KiB")
+                        requested.setText(String(requestedBytes / 1024))
+                    }
+                }), changedRequested
         else {
             throw DomainInventoryError.unparseable(
                 "the virtio-mem device declares no <target><requested>")
