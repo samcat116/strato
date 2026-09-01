@@ -3,6 +3,7 @@
 control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
   s_e71e4568f433f9::t_1cfb6ba9648b04 1-2,6-7,13-32,34-42,43-53,55-66,68-90
   s_e71e4568f433f9::t_30a0adeab32a12 54,67
+  s_e71e4568f433f9::t_bbcfa2f3fb5158 33
 control-plane/Sources/App/Migrations/FixStorageDeviceUsesArrayType.swift
   s_e71e4568f433f9::t_aece066e350157 1-13,32-50,56-64,66,77
   s_e71e4568f433f9::t_c266b3c3df757a 14-31,51-55,65,67-76
@@ -11,6 +12,8 @@ control-plane/Sources/App/Migrations/CreateStorageDevices.swift
 control-plane/Tests/AppPlatformTests/StorageDevicePersistenceTests.swift
   s_e71e4568f433f9::t_76923d8861422d 14-29,212-213,225
   s_e71e4568f433f9::t_aece066e350157 30-85
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_e71e4568f433f9::t_c00c527da64488 137-140
 ---
 {
   "schema_version": "authorship/3.0.0",
