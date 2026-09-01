@@ -649,15 +649,11 @@ extension Agent: ReconcileActuator {
         let desiredReservation = VMHostReservation.forSpec(
             desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
         let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
-        let claim: HostCapacityClaim?
-        do {
-            try capacityAdmissionLedger.validateExistingReservation(
-                snapshot: raw, agentName: initialAgentID)
-            claim = try capacityAdmissionLedger.claim(
-                growth, snapshot: raw, agentName: initialAgentID)
-        } catch let refusal as HostCapacityAdmissionError {
-            throw DependencyPendingError(refusal.localizedDescription)
-        }
+        try capacityAdmissionLedger.validateExistingReservation(
+            currentReservation, snapshot: raw, agentName: initialAgentID)
+        let claim = try capacityAdmissionLedger.claim(
+            growth, desiredWorkloadReservation: desiredReservation,
+            snapshot: raw, agentName: initialAgentID)
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {

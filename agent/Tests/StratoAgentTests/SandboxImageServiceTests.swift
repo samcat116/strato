@@ -270,7 +270,7 @@ struct SandboxImageServiceTests {
                 Issue.record("expected insufficientDiskSpace, got \(error)")
                 return
             }
-            #expect(error.failureClassification == .permanent)
+            #expect(error.failureClassification == .blocked)
         }
     }
 

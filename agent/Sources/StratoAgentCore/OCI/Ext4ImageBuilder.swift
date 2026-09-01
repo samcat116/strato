@@ -1,6 +1,12 @@
 import Foundation
 import Logging
 
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
+
 /// Builds the sandbox rootfs image from a flattened tree. Protocol-typed so
 /// the materialization pipeline is testable on hosts without mkfs.ext4
 /// (macOS, CI containers).
@@ -27,6 +33,7 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
     private let mkfsPath: String?
     private let logger: Logger
     private let runSubprocess: SubprocessRunner
+    private let prepareImage: @Sendable (String, UInt64) throws -> Void
 
     private static let mkfsCandidates = ["/usr/sbin/mkfs.ext4", "/sbin/mkfs.ext4", "/usr/bin/mkfs.ext4"]
     private static let blockSize: Int64 = 4096
@@ -41,12 +48,34 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
             try await ProcessRunner.run(executableURL: $0, arguments: $1)
         }
     ) {
+        self.init(
+            mkfsPath: mkfsPath,
+            headroomFraction: headroomFraction,
+            minimumHeadroomBytes: minimumHeadroomBytes,
+            minimumImageBytes: minimumImageBytes,
+            logger: logger,
+            runSubprocess: runSubprocess,
+            prepareImage: Self.prepareImage)
+    }
+
+    init(
+        mkfsPath: String? = nil,
+        headroomFraction: Double = 0.25,
+        minimumHeadroomBytes: Int64 = 32 * 1024 * 1024,
+        minimumImageBytes: Int64 = 64 * 1024 * 1024,
+        logger: Logger,
+        runSubprocess: @escaping SubprocessRunner = {
+            try await ProcessRunner.run(executableURL: $0, arguments: $1)
+        },
+        prepareImage: @escaping @Sendable (String, UInt64) throws -> Void
+    ) {
         self.mkfsPath = mkfsPath
         self.headroomFraction = headroomFraction
         self.minimumHeadroomBytes = minimumHeadroomBytes
         self.minimumImageBytes = minimumImageBytes
         self.logger = logger
         self.runSubprocess = runSubprocess
+        self.prepareImage = prepareImage
     }
 
     public func buildImage(fromTree treePath: String, at imagePath: String) async throws {
@@ -54,17 +83,14 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
         let sizeBytes = imageSizeBytes(forTree: treePath)
 
         // Pre-size the image file; mkfs formats to the existing size.
-        FileManager.default.createFile(atPath: imagePath, contents: nil)
-        guard let handle = FileHandle(forWritingAtPath: imagePath) else {
-            throw OCIError.hostMisconfiguration(detail: "cannot create rootfs image at \(imagePath)")
-        }
         do {
-            try handle.truncate(atOffset: UInt64(sizeBytes))
-            try handle.close()
+            try prepareImage(imagePath, UInt64(sizeBytes))
         } catch {
-            try? handle.close()
             try? FileManager.default.removeItem(atPath: imagePath)
-            throw error
+            guard Self.isInsufficientDiskSpace(error) else { throw error }
+            throw OCIError.insufficientDiskSpace(
+                detail: "pre-sizing the rootfs image at \(imagePath) ran out of space. "
+                    + "Free disk space or inodes, then retry.")
         }
 
         logger.info(
@@ -79,6 +105,11 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
             URL(fileURLWithPath: mkfs), ["-F", "-q", "-d", treePath, imagePath])
         guard result.terminationStatus == 0 else {
             try? FileManager.default.removeItem(atPath: imagePath)
+            if result.combinedOutput.localizedCaseInsensitiveContains("No space left on device") {
+                throw OCIError.insufficientDiskSpace(
+                    detail: "mkfs.ext4 ran out of space while populating \(imagePath). "
+                        + "Free disk space or inodes, then retry. Output: \(result.combinedOutput)")
+            }
             throw OCIError.hostMisconfiguration(
                 detail: "mkfs.ext4 exited \(result.terminationStatus): \(result.combinedOutput)")
         }
@@ -122,5 +153,44 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
         throw OCIError.hostMisconfiguration(
             detail: "mkfs.ext4 not found (looked in \(Self.mkfsCandidates.joined(separator: ", "))); "
                 + "install e2fsprogs to materialize sandbox root filesystems")
+    }
+
+    private static func prepareImage(at path: String, sizeBytes: UInt64) throws {
+        guard FileManager.default.createFile(atPath: path, contents: nil) else {
+            if errno == ENOSPC { throw POSIXError(.ENOSPC) }
+            throw OCIError.hostMisconfiguration(detail: "cannot create rootfs image at \(path)")
+        }
+        guard let handle = FileHandle(forWritingAtPath: path) else {
+            throw OCIError.hostMisconfiguration(detail: "cannot create rootfs image at \(path)")
+        }
+        do {
+            try handle.truncate(atOffset: sizeBytes)
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+    }
+
+    /// Foundation can wrap POSIX write failures in one or more Cocoa errors.
+    private static func isInsufficientDiskSpace(_ error: Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOSPC.rawValue
+            {
+                return true
+            }
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == CocoaError.Code.fileWriteOutOfSpace.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
     }
 }

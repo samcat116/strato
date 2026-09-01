@@ -5,8 +5,8 @@ import Testing
 
 @Suite("Operation response contract")
 struct OperationResponseContractTests {
-    @Test("The legacy VM id remains emitted but is optional when decoding")
-    func legacyVMIDDeprecationCycle() throws {
+    @Test("The operation target uses only the kind-aware resource fields")
+    func operationTargetContract() throws {
         let resourceID = UUID()
         let response = OperationResponse(
             id: UUID(),
@@ -21,14 +21,16 @@ struct OperationResponseContractTests {
 
         let encoded = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(response)) as? [String: Any])
-        #expect(encoded["vmId"] as? String == resourceID.uuidString)
+        #expect(!encoded.keys.contains("vmId"))
+        #expect(encoded["resourceKind"] as? String == "sandbox")
+        #expect(encoded["resourceId"] as? String == resourceID.uuidString)
 
-        let withoutLegacyField = """
+        let operation = """
             {"resourceKind":"virtual_machine","resourceId":"\(resourceID)","kind":"boot","status":"pending"}
             """
         let decoded = try JSONDecoder().decode(
-            OperationResponse.self, from: Data(withoutLegacyField.utf8))
-        #expect(decoded.vmId == nil)
+            OperationResponse.self, from: Data(operation.utf8))
+        #expect(decoded.resourceKind == .virtualMachine)
         #expect(decoded.resourceId == resourceID)
     }
 

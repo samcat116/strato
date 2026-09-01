@@ -33,6 +33,8 @@ public final class OCIImageFlattener {
     private let rootPath: String
     private let logger: Logger
     private let applyOwnership: Bool
+    private let createFile: (String) throws -> Void
+    private let writeContent: (FileHandle, Data) throws -> Void
 
     /// Final directory modes/ownership, keyed by absolute path.
     private var deferredDirectories: [String: (mode: UInt16, uid: Int, gid: Int)] = [:]
@@ -41,10 +43,29 @@ public final class OCIImageFlattener {
     private static let whiteoutPrefix = ".wh."
     private static let maxSymlinkHops = 40
 
-    public init(rootPath: String, logger: Logger, applyOwnership: Bool = geteuid() == 0) throws {
+    public convenience init(rootPath: String, logger: Logger, applyOwnership: Bool = geteuid() == 0) throws {
+        try self.init(
+            rootPath: rootPath, logger: logger, applyOwnership: applyOwnership,
+            writeContent: { handle, content in
+                try handle.write(contentsOf: content)
+            })
+    }
+
+    init(
+        rootPath: String, logger: Logger, applyOwnership: Bool,
+        createFile: @escaping (String) throws -> Void = { path in
+            guard FileManager.default.createFile(atPath: path, contents: nil) else {
+                if errno == ENOSPC { throw POSIXError(.ENOSPC) }
+                throw OCIError.layerUnpackFailed(detail: "cannot create file at \(path)")
+            }
+        },
+        writeContent: @escaping (FileHandle, Data) throws -> Void
+    ) throws {
         self.rootPath = rootPath
         self.logger = logger
         self.applyOwnership = applyOwnership
+        self.createFile = createFile
+        self.writeContent = writeContent
         try FileManager.default.createDirectory(atPath: rootPath, withIntermediateDirectories: true)
     }
 
@@ -52,7 +73,14 @@ public final class OCIImageFlattener {
     public func apply(layerTarPath: String) throws {
         let reader = try TarArchiveReader(path: layerTarPath)
         while let entry = try reader.nextEntry() {
-            try apply(entry: entry, reader: reader)
+            do {
+                try apply(entry: entry, reader: reader)
+            } catch {
+                guard Self.isInsufficientDiskSpace(error) else { throw error }
+                throw OCIError.insufficientDiskSpace(
+                    detail: "unpacking layer entry '\(entry.name)' ran out of space on the filesystem "
+                        + "backing \(rootPath). Free disk space or inodes, then retry.")
+            }
         }
     }
 
@@ -123,15 +151,14 @@ public final class OCIImageFlattener {
 
         case .file:
             try removeExisting(at: path)
-            guard FileManager.default.createFile(atPath: path, contents: nil) else {
-                throw OCIError.layerUnpackFailed(detail: "cannot create file at \(path)")
-            }
+            try createFile(path)
             guard let handle = FileHandle(forWritingAtPath: path) else {
+                if errno == ENOSPC { throw POSIXError(.ENOSPC) }
                 throw OCIError.layerUnpackFailed(detail: "cannot open file for writing at \(path)")
             }
             do {
                 try reader.readContent { chunk in
-                    try handle.write(contentsOf: chunk)
+                    try writeContent(handle, chunk)
                 }
                 try handle.close()
             } catch {
@@ -168,7 +195,9 @@ public final class OCIImageFlattener {
         case .fifo:
             try removeExisting(at: path)
             guard mkfifo(path, mode_t(entry.mode)) == 0 else {
-                throw OCIError.layerUnpackFailed(detail: "mkfifo failed for \(entry.name) (errno \(errno))")
+                let failure = errno
+                if failure == ENOSPC { throw POSIXError(.ENOSPC) }
+                throw OCIError.layerUnpackFailed(detail: "mkfifo failed for \(entry.name) (errno \(failure))")
             }
             changeOwner(path: path, uid: entry.uid, gid: entry.gid)
 
@@ -256,6 +285,28 @@ public final class OCIImageFlattener {
     private func itemExists(at path: String) -> Bool {
         FileManager.default.fileExists(atPath: path)
             || (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
+    }
+
+    /// Foundation can wrap POSIX write failures in one or more Cocoa errors.
+    private static func isInsufficientDiskSpace(_ error: Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOSPC.rawValue
+            {
+                return true
+            }
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == CocoaError.Code.fileWriteOutOfSpace.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
     }
 
     private func changeOwner(path: String, uid: Int, gid: Int, ofSymlink: Bool = false) {

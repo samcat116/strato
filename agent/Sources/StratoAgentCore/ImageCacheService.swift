@@ -453,10 +453,14 @@ public enum ImageCacheError: Error, LocalizedError {
 extension ImageCacheError: ClassifiableError {
     public var failureClassification: FailureClassification {
         switch self {
-        case .invalidURL, .artifactNotFound, .insufficientDiskSpace:
+        case .invalidURL, .artifactNotFound:
             // Nothing on this host will change these; retrying the same
             // operation only delays the report.
             return .permanent
+        case .insufficientDiskSpace:
+            // The cache's own LRU sweep or an operator can free capacity
+            // without changing the workload's desired generation.
+            return .blocked
         case .downloadFailed, .checksumMismatch, .fileNotFound, .storageFailed:
             return .transient
         }

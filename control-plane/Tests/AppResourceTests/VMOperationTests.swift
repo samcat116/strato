@@ -366,7 +366,8 @@ final class VMOperationTests {
                 let operation = try res.content.decode(OperationResponse.self)
                 #expect(operation.kind == .boot)
                 #expect(operation.status == .failed)
-                #expect(operation.vmId == vm.id)
+                #expect(operation.resourceKind == .virtualMachine)
+                #expect(operation.resourceId == vm.id)
                 #expect(operation.error?.isEmpty == false)
             }
         }
@@ -491,7 +492,8 @@ final class VMOperationTests {
                 #expect(res.status == .ok)
                 let body = try res.content.decode(OperationResponse.self)
                 #expect(body.id == eventID)
-                #expect(body.vmId == vm.id)
+                #expect(body.resourceKind == .virtualMachine)
+                #expect(body.resourceId == vm.id)
             }
 
             // A user with no binding on the VM cannot read its operation.
@@ -945,14 +947,11 @@ final class VMOperationTests {
         }
     }
 
-    /// `degradeOverdue` skips a converged resource. Since STR-191 a VM already
-    /// degraded at its current generation is no longer converged, so it falls
-    /// through — onto `recordFailure`'s own `failedGeneration == generation`
-    /// guard, which is the same condition stated once more. The claim clears the
-    /// deadline; nothing else changes, and the agent's reason is not replaced
-    /// with a timeout the user cannot act on.
-    @Test("The sweep does not degrade a VM that is already degraded at this generation")
-    func sweepDoesNotDegradeTwice() async throws {
+    /// A current-generation agent error may be a blocked report rather than a
+    /// terminal verdict. The deadline claimant finalizes it, while keeping the
+    /// agent's actionable reason instead of replacing it with a generic timeout.
+    @Test("The sweep finalizes an already-degraded VM without losing its reason")
+    func sweepFinalizesReportedFailure() async throws {
         try await withVMTestApp { app, user, vm, _ in
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)

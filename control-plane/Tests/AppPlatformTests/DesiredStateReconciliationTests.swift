@@ -593,14 +593,15 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("An agent capacity create refusal degrades immediately and clears its deadline")
-    func capacityCreateRefusalDegradesImmediately() async throws {
+    @Test("A blocked capacity boot retains intent and converges at the same generation")
+    func blockedCapacityBootRetainsIntent() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             vm.setFixtureDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
+            let originalDeadline = try #require(vm.convergenceDeadline)
             let reason = "agent `hv-03` has 12 GiB available; this operation requires 64 GiB additional memory"
 
             let envelope = try self.report(
@@ -608,7 +609,8 @@ final class DesiredStateReconciliationTests {
                 vms: [
                     ObservedVMState(
                         vmId: vm.id!, status: .shutdown, observedGeneration: 0,
-                        lastError: reason, failedGeneration: 1)
+                        lastError: reason, failedGeneration: 1,
+                        failureClassification: .blocked)
                 ])
             await app.agentService.applyObservedStateReport(
                 envelope, fromAgentKey: agentKey("recon-agent"))
@@ -616,7 +618,27 @@ final class DesiredStateReconciliationTests {
             let refreshed = try #require(await VM.find(vm.id, on: app.db))
             #expect(refreshed.conditions.degraded?.reason == reason)
             #expect(refreshed.conditions.degraded?.sinceGeneration == 1)
-            #expect(refreshed.convergenceDeadline == nil)
+            #expect(refreshed.convergenceDeadline == originalDeadline)
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.generation == 1)
+
+            // Capacity becomes available and the agent's same-generation retry
+            // succeeds. The original boot intent now settles normally.
+            let recovered = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: 1)
+                ])
+            await app.agentService.applyObservedStateReport(
+                recovered, fromAgentKey: agentKey("recon-agent"))
+
+            let converged = try #require(await VM.find(vm.id, on: app.db))
+            #expect(converged.conditions.converged)
+            #expect(converged.conditions.degraded == nil)
+            #expect(converged.convergenceDeadline == nil)
+            #expect(converged.desiredStatus == .running)
+            #expect(converged.generation == 1)
         }
     }
 

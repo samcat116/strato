@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 53). The required registration fields
+currently 57). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -117,6 +117,11 @@ sessions remain live streams whose frontend owns their lifetime, while
 the same agent process remains alive. It also adds a level-triggered recorded
 state and terminal-result replay. This is an exact-version cutover; a missing
 session kind does not decode to an implicit default.
+
+Wire v57 adds the failure classification to reconciliation observations. This
+distinguishes a blocked refusal, which retains the desired state and retries,
+from a terminal failure, which ends the mutation. The exact-version handshake
+prevents an older control plane from treating a blocked report as terminal.
 
 Two consequences worth knowing:
 
@@ -342,7 +347,7 @@ the field plans nothing — withdrawing an exported copy is the control plane's
 own object-store bookkeeping, not a teardown the agent can perform.
 
 `ObservedSnapshotState` reports presence, whether this host has finished
-exporting, the usual convergence quartet, and `ObservedSnapshotFacts` — the
+exporting, the usual convergence metadata, and `ObservedSnapshotFacts` — the
 footprint, hypervisor version, device nodes, fork layout and CPU template that
 used to ride the RPC replies. Moving them here is not relocation: a reply is
 delivered once, so both old paths had to treat a dropped socket as a protocol
@@ -381,7 +386,13 @@ reordered syncs can never roll a resource backward. The observed side reports
 progress string, and on failure a `lastError` paired with `failedGeneration` —
 the control plane marks a resource degraded only when `failedGeneration` matches
 the current generation, which prevents attributing a stale error to a newer
-change.
+change. `failureClassification` carries the agent's retry category. A
+`.blocked` report retains desired state and its convergence deadline while
+surfacing the remedy; a later success can therefore settle the same generation.
+If the deadline expires first, the stuck-convergence sweep preserves that remedy
+while terminally resolving the mutation and emitting its failure outcome. The
+field is optional so reports from older agents retain the historical
+terminal-failure behavior.
 
 ### One transport: the long-poll (STR-146)
 

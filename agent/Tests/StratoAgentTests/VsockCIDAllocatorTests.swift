@@ -204,13 +204,13 @@ struct VsockCIDAllocatorTests {
         #expect(!error.localizedDescription.contains("The operation couldn't be completed"))
     }
 
-    /// Exhaustion only clears when another VM is deleted, which cannot happen
-    /// inside one item's retry budget — so retrying is pure waste.
-    @Test("Exhaustion is a permanent failure, not a transient one")
-    func exhaustionIsPermanent() {
+    /// Exhaustion clears when another VM is deleted, without changing this
+    /// VM's generation, so the level-triggered sync must keep re-driving it.
+    @Test("Exhaustion is a blocked failure, not a permanent one")
+    func exhaustionIsBlocked() {
         let error = VsockCIDAllocator.AllocationError.exhausted(inUse: 3)
-        #expect((error as any ClassifiableError).failureClassification == .permanent)
-        #expect((error as? any ClassifiableError)?.failureClassification == .permanent)
+        #expect((error as any ClassifiableError).failureClassification == .blocked)
+        #expect((error as? any ClassifiableError)?.failureClassification == .blocked)
     }
 
     // MARK: - Leases (the create path's rollback rule)

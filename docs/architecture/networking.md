@@ -598,7 +598,7 @@ the snapshot arm still queued behind it (STR-104) are in
 
 Stateful, NIC-level firewalling modeled AWS-style and realized as **OVN ACLs
 on Port_Groups** (the OpenStack/ovn-kubernetes pattern). The fields first
-shipped in wire v20 (v24 added per-rule ACL logging); the current v56 contract
+shipped in wire v20 (v24 added per-rule ACL logging); the current v57 contract
 is lockstep and has no per-feature protocol-version gates.
 
 ### Model (control plane)

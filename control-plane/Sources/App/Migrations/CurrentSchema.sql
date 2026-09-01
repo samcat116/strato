@@ -1545,10 +1545,12 @@ CREATE TABLE public.webhook_deliveries (
     status text DEFAULT 'pending'::text NOT NULL,
     attempts bigint DEFAULT 0 NOT NULL,
     next_attempt_at timestamp with time zone NOT NULL,
+    claimed_until timestamp with time zone,
     last_attempt_at timestamp with time zone,
     response_status bigint,
     last_error text,
     delivered_at timestamp with time zone,
+    enqueued_at timestamp with time zone DEFAULT now(),
     created_at timestamp with time zone,
     updated_at timestamp with time zone
 );
@@ -2953,10 +2955,38 @@ CREATE INDEX idx_webhook_deliveries_due ON public.webhook_deliveries USING btree
 
 
 --
+-- Name: idx_webhook_deliveries_pending_subscription_due; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_pending_subscription_due ON public.webhook_deliveries USING btree (subscription_id, next_attempt_at, created_at, id) WHERE (status = 'pending'::text);
+
+
+--
+-- Name: idx_webhook_deliveries_pending_subscription_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_pending_subscription_created ON public.webhook_deliveries USING btree (subscription_id, created_at, id) WHERE (status = 'pending'::text);
+
+
+--
 -- Name: idx_webhook_deliveries_subscription; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_webhook_deliveries_subscription ON public.webhook_deliveries USING btree (subscription_id, created_at);
+
+
+--
+-- Name: idx_webhook_deliveries_subscription_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_subscription_updated ON public.webhook_deliveries USING btree (subscription_id, updated_at DESC, created_at DESC);
+
+
+--
+-- Name: idx_webhook_deliveries_terminal_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_webhook_deliveries_terminal_updated ON public.webhook_deliveries USING btree (updated_at) WHERE (status <> 'pending'::text);
 
 
 --

@@ -1,4 +1,5 @@
 import Foundation
+import MetricsTestKit
 import Testing
 
 @testable import App
@@ -68,6 +69,94 @@ struct TelemetrySupportTests {
         #expect(
             Set(Telemetry.DesiredStatePollOutcome.allCases.map(\.rawValue))
                 == Set(["served", "not_modified", "assembly_budget_exhausted", "park_refused"]))
+    }
+
+    // MARK: - Webhook delivery
+
+    @Test("webhook delivery results are a bounded metric dimension")
+    func webhookDeliveryResults() {
+        #expect(
+            Set(Telemetry.WebhookDeliveryResult.allCases.map(\.rawValue))
+                == Set(["succeeded", "failed", "dead"]))
+    }
+
+    @Test("webhook queue snapshots record totals, per-subscription depth, and recovery zeroes")
+    func webhookQueueSnapshot() throws {
+        let metrics = TestMetrics()
+        let backedUp = UUID(uuidString: "975C249E-7A7D-407D-9037-7264A8E0096F")!
+        let empty = UUID(uuidString: "6E813091-35A4-4F58-84BD-42932BAC8A8B")!
+
+        Telemetry.recordWebhookDeliveryQueue(
+            pendingCount: 3,
+            oldestPendingAgeSeconds: 42.5,
+            droppedCount: 2,
+            subscriptionIDs: [backedUp, empty],
+            pendingBySubscription: [backedUp: 3],
+            factory: metrics)
+
+        let total = try metrics.expectGauge("strato_webhook_delivery_pending")
+        let oldest = try metrics.expectGauge(
+            "strato_webhook_delivery_oldest_pending_age_seconds")
+        let dropped = try metrics.expectGauge("strato_webhook_delivery_dropped")
+        let backedUpDepth = try metrics.expectGauge(
+            "strato_webhook_delivery_subscription_pending",
+            [("subscription_id", backedUp.uuidString)])
+        let emptyDepth = try metrics.expectGauge(
+            "strato_webhook_delivery_subscription_pending",
+            [("subscription_id", empty.uuidString)])
+        #expect(total.lastValue == 3)
+        #expect(oldest.lastValue == 42.5)
+        #expect(dropped.lastValue == 2)
+        #expect(backedUpDepth.lastValue == 3)
+        #expect(emptyDepth.lastValue == 0)
+
+        Telemetry.recordWebhookDeliveryQueue(
+            pendingCount: 0,
+            oldestPendingAgeSeconds: nil,
+            droppedCount: 0,
+            subscriptionIDs: [backedUp, empty],
+            pendingBySubscription: [:],
+            factory: metrics)
+
+        #expect(total.lastValue == 0)
+        #expect(oldest.lastValue == 0)
+        #expect(dropped.lastValue == 0)
+        #expect(backedUpDepth.lastValue == 0)
+        #expect(emptyDepth.lastValue == 0)
+
+        Telemetry.removeWebhookDeliverySubscriptionQueueMetric(
+            subscriptionID: backedUp, factory: metrics)
+        #expect(throws: (any Error).self) {
+            try metrics.expectGauge(
+                "strato_webhook_delivery_subscription_pending",
+                [("subscription_id", backedUp.uuidString)])
+        }
+    }
+
+    @Test("webhook delivery counters accept aggregate pass counts")
+    func webhookDeliveryCounters() throws {
+        let metrics = TestMetrics()
+
+        Telemetry.webhookDeliveryAttempted(count: 7, factory: metrics)
+        Telemetry.webhookDeliveryFinished(result: .succeeded, count: 4, factory: metrics)
+        Telemetry.webhookDeliveryFinished(result: .failed, count: 2, factory: metrics)
+        Telemetry.webhookDeliveryFinished(result: .dead, factory: metrics)
+
+        #expect(
+            try metrics.expectCounter("strato_webhook_delivery_attempts_total").totalValue
+                == 7)
+        #expect(
+            try metrics.expectCounter(
+                "strato_webhook_delivery_results_total", [("result", "succeeded")]
+            ).totalValue == 4)
+        #expect(
+            try metrics.expectCounter(
+                "strato_webhook_delivery_results_total", [("result", "failed")]
+            ).totalValue == 2)
+        #expect(
+            try metrics.expectCounter(
+                "strato_webhook_delivery_results_total", [("result", "dead")]
+            ).totalValue == 1)
     }
 
     // MARK: - SchedulerService.placementOutcome

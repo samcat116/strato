@@ -1,21 +1,25 @@
 import Foundation
 
-/// Whether a failed operation could succeed if simply retried, or needs an
-/// operator to change something on the host first.
+/// Whether a failed operation might succeed after time or host state changes,
+/// or whether the request itself cannot succeed on this agent.
 ///
-/// The reconciler uses this to suppress failures that can never self-heal
-/// (missing binaries, permission problems, a full disk) while backing off and
-/// continuing to retry ordinary transient failures.
+/// The reconciler uses this to preserve level-triggered retries for failures
+/// whose remedy does not mint a new generation, while suppressing requests
+/// whose spec, artifact, format, platform, or compiled capability is
+/// intrinsically unsupported.
 public enum FailureClassification: Sendable, Equatable {
     /// Might succeed on retry (network blip, service briefly down).
     case transient
-    /// Will keep failing until the host is fixed (misconfiguration,
-    /// missing dependency, permissions, disk full).
+    /// The request itself cannot succeed on this agent: for example an
+    /// unsupported format or media type, no image manifest for this
+    /// architecture, an invalid image reference, an unsafe archive, an
+    /// unsupported platform, or a runtime absent from this agent build.
+    /// Re-driving the same request against unchanged capabilities cannot help.
     case permanent
-    /// Refused by a precondition that this convergence cannot satisfy but that
-    /// clears on its own or when an operator acts on the reported reason — a
-    /// volume grow refused because the guest holding the image is still running
-    /// (STR-199).
+    /// The host is currently in a state that refuses this convergence, and the
+    /// reported error names what clears it: capacity or disk space becomes
+    /// available, a guest releases a volume, or an operator repairs a host
+    /// precondition (STR-199, STR-262).
     ///
     /// The two halves are what make it its own case rather than a flavour of
     /// the two above. It is *reported* like a permanent failure, because the
@@ -59,6 +63,8 @@ extension StorageBackendError: ClassifiableError {
         switch self {
         case .hostMisconfiguration, .unsupportedFormat, .imageSourceUnavailable:
             return .permanent
+        case .insufficientDiskSpace:
+            return .blocked
         case .createFailed, .deleteFailed, .resizeFailed, .snapshotFailed, .cloneFailed, .infoFailed,
             .volumeNotFound:
             return .transient
