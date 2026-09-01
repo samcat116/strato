@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { Loader2, AlertTriangle, Plus, Trash2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,6 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  VMNetworkInterfacesFields,
+  initialNIC,
+  type NICRow,
+} from "@/components/vms/create-vm-network-fields";
+import { VMGuestOptionsFields } from "@/components/vms/create-vm-guest-options-fields";
+import { VMImageSelector } from "@/components/vms/create-vm-image-selector";
 import { vmsApi } from "@/lib/api/vms";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useImages } from "@/lib/hooks/use-images";
@@ -21,18 +28,15 @@ import { useNetworks } from "@/lib/hooks/use-networks";
 import { useProjectStoragePools } from "@/lib/hooks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
-import { MAX_SECURITY_GROUPS_PER_NIC, type MetadataSource } from "@/types/api";
+import type { MetadataSource } from "@/types/api";
 import { toast } from "sonner";
-import {
-  createNetworkInterfaceDraft as initialNIC,
-  type VMNetworkInterfaceDraft as NICRow,
-} from "@/lib/vm-create-form";
 
 interface CreateVMDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated?: () => void;
 }
+
 
 export function CreateVMDialog({
   open,
@@ -95,26 +99,6 @@ export function CreateVMDialog({
     isError: securityGroupsFailed,
   } = useSecurityGroups(projectId);
 
-  const updateNIC = (key: string, update: Partial<NICRow>) => {
-    setNetworkInterfaces((rows) =>
-      rows.map((row) => (row.key === key ? { ...row, ...update } : row))
-    );
-  };
-
-  const toggleSecurityGroup = (key: string, id: string) => {
-    setNetworkInterfaces((rows) =>
-      rows.map((row) =>
-        row.key !== key
-          ? row
-          : {
-              ...row,
-              securityGroupIds: row.securityGroupIds.includes(id)
-                ? row.securityGroupIds.filter((groupId) => groupId !== id)
-                : [...row.securityGroupIds, id],
-            }
-      )
-    );
-  };
 
   // Filter to only show ready images with valid IDs (memoized to prevent dependency changes on every render)
   const readyImages = useMemo(
@@ -320,48 +304,7 @@ export function CreateVMDialog({
     });
   };
 
-  const renderImageSelector = () => (
-    <div className="space-y-2">
-      <Label htmlFor="image" className="text-foreground">
-        Disk Image
-      </Label>
-      {!projectId ? (
-        <div className="text-sm text-muted-foreground py-2">
-          No project available. Create a project first to upload images.
-        </div>
-      ) : imagesLoading ? (
-        <div className="flex items-center gap-2 text-muted-foreground text-sm">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading images...
-        </div>
-      ) : readyImages.length === 0 ? (
-        <div className="text-sm text-muted-foreground py-2">
-          No images available.{" "}
-          <Link href="/images" className="text-blue-600 hover:underline">
-            Upload an image
-          </Link>{" "}
-          first.
-        </div>
-      ) : (
-        <select
-          value={formData.imageId}
-          onChange={(e) => handleImageSelect(e.target.value)}
-          disabled={isLoading}
-          className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <option value="" disabled>
-            Select an image
-          </option>
-          {readyImages.map((image) => (
-            <option key={image.id} value={image.id!}>
-              {image.name}
-              {image.sizeFormatted ? ` (${image.sizeFormatted})` : ""}
-            </option>
-          ))}
-        </select>
-      )}
-    </div>
-  );
+
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -442,7 +385,14 @@ export function CreateVMDialog({
               </p>
             </div>
 
-            {renderImageSelector()}
+            <VMImageSelector
+              projectId={projectId}
+              imagesLoading={imagesLoading}
+              readyImages={readyImages}
+              imageId={formData.imageId}
+              isLoading={isLoading}
+              onSelect={handleImageSelect}
+            />
 
             <div className="space-y-2">
               <Label htmlFor="vmStoragePool" className="text-foreground">
@@ -538,348 +488,36 @@ export function CreateVMDialog({
               </div>
             </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-foreground">Network interfaces</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Add up to eight NICs. Duplicate network selections are allowed.
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={isLoading || networkInterfaces.length >= 8}
-                  onClick={() =>
-                    setNetworkInterfaces((rows) => [
-                      ...rows,
-                      {
-                        ...initialNIC(),
-                        key: crypto.randomUUID(),
-                      },
-                    ])
-                  }
-                >
-                  <Plus className="mr-1 h-4 w-4" /> Add NIC
-                </Button>
-              </div>
+            <VMNetworkInterfacesFields
+              isLoading={isLoading}
+              networkInterfaces={networkInterfaces}
+              setNetworkInterfaces={setNetworkInterfaces}
+              networks={networks}
+              securityGroups={securityGroups}
+              securityGroupsFailed={securityGroupsFailed}
+            />
 
-              {networkInterfaces.map((nic, index) => (
-                <div
-                  key={nic.key}
-                  className="space-y-3 rounded-md border border-border p-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">net{index}</span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      aria-label={`Remove net${index}`}
-                      disabled={isLoading || networkInterfaces.length === 1}
-                      onClick={() =>
-                        setNetworkInterfaces((rows) =>
-                          rows.filter((row) => row.key !== nic.key)
-                        )
-                      }
-                    >
-                      <Trash2 className="h-4 w-4 text-red-600" />
-                    </Button>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
-                    <div className="space-y-1">
-                      <Label htmlFor={`network-${nic.key}`}>Network</Label>
-                      <select
-                        id={`network-${nic.key}`}
-                        value={nic.networkId}
-                        onChange={(event) =>
-                          updateNIC(nic.key, { networkId: event.target.value })
-                        }
-                        disabled={isLoading || networks.length === 0}
-                        required
-                        className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                      >
-                        <option value="" disabled>Select a network</option>
-                        {networks.filter((network) => network.id).map((network) => (
-                          <option key={network.id} value={network.id!}>
-                            {network.name} ({network.subnet})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor={`mtu-${nic.key}`}>MTU (optional)</Label>
-                      <Input
-                        id={`mtu-${nic.key}`}
-                        type="number"
-                        min="68"
-                        max="65535"
-                        placeholder="Network default"
-                        value={nic.mtu}
-                        onChange={(event) =>
-                          updateNIC(nic.key, { mtu: event.target.value })
-                        }
-                        disabled={isLoading}
-                      />
-                    </div>
-                  </div>
-                  {securityGroups.length > 0 && (
-                    <div className="space-y-1">
-                      <Label>Security groups</Label>
-                      <div className="grid gap-1 rounded-md border border-border p-2 sm:grid-cols-2">
-                        {securityGroups.map((group) => {
-                          const checked = nic.securityGroupIds.includes(group.id);
-                          const atLimit =
-                            !checked &&
-                            nic.securityGroupIds.length >= MAX_SECURITY_GROUPS_PER_NIC;
-                          return (
-                            <label key={group.id} className="flex items-center gap-2 text-sm">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleSecurityGroup(nic.key, group.id)}
-                                disabled={isLoading || atLimit}
-                                className="h-4 w-4 rounded border-input bg-background accent-blue-600"
-                              />
-                              <span className="truncate">{group.name}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Default group is used when none are selected.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ))}
-              {networks.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  This project has no networks yet. Create one before adding a VM.
-                </p>
-              )}
-            </div>
-            {securityGroupsFailed && (
-              // A failed fetch must not read as "this project has no groups":
-              // the VM would silently land on the default group only.
-              <p className="text-xs text-red-600">
-                Failed to load security groups — the VM will use the
-                project&apos;s default group. Retry from the Security Groups
-                page.
-              </p>
-            )}
-
-            <div className="space-y-3 rounded-md border border-border p-3">
-              <div className="space-y-1">
-                <Label htmlFor="metadataSource" className="text-foreground">
-                  Guest bootstrap source
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  {isFirecracker
-                    ? "Firecracker exposes guest bootstrap data through its metadata service."
-                    : "Choose where cloud-init reads hostname, SSH keys, and user data at first boot."}
-                </p>
-              </div>
-              <select
-                id="metadataSource"
-                value={metadataSourceForcedToISO ? "iso" : metadataSource}
-                onChange={(e) =>
-                  setMetadataSource(e.target.value as MetadataSource)
-                }
-                disabled={isLoading || metadataSourceForcedToISO}
-                className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <option value="imds">
-                  Instance metadata service (x86 QEMU default)
-                </option>
-                <option value="iso">
-                  {isFirecracker ? "Firecracker MMDS" : "Seed ISO"}
-                </option>
-              </select>
-              {isFirecracker ? (
-                <p className="text-xs text-muted-foreground">
-                  Firecracker has no seed disk. It serves EC2-compatible
-                  metadata from MMDS on metadata-enabled NICs; the selected
-                  network must also provide DHCP so the guest can reach it.
-                </p>
-              ) : !metadataEnabled ? (
-                <p className="text-xs text-muted-foreground">
-                  IMDS bootstrap requires the instance metadata service. Seed
-                  ISO will be used while the service is disabled.
-                </p>
-              ) : allSelectedNetworksDisableMetadata ? (
-                <p className="text-xs text-muted-foreground">
-                  None of the selected networks publish instance metadata. Seed
-                  ISO will be used for this VM.
-                </p>
-              ) : selectedImage?.architecture === "arm64" &&
-                metadataSource === "iso" ? (
-                <p className="text-xs text-muted-foreground">
-                  ARM64 QEMU defaults to Seed ISO until it has an equivalent
-                  NoCloudNet discovery hint.
-                </p>
-              ) : metadataSource === "imds" ? (
-                <p className="text-xs text-muted-foreground">
-                  The ISO keeps the network configuration needed to get online,
-                  then follows a <code>seedfrom</code> stub to
-                  169.254.169.254 for the remaining, mutable documents.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  The complete, immutable NoCloud payload is written to the ISO.
-                  Use this compatibility path when the guest cannot use IMDS.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-3 rounded-md border border-border p-3">
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">
-                  Windows / Secure Boot
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Windows 11 and Server 2025 require both. Leave off for Linux
-                  guests.
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-foreground">
-                <input
-                  id="secureBoot"
-                  type="checkbox"
-                  checked={!isFirecracker && secureBoot}
-                  onChange={(e) => setSecureBoot(e.target.checked)}
-                  disabled={isLoading || isFirecracker}
-                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
-                />
-                Secure Boot
-              </label>
-              <label className="flex items-center gap-2 text-sm text-foreground">
-                <input
-                  id="tpm"
-                  type="checkbox"
-                  checked={!isFirecracker && tpm}
-                  onChange={(e) => setTpm(e.target.checked)}
-                  disabled={isLoading || isFirecracker}
-                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
-                />
-                TPM 2.0
-              </label>
-              {isFirecracker ? (
-                <p className="text-xs text-muted-foreground">
-                  Unavailable for this image: it boots under Firecracker, which
-                  has no UEFI firmware or TPM device. Use a QEMU image.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Secure Boot boots signed firmware with Microsoft&apos;s keys
-                  enrolled. TPM 2.0 is emulated per VM and only places on nodes
-                  with <code>swtpm</code> installed.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-3 rounded-md border border-border p-3">
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">Display</p>
-                <p className="text-xs text-muted-foreground">
-                  Needed to run a graphical OS installer, or to reach a guest
-                  that never brings up a network.
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-foreground">
-                <input
-                  id="graphicsConsole"
-                  type="checkbox"
-                  checked={!isFirecracker && graphicsConsole}
-                  onChange={(e) => setGraphicsConsole(e.target.checked)}
-                  disabled={isLoading || isFirecracker}
-                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
-                />
-                Graphics console
-              </label>
-              {isFirecracker ? (
-                <p className="text-xs text-muted-foreground">
-                  Unavailable for this image: it boots under Firecracker, which
-                  emulates no display device. Use a QEMU image.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Adds a virtual display and a VNC server, shown in the VM&apos;s
-                  Display tab. <strong>This cannot be changed later</strong> —
-                  the display is fixed when the VM is created. The serial console
-                  works either way.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-3 rounded-md border border-border p-3">
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">
-                  Instance metadata
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  The link-local service at 169.254.169.254 that a guest reads
-                  its own configuration and identity from.
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-foreground">
-                <input
-                  id="metadataEnabled"
-                  type="checkbox"
-                  checked={metadataEnabled}
-                  onChange={(e) => {
-                    const enabled = e.target.checked;
-                    setMetadataEnabled(enabled);
-                    if (!enabled) setMetadataSource("iso");
-                  }}
-                  disabled={isLoading}
-                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
-                />
-                Serve instance metadata to this VM
-              </label>
-              <p className="text-xs text-muted-foreground">
-                Turning it off denies this VM the service outright, even where
-                its security groups would allow it — the lever for a workload
-                you want an SSRF bug to find nothing behind.{" "}
-                If the guest bootstrap source above is instance metadata,
-                turning this off also prevents cloud-init from fetching its
-                configuration. This switch can be changed later.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="userData" className="text-foreground">
-                Cloud-init user data{" "}
-                <span className="text-muted-foreground">(optional)</span>
-              </Label>
-              <textarea
-                id="userData"
-                placeholder={"#cloud-config\npackages:\n  - nginx\nruncmd:\n  - systemctl enable --now nginx"}
-                value={formData.userData}
-                onChange={(e) =>
-                  setFormData({ ...formData, userData: e.target.value })
-                }
-                rows={5}
-                spellCheck={false}
-                disabled={isLoading}
-                className="w-full px-3 py-2 bg-background border border-border text-foreground rounded-md font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed resize-y"
-              />
-              <p className="text-xs text-muted-foreground">
-                {isFirecracker ? (
-                  <>
-                    Delivered through Firecracker MMDS. The uploaded rootfs
-                    must include cloud-init with its EC2 datasource enabled,
-                    and the kernel command line must not disable cloud-init.
-                  </>
-                ) : (
-                  <>Runs in the guest at first boot. </>
-                )}{" "}
-                Accepts any cloud-init format: <code>#cloud-config</code>, a{" "}
-                <code>#!</code> shell script, <code>#include</code>, a Jinja
-                template, or a full MIME multipart document.
-              </p>
-            </div>
+            <VMGuestOptionsFields
+              isLoading={isLoading}
+              isFirecracker={isFirecracker}
+              metadataEnabled={metadataEnabled}
+              setMetadataEnabled={setMetadataEnabled}
+              metadataSource={metadataSource}
+              setMetadataSource={setMetadataSource}
+              metadataSourceForcedToISO={metadataSourceForcedToISO}
+              allSelectedNetworksDisableMetadata={allSelectedNetworksDisableMetadata}
+              selectedImage={selectedImage}
+              secureBoot={secureBoot}
+              setSecureBoot={setSecureBoot}
+              tpm={tpm}
+              setTpm={setTpm}
+              graphicsConsole={graphicsConsole}
+              setGraphicsConsole={setGraphicsConsole}
+              userData={formData.userData}
+              onUserDataChange={(userData) =>
+                setFormData({ ...formData, userData })
+              }
+            />
           </div>
           <DialogFooter>
             <Button
