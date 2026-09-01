@@ -53,14 +53,49 @@ actor WorkloadPlacementService {
                         .internalServerError,
                         reason: "VM \(vmId) must have exactly one managed boot volume before placement")
                 }
-                let poolMembers = bootVolume.pool?.memberAgentIds ?? []
-                let storageEligibleAgents = schedulableAgents.filter { agent in
-                    poolMembers.isEmpty || poolMembers.contains(agent.id)
+                guard let bootPool = bootVolume.pool else {
+                    throw Abort(.internalServerError, reason: "VM \(vmId)'s boot volume has no storage pool")
                 }
 
                 // A network pinned to a site exists only in that site's OVN
                 // deployment, so it pins the VM's placement (issue #343).
                 let requiredSiteID = try await pinnedSiteID(for: currentVM, on: tx)
+                if bootPool.mode == .ceph, let requiredSiteID,
+                    requiredSiteID != bootPool.$site.id
+                {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "VM \(vmId)'s network and Ceph boot pool belong to different sites")
+                }
+
+                let storageEligibleAgents: [SchedulableAgent]
+                switch bootPool.mode {
+                case .local:
+                    // Historical local behavior: an empty membership list
+                    // means every otherwise-schedulable agent.
+                    let poolMembers = bootPool.memberAgentIds
+                    storageEligibleAgents = schedulableAgents.filter { agent in
+                        poolMembers.isEmpty || poolMembers.contains(agent.id)
+                    }
+                case .ceph:
+                    let schedulableIDs = schedulableAgents.compactMap { UUID(uuidString: $0.id) }
+                    let clientRows =
+                        schedulableIDs.isEmpty
+                        ? []
+                        : try await Agent.query(on: tx)
+                            .filter(\.$id ~~ schedulableIDs)
+                            .all()
+                    let reachableIDs = Set(
+                        clientRows.compactMap { agent -> String? in
+                            StoragePool.agentCanReach(
+                                agent: agent, pool: bootPool, replicaAgentIds: [])
+                                ? agent.id?.uuidString : nil
+                        })
+                    storageEligibleAgents = schedulableAgents.filter { reachableIDs.contains($0.id) }
+                case .replicated:
+                    throw Abort(.conflict, reason: "Replicated boot pools are not executable")
+                }
 
                 // Use the freshly locked row for every placement requirement,
                 // including the v39 metadata opt-out gate. The reservation is
@@ -69,7 +104,11 @@ actor WorkloadPlacementService {
                 do {
                     selectedAgentId = try await app.scheduler.selectAndReserveAgent(
                         requirements: SchedulerService.placementRequirements(
-                            for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID),
+                            for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID,
+                            // RBD bytes do not consume agent-local disk. CPU and
+                            // memory remain reserved, while Ceph placement is
+                            // completely described by pool reachability.
+                            diskBytes: bootPool.mode == .ceph ? 0 : nil),
                         vmId: vmId,
                         from: storageEligibleAgents,
                         coordination: app.coordination,
@@ -104,13 +143,21 @@ actor WorkloadPlacementService {
                         reason: "Boot volume \(bootVolumeID) was already placed before VM \(vmId)")
                 }
                 bootVolume.attachedAgentId = selectedAgentId
-                try await bootVolume.save(on: tx)
-                try await VolumeReplica(
-                    volumeID: bootVolumeID,
-                    agentId: selectedAgentId,
-                    state: .provisioning,
-                    generation: bootVolume.generation
-                ).save(on: tx)
+                switch bootPool.mode {
+                case .local:
+                    try await bootVolume.save(on: tx)
+                    try await VolumeReplica(
+                        volumeID: bootVolumeID,
+                        agentId: selectedAgentId,
+                        state: .provisioning,
+                        generation: bootVolume.generation
+                    ).save(on: tx)
+                case .ceph:
+                    bootVolume.reconcilerAgentId = selectedAgentId
+                    try await bootVolume.save(on: tx)
+                case .replicated:
+                    throw Abort(.conflict, reason: "Replicated boot pools are not executable")
+                }
                 return selectedAgentId
             }
         } catch {

@@ -331,6 +331,11 @@ struct SiteController: RouteCollection {
                 .conflict,
                 reason: "Site has \(poolCount) floating IP pool(s) pinned to it; move or delete them first")
         }
+        let cephClusterCount = try await CephCluster.query(on: req.db)
+            .filter(\.$site.$id == siteId).count()
+        guard cephClusterCount == 0 else {
+            throw Abort(.conflict, reason: "Site has a registered Ceph cluster; remove it first")
+        }
 
         try await site.delete(on: req.db)
         return .noContent

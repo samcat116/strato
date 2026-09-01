@@ -211,20 +211,25 @@ struct DomainDiskInventoryTests {
     func rbdHotplugFragment() {
         let xml = DomainDeviceXML.hotplugDisk(
             attachment: .rbd(
-                pool: "volumes", image: "volume-1", user: "client.project-1",
-                monHosts: ["mon-1:6789", "mon-2:6789"]),
+                pool: "volumes", image: "volume-1", namespace: "project-1",
+                user: "project-1",
+                monEndpoints: ["v2:mon-1:3300", "v2:[2001:db8::2]:3300"],
+                clusterId: UUID(uuidString: "11111111-2222-4333-8444-555555555555")!,
+                credentialId: UUID(uuidString: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")!,
+                configPath: "/var/lib/strato/ceph/client/ceph.conf"),
             target: "vdc", readonly: false, volumeId: Self.dataVolumeId)
 
         #expect(
             xml == """
                 <disk type='network' device='disk'>
                   <driver name='qemu' type='raw'/>
-                  <source protocol='rbd' name='volumes/volume-1'>
-                    <host name='mon-1' port='6789'/>
-                    <host name='mon-2' port='6789'/>
+                  <source protocol='rbd' name='volumes/project-1/volume-1'>
+                    <host name='mon-1' port='3300'/>
+                    <host name='2001:db8::2' port='3300'/>
+                    <config file='/var/lib/strato/ceph/client/ceph.conf'/>
                   </source>
-                  <auth username='client.project-1'>
-                    <secret type='ceph' usage='client.project-1'/>
+                  <auth username='project-1'>
+                    <secret type='ceph' uuid='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'/>
                   </auth>
                   <target dev='vdc' bus='virtio'/>
                   <serial>vol-\(Self.dataVolumeId)</serial>

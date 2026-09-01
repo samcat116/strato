@@ -51,6 +51,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: SiteController())
     // Agent-reported physical disks and operator OSD eligibility.
     try app.register(collection: StorageDeviceController())
+    // Bring-your-own Ceph cluster registration and project-scoped RBD pools.
+    try app.register(collection: CephStorageController())
 
     // SCIM controllers
     try app.register(collection: SCIMController())

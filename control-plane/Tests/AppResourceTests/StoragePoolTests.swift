@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import StratoShared
 import Testing
 import Vapor
 import VaporTesting
@@ -7,62 +8,106 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-/// Storage phase 1 (issue #349): the pool/replica data model. Covers the
-/// pool-aware reachability guard and the baseline-seeded default pool.
 @Suite("Storage Pool Tests", .serialized)
 struct StoragePoolTests {
+    private let resources = AgentResources(
+        totalCPU: 8, availableCPU: 8,
+        totalMemory: 16_000_000_000, availableMemory: 16_000_000_000,
+        totalDisk: 100_000_000_000, availableDisk: 100_000_000_000)
 
-    // MARK: - Reachability (pure logic)
-
-    private func makePool(mode: StoragePoolMode, members: [String] = []) -> StoragePool {
-        StoragePool(name: "test", mode: mode, memberAgentIds: members, backing: .filesystem)
+    private func makePool(mode: StoragePoolMode, siteID: UUID? = nil) -> StoragePool {
+        StoragePool(
+            name: "test", mode: mode, memberAgentIds: [], backing: .filesystem,
+            siteID: mode == .ceph ? siteID : nil,
+            cephClusterID: mode == .ceph ? UUID() : nil,
+            cephProjectAccessID: mode == .ceph ? UUID() : nil,
+            cephPoolName: mode == .ceph ? "rbd" : nil,
+            cephNamespace: mode == .ceph ? "project" : nil)
     }
 
-    @Test("local pool: only the agent holding the replica reaches the volume")
+    private func makeAgent(
+        id: UUID = UUID(), siteID: UUID? = nil, cephState: NodeDependencyFunctionalState? = nil,
+        receivedAt: Date = Date(), status: AgentStatus = .online
+    ) -> Agent {
+        let observations: [NodeDependencyObservation]
+        if let cephState {
+            observations = [
+                NodeDependencyObservation(
+                    id: .cephClient, role: .storage, desiredState: .required,
+                    ownership: .observeOnly, supervisorState: .notApplicable,
+                    compatibility: .compatible, functionalState: cephState,
+                    checkedAt: receivedAt, affectedCapabilities: [.cephVolumes])
+            ]
+        } else {
+            observations = []
+        }
+        return Agent(
+            id: id, name: "agent-\(id)", hostname: "agent.example", version: "test",
+            siteID: siteID ?? UUID(), status: status, resources: resources,
+            dependencyObservations: observations,
+            dependencyObservationsReceivedAt: observations.isEmpty ? nil : receivedAt,
+            lastHeartbeat: Date())
+    }
+
+    @Test("local pool reachability remains replica-local")
     func localPoolRequiresReplicaAgent() {
         let pool = makePool(mode: .local)
+        let holder = makeAgent()
+        let other = makeAgent()
+        let holderID = holder.id!.uuidString
 
-        #expect(StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: ["agent-a"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-b", pool: pool, replicaAgentIds: ["agent-a"]))
+        #expect(StoragePool.agentCanReach(agent: holder, pool: pool, replicaAgentIds: [holderID]))
+        #expect(!StoragePool.agentCanReach(agent: other, pool: pool, replicaAgentIds: [holderID]))
+        #expect(StoragePool.agentCanReach(agent: other, pool: pool, replicaAgentIds: []))
     }
 
-    @Test("local pool: a volume with no replicas yet is reachable from anywhere")
-    func localPoolUnprovisionedVolumeIsUnrestricted() {
-        // Matches the old guard's behavior when no hypervisor was recorded.
-        let pool = makePool(mode: .local)
-
-        #expect(StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: []))
-    }
-
-    @Test("no pool behaves like a local pool")
+    @Test("no pool behaves like local")
     func nilPoolBehavesLikeLocal() {
-        #expect(StoragePool.agentCanReach(agentId: "agent-a", pool: nil, replicaAgentIds: ["agent-a"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-b", pool: nil, replicaAgentIds: ["agent-a"]))
-        #expect(StoragePool.agentCanReach(agentId: "agent-b", pool: nil, replicaAgentIds: []))
+        let holder = makeAgent()
+        let other = makeAgent()
+        let holderID = holder.id!.uuidString
+        #expect(StoragePool.agentCanReach(agent: holder, pool: nil, replicaAgentIds: [holderID]))
+        #expect(!StoragePool.agentCanReach(agent: other, pool: nil, replicaAgentIds: [holderID]))
     }
 
-    @Test("replicated pools fail closed until a coherent backend exists")
+    @Test("replicated pools remain fail closed")
     func replicatedPoolIsUnreachable() {
-        let pool = makePool(mode: .replicated, members: ["agent-a", "agent-b", "agent-c"])
-
-        #expect(!StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: ["agent-a"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-d", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
-        #expect(!StoragePool.agentCanReach(agentId: "agent-c", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
+        let agent = makeAgent()
+        #expect(
+            !StoragePool.agentCanReach(
+                agent: agent, pool: makePool(mode: .replicated), replicaAgentIds: [agent.id!.uuidString]))
     }
 
-    // MARK: - Default pool (baseline-seeded)
+    @Test("Ceph requires same site and a fresh healthy client capability")
+    func cephReachability() {
+        let siteID = UUID()
+        let pool = makePool(mode: .ceph, siteID: siteID)
+        let eligible = makeAgent(siteID: siteID, cephState: .healthy)
+        let wrongSite = makeAgent(siteID: UUID(), cephState: .healthy)
+        let missing = makeAgent(siteID: siteID)
+        let unhealthy = makeAgent(siteID: siteID, cephState: .unhealthy)
+        let stale = makeAgent(
+            siteID: siteID, cephState: .healthy,
+            receivedAt: Date().addingTimeInterval(-Agent.dependencyObservationStaleAfter - 1))
+
+        #expect(StoragePool.agentCanReach(agent: eligible, pool: pool, replicaAgentIds: []))
+        #expect(!StoragePool.agentCanReach(agent: wrongSite, pool: pool, replicaAgentIds: []))
+        #expect(!StoragePool.agentCanReach(agent: missing, pool: pool, replicaAgentIds: []))
+        #expect(!StoragePool.agentCanReach(agent: unhealthy, pool: pool, replicaAgentIds: []))
+        #expect(!StoragePool.agentCanReach(agent: stale, pool: pool, replicaAgentIds: []))
+    }
 
     @Test("the schema baseline seeds the default local pool")
     func defaultPoolExists() async throws {
         try await withTestApp { app in
             let pool = try await StoragePool.defaultPool(on: app.db)
-
             #expect(pool.name == StoragePool.defaultPoolName)
             #expect(pool.mode == .local)
             #expect(pool.replicationFactor == 1)
             #expect(pool.memberAgentIds.isEmpty)
             #expect(pool.backing == .filesystem)
+            #expect(pool.$site.id == nil)
+            #expect(pool.$cephCluster.id == nil)
         }
     }
-
 }

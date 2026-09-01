@@ -119,6 +119,14 @@ export type SiteStatus = OpenAPISchemas["SiteStatus"];
 export type Site = OpenAPISchemas["SiteDetail"];
 export type CreateSiteRequest = OpenAPISchemas["CreateSiteRequest"];
 export type UpdateSiteRequest = OpenAPISchemas["UpdateSiteRequest"];
+export type StoragePoolMode = OpenAPISchemas["StoragePoolMode"];
+export type StoragePool = OpenAPISchemas["StoragePoolResponse"];
+export type CephClusterHealth = OpenAPISchemas["CephClusterHealth"];
+export type CephCluster = OpenAPISchemas["CephClusterResponse"];
+export type RegisterCephClusterRequest = OpenAPISchemas["CreateExternalCephClusterRequest"];
+export type UpdateCephClusterRequest = OpenAPISchemas["UpdateExternalCephClusterRequest"];
+export type CephProjectAccess = OpenAPISchemas["CephProjectAccessResponse"];
+export type ConfigureCephProjectAccessRequest = OpenAPISchemas["UpsertCephProjectAccessRequest"];
 export type CredentialRestriction = OpenAPISchemas["CredentialRestriction"];
 
 export type APIKey = WithRequired<OpenAPISchemas["APIKeySummary"], "id">;

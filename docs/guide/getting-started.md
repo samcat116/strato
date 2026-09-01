@@ -34,11 +34,16 @@ separate hosts.
   ports are needed on the hypervisor
 
 The enrollment install script (below) installs everything else the agent
-needs: QEMU (`qemu-system-x86`, `qemu-utils`), libvirt (11.5+),
+needs: QEMU (`qemu-system-x86`, `qemu-utils`), the client-only Ceph RBD tools
+(`ceph-common`), libvirt (11.5+),
 OVN/OVS chassis packages (`ovn-host`, `openvswitch-switch`), and
 swtpm/OVMF for Windows guests. Hypervisors run only the OVN chassis side;
 the per-site NB/SB/northd central runs separately (see
 `deploy/ovn-central/`).
+
+Libvirt 11.5 is the local-disk QEMU floor. QEMU with project-namespaced RBD
+needs libvirt 11.6+; Firecracker clients that map RBD through krbd do not need
+libvirt.
 
 #### macOS (development only)
 

@@ -364,7 +364,11 @@ public actor FileSystemStorageBackend: StorageBackend {
 
     // MARK: - Volume Resize
 
-    public func resizeVolume(volumePath: String, newSizeBytes: Int64) async throws {
+    public func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {
+        guard case .file(let volumePath, _) = attachment else {
+            throw StorageBackendError.resizeFailed(
+                "filesystem storage cannot resize non-file attachment \(attachment)")
+        }
         logger.info(
             "Resizing volume",
             metadata: [
@@ -397,7 +401,13 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// Creates an external snapshot as a qcow2 overlay whose backing file is
     /// the volume. The backing format is detected rather than assumed, so raw
     /// volumes snapshot correctly too.
-    public func createSnapshot(volumeId: String, snapshotId: String, volumePath: String) async throws -> String {
+    public func createSnapshot(
+        volumeId: String, snapshotId: String, attachment: DiskAttachment
+    ) async throws -> String {
+        guard case .file(let volumePath, _) = attachment else {
+            throw StorageBackendError.snapshotFailed(
+                "filesystem storage cannot snapshot non-file attachment \(attachment)")
+        }
         let snapshotPath = snapshotPath(volumeId: volumeId, snapshotId: snapshotId)
 
         // Snapshot capture is level-triggered. The artifact may have been
@@ -491,9 +501,13 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// Clones a volume into a new, fully independent volume of the same
     /// format. `qemu-img convert` produces a flattened copy, so the clone
     /// shares no backing chain with the source.
-    public func cloneVolume(sourceVolumeId: String, sourcePath: String, targetVolumeId: String) async throws
-        -> DiskAttachment
-    {
+    public func cloneVolume(
+        sourceVolumeId: String, sourceAttachment: DiskAttachment, targetVolumeId: String
+    ) async throws -> DiskAttachment {
+        guard case .file(let sourcePath, _) = sourceAttachment else {
+            throw StorageBackendError.cloneFailed(
+                "filesystem storage cannot clone non-file attachment \(sourceAttachment)")
+        }
         let sourceFormatString = try await detectFormat(of: sourcePath)
         guard let format = DiskFormat(rawValue: sourceFormatString) else {
             throw StorageBackendError.unsupportedFormat(sourceFormatString)
@@ -555,7 +569,11 @@ public actor FileSystemStorageBackend: StorageBackend {
 
     // MARK: - Volume Info
 
-    public func volumeInfo(volumePath: String) async throws -> VolumeInfoResult {
+    public func volumeInfo(attachment: DiskAttachment) async throws -> VolumeInfoResult {
+        guard case .file(let volumePath, _) = attachment else {
+            throw StorageBackendError.infoFailed(
+                "filesystem storage cannot inspect non-file attachment \(attachment)")
+        }
         logger.debug("Getting volume info", metadata: ["path": .string(volumePath)])
 
         let info = try await queryImageInfo(path: volumePath)

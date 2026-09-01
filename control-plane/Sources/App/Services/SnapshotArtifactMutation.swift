@@ -72,15 +72,36 @@ enum SnapshotArtifactMutation {
             @escaping @Sendable (A, ResourceMutation.Accepted, any Database) async throws -> Data? = {
                 _, _, _ in nil
             },
+        reassignedAgentId: String? = nil,
         on db: any Database,
         app: Application,
         failureReason: String? = nil
     ) async throws -> ResourceMutation.Accepted {
         let artifactID = try artifact.requireID()
 
+        var effectiveReassignedAgentId = reassignedAgentId
+        if effectiveReassignedAgentId == nil,
+            let volumeSnapshot = artifact as? VolumeSnapshot,
+            let volume = try await Volume.find(volumeSnapshot.$volume.id, on: db),
+            try await VolumeService.pool(of: volume, on: db)?.mode == .ceph
+        {
+            let resolution = try await VolumeService.resolveAgentHolding(volume, on: db)
+            guard let selected = resolution.agentID else {
+                throw Abort(
+                    .conflict,
+                    reason: "No configured Ceph client is online to delete this snapshot")
+            }
+            effectiveReassignedAgentId = selected
+            if resolution.changed, let previous = resolution.previousAgentID {
+                await app.agentService.syncDesiredState(agentId: previous)
+            }
+        }
+
         // An unplaced artifact or one whose agent is unavailable cannot confirm
         // teardown, so clear the agent finalizer rather than make it undeletable.
-        let agentCanConverge = await agentConvergesSnapshots(artifact.agentId, app: app)
+        let finalReassignedAgentId = effectiveReassignedAgentId
+        let effectiveAgentId = finalReassignedAgentId ?? artifact.agentId
+        let agentCanConverge = await agentConvergesSnapshots(effectiveAgentId, app: app)
         let strategy: ResourceMutation.Dispatch =
             agentCanConverge
             ? .stateSync
@@ -104,7 +125,8 @@ enum SnapshotArtifactMutation {
                 return outcome.isRemoved
             }
 
-        return try await ResourceMutation(
+        let previousArtifactAgentId = artifact.agentId
+        let accepted = try await ResourceMutation(
             agentDispatch: app.agentService,
             logger: app.logger,
             idempotencyContext: idempotencyContext
@@ -134,9 +156,20 @@ enum SnapshotArtifactMutation {
                 // artifact is already terminating, and re-stamping a second DELETE
                 // would resurrect tokens their participants have already cleared.
                 try await ResourceFinalizerService.stampForDeletion(artifact, on: transaction)
+                if let finalReassignedAgentId {
+                    // Shared storage can move lifecycle execution without moving
+                    // bytes. Persist the move under the artifact row lock.
+                    artifact.agentId = finalReassignedAgentId
+                }
                 artifact.setDesiredStatus(.absent)
             }
         )
+        if let previousArtifactAgentId, let finalReassignedAgentId,
+            previousArtifactAgentId != finalReassignedAgentId
+        {
+            await app.agentService.syncDesiredState(agentId: previousArtifactAgentId)
+        }
+        return accepted
     }
 
     /// Accepts an export request: the placement fact "this snapshot should also

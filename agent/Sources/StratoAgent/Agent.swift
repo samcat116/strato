@@ -77,6 +77,7 @@ actor Agent {
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
     private var storageBackend: (any StorageBackend)?
+    private var storageBackends: StorageBackendRegistry?
     private var consoleSocketManager: ConsoleSocketManager?
     private var reconnectTask: Task<Void, Never>?
     private var isRunning = false
@@ -684,6 +685,15 @@ actor Agent {
             )
         }
         self.storageBackend = storageBackend
+        let cephImageSource = imageCacheService
+        let cephLogger = logger
+        self.storageBackends = StorageBackendRegistry(
+            local: storageBackend,
+            makeCeph: { configuration in
+                CephRBDStorageBackend(
+                    logger: cephLogger, configuration: configuration,
+                    imageSource: cephImageSource)
+            })
 
         if isSimulationMode {
             // One mock backend per hypervisor type, so the agent is eligible for
@@ -761,6 +771,7 @@ actor Agent {
             hypervisorServices[.firecracker] = FirecrackerService(
                 logger: logger,
                 storage: storageBackend,
+                diskRealizer: KRBDDiskRealizer(),
                 imageSource: imageCacheService,
                 vmStoragePath: vmStoragePath,
                 firecrackerBinaryPath: firecrackerBinaryPath,
@@ -1885,6 +1896,34 @@ actor Agent {
                         }
                     },
                     probe: { await LibvirtProbe.probe() }))
+
+            let cephVersionCache = NodeDependencyProbeCache<String?>()
+            registry.append(
+                CephClientNodeDependencyModule(
+                    version: {
+                        await cephVersionCache.value(maxAge: 300) {
+                            await DependencyVersionProbe.version(
+                                candidates: [
+                                    CephRBDStorageBackend.defaultRBDPath
+                                ], arguments: ["--version"])
+                        }
+                    },
+                    libvirt: { await LibvirtProbe.probe() },
+                    // `hypervisor_type = firecracker` is the explicit
+                    // Firecracker-only posture. krbd needs no libvirt, so an
+                    // installed 11.5 daemon must not withdraw its Ceph client
+                    // capability. QEMU-configured hosts remain fail-closed at
+                    // the namespaced-RBD 11.6 floor.
+                    qemuAttachmentsEnabled: hypervisorType == .qemu,
+                    functional: {
+                        let files = FileManager.default
+                        guard files.isExecutableFile(atPath: CephRBDStorageBackend.defaultRBDPath) else {
+                            return .unhealthy(
+                                "Ceph RBD client is not executable",
+                                code: .missingBinary)
+                        }
+                        return .healthy
+                    }))
             #endif
 
             if effectiveNetworkMode == .ovn {
@@ -2721,6 +2760,13 @@ extension Agent {
                 // copy of user data (STR-148). Snapshots carry the same nil
                 // contract.
                 await reconciler?.apply(message)
+                // Credential revocations are a permanent site ledger, not a
+                // one-shot command. Apply them after convergence has consumed
+                // this sync so ordinary volume/snapshot work is already
+                // enqueued, then fail each cleanup independently: one broken
+                // libvirt secret must not stop unrelated desired state or a
+                // different credential's retry.
+                await applyCephCredentialRevocations(message)
                 // The guest-facing listeners, after the reconciler rather than
                 // beside the network reconcile above (STR-56). Both orderings
                 // are needed and only this one has both: `reconcileNetworks`
@@ -2809,6 +2855,115 @@ extension Agent {
             }
         } catch {
             WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
+        }
+    }
+
+    /// Applies append-only Ceph credential tombstones from one desired-state
+    /// sync. `credentialId` is an opaque version identity: every comparison and
+    /// cleanup is the exact `(clusterId, credentialId)` pair, with no assumption
+    /// that it names a project-access row.
+    private func applyCephCredentialRevocations(_ message: DesiredStateMessage) async {
+        guard let storageBackends, !message.cephCredentialRevocations.isEmpty else { return }
+
+        let activeStorages =
+            message.volumes.map(\.storage)
+            + message.snapshots.compactMap(\.volumeStorage)
+        let activeAttachments = message.vms.flatMap { vm in
+            vm.spec.volumes.compactMap(\.attachment)
+        }
+
+        for revocation in message.cephCredentialRevocations {
+            let clusterId = revocation.clusterId
+            let credentialId = revocation.credentialId
+            guard
+                !StorageBackendRegistry.referencesCredential(
+                    clusterId: clusterId, credentialId: credentialId,
+                    storages: activeStorages, attachments: activeAttachments)
+            else {
+                // An absent volume/snapshot can still need this credential for
+                // its idempotent RBD delete. A control-plane ordering mistake
+                // therefore fails closed and the permanent tombstone retries
+                // after the last desired reference disappears.
+                logger.warning(
+                    "Deferring Ceph credential revocation because this sync still references it",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+                continue
+            }
+            var runtimeCleanupSucceeded = true
+            do {
+                // This is the concurrency barrier. The registry deny-lists the
+                // identity before its first suspension, invalidates every
+                // cached backend, and waits for prior-sync operations to
+                // unwind before returning. Only after that barrier is it safe
+                // to scrub durable Agent state: otherwise an older capture can
+                // resume and write a fresh SnapshotRecord containing the key.
+                try await storageBackends.revokeCephCredential(
+                    clusterId: clusterId, credentialId: credentialId,
+                    activeStorages: activeStorages, activeAttachments: activeAttachments)
+            } catch {
+                // Invalidation precedes host-file/libvirt cleanup inside the
+                // registry, so even a cleanup failure leaves the credential
+                // denied and makes the durable scrub below race-safe. Do not
+                // surface subprocess output: a hostile or broken client could
+                // echo key material.
+                runtimeCleanupSucceeded = false
+                logger.error(
+                    "Ceph credential cleanup failed and will retry on the next desired-state sync",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+            }
+
+            // `prepareManagedVolumeInventory` normally replaces this map from
+            // the same message. Filter it explicitly as well so an early
+            // presence-incomplete return cannot retain a keyring from an older
+            // sync after the credential has been denied.
+            desiredVolumeStates = desiredVolumeStates.filter { _, desired in
+                guard case .ceph(let configuration) = desired.storage else { return true }
+                return configuration.clusterId != clusterId
+                    || configuration.credentialId != credentialId
+            }
+
+            if snapshotInventoryUnreadable {
+                // Never overwrite an unreadable inventory: it may contain the
+                // only durable routing record for an artifact. The credential
+                // remains denied and the permanent tombstone retries the scrub
+                // after an operator repairs the file.
+                logger.error(
+                    "Ceph credential was denied but snapshot records remain unreadable and could not be scrubbed",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+                continue
+            }
+            let scrubbed = SnapshotRecordCredentialScrubber.removing(
+                clusterId: clusterId, credentialId: credentialId, from: snapshotRecords)
+            if scrubbed != snapshotRecords {
+                guard snapshotRecordStore.save(scrubbed) else {
+                    logger.error(
+                        "Ceph credential was denied but snapshot records could not be scrubbed",
+                        metadata: [
+                            "clusterId": .string(clusterId.uuidString),
+                            "credentialId": .string(credentialId.uuidString),
+                        ])
+                    continue
+                }
+                snapshotRecords = scrubbed
+            }
+
+            if runtimeCleanupSucceeded {
+                logger.info(
+                    "Applied permanent Ceph credential revocation",
+                    metadata: [
+                        "clusterId": .string(clusterId.uuidString),
+                        "credentialId": .string(credentialId.uuidString),
+                    ])
+            }
         }
     }
 
@@ -4079,10 +4234,11 @@ extension Agent: ReconcileActuator {
     func observedVolumePresence() async -> [String: VolumePresence]? {
         // No storage backend is an *answer*: such a host holds no volumes, and
         // the control plane never places one on it.
-        guard let storageBackend else { return [:] }
+        guard let storageBackends else { return [:] }
         let inventory: [String: DiskAttachment]
         do {
-            inventory = try await storageBackend.listVolumes()
+            inventory = try await storageBackends.inventory(
+                desiredVolumes: Array(desiredVolumeStates.values))
         } catch {
             // Nil, not `[:]`. An empty inventory is authoritative to everything
             // downstream — the reconciler would plan a create for every volume
@@ -4099,12 +4255,7 @@ extension Agent: ReconcileActuator {
         var presence: [String: VolumePresence] = [:]
         for (volumeId, disk) in inventory {
             let attachment = attachments[volumeId]
-            let sizeBytes: Int64?
-            if case .file(let path, _) = disk {
-                sizeBytes = await volumeVirtualSize(volumeId: volumeId, path: path)
-            } else {
-                sizeBytes = volumeSizes[volumeId]
-            }
+            let sizeBytes = await volumeVirtualSize(volumeId: volumeId, attachment: disk)
             presence[volumeId] = .managed(
                 ObservedVolumeFacts(
                     attachment: disk,
@@ -4125,7 +4276,7 @@ extension Agent: ReconcileActuator {
         desiredVolumeStates = Dictionary(
             desiredVolumes.map { ($0.volumeId.uuidString, $0) },
             uniquingKeysWith: { first, _ in first })
-        guard let storageBackend else { return }
+        guard let storageBackend, let storageBackends else { return }
         var formats: [UUID: DiskFormat] = [:]
         for volume in desiredVolumes {
             formats[volume.volumeId] = DiskFormat(rawValue: volume.format)
@@ -4150,7 +4301,7 @@ extension Agent: ReconcileActuator {
 
         var inventory: [String: DiskAttachment]
         do {
-            inventory = try await storageBackend.listVolumes()
+            inventory = try await storageBackends.inventory(desiredVolumes: desiredVolumes)
         } catch {
             // `observedVolumePresence` will report the authoritative inventory
             // as unreadable and skip this half of convergence.
@@ -4161,6 +4312,7 @@ extension Agent: ReconcileActuator {
             for volume in desiredVM.spec.volumes where inventory[volume.volumeId.uuidString] == nil {
                 guard case .file(let existingPath, _) = volume.attachment else { continue }
                 let volumeId = volume.volumeId.uuidString
+                guard desiredVolumeStates[volumeId]?.storage == .local else { continue }
                 guard let format = formats[volume.volumeId] else {
                     volumeAdoptionFailures[volumeId] =
                         "managed volume \(volumeId) has no supported desired format"
@@ -4216,11 +4368,13 @@ extension Agent: ReconcileActuator {
     /// a guess. What nil must *not* do is pass silently — an item that runs no
     /// steps records its generation as applied, which is how an unreadable
     /// volume used to report a grow it never attempted as converged (STR-199).
-    private func volumeVirtualSize(volumeId: String, path: String) async -> Int64? {
+    private func volumeVirtualSize(volumeId: String, attachment: DiskAttachment) async -> Int64? {
         if let cached = volumeSizes[volumeId] { return cached }
-        guard let storageBackend else { return nil }
+        guard let storageBackends else { return nil }
         do {
-            let info = try await storageBackend.volumeInfo(volumePath: path)
+            let storage = desiredVolumeStates[volumeId]?.storage ?? .local
+            let storageBackend = try await storageBackends.backend(for: storage)
+            let info = try await storageBackend.volumeInfo(attachment: attachment)
             volumeSizes[volumeId] = info.virtualSize
             return info.virtualSize
         } catch {
@@ -4374,6 +4528,10 @@ extension Agent: ReconcileActuator {
             observedVolumes: observedVolumes)
         {
             throw DependencyPendingError(reason)
+        }
+
+        if desired.hypervisorType == .qemu {
+            try await prepareQEMUStorageAttachments(current.spec)
         }
 
         let raw = await rawHostCapacitySnapshot()
@@ -4566,19 +4724,16 @@ extension Agent: ReconcileActuator {
                         "volume \(parentId) is attached to VM \(holderID), which is not confirmed shut down")
                 }
             }
-            let backend = try requireStorageBackend()
-            guard let disk = try await backend.listVolumes()[parentId] else {
+            let backend = try await requireStorageBackend(
+                volumeId: parentId, volumeStorage: desired.volumeStorage)
+            guard let disk = try await backend.inspectVolume(volumeId: parentId) else {
                 // The volume may be mid-create in this very sync; a dependency
                 // wait burns no attempt and retries on the next one.
                 throw SnapshotConvergenceError.sourceNotReady(
                     "volume \(parentId) is not present on this host yet")
             }
-            guard case .file(let diskPath, _) = disk else {
-                throw SnapshotConvergenceError.unsupported(
-                    "the filesystem snapshot backend cannot capture \(disk)")
-            }
             let path = try await backend.createSnapshot(
-                volumeId: parentId, snapshotId: snapshotId, volumePath: diskPath)
+                volumeId: parentId, snapshotId: snapshotId, attachment: disk)
             facts = ObservedSnapshotFacts(
                 sizeBytes: Self.fileSizeBytes(at: path),
                 storagePath: path,
@@ -4618,6 +4773,7 @@ extension Agent: ReconcileActuator {
 
         snapshotRecords[desired.snapshotId] = SnapshotRecord(
             snapshotId: desired.snapshotId, kind: desired.kind, parentId: desired.parentId,
+            volumeStorage: desired.kind == .volumeSnapshot ? desired.volumeStorage : nil,
             facts: facts)
         persistSnapshotRecords()
         logger.info(
@@ -4662,7 +4818,13 @@ extension Agent: ReconcileActuator {
         // bytes that are already gone confirms cleanly rather than failing.
         switch kind {
         case .volumeSnapshot:
-            try await requireStorageBackend().deleteSnapshot(
+            let backend = try await requireStorageBackend(
+                volumeId: parentId.uuidString,
+                volumeStorage: VolumeSnapshotStorageRouting.resolve(
+                    desiredStorage: item.desiredSnapshot?.volumeStorage,
+                    recordedStorage: snapshotRecords[snapshotId]?.volumeStorage,
+                    currentParentStorage: desiredVolumeStates[parentId.uuidString]?.storage))
+            try await backend.deleteSnapshot(
                 volumeId: parentId.uuidString, snapshotId: snapshotId.uuidString)
         case .vmCheckpoint:
             guard let service = getHypervisorServiceForVM(vmId: parentId.uuidString) else {
@@ -4788,14 +4950,22 @@ extension Agent: ReconcileActuator {
         return size.int64Value
     }
 
-    private func requireStorageBackend() throws -> any StorageBackend {
-        guard let storageBackend else {
+    private func requireStorageBackend(
+        volumeId: String? = nil, desired: DesiredVolumeState? = nil,
+        volumeStorage: DesiredVolumeStorage? = nil
+    ) async throws -> any StorageBackend {
+        guard let storageBackends else {
             // A host with no storage backend can never grow one by retrying,
             // and the control plane only places volumes on QEMU-capable agents,
             // so this is a misconfiguration to surface rather than retry.
             throw VolumeConvergenceError.unsupported("storage backend not available on this agent")
         }
-        return storageBackend
+        let storage =
+            volumeStorage
+            ?? desired?.storage
+            ?? volumeId.flatMap { desiredVolumeStates[$0]?.storage }
+            ?? .local
+        return try await storageBackends.backend(for: storage)
     }
 
     private func volumeReconcileCreate(_ item: ReconcileWorkItem) async throws {
@@ -4809,7 +4979,7 @@ extension Agent: ReconcileActuator {
             throw VolumeConvergenceError.blocked(
                 "managed volume \(item.id) has historical bytes that could not be adopted: \(adoptionFailure)")
         }
-        let backend = try requireStorageBackend()
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
 
         // The create strategy is read only here, when the volume does not yet
         // exist. A present volume never re-runs it, which is what makes a
@@ -4822,15 +4992,19 @@ extension Agent: ReconcileActuator {
             }
             // The control plane guarantees the source is on this agent, so the
             // path comes from our own inventory rather than the wire.
-            guard let source = try await backend.listVolumes()[sourceId] else {
+            guard let sourceDesired = desiredVolumeStates[sourceId] else {
+                throw VolumeConvergenceError.sourceNotReady(
+                    "source volume \(sourceId) has no desired storage configuration")
+            }
+            guard sourceDesired.storage == desired.storage else {
+                throw VolumeConvergenceError.unsupported(
+                    "cross-backend volume clones are not supported")
+            }
+            guard let source = try await backend.inspectVolume(volumeId: sourceId) else {
                 // Genuinely a dependency, not a failure: the source may still
                 // be converging earlier in this same sync.
                 throw VolumeConvergenceError.sourceNotReady(
                     "source volume \(sourceId) is not present on this agent yet")
-            }
-            guard case .file(let sourcePath, _) = source else {
-                throw VolumeConvergenceError.unsupported(
-                    "the filesystem clone path cannot use \(source)")
             }
             if let holder = recordedVolumeAttachments()[sourceId] {
                 guard desired.source?.sourceVMId?.uuidString == holder.vmId else {
@@ -4847,7 +5021,7 @@ extension Agent: ReconcileActuator {
                 }
             }
             attachment = try await backend.cloneVolume(
-                sourceVolumeId: sourceId, sourcePath: sourcePath, targetVolumeId: item.id)
+                sourceVolumeId: sourceId, sourceAttachment: source, targetVolumeId: item.id)
         case DesiredVolumeSource.image:
             guard let imageInfo = desired.source?.imageInfo,
                 let artifactKind = desired.source?.artifactKind
@@ -4864,9 +5038,7 @@ extension Agent: ReconcileActuator {
 
         // A cloned or image-backed volume inherits the source's size, which may
         // be smaller than what was asked for; the next sync plans the grow.
-        if case .file(let path, _) = attachment {
-            volumeSizes[item.id] = try? await backend.volumeInfo(volumePath: path).virtualSize
-        }
+        volumeSizes[item.id] = try? await backend.volumeInfo(attachment: attachment).virtualSize
         logger.info(
             "Volume converged into existence",
             metadata: [
@@ -4880,13 +5052,9 @@ extension Agent: ReconcileActuator {
         guard let desired = item.desiredVolume else {
             throw VolumeConvergenceError.unsupported("volume resize requires a desired entry")
         }
-        let backend = try requireStorageBackend()
-        guard let disk = try await backend.listVolumes()[item.id] else {
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        guard let disk = try await backend.inspectVolume(volumeId: item.id) else {
             throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
-        }
-        guard case .file(let diskPath, _) = disk else {
-            throw VolumeConvergenceError.unsupported(
-                "the filesystem resize path cannot use \(disk)")
         }
         // The planner's cached size, not a fresh `qemu-img info` (STR-199).
         //
@@ -4899,14 +5067,14 @@ extension Agent: ReconcileActuator {
         // reporting the size in the first place. The cache is authoritative
         // because every write path records the size it produced; the probe
         // behind it fires once per volume, not once per attempt.
-        guard let current = await volumeVirtualSize(volumeId: item.id, path: diskPath) else {
+        guard let current = await volumeVirtualSize(volumeId: item.id, attachment: disk) else {
             // Blocked rather than transient: an image whose size cannot be read
             // is not one to grow on a guess, and this is how the refusal
             // reaches an operator instead of the item running no steps and
             // recording the generation as converged.
             throw VolumeConvergenceError.blocked(
-                "cannot read the current size of volume \(item.id) at \(diskPath), so its size "
-                    + "cannot be converged; check the image with `qemu-img info`")
+                "cannot read the current size of volume \(item.id), so its size cannot be converged; "
+                    + "check the backing image with its storage client")
         }
         guard desired.sizeBytes >= current else {
             // Shrinking a disk image truncates the guest's filesystem. There is
@@ -4963,13 +5131,14 @@ extension Agent: ReconcileActuator {
                             + "has no online grow path")
                 }
             }
-            try await backend.resizeVolume(volumePath: diskPath, newSizeBytes: desired.sizeBytes)
+            try await backend.resizeVolume(attachment: disk, newSizeBytes: desired.sizeBytes)
         }
         volumeSizes[item.id] = desired.sizeBytes
     }
 
     private func volumeReconcileDelete(_ item: ReconcileWorkItem) async throws {
-        let backend = try requireStorageBackend()
+        let backend = try await requireStorageBackend(
+            volumeId: item.id, desired: item.desiredVolume)
         // Unplug before removing the bytes, or a running guest keeps an open
         // handle on a file that no longer exists. Best effort: a VM that is
         // already gone leaves nothing to unplug.
@@ -4986,8 +5155,8 @@ extension Agent: ReconcileActuator {
         guard let desired = item.desiredVolume, let attachment = desired.attachment else {
             throw VolumeConvergenceError.unsupported("volume attach requires a desired attachment")
         }
-        let backend = try requireStorageBackend()
-        guard let disk = try await backend.listVolumes()[item.id] else {
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        guard let disk = try await backend.inspectVolume(volumeId: item.id) else {
             throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
         }
         let vmId = attachment.vmId.uuidString
@@ -4999,6 +5168,9 @@ extension Agent: ReconcileActuator {
             // control plane would show an operator.
             throw VolumeConvergenceError.sourceNotReady(
                 "VM \(vmId) is not present on this agent yet")
+        }
+        if entry.hypervisorType == .qemu {
+            try await backend.prepareAttachmentForQEMU(disk)
         }
 
         // Record first, then hot-plug. A crash in between leaves a recorded
@@ -5092,24 +5264,44 @@ extension Agent: ReconcileActuator {
     /// image materialization finishes, so absence is a retryable dependency;
     /// retaining a nil or control-plane-stale attachment would recreate the legacy
     /// path-only boot behavior this contract replaces.
-    private func specWithRealizedVolumeAttachments(_ spec: VMSpec, vmId: String) async throws -> VMSpec {
-        let backend = try requireStorageBackend()
-        let inventory = try await backend.listVolumes()
-        let volumes = try spec.volumes.map { volume -> VolumeSpec in
+    private func specWithRealizedVolumeAttachments(
+        _ spec: VMSpec, vmId: String, hypervisorType: HypervisorType
+    ) async throws -> VMSpec {
+        var volumes: [VolumeSpec] = []
+        for volume in spec.volumes {
             let volumeId = volume.volumeId.uuidString
-            guard let disk = inventory[volumeId] else {
+            guard let desired = desiredVolumeStates[volumeId] else {
+                throw VolumeConvergenceError.sourceNotReady(
+                    "managed volume \(volumeId) for VM \(vmId) has no desired storage configuration")
+            }
+            let backend = try await requireStorageBackend(volumeId: volumeId, desired: desired)
+            guard let disk = try await backend.inspectVolume(volumeId: volumeId) else {
                 throw VolumeConvergenceError.sourceNotReady(
                     "managed volume \(volumeId) for VM \(vmId) is not present on this agent yet")
             }
-            return VolumeSpec(
-                volumeId: volume.volumeId,
-                deviceName: volume.deviceName,
-                attachment: disk,
-                readonly: volume.readonly,
-                bootOrder: volume.bootOrder,
-                ioLimits: volume.ioLimits)
+            if hypervisorType == .qemu {
+                try await backend.prepareAttachmentForQEMU(disk)
+            }
+            volumes.append(
+                VolumeSpec(
+                    volumeId: volume.volumeId,
+                    deviceName: volume.deviceName,
+                    attachment: disk,
+                    readonly: volume.readonly,
+                    bootOrder: volume.bootOrder,
+                    ioLimits: volume.ioLimits))
         }
         return spec.withVolumes(volumes)
+    }
+
+    private func prepareQEMUStorageAttachments(_ spec: VMSpec) async throws {
+        for volume in spec.volumes {
+            guard let attachment = volume.attachment else { continue }
+            let volumeId = volume.volumeId.uuidString
+            let backend = try await requireStorageBackend(
+                volumeId: volumeId, desired: desiredVolumeStates[volumeId])
+            try await backend.prepareAttachmentForQEMU(attachment)
+        }
     }
 
     private func reconcileCreate(_ item: ReconcileWorkItem) async throws {
@@ -5119,7 +5311,8 @@ extension Agent: ReconcileActuator {
         guard let service = getHypervisorService(for: desired.hypervisorType) else {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
-        let realizedSpec = try await specWithRealizedVolumeAttachments(desired.spec, vmId: item.id)
+        let realizedSpec = try await specWithRealizedVolumeAttachments(
+            desired.spec, vmId: item.id, hypervisorType: desired.hypervisorType)
         let creationMetadata = await metadataForHypervisorCreate(desired)
 
         let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
@@ -5399,7 +5592,8 @@ extension Agent: ReconcileActuator {
         service: any HypervisorService
     ) async throws -> (spec: VMSpec, interfaces: [String]) {
         let targetSpec = entry.spec.withNetworks(desired.spec.networks)
-        let realizedSpec = try await specWithRealizedVolumeAttachments(targetSpec, vmId: item.id)
+        let realizedSpec = try await specWithRealizedVolumeAttachments(
+            targetSpec, vmId: item.id, hypervisorType: .firecracker)
         let metadata = await metadataForHypervisorCreate(desired)
 
         // These TAPs already exist. Reassert each attachment individually so a
@@ -5473,8 +5667,16 @@ extension Agent: ReconcileActuator {
                 // about the removal here.
                 if adoption == .processGone, let service {
                     // Nothing is running from this VM's disks, so its whole
-                    // directory — boot disk included — goes with it.
-                    await service.reclaimVMDirectory(vmId: item.id)
+                    // directory — boot disk included — goes with it. A
+                    // Firecracker adoption acquired the durable krbd mapping
+                    // before proving the process was gone; use its throwing
+                    // delete path so an unmap failure retains this manifest
+                    // and is retried instead of being forgotten.
+                    if entry.hypervisorType == .firecracker {
+                        try await service.deleteVM(vmId: item.id)
+                    } else {
+                        await service.reclaimVMDirectory(vmId: item.id)
+                    }
                 } else {
                     logger.warning(
                         "Deleting an orphaned VM this agent could not re-adopt; any surviving hypervisor process and the VM's files must be cleaned up manually",

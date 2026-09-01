@@ -18,6 +18,7 @@ import { vmsApi } from "@/lib/api/vms";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useImages } from "@/lib/hooks/use-images";
 import { useNetworks } from "@/lib/hooks/use-networks";
+import { useProjectStoragePools } from "@/lib/hooks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { MAX_SECURITY_GROUPS_PER_NIC, type MetadataSource } from "@/types/api";
@@ -47,6 +48,8 @@ export function CreateVMDialog({
     cpu: "2",
     memory: "4",
     disk: "50",
+    poolId: "",
+    poolProjectId: "",
     sshPublicKey: "",
     userData: "",
   });
@@ -70,6 +73,20 @@ export function CreateVMDialog({
   const { currentProject } = useProjectContext();
   const projectId = currentProject?.id;
   const { data: images, isLoading: imagesLoading } = useImages(projectId);
+  const poolsQuery = useProjectStoragePools(projectId);
+  const selectablePools = useMemo(
+    () =>
+      (poolsQuery.data ?? []).filter(
+        (pool) =>
+          pool.id &&
+          pool.mode !== "replicated" &&
+          !(pool.mode === "local" && pool.name === "default")
+      ),
+    [poolsQuery.data]
+  );
+  const selectedPoolId =
+    formData.poolProjectId === projectId ? formData.poolId : "";
+  const selectedPool = selectablePools.find((pool) => pool.id === selectedPoolId);
   // The list always includes the global "default" network, so it is present
   // even when scoped to a project.
   const { data: networks = [] } = useNetworks(projectId);
@@ -164,6 +181,15 @@ export function CreateVMDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (poolsQuery.isLoading) {
+      toast.error("Wait for storage pools to finish loading");
+      return;
+    }
+    if (poolsQuery.error) {
+      toast.error("Storage pools could not be loaded");
+      return;
+    }
+
     // Required: there is no default project to fall back to (issue #1059).
     // Without this the body would go out with the key dropped by
     // JSON.stringify and come back a 400 the user cannot act on.
@@ -223,6 +249,7 @@ export function CreateVMDialog({
       cpu: parseInt(formData.cpu) || 2,
       memory: (parseInt(formData.memory) || 4) * GB,
       disk: (parseInt(formData.disk) || 50) * GB,
+      poolId: selectedPoolId || undefined,
       networkInterfaces: networkInterfaces.map((nic) => ({
         networkId: nic.networkId,
         securityGroupIds:
@@ -268,6 +295,8 @@ export function CreateVMDialog({
           cpu: "2",
           memory: "4",
           disk: "50",
+          poolId: "",
+          poolProjectId: "",
           sshPublicKey: "",
           userData: "",
         });
@@ -414,6 +443,49 @@ export function CreateVMDialog({
             </div>
 
             {renderImageSelector()}
+
+            <div className="space-y-2">
+              <Label htmlFor="vmStoragePool" className="text-foreground">
+                Boot storage pool
+              </Label>
+              {poolsQuery.isLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading storage pools...
+                </div>
+              ) : (
+                <select
+                  id="vmStoragePool"
+                  value={selectedPoolId}
+                  onChange={(event) =>
+                    setFormData((current) => ({
+                      ...current,
+                      poolId: event.target.value,
+                      poolProjectId: projectId ?? "",
+                    }))
+                  }
+                  disabled={isLoading || !!poolsQuery.error}
+                  className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <option value="">Default local pool</option>
+                  {selectablePools.map((pool) => (
+                    <option key={pool.id} value={pool.id}>
+                      {pool.name}
+                      {pool.mode === "ceph"
+                        ? ` · Ceph ${pool.cephPoolName}/${pool.cephNamespace}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {poolsQuery.error
+                  ? "Storage pools could not be loaded; VM creation is disabled."
+                  : selectedPool?.mode === "ceph"
+                    ? "The boot disk is an RBD image that can start on any configured Ceph client in this site."
+                    : "The boot disk stays pinned to the local agent that creates it."}
+              </p>
+            </div>
 
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
@@ -825,7 +897,9 @@ export function CreateVMDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading || !projectId}
+              disabled={
+                isLoading || !projectId || poolsQuery.isLoading || !!poolsQuery.error
+              }
             >
               {isLoading ? (
                 <>
