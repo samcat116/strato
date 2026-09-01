@@ -1,6 +1,9 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
+import {
+  StatusBadge,
+  type StatusBadgeConfig,
+} from "@/components/ui/status-badge";
 import type { ImageStatus } from "@/types/api";
 
 interface ImageStatusBadgeProps {
@@ -8,54 +11,52 @@ interface ImageStatusBadgeProps {
   downloadProgress?: number;
 }
 
+const statusConfig: Record<ImageStatus, StatusBadgeConfig> = {
+  ready: {
+    label: "Ready",
+    className: "bg-green-500/20 text-green-600 border-green-500/30 border",
+  },
+  uploading: {
+    label: "Uploading",
+    className: "bg-blue-500/20 text-blue-600 border-blue-500/30 border",
+  },
+  downloading: {
+    label: "Downloading",
+    className: "bg-blue-500/20 text-blue-600 border-blue-500/30 border",
+  },
+  validating: {
+    label: "Validating",
+    className: "bg-yellow-500/20 text-yellow-700 border-yellow-500/30 border",
+  },
+  pending: {
+    label: "Pending",
+    className:
+      "bg-gray-500/20 text-muted-foreground border-gray-500/30 border",
+  },
+  error: {
+    label: "Error",
+    className: "bg-red-500/20 text-red-600 border-red-500/30 border",
+  },
+};
+
 export function ImageStatusBadge({
   status,
   downloadProgress,
 }: ImageStatusBadgeProps) {
-  const getStatusColor = () => {
-    switch (status) {
-      case "ready":
-        return "bg-green-500/20 text-green-600 border-green-500/30";
-      case "uploading":
-      case "downloading":
-        return "bg-blue-500/20 text-blue-600 border-blue-500/30";
-      case "validating":
-        return "bg-yellow-500/20 text-yellow-700 border-yellow-500/30";
-      case "pending":
-        return "bg-gray-500/20 text-muted-foreground border-gray-500/30";
-      case "error":
-        return "bg-red-500/20 text-red-600 border-red-500/30";
-      default:
-        return "bg-gray-500/20 text-muted-foreground border-gray-500/30";
-    }
-  };
+  const config =
+    downloadProgress !== undefined
+      ? {
+          ...statusConfig,
+          uploading: {
+            ...statusConfig.uploading,
+            label: `Uploading ${downloadProgress}%`,
+          },
+          downloading: {
+            ...statusConfig.downloading,
+            label: `Downloading ${downloadProgress}%`,
+          },
+        }
+      : statusConfig;
 
-  const getStatusText = () => {
-    switch (status) {
-      case "ready":
-        return "Ready";
-      case "uploading":
-        return downloadProgress !== undefined
-          ? `Uploading ${downloadProgress}%`
-          : "Uploading";
-      case "downloading":
-        return downloadProgress !== undefined
-          ? `Downloading ${downloadProgress}%`
-          : "Downloading";
-      case "validating":
-        return "Validating";
-      case "pending":
-        return "Pending";
-      case "error":
-        return "Error";
-      default:
-        return status;
-    }
-  };
-
-  return (
-    <Badge variant="outline" className={`${getStatusColor()} border`}>
-      {getStatusText()}
-    </Badge>
-  );
+  return <StatusBadge status={status} config={config} />;
 }
