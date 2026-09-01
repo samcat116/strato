@@ -634,11 +634,13 @@ metadata listener for `imds` — has two shapes:
 
 Both non-passthrough shapes also install and enable the **QEMU guest agent**
 (issue #563) so stock cloud images gain verified shutdown and guest IP
-reporting without image changes. The no-caller path uses cloud-init's
-native `packages:` key; the multipart path installs it from a `text/x-shellscript`
-part instead, because a caller cloud-config's own `packages:` list would replace
-a merged key under cloud-init's `dict(replace)+list()` policy (the same reason
-console setup travels as a script part).
+reporting without image changes. Both use the same best-effort shell script,
+which skips package installation when the image already contains QGA and does
+not fail cloud-init when package repositories are unavailable (STR-305). The
+no-caller path embeds it in `runcmd`; the multipart path carries it as a
+`text/x-shellscript` part so a caller cloud-config cannot replace it under
+cloud-init's `dict(replace)+list()` policy (the same reason console setup
+travels as a script part).
 
 ## QEMU guest agent (qga)
 
