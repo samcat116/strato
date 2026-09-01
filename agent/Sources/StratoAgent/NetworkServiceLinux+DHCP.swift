@@ -17,39 +17,33 @@ extension NetworkServiceLinux {
         let output: String
     }
 
+    /// Bound host command execution so a wedged tool cannot park the network
+    /// actor during startup or reconciliation.
+    static let hostCommandTimeout: Duration = .seconds(15)
+    static let hostCommandOutputLimit = 1024 * 1024
+
     /// Runs a command via `/usr/bin/env` (PATH resolution) and returns its exit
-    /// status and combined stdout/stderr. Mirrors the `Process` usage in
-    /// `FileSystemStorageBackend`.
-    func runProcess(_ command: String, _ arguments: [String]) throws -> CommandResult {
-        try runProcessAt("/usr/bin/env", [command] + arguments)
+    /// status and combined stdout/stderr.
+    func runProcess(_ command: String, _ arguments: [String]) async throws -> CommandResult {
+        try await runProcessAt("/usr/bin/env", [command] + arguments)
     }
 
-    /// Runs an already-resolved executable, with no `PATH` lookup. The sandbox
-    /// namespace path uses this: its binaries were located at agent start, and a
-    /// stripped service-manager `PATH` must not be able to break a host the
-    /// start-time probe declared usable.
-    func runProcessAt(_ executable: String, _ arguments: [String]) throws -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return CommandResult(status: process.terminationStatus, output: output)
+    /// Runs an already-resolved executable, with no `PATH` lookup.
+    func runProcessAt(_ executable: String, _ arguments: [String]) async throws -> CommandResult {
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: executable),
+            arguments: arguments,
+            timeout: Self.hostCommandTimeout,
+            maxOutputBytes: Self.hostCommandOutputLimit)
+        return CommandResult(status: result.terminationStatus, output: result.combinedOutput)
     }
 
     /// Runs a command and throws `NetworkError.tapError` on a non-zero exit,
     /// appending the remediation when the output points at a host problem
     /// (missing privileges) rather than a bad invocation.
     @discardableResult
-    func run(_ command: String, _ arguments: [String]) throws -> String {
-        let result = try runProcess(command, arguments)
+    func run(_ command: String, _ arguments: [String]) async throws -> String {
+        let result = try await runProcess(command, arguments)
         if result.status != 0 {
             throw NetworkError.tapError(networkCommandFailure(command, arguments, result))
         }
@@ -81,8 +75,8 @@ extension NetworkServiceLinux {
     }
 
     /// Returns true if a network interface with the given name exists.
-    func tapDeviceExists(_ name: String) -> Bool {
-        guard let result = try? runProcess("ip", ["link", "show", name]) else {
+    func tapDeviceExists(_ name: String) async -> Bool {
+        guard let result = try? await runProcess("ip", ["link", "show", name]) else {
             return false
         }
         return result.status == 0

@@ -47,24 +47,11 @@ actor AgentService {
     /// heartbeat monitor after `shutdown()` already ran.
     var isShutDown = false
 
-    /// Overrides the startup-resolved agent target for the auto-update sweep.
-    var autoUpdateTargetOverride: String?
-
     /// Tail of each agent's report-application chain. These are stored on the
     /// actor itself because extensions cannot add state; report ingestion lives
     /// in `AgentService+ObservedState.swift`.
     var reportTails: [String: (id: UInt64, task: Task<Void, Never>)] = [:]
     var nextReportTailId: UInt64 = 0
-
-    func setAutoUpdateTargetForTesting(_ target: String?) {
-        autoUpdateTargetOverride = target
-    }
-
-    /// The version auto-updating agents should converge on.
-    var autoUpdateTarget: String? {
-        autoUpdateTargetOverride
-            ?? AgentVersionTarget.version(configuration: app.controlPlaneConfiguration)
-    }
 
     init(app: Application, heartbeatInterval: Duration = .seconds(30)) {
         self.app = app

@@ -298,7 +298,7 @@ extension NetworkServiceLinux: NetworkActuator {
         // Provider bridge + physnet mapping. The operator connects the bridge to
         // the external network out of band; the agent only wires the OVN side.
         try await ensureProviderBridge(uplink.bridge)
-        try ensureBridgeMapping(physnet: uplink.physnet, bridge: uplink.bridge)
+        try await ensureBridgeMapping(physnet: uplink.physnet, bridge: uplink.bridge)
 
         // External logical switch + localnet port (the provider attachment).
         // Created with the external role marker so observeTopology can tell it
@@ -648,7 +648,7 @@ extension NetworkServiceLinux: NetworkActuator {
 /// Which address family a router's default route belongs to. Each family owns
 /// its own default prefix and reconciles only that prefix, so a v4 and a v6
 /// default coexist on one router without disturbing each other.
-fileprivate enum DefaultRouteFamily {
+enum DefaultRouteFamily {
     case v4
     case v6
 

@@ -258,7 +258,7 @@ extension NetworkServiceLinux {
 
             // Detach the TAP from the integration bridge (idempotent via --if-exists)
             do {
-                try run(
+                try await run(
                     "ovs-vsctl",
                     [
                         "--timeout=\(Self.ovsCommandTimeoutSeconds)",

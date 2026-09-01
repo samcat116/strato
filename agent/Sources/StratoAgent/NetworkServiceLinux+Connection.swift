@@ -47,7 +47,7 @@ extension NetworkServiceLinux {
         // chassis that never registers means ports get created but no flows
         // are ever programmed, which must gate the capability, not pass
         // silently (issue #328).
-        try ensureChassisConfiguration()
+        try await ensureChassisConfiguration()
         try await verifyOVNControllerConnected()
 
         // Service_Monitor lives in Southbound. Keep this connection separate
@@ -56,7 +56,7 @@ extension NetworkServiceLinux {
         // this read — health observation will report a backend error until the
         // access is fixed.
         do {
-            let connection = try southboundConnectionString()
+            let connection = try await southboundConnectionString()
             var endpoint = try OVSDBEndpoint(parsing: connection)
             if case .ssl(let host, let port, _) = endpoint, let tls = ovnNBTLS {
                 endpoint = .ssl(
@@ -205,11 +205,11 @@ extension NetworkServiceLinux {
     }
 
     #if os(Linux)
-    func southboundConnectionString() throws -> String {
+    func southboundConnectionString() async throws -> String {
         if let configured = chassisConfig.remote, !configured.isEmpty {
             return configured
         }
-        let result = try runProcess(
+        let result = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         guard result.status == 0 else {

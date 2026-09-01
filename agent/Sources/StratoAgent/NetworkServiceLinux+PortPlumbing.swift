@@ -58,13 +58,13 @@ extension NetworkServiceLinux {
     /// missing values get defaults (encap IP auto-detected from the default
     /// route). Without these a fresh host looks fully wired but programs no
     /// flows, ever.
-    func ensureChassisConfiguration() throws {
+    func ensureChassisConfiguration() async throws {
         guard chassisConfig.bootstrapEnabled else {
             logger.info("OVN chassis bootstrap disabled by configuration; assuming operator-managed external_ids")
             return
         }
 
-        let current = try runProcess(
+        let current = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         guard current.status == 0 else {
@@ -76,7 +76,7 @@ extension NetworkServiceLinux {
 
         var detectedEncapIP: String?
         if chassisConfig.encapIP == nil, existing["ovn-encap-ip"] == nil {
-            detectedEncapIP = detectEncapIP()
+            detectedEncapIP = await detectEncapIP()
         }
 
         let plan = OVNChassisBootstrap.plan(
@@ -100,7 +100,7 @@ extension NetworkServiceLinux {
         let arguments =
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "set", "open_vswitch", "."]
             + plan.settings.map(\.vsctlArgument)
-        let result = try runProcess("ovs-vsctl", arguments)
+        let result = try await runProcess("ovs-vsctl", arguments)
         guard result.status == 0 else {
             throw NetworkError.ovsError(
                 "failed to set chassis external_ids (exit \(result.status)): "
@@ -117,8 +117,10 @@ extension NetworkServiceLinux {
     /// The IP the kernel would use as the source for off-host traffic — the
     /// sensible default tunnel endpoint on single-NIC hosts. Multi-homed
     /// hosts must set `ovn_encap_ip` explicitly.
-    func detectEncapIP() -> String? {
-        guard let result = try? runProcess("ip", ["-j", "route", "get", "1.1.1.1"]), result.status == 0 else {
+    func detectEncapIP() async -> String? {
+        guard let result = try? await runProcess("ip", ["-j", "route", "get", "1.1.1.1"]),
+            result.status == 0
+        else {
             return nil
         }
         return OVNChassisBootstrap.parseRouteSourceIP(result.output)
@@ -138,7 +140,8 @@ extension NetworkServiceLinux {
         for attempt in 1...attempts {
             let result: CommandResult
             do {
-                result = try runProcess("ovn-appctl", ["-t", "ovn-controller", "connection-status"])
+                result = try await runProcess(
+                    "ovn-appctl", ["-t", "ovn-controller", "connection-status"])
             } catch {
                 logger.warning(
                     "Cannot verify ovn-controller connection status: \(error.localizedDescription)")
@@ -312,13 +315,13 @@ extension NetworkServiceLinux {
             ])
 
         // Idempotent: reuse the device if it already exists (crash recovery, re-attach).
-        if tapDeviceExists(tapName) {
+        if await tapDeviceExists(tapName) {
             logger.debug("TAP interface already exists, reusing", metadata: ["tapName": .string(tapName)])
         } else {
             // Create a persistent single-queue TAP device. It must exist before QEMU
             // opens it (QEMU is launched with `script=no,ifname=<tap>`), and persistence
             // is what lets QEMU attach to the pre-created device.
-            try run("ip", ["tuntap", "add", "dev", tapName, "mode", "tap"])
+            try await run("ip", ["tuntap", "add", "dev", tapName, "mode", "tap"])
             logger.info("Created TAP interface", metadata: ["tapName": .string(tapName)])
         }
 
@@ -335,11 +338,11 @@ extension NetworkServiceLinux {
         // OVN deployment (nothing routes via the br-int internal port), but it
         // is a host-scoped effect of a per-VM setting.
         if let mtu, mtu > 0 {
-            try run("ip", ["link", "set", tapName, "mtu", String(mtu)])
+            try await run("ip", ["link", "set", tapName, "mtu", String(mtu)])
         }
 
         // Bring the interface up (idempotent).
-        try run("ip", ["link", "set", tapName, "up"])
+        try await run("ip", ["link", "set", tapName, "up"])
 
         return tapName
     }
@@ -377,7 +380,7 @@ extension NetworkServiceLinux {
         for command in plan.hostSetup {
             try await runNetnsCommand(command)
         }
-        try run("ovs-vsctl", plan.ovsAttach)
+        try await run("ovs-vsctl", plan.ovsAttach)
 
         _ = try await verifyOVSBinding(
             verify: plan.ovsVerify, device: plan.vethHostName, portName: portName, stage: "attach")
@@ -439,7 +442,7 @@ extension NetworkServiceLinux {
     ) async throws -> OVSInterfaceBinding {
         var binding = OVSInterfaceBinding(ofport: nil, error: nil)
         for attempt in 1...Self.ovsBindingReadbackAttempts {
-            binding = OVSInterfaceBinding.parse(try run("ovs-vsctl", verify))
+            binding = OVSInterfaceBinding.parse(try await run("ovs-vsctl", verify))
             if binding.isBound { return binding }
             // An `error` is a verdict, not a race — retrying cannot clear it.
             if binding.error != nil { break }
@@ -477,7 +480,7 @@ extension NetworkServiceLinux {
             deletesNamespace: nicIndex == 0)
 
         do {
-            try run("ovs-vsctl", removal.ovsDetach)
+            try await run("ovs-vsctl", removal.ovsDetach)
         } catch {
             logger.warning(
                 "Failed to remove OVS port",
@@ -545,7 +548,7 @@ extension NetworkServiceLinux {
         // implementation set `ovn-port-name` on the Port, which OVN ignores.
         // `ovs-vsctl` performs the port + interface insert and the external_ids set
         // atomically and idempotently (`--may-exist`).
-        try run(
+        try await run(
             "ovs-vsctl",
             [
                 "--timeout=\(Self.ovsCommandTimeoutSeconds)",
@@ -565,15 +568,15 @@ extension NetworkServiceLinux {
         logger.debug("Removing TAP interface", metadata: ["tapName": .string(tapInterface)])
 
         // Tolerate an already-absent device (double cleanup, crash recovery).
-        guard tapDeviceExists(tapInterface) else {
+        guard await tapDeviceExists(tapInterface) else {
             logger.debug(
                 "TAP interface already absent, nothing to remove", metadata: ["tapName": .string(tapInterface)])
             return
         }
 
         // Best-effort down, then delete.
-        _ = try? runProcess("ip", ["link", "set", tapInterface, "down"])
-        try run("ip", ["tuntap", "del", "dev", tapInterface, "mode", "tap"])
+        _ = try? await runProcess("ip", ["link", "set", tapInterface, "down"])
+        try await run("ip", ["tuntap", "del", "dev", tapInterface, "mode", "tap"])
         logger.info("Removed TAP interface", metadata: ["tapName": .string(tapInterface)])
     }
     #endif

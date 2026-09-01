@@ -15,7 +15,7 @@ extension NetworkServiceLinux {
     /// `ipv6_ra_configs` is always written as a concrete map (empty when nil)
     /// so removing IPv6 from a network clears the port's RA config — the row
     /// encoder omits nil fields, which would otherwise leave it stale.
-    fileprivate func ensureRouterPort(
+    func ensureRouterPort(
         name: String, mac: String, cidrs: [String], ipv6RAConfigs: [String: String]? = nil,
         switchName: String, switchPortName: String, router: String
     ) async throws {
@@ -57,7 +57,7 @@ extension NetworkServiceLinux {
     }
 
     /// The SNAT/DNAT rules attached to a router, resolved from its `nat` refs.
-    fileprivate func snatRules(onRouter routerName: String) async throws -> [OVNNAT] {
+    func snatRules(onRouter routerName: String) async throws -> [OVNNAT] {
         guard let ovnManager,
             let router = try await ovnManager.getLogicalRouter(named: routerName),
             let natUUIDs = router.nat
@@ -70,7 +70,7 @@ extension NetworkServiceLinux {
     }
 
     /// Ensure the external provider bridge exists, mirroring `ensureIntegrationBridge`.
-    fileprivate func ensureProviderBridge(_ bridgeName: String) async throws {
+    func ensureProviderBridge(_ bridgeName: String) async throws {
         guard let ovsManager else {
             throw NetworkError.notConnected("OVS manager not connected")
         }
@@ -95,7 +95,7 @@ extension NetworkServiceLinux {
     /// the bridge has no host presence and no localnet datapath (issue #371).
     /// `ovs-vsctl add-br` creates all three rows in one transaction — this
     /// repairs both freshly created bridges and ones from older agents.
-    fileprivate func ensureBridgeLocalPort(_ bridgeName: String) async throws {
+    func ensureBridgeLocalPort(_ bridgeName: String) async throws {
         guard let ovsManager else {
             throw NetworkError.notConnected("OVS manager not connected")
         }
@@ -120,7 +120,9 @@ extension NetworkServiceLinux {
     /// catching up; usually the first probe succeeds and this costs one exec.
     fileprivate func warnIfBridgeNetdevMissing(_ bridgeName: String) async {
         for _ in 0..<10 {
-            if let probe = try? runProcess("ip", ["link", "show", "dev", bridgeName]), probe.status == 0 {
+            if let probe = try? await runProcess("ip", ["link", "show", "dev", bridgeName]),
+                probe.status == 0
+            {
                 return
             }
             try? await Task.sleep(nanoseconds: 200_000_000)
@@ -137,11 +139,11 @@ extension NetworkServiceLinux {
     /// so the local chassis is the site's designated SNAT gateway; stale
     /// Strato-managed bindings to other chassis (host re-provisioned, role
     /// moved) are removed, operator-authored rows are left alone.
-    fileprivate func ensureGatewayChassis(onPort portName: String) async throws {
+    func ensureGatewayChassis(onPort portName: String) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        let chassisName = try localChassisSystemID()
+        let chassisName = try await localChassisSystemID()
         guard let port = try await ovnManager.getLogicalRouterPort(named: portName) else {
             throw NetworkError.ovnError(
                 "external router port \(portName) not found while binding its gateway chassis")
@@ -172,8 +174,8 @@ extension NetworkServiceLinux {
     /// The chassis `system-id` of the local OVS — the name `ovn-controller`
     /// registers in the southbound `Chassis` table (set or verified by
     /// `ensureChassisConfiguration` at connect time).
-    fileprivate func localChassisSystemID() throws -> String {
-        let result = try runProcess(
+    fileprivate func localChassisSystemID() async throws -> String {
+        let result = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         guard result.status == 0 else {
@@ -194,15 +196,15 @@ extension NetworkServiceLinux {
 
     /// Ensure the local OVS carries `ovn-bridge-mappings=<physnet>:<bridge>` for
     /// the provider network, merged with any mappings already present.
-    fileprivate func ensureBridgeMapping(physnet: String, bridge: String) throws {
-        let current = try runProcess(
+    func ensureBridgeMapping(physnet: String, bridge: String) async throws {
+        let current = try await runProcess(
             "ovs-vsctl",
             ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
         let existing = OVNChassisBootstrap.parseExternalIDs(current.output)["ovn-bridge-mappings"]
         guard let merged = OVNBridgeMappings.merged(existing: existing, physnet: physnet, bridge: bridge) else {
             return  // already mapped
         }
-        try run(
+        try await run(
             "ovs-vsctl",
             [
                 "--timeout=\(Self.ovsCommandTimeoutSeconds)", "set", "open_vswitch", ".",
@@ -222,7 +224,7 @@ extension NetworkServiceLinux {
     /// family to infer. Inferring it would let a v6 address in `gateway` install
     /// a `::/0`, skip `0.0.0.0/0` entirely, and still report the uplink ready —
     /// leaving IPv4 SNAT running over a router with no IPv4 default route.
-    fileprivate func ensureDefaultRoute(
+    func ensureDefaultRoute(
         router routerName: String, nextHop: String, family: DefaultRouteFamily
     ) async throws {
         guard let ovnManager else {
@@ -296,7 +298,7 @@ extension NetworkServiceLinux {
     /// also clears untagged duplicates, but that is safe only because it is
     /// replacing them — here there is no replacement, so an operator's own
     /// default (untagged, or policy/named-table) is left alone.
-    fileprivate func removeManagedDefaultRoute(router routerName: String, family: DefaultRouteFamily) async throws {
+    func removeManagedDefaultRoute(router routerName: String, family: DefaultRouteFamily) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }

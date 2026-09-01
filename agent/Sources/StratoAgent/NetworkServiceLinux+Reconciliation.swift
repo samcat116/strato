@@ -311,7 +311,7 @@ extension NetworkServiceLinux {
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
             ratePPS: tcBinaryPath == nil ? 0 : linkLocalServiceRatePPS)
         do {
-            try run("ovs-vsctl", plan.ovsAttach)
+            try await run("ovs-vsctl", plan.ovsAttach)
             _ = try await verifyOVSBinding(
                 verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
                 stage: "attach")
@@ -357,7 +357,7 @@ extension NetworkServiceLinux {
             try? await runNetnsCommand(command)
         }
         do {
-            try run("ovs-vsctl", removal.ovsDetach)
+            try await run("ovs-vsctl", removal.ovsDetach)
         } catch {
             if !quiet {
                 logger.warning(
@@ -472,7 +472,7 @@ extension NetworkServiceLinux {
             for command in plan.namespaceSetup {
                 try await runNetnsCommand(command)
             }
-            try run("ovs-vsctl", plan.ovsAttach)
+            try await run("ovs-vsctl", plan.ovsAttach)
             _ = try await verifyOVSBinding(
                 verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
                 stage: "attach")
@@ -533,7 +533,7 @@ extension NetworkServiceLinux {
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
         var failures = 0
         do {
-            try run("ovs-vsctl", removal.ovsDetach)
+            try await run("ovs-vsctl", removal.ovsDetach)
         } catch {
             failures += 1
             if !quiet {
