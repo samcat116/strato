@@ -4,14 +4,14 @@ import StratoShared
 /// The device fragments `LibvirtService` hands to `virDomainAttachDeviceFlags`,
 /// `virDomainDetachDeviceFlags` and `virDomainUpdateDeviceFlags` (STR-134).
 ///
-/// Every one of them is built from `DomainXMLBuilder`'s own element functions
-/// rather than interpolated here. That is not tidiness: libvirt matches an
-/// update or a detach against the device's *identity* as the fragment describes
-/// it, so a fragment that drifts from what the create-time document said stops
-/// matching the device it means to act on — and libvirt's answer to that is
-/// either a puzzling "device not found" or, worse, a match on the wrong one.
-/// Fragments live in the core library for the reason the builder gives: the
-/// driver that sends them links a hypervisor SDK and has no unit tests.
+/// New-device fragments come from `DomainXMLBuilder`; existing-device
+/// fragments retain the identity read from libvirt. That is not tidiness:
+/// libvirt matches an update or detach against the identity the fragment
+/// describes, so reconstructing an existing device can stop matching the one
+/// it means to act on — and libvirt's answer is either a puzzling "device not
+/// found" or, worse, a match on the wrong one. Fragments live in the core
+/// library for the reason the builder gives: the driver that sends them links
+/// a hypervisor SDK and has no unit tests.
 public enum DomainDeviceXML {
 
     /// The same interface fragment used at domain creation, for hot-plug.
@@ -76,17 +76,33 @@ public enum DomainDeviceXML {
     /// The `<memory model='virtio-mem'>` device with a new `<requested>`, for
     /// `virDomainUpdateDeviceFlags`.
     ///
-    /// `sizeBytes` and `blockBytes` must be the ones the domain already
-    /// declares — read them back with `DomainMemoryInventory`, never recompute
-    /// them from the desired spec. They are what makes libvirt recognise this
-    /// as the device already present rather than a different one, and a spec
-    /// whose headroom has changed since the domain was defined would produce a
-    /// fragment that matches nothing.
+    /// The complete device must be the one read from the live domain with
+    /// `DomainMemoryInventory`. libvirt adds identity to it when the domain is
+    /// defined (notably `<alias>` and `<address>`); rebuilding the fragment
+    /// from its sizing fields drops that identity and makes the update match
+    /// nothing. This mirrors `virsh update-memory-device`: preserve the device
+    /// and change only `<requested>`.
     public static func memoryDevice(
-        sizeBytes: Int64, blockBytes: Int64, requestedBytes: Int64
-    ) -> String {
-        DomainXMLBuilder.memoryDeviceNode(
-            sizeBytes: sizeBytes, blockBytes: blockBytes, requestedBytes: requestedBytes
-        ).render()
+        _ device: DomainMemoryLayout.VirtioMem, requestedBytes: Int64
+    ) throws -> String {
+        var node = try DomainXMLNode.parse(device.deviceXML)
+        guard node.name == "memory", node.attribute("model") == "virtio-mem" else {
+            throw DomainInventoryError.unparseable(
+                "the selected memory device is not <memory model='virtio-mem'>")
+        }
+
+        var changedRequested = false
+        guard
+            node.editChild(named: "target", { target in
+                changedRequested = target.editChild(named: "requested") { requested in
+                    requested.setAttribute("unit", "KiB")
+                    requested.setText(String(requestedBytes / 1024))
+                }
+            }), changedRequested
+        else {
+            throw DomainInventoryError.unparseable(
+                "the virtio-mem device declares no <target><requested>")
+        }
+        return node.render()
     }
 }

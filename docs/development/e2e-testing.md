@@ -157,6 +157,22 @@ Run it as an account that can read `qemu:///system`; the script deletes its VM
 on exit. Running vCPU shrink is intentionally not pending-reboot state: the API
 returns `422` and tells the caller to stop, resize, and start the VM.
 
+### Live QEMU memory growth contract
+
+`deploy/compose/memory-growth-test.sh` exercises STR-301 on the libvirt agent
+host. It starts a VM at 512 MiB with a 1 GiB ceiling, verifies the live
+virtio-mem device initially requests no headroom, grows the running VM to 1 GiB,
+then verifies both the live libvirt device and the API's observed generation:
+
+```bash
+sudo deploy/compose/memory-growth-test.sh \
+  --origin "$ORIGIN" --api-key "$(cat "$KEY_FILE")" \
+  --project "$PROJECT_ID" --network "$NET_ID" --image "$IMAGE_ID"
+```
+
+Run it as an account that can read `qemu:///system`; the script deletes its VM
+on exit.
+
 One carve-out keeps the older machinery:
 
 - **Delete** is the one mutation whose success is the resource's *absence*, so

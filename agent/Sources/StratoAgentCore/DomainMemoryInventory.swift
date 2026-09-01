@@ -12,9 +12,8 @@ import FoundationXML
 ///
 /// - the **boot** size, which is the floor a virtio-mem resize works up from —
 ///   only the region above it is plug/unpluggable;
-/// - the memory **device's** size and block size, which are what makes an
-///   update fragment match the device already present rather than describe a
-///   different one;
+/// - the memory **device's** size, block size and complete live element, so an
+///   update can retain the identity libvirt assigned to the existing device;
 /// - whether there is a memory device at all.
 ///
 /// The process driver kept the equivalent in `vmSpawnSizing`, a dictionary keyed by
@@ -64,11 +63,23 @@ public struct DomainMemoryLayout: Sendable, Equatable {
         public let blockBytes: Int64
         /// `<target><requested>` — how much of the region is plugged in now.
         public let requestedBytes: Int64
+        /// The complete `<memory>` element read from the domain, including
+        /// identity libvirt assigned when it defined the device.
+        ///
+        /// An update must change this element in place rather than reconstruct
+        /// it from the sizing fields above: the live XML also carries the
+        /// device's `<alias>` and `<address>`, and libvirt uses those to find
+        /// the device that `virDomainUpdateDeviceFlags` should update.
+        public let deviceXML: String
 
-        public init(sizeBytes: Int64, blockBytes: Int64, requestedBytes: Int64) {
+        public init(
+            sizeBytes: Int64, blockBytes: Int64, requestedBytes: Int64,
+            deviceXML: String
+        ) {
             self.sizeBytes = sizeBytes
             self.blockBytes = blockBytes
             self.requestedBytes = requestedBytes
+            self.deviceXML = deviceXML
         }
     }
 
@@ -135,9 +146,24 @@ public enum DomainMemoryInventory {
         guard let maximum = delegate.memory else {
             throw DomainInventoryError.unparseable("the domain document declares no memory size")
         }
+        let deviceNodes = try DomainXMLNode.parse(xml).child(named: "devices")?.children.filter {
+            $0.name == "memory" && $0.attribute("model") == "virtio-mem"
+        } ?? []
+        let virtioMem: DomainMemoryLayout.VirtioMem?
+        if let parsed = delegate.virtioMem {
+            guard deviceNodes.count == 1 else {
+                throw DomainInventoryError.unparseable(
+                    "the domain declares \(deviceNodes.count) virtio-mem devices; expected exactly one")
+            }
+            virtioMem = DomainMemoryLayout.VirtioMem(
+                sizeBytes: parsed.sizeBytes, blockBytes: parsed.blockBytes,
+                requestedBytes: parsed.requestedBytes, deviceXML: deviceNodes[0].render())
+        } else {
+            virtioMem = nil
+        }
         return DomainMemoryLayout(
             maximumBytes: maximum, memoryDeviceBytes: delegate.memoryDeviceBytes,
-            virtioMem: delegate.virtioMem)
+            virtioMem: virtioMem)
     }
 
     /// A libvirt memory value in its declared unit, as bytes.
@@ -175,10 +201,16 @@ public enum DomainMemoryInventory {
 ///
 /// `<currentMemory>` is deliberately not collected — see `DomainMemoryLayout`
 /// for why it is not the boot size.
+private struct ParsedVirtioMem {
+    let sizeBytes: Int64
+    let blockBytes: Int64
+    let requestedBytes: Int64
+}
+
 private final class MemoryCollector: NSObject, XMLParserDelegate {
     private(set) var memory: Int64?
     private(set) var memoryDeviceBytes: Int64 = 0
-    private(set) var virtioMem: DomainMemoryLayout.VirtioMem?
+    private(set) var virtioMem: ParsedVirtioMem?
 
     private var path: [String] = []
     private var text: String?
@@ -234,7 +266,7 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
             if let size = deviceSize {
                 memoryDeviceBytes += size
                 if isVirtioMem, let block = deviceBlock, block > 0 {
-                    virtioMem = DomainMemoryLayout.VirtioMem(
+                    virtioMem = ParsedVirtioMem(
                         sizeBytes: size, blockBytes: block, requestedBytes: deviceRequested ?? 0)
                 }
             }
