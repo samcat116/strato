@@ -13,6 +13,7 @@ agent/Sources/StratoAgentCore/DomainRedefinition.swift
 agent/Sources/StratoAgent/LibvirtService.swift
   s_01730cdafc8446::t_47fb87dfda3cff 87-92,711-712
   s_01730cdafc8446::t_dd9ae8ee6ec3d8 1469-1472,1475,1482,1487-1491,1493-1495,1497-1520,1522-1524,1526-1546,1549,1552
+  s_01730cdafc8446::t_4b33b3039e8caf 1496,1525,1551
 agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
   s_01730cdafc8446::t_f33ef0a303c034 662-808,817-818
   s_01730cdafc8446::t_4e92e79531a293 809-816
@@ -27,6 +28,10 @@ agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
   s_01730cdafc8446::t_47fb87dfda3cff 182-183
 agent/Sources/StratoAgentCore/DomainDeviceXML.swift
   s_01730cdafc8446::t_47fb87dfda3cff 36-40
+agent/Sources/StratoAgent/Agent+StorageReconciliation.swift
+  s_01730cdafc8446::t_a9c25674b986b4 557,573-574,604-610,614-616,625-627
+docs/adr/0005-agent-drives-libvirt-not-qemu.md
+  s_01730cdafc8446::t_8372efcc2f9d4f 102-105
 ---
 {
   "schema_version": "authorship/3.0.0",
