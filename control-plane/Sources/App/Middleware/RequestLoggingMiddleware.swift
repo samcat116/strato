@@ -1,7 +1,9 @@
 import Vapor
 
 /// Emits exactly one structured `http_request` log line per request — method,
-/// path, status, duration — whether the request succeeded or failed.
+/// matched route, status, duration — whether the request succeeded or failed.
+/// Route parameters remain placeholders so credentials and resource identifiers
+/// in concrete paths never enter the process log.
 ///
 /// On the error path the request may be turned into its HTTP response by a
 /// downstream middleware (`ErrorMiddleware`) *after* it propagates back through
@@ -24,21 +26,18 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
         }
 
         func log(status: HTTPResponseStatus, error: (any Error)? = nil) {
-            var metadata: Logger.Metadata = [
+            let metadata: Logger.Metadata = [
                 "method": .string(request.method.rawValue),
-                "path": .string(request.url.path),
+                "path": .string(request.secretSafeLogPath),
                 "status": .stringConvertible(status.code),
                 "durationMs": .stringConvertible(elapsedMilliseconds()),
             ]
-            if let error {
-                metadata["error"] = .string(String(reflecting: error))
-            }
             // Server-side failures are worth surfacing at error level; everything
             // else (incl. expected 4xx) stays at info so it's one uniform line.
             if status.code >= 500 {
-                request.logger.error("http_request", metadata: metadata)
+                request.logger.error("http_request", error: error, metadata: metadata)
             } else {
-                request.logger.info("http_request", metadata: metadata)
+                request.logger.info("http_request", error: error, metadata: metadata)
             }
         }
 
@@ -53,5 +52,30 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
             log(status: status, error: error)
             throw error
         }
+    }
+}
+
+extension Request {
+    /// A path that is safe to copy into process logs.
+    ///
+    /// Prefer the matched route because its parameters remain placeholders. A
+    /// middleware that rejects before routing cannot see `route`; recognize the
+    /// one credential-bearing pre-routing path explicitly and fail closed for
+    /// every other unmatched request rather than logging attacker-controlled
+    /// path components.
+    var secretSafeLogPath: String {
+        if let route {
+            return "/" + route.path.map { "\($0)" }.joined(separator: "/")
+        }
+
+        let components = url.path.split(separator: "/")
+        if components.count == 3,
+            components[0] == "auth",
+            components[1] == "claim"
+        {
+            return "/auth/claim/:token"
+        }
+
+        return "unmatched"
     }
 }

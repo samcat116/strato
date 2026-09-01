@@ -152,7 +152,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
                 metadata: [
                     "scope": .string(scope.rawValue),
                     "identity": .string(identity),
-                    "path": .string(request.url.path),
+                    "path": .string(request.secretSafeLogPath),
                 ])
             return limitedResponse(limit: policy.limit, resetAfter: count.ttl)
         }

@@ -108,11 +108,9 @@ struct WireMessageLoggingTests {
                 #expect(stringMetadata(key, in: entry) == value)
             }
 
-            let rendered = render(entry)
-            for sentinel in fixture.sentinels {
-                #expect(!rendered.contains(sentinel))
-            }
-            #expect(!rendered.contains(fixture.envelope.payload.base64EncodedString()))
+            LogLeakAssertions.expectNoSecrets(
+                fixture.sentinels + [fixture.envelope.payload.base64EncodedString()],
+                in: entries)
             #expect(entry.metadata["payload"] == nil)
             #expect(entry.metadata["body"] == nil)
             #expect(entry.metadata["preview"] == nil)
@@ -225,10 +223,13 @@ struct WireMessageLoggingTests {
                 "Failed to handle WebSocket message",
                 "Failed to decode WebSocket envelope",
             ])
-        let rendered = entries.map(render).joined(separator: "\n")
-        #expect(!rendered.contains("MALFORMED_BODY_SENTINEL_STR_283"))
-        #expect(!rendered.contains("MALFORMED_OUTER_SENTINEL_STR_283"))
-        #expect(!rendered.contains(envelope.payload.base64EncodedString()))
+        LogLeakAssertions.expectNoSecrets(
+            [
+                "MALFORMED_BODY_SENTINEL_STR_283",
+                "MALFORMED_OUTER_SENTINEL_STR_283",
+                envelope.payload.base64EncodedString(),
+            ],
+            in: entries)
         #expect(entries[0].metadata.keys.sorted() == ["direction", "type"])
         #expect(entries[1].metadata.keys.sorted() == ["byteCount", "direction"])
     }
@@ -250,7 +251,9 @@ struct WireMessageLoggingTests {
         #expect(handler.entries.count == 1)
         #expect(stringMetadata("requestId", in: entry) == "request-no-coding")
         #expect(stringMetadata("byteCount", in: entry) == String(16 << 20))
-        #expect(!render(entry).contains("CODING_TRAP_SECRET_STR_283"))
+        LogLeakAssertions.expectNoSecrets(
+            ["CODING_TRAP_SECRET_STR_283"],
+            in: handler.entries)
     }
 
     private struct Fixture {
@@ -329,10 +332,4 @@ struct WireMessageLoggingTests {
         return value
     }
 
-    private func render(_ entry: InMemoryLogHandler.Entry) -> String {
-        let metadata = entry.metadata.sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }
-            .joined(separator: " ")
-        return "\(entry.message) \(metadata)"
-    }
 }
