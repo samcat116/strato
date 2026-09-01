@@ -1,0 +1,54 @@
+.claude/settings.json
+  s_e96ba4ae06c4bf::t_2e772d9cb602fb 7-48,51,56-70,74-89
+docs/architecture/agent.md
+  s_01730cdafc8446::t_cd140014e568d6 330-332,337-345
+agent/Tests/StratoAgentTests/DomainBootOrderTests.swift
+  s_01730cdafc8446::t_84b6f1e98cd820 41-44,52-53,60,65-104
+  s_01730cdafc8446::t_2f1ad0e1ab94ab 1-40,54-59,61-64,105-106
+  s_01730cdafc8446::t_4e92e79531a293 45-51
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_01730cdafc8446::t_4e92e79531a293 126-127
+  s_01730cdafc8446::t_822c29a7283fd4 75-90,94-125,128-141
+  s_01730cdafc8446::t_2f1ad0e1ab94ab 73-74,91-93,142-143
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_01730cdafc8446::t_47fb87dfda3cff 87-92,711-712
+  s_01730cdafc8446::t_dd9ae8ee6ec3d8 1469-1472,1475,1482,1487-1491,1493-1495,1497-1520,1522-1524,1526-1546,1549,1552
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_01730cdafc8446::t_f33ef0a303c034 662-808,817-818
+  s_01730cdafc8446::t_4e92e79531a293 809-816
+  s_01730cdafc8446::t_bc3e75b2d4a95a 16-18,661,819
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_01730cdafc8446::t_c0871e849d6efe 142,151
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_01730cdafc8446::t_c0871e849d6efe 232-235,240
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_01730cdafc8446::t_c0871e849d6efe 815
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_01730cdafc8446::t_47fb87dfda3cff 182-183
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_01730cdafc8446::t_47fb87dfda3cff 36-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "1cd6bda430fae4ccf22ebd120be20fa45803ebb3",
+  "prompts": {},
+  "sessions": {
+    "s_01730cdafc8446": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-d8cf-7de3-97c1-67f2dad45e55",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
