@@ -1,0 +1,20 @@
+control-plane/Sources/App/Controllers/UserController.swift
+  s_bd67073331cbe0::t_6dbd14fe7cc2b4 384-394
+  s_bd67073331cbe0::t_6cd6394504f764 430-436,438-448
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "72f519ba1143ff8ce1fefcd3f1f18901649b8fe0",
+  "prompts": {},
+  "sessions": {
+    "s_bd67073331cbe0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2d63a8f9-ada9-44c9-9928-c6955658bdbf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
