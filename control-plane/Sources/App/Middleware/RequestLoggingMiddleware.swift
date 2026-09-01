@@ -2,7 +2,9 @@ import StratoShared
 import Vapor
 
 /// Emits exactly one structured `http_request` log line per request — method,
-/// route template, status, duration — whether the request succeeded or failed.
+/// matched route, status, duration — whether the request succeeded or failed.
+/// Route parameters remain placeholders so credentials and resource identifiers
+/// in concrete paths never enter the process log.
 ///
 /// On the error path the request may be turned into its HTTP response by a
 /// downstream middleware (`ErrorMiddleware`) *after* it propagates back through
@@ -13,8 +15,7 @@ import Vapor
 /// common 401/403/404 `Abort`s still get logged with their real status.
 ///
 /// Gated by the `REQUEST_LOGGING` env var; see `configure.swift` for the default
-/// (on outside `.production`). There was previously no request logging at all,
-/// which left the control plane silent about the traffic it was handling.
+/// (on outside `.production`).
 struct RequestLoggingMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
         let start = DispatchTime.now()
@@ -25,7 +26,7 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
         }
 
         func log(status: HTTPResponseStatus, error: (any Error)? = nil) {
-            let route = request.safeLogRoute
+            let route = request.secretSafeLogPath
             var metadata: Logger.Metadata = [
                 "method": .string(request.method.rawValue),
                 "http.route": .string(route),
@@ -63,29 +64,35 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
     }
 }
 
-extension Application {
-    /// Replace Vapor's default concrete-path access logger with Strato's
-    /// route-template logger while retaining Vapor's default error responses.
-    /// This must run before the rest of the application middleware is added.
-    func configureRequestLogging(enabled: Bool) {
-        var configuredMiddleware = Middlewares()
-        configuredMiddleware.use(ErrorMiddleware.requestLogSafeDefault(environment: environment))
-        if enabled {
-            configuredMiddleware.use(RequestLoggingMiddleware())
+extension Request {
+    /// A path that is safe to copy into process logs and metrics.
+    ///
+    /// Prefer the matched route because its parameters remain placeholders. A
+    /// middleware that rejects before routing cannot see `route`; recognize the
+    /// one credential-bearing pre-routing path explicitly and fail closed for
+    /// every other unmatched request rather than logging attacker-controlled
+    /// path components.
+    var secretSafeLogPath: String {
+        if let route {
+            return "/" + route.path.map { "\($0)" }.joined(separator: "/")
         }
-        middleware = configuredMiddleware
 
-        if enabled {
-            logger.info("Request logging enabled")
+        let components = url.path.split(separator: "/")
+        if components.count == 3,
+            components[0] == "auth",
+            components[1] == "claim"
+        {
+            return "/auth/claim/:token"
         }
+
+        return "unmatched"
     }
 }
 
 extension ErrorMiddleware {
-    /// Vapor's default error middleware reports the concrete request URL and the
-    /// full error description. Render the same response without creating a second,
-    /// secret-bearing request log; `RequestLoggingMiddleware` records the safe event.
-    fileprivate static func requestLogSafeDefault(environment: Environment) -> ErrorMiddleware {
+    /// Render Vapor-compatible error responses while emitting one always-on,
+    /// secret-safe event independently of the optional access log.
+    static func secretSafeDefault(environment: Environment) -> ErrorMiddleware {
         .init { request, error in
             let status: HTTPResponseStatus
             let reason: String
@@ -103,7 +110,7 @@ extension ErrorMiddleware {
                 (status, headers) = (.internalServerError, [:])
             }
 
-            let route = request.safeLogRoute
+            let route = request.secretSafeLogPath
             let metadata: Logger.Metadata = [
                 "method": .string(request.method.rawValue),
                 "http.route": .string(route),

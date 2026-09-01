@@ -424,7 +424,7 @@ actor Agent {
     // Desired-state transport (STR-146): the long-poll loop, started once
     // registration confirms the control plane.
     let desiredStateFullRefetchInterval: Duration
-    var desiredStatePoller: DesiredStatePoller?
+    var desiredStatePoller: DesiredStatePoller<ContinuousClock>?
 
     // Set when a failure is unrecoverable (e.g. the agent's identity was
     // rejected); start() rethrows it so the process exits non-zero instead
@@ -481,7 +481,7 @@ actor Agent {
         installMode: AgentInstallMode = .detect(),
         spiffeConfig: SPIFFEConfig? = nil,
         teardownGuard: TeardownGuard = TeardownGuard(),
-        desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval,
+        desiredStateFullRefetchInterval: Duration = DesiredStatePoller<ContinuousClock>.defaultFullRefetchInterval,
         metadataServiceEnabled: Bool = true,
         metadataHopLimit: Int = 1
     ) {

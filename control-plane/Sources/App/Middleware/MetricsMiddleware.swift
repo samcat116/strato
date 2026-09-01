@@ -27,7 +27,7 @@ struct MetricsMiddleware: AsyncMiddleware {
             let method = request.method.rawValue
             let statusClass = "\(statusCode / 100)xx"
             let durationSeconds = (clock.now - start).asSeconds
-            let route = request.safeLogRoute
+            let route = request.secretSafeLogPath
             Telemetry.recordHTTPRequest(
                 method: method,
                 route: route,
@@ -56,15 +56,5 @@ struct MetricsMiddleware: AsyncMiddleware {
     static func routeLabel(fromSegments segments: [String]?) -> String {
         guard let segments else { return "unmatched" }
         return "/" + segments.joined(separator: "/")
-    }
-}
-
-extension Request {
-    /// A bounded route label safe for logs and metrics. Vapor populates `route`
-    /// before middleware runs for matched requests; genuine unmatched requests
-    /// use one constant rather than any attacker-controlled URL component.
-    var safeLogRoute: String {
-        let routeSegments = route?.path.map { "\($0)" }
-        return MetricsMiddleware.routeLabel(fromSegments: routeSegments)
     }
 }

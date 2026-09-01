@@ -687,37 +687,7 @@ struct VMController: RouteCollection {
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
-        guard newCPU > 0 else { throw Abort(.badRequest, reason: "'cpu' must be positive") }
-        guard newMemory > 0 else { throw Abort(.badRequest, reason: "'memory' must be positive") }
-        guard newCPU <= Self.maxHotpluggableCPUs else {
-            throw Abort(.badRequest, reason: "'cpu' must not exceed \(Self.maxHotpluggableCPUs)")
-        }
-        // A stopped VM raises its own `maxMemory` to the new sizing below, so
-        // this one bound covers the ceiling too.
-        guard newMemory <= WorkloadSizeLimits.maxMemoryBytes else {
-            throw Abort(
-                .badRequest,
-                reason: "'memory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
-        }
-        if let target = newBalloonTarget {
-            // A target is a reclaim floor within the grant, so it is bounded
-            // by the memory the VM will have — growing a guest is `memory`,
-            // not the balloon. The lower bound is the guard the issue calls
-            // for: a target small enough to OOM the guest is a mistake the
-            // API can catch, not a policy it should let through.
-            guard target <= newMemory else {
-                throw Abort(
-                    .badRequest,
-                    reason: "'balloonTarget' must not exceed the VM's memory (\(newMemory) bytes); "
-                        + "raise 'memory' to give the guest more")
-            }
-            guard target >= Self.minimumBalloonTargetBytes else {
-                throw Abort(
-                    .badRequest,
-                    reason: "'balloonTarget' must be at least \(Self.minimumBalloonTargetBytes) bytes; "
-                        + "a smaller target would leave the guest too little memory to stay alive")
-            }
-        }
+        try Self.validateSizing(cpu: newCPU, memory: newMemory, balloonTarget: newBalloonTarget)
 
         guard let project = try await Project.find(existingVM.$project.id, on: req.db) else {
             throw Abort(.internalServerError, reason: "VM's project no longer exists")
@@ -742,18 +712,22 @@ struct VMController: RouteCollection {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
                 let committed = try await Self.committedVMSizing(existingVMID, on: db)
+                let lockedCPU = updateRequest.cpu ?? committed.cpu
+                let lockedMemory = updateRequest.memory ?? committed.memory
+                let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
+                try Self.validateSizing(
+                    cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
                 _ = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
-                    vcpuDelta: newCPU - committed.cpu,
-                    memoryDelta: newMemory - committed.memory,
-                    on: db)
-                existingVM.cpu = newCPU
-                existingVM.memory = newMemory
-                existingVM.balloonTarget = newBalloonTarget
-                existingVM.maxCpu = max(existingVM.maxCpu, newCPU)
-                existingVM.maxMemory = max(existingVM.maxMemory, newMemory)
+                    vcpuDelta: lockedCPU - committed.cpu,
+                    memoryDelta: lockedMemory - committed.memory, on: db)
+                existingVM.cpu = lockedCPU
+                existingVM.memory = lockedMemory
+                existingVM.balloonTarget = lockedBalloonTarget
+                existingVM.maxCpu = max(committed.maxCPU, lockedCPU)
+                existingVM.maxMemory = max(committed.maxMemory, lockedMemory)
                 // The stopped VM still has a desired-state entry the agent
                 // syncs on; bump so the new spec isn't dropped as stale.
                 let expectedGeneration = existingVM.generation
@@ -841,16 +815,22 @@ struct VMController: RouteCollection {
             // committed sizing — which is what makes the delta right rather
             // than merely refused.
             let committed = try await Self.committedVMSizing(existingVMID, on: db)
+            let lockedCPU = updateRequest.cpu ?? committed.cpu
+            let lockedMemory = updateRequest.memory ?? committed.memory
+            let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
+            try Self.validateSizing(
+                cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
             try await QuotaEnforcementService.reserveVMResize(
                 for: project, environment: existingVM.environment,
-                vcpuDelta: newCPU - committed.cpu, memoryDelta: newMemory - committed.memory, on: db)
-            existingVM.cpu = newCPU
-            existingVM.memory = newMemory
+                vcpuDelta: lockedCPU - committed.cpu,
+                memoryDelta: lockedMemory - committed.memory, on: db)
+            existingVM.cpu = lockedCPU
+            existingVM.memory = lockedMemory
             // Deliberately not a quota movement: ballooning reclaims memory
             // opportunistically, the grant the project is charged for is
             // still committed, and the guest takes it all back the moment the
             // target is cleared.
-            existingVM.balloonTarget = newBalloonTarget
+            existingVM.balloonTarget = lockedBalloonTarget
             // Desired status is unchanged — this is a spec change — but the
             // generation must still advance for the agent to apply it. The
             // generation it builds on came from `accept`'s refresh, so the
@@ -926,6 +906,38 @@ struct VMController: RouteCollection {
             reason: "Cannot reduce a running VM from \(current) to \(requested) vCPUs: "
                 + "live vCPU unplug is not supported. Stop the VM, resize it, then start it again; "
                 + "no resize was recorded.")
+    }
+
+    private static func validateSizing(cpu: Int, memory: Int64, balloonTarget: Int64?) throws {
+        guard cpu > 0 else { throw Abort(.badRequest, reason: "'cpu' must be positive") }
+        guard memory > 0 else { throw Abort(.badRequest, reason: "'memory' must be positive") }
+        guard cpu <= Self.maxHotpluggableCPUs else {
+            throw Abort(.badRequest, reason: "'cpu' must not exceed \(Self.maxHotpluggableCPUs)")
+        }
+        // A stopped VM raises its own `maxMemory` to the new sizing, so this
+        // one bound covers the ceiling too.
+        guard memory <= WorkloadSizeLimits.maxMemoryBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "'memory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
+        }
+        if let balloonTarget {
+            // A target is a reclaim floor within the grant. Re-checking this
+            // relation under the row lock matters when memory and balloon
+            // updates race and each began from the other's old value.
+            guard balloonTarget <= memory else {
+                throw Abort(
+                    .badRequest,
+                    reason: "'balloonTarget' must not exceed the VM's memory (\(memory) bytes); "
+                        + "raise 'memory' to give the guest more")
+            }
+            guard balloonTarget >= Self.minimumBalloonTargetBytes else {
+                throw Abort(
+                    .badRequest,
+                    reason: "'balloonTarget' must be at least \(Self.minimumBalloonTargetBytes) bytes; "
+                        + "a smaller target would leave the guest too little memory to stay alive")
+            }
+        }
     }
 
     /// Rejects a placed resize before quota, sizing, or generation mutate.
@@ -1038,16 +1050,16 @@ struct VMController: RouteCollection {
     /// `ResourceMutation.accept` already holds the row lock, so this sees what
     /// a racing resize committed rather than the request's own stale snapshot.
     ///
-    /// Read here rather than adopted by `accept`'s refresh because `cpu` and
-    /// `memory` are *mutation*-owned columns: the refresh deliberately leaves
-    /// them alone so this request's new sizing is not overwritten by the old.
+    /// Read here rather than adopted by `accept`'s refresh because sizing is
+    /// mutation-owned state: the refresh deliberately leaves it alone so this
+    /// request's explicit fields are not overwritten before they are merged.
     private static func committedVMSizing(_ id: UUID, on db: any Database) async throws -> CommittedVMSizing {
         guard let sql = db as? any SQLDatabase else {
             throw Abort(.internalServerError, reason: "Resizing a VM requires an SQL database")
         }
         guard
             let row = try await sql.raw(
-                "SELECT cpu, memory FROM vms WHERE id = \(bind: id)"
+                "SELECT cpu, max_cpu, memory, max_memory, balloon_target FROM vms WHERE id = \(bind: id)"
             ).first(decoding: CommittedVMSizing.self)
         else {
             throw Abort(.notFound, reason: "VM no longer exists")
@@ -1057,7 +1069,17 @@ struct VMController: RouteCollection {
 
     private struct CommittedVMSizing: Decodable {
         let cpu: Int
+        let maxCPU: Int
         let memory: Int64
+        let maxMemory: Int64
+        let balloonTarget: Int64?
+
+        enum CodingKeys: String, CodingKey {
+            case cpu, memory
+            case maxCPU = "max_cpu"
+            case maxMemory = "max_memory"
+            case balloonTarget = "balloon_target"
+        }
     }
 
     /// Upper bound on a VM's vCPU count, and so on the hotplug slots QEMU is

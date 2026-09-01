@@ -93,12 +93,15 @@ agent's testable core target rather than beside a linked SDK.
 ### 2. The domain document is the interface, and a boot reads it
 
 `createVM` calls `domainDefineXML`, and the next boot starts that definition
-rather than re-reading the spec. That single fact propagates: every in-place
-mutation is sent with `AFFECT_LIVE|AFFECT_CONFIG` so it lands on the running
-guest *and* in the definition the next boot reads, and a resize the guest cannot
-take online is written to `CONFIG` alone rather than deferred to a boot that
-would not pick it up. The one other writer is `redefineVM` (STR-187), which
-widens a stopped domain's ceilings before it starts and touches nothing else.
+rather than re-reading the spec. That single fact propagates: in-place
+mutations land on the running guest *and* in the definition the next boot reads,
+and a resize the guest cannot take online is written to `CONFIG` alone rather
+than deferred to a boot that would not pick it up. Most live mutations use
+`AFFECT_LIVE|AFFECT_CONFIG`; network detach applies `AFFECT_LIVE` and
+`AFFECT_CONFIG` as independently verified steps because libvirt does not make
+the combined operation atomic (STR-304). The one other writer is `redefineVM`
+(STR-187), which widens a stopped domain's ceilings before it starts and touches
+nothing else.
 
 `DomainXMLBuilder` is therefore an owned artifact, tested against eight golden
 documents that are validated three ways: against the RELAX-NG schema of libvirt

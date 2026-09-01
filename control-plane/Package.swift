@@ -36,7 +36,7 @@ let package = Package(
         .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift-protobuf.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.1"),
         .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
         .package(url: "https://github.com/samcat116/swift-cedar.git", from: "0.2.0"),
@@ -178,8 +178,8 @@ let package = Package(
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
-                .product(name: "InMemoryLogging", package: "swift-log"),
                 .product(name: "MetricsTestKit", package: "swift-metrics"),
+                .product(name: "InMemoryLogging", package: "swift-log"),
                 .product(name: "Logging", package: "swift-log"),
                 // Mints the throwaway server certificate GuardedHTTPClientTests
                 // uses to prove TLS is still verified against the hostname when

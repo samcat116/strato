@@ -70,8 +70,17 @@ public struct AgentLogHandlerFactory: Sendable {
         var handler = CustomLogHandler(
             label: label,
             metadataProvider: metadataProvider)
-        handler.logLevel = logLevel.loggerLevel
+        configure(&handler)
         return handler
+    }
+
+    /// Applies the process logging contract to an isolated handler.
+    ///
+    /// Production uses this through `makeHandler`; tests can apply the same
+    /// configuration to `InMemoryLogHandler` without bootstrapping global state.
+    public func configure(_ handler: inout some LogHandler) {
+        handler.logLevel = logLevel.loggerLevel
+        handler.metadataProvider = metadataProvider
     }
 
     public func bootstrap() {

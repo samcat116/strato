@@ -1,4 +1,4 @@
-import Foundation
+import InMemoryLogging
 import Logging
 import StratoShared
 import Testing
@@ -6,12 +6,6 @@ import Testing
 
 @Suite("Agent log level")
 struct AgentLogLevelTests {
-    private static let bootstrapChildEnvironmentKey = "STRATO_AGENT_LOG_LEVEL_BOOTSTRAP_CHILD"
-    private static let filteredMessage = "STRATO_AGENT_INFO_MUST_BE_FILTERED"
-    private static let visibleMessage = "STRATO_AGENT_WARNING_MUST_BE_VISIBLE"
-    private static let childSentinel = "STRATO_AGENT_LOG_LEVEL_BOOTSTRAP_PASSED"
-    private static let agentNameMetadata = #""strato.agent.name":"agent-284""#
-
     @Test("The authoritative parser accepts every supported level", arguments: AgentLogLevel.allCases)
     func parsesSupportedLevel(_ expected: AgentLogLevel) throws {
         #expect(try AgentLogLevel(parsing: expected.rawValue) == expected)
@@ -58,58 +52,38 @@ struct AgentLogLevelTests {
         #expect(resolved == .debug)
     }
 
-    @Test("The final factory filters plain root, subsystem, and dependency loggers process-wide")
-    func appliesProcessWideThreshold() async throws {
-        if ProcessInfo.processInfo.environment[Self.bootstrapChildEnvironmentKey] != "1" {
-            try await launchIsolatedBootstrapTest()
-            return
-        }
-
+    @Test("The final factory filters every isolated logger at the configured threshold")
+    func appliesConfiguredThreshold() {
         let processMetadata = DynamicLogMetadata([
             LogMetadata.Key.serviceName: "strato-agent"
         ])
         let factory = AgentLogHandlerFactory(
             logLevel: .warning,
             metadataProvider: processMetadata.provider)
-        factory.bootstrap()
-        let root = Logger(label: "strato-agent")
-        processMetadata[metadataKey: LogMetadata.Key.agentName] = "agent-284"
-        let subsystem = Logger(label: "strato-agent.storage-device-inventory")
-        let dependencyLogger = Logger(label: "dependency-created-logger")
+        let handler = InMemoryLogHandler()
+        var configuredHandler = handler
+        factory.configure(&configuredHandler)
 
-        #expect(root.logLevel == .warning)
-        #expect(subsystem.logLevel == .warning)
-        #expect(dependencyLogger.logLevel == .warning)
-        root.info("\(Self.filteredMessage)")
-        dependencyLogger.warning("\(Self.visibleMessage)")
-        print(Self.childSentinel)
-    }
-
-    private func launchIsolatedBootstrapTest() async throws {
-        var environment = ProcessInfo.processInfo.environment
-        environment[Self.bootstrapChildEnvironmentKey] = "1"
-        var arguments = Array(CommandLine.arguments.dropFirst())
-        if let filterIndex = arguments.firstIndex(of: "--filter"),
-            arguments.indices.contains(filterIndex + 1)
-        {
-            arguments[filterIndex + 1] = "AgentLogLevelTests.appliesProcessWideThreshold"
-        } else {
-            arguments.append(
-                contentsOf: ["--filter", "AgentLogLevelTests.appliesProcessWideThreshold"])
+        let labels = [
+            "strato-agent",
+            "strato-agent.storage-device-inventory",
+            "dependency-created-logger",
+        ]
+        let loggers = labels.map { label in
+            Logger(label: label) { _ in configuredHandler }
         }
+        processMetadata[metadataKey: LogMetadata.Key.agentName] = "agent-284"
 
-        let result = try await ProcessRunner.run(
-            executableURL: URL(fileURLWithPath: CommandLine.arguments[0]),
-            arguments: arguments,
-            timeout: .seconds(30),
-            environment: environment,
-            maxOutputBytes: 1 << 20)
-        let output = result.combinedOutput
+        for logger in loggers {
+            #expect(logger.logLevel == .warning)
+            logger.info("filtered")
+        }
+        loggers[2].warning("visible")
 
-        try #require(result.terminationStatus == 0, "isolated logging test failed: \(output)")
-        #expect(output.contains(Self.childSentinel))
-        #expect(output.contains(Self.visibleMessage))
-        #expect(output.contains(Self.agentNameMetadata))
-        #expect(!output.contains(Self.filteredMessage))
+        #expect(handler.entries.count == 1)
+        #expect(handler.entries.first?.level == .warning)
+        #expect(handler.entries.first?.message == "visible")
+        #expect(handler.entries.first?.metadata[LogMetadata.Key.serviceName] == "strato-agent")
+        #expect(handler.entries.first?.metadata[LogMetadata.Key.agentName] == "agent-284")
     }
 }

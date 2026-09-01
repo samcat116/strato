@@ -147,7 +147,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
         let remaining = max(0, policy.limit - count.count)
         if count.count > policy.limit {
-            let route = request.safeLogRoute
+            let route = request.secretSafeLogPath
             request.logger.warning(
                 "rate_limit_exceeded",
                 metadata: [

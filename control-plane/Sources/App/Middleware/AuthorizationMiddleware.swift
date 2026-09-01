@@ -255,7 +255,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             // (`assertAllRoutesClassified`), so this is a request for a path
             // that matches no route at all — or a gap in that assertion.
             // Either way: default deny.
-            let route = request.safeLogRoute
+            let route = request.secretSafeLogPath
             request.logger.error(
                 "Request for unclassified path denied",
                 metadata: [
@@ -321,7 +321,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         guard response.status.code < 400, response.status != .switchingProtocols else { return }
         guard !request.iamAuthState.decisionEvaluated.withLockedValue({ $0 }) else { return }
 
-        let route = request.safeLogRoute
+        let route = request.secretSafeLogPath
         request.logger.error(
             "Mutating handler served without an authorization decision",
             metadata: [
@@ -477,6 +477,18 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             CedarSchemaBuilder.resourceTypes(for: check.action).contains(check.node.type.cedarEntityType)
         else {
             throw Abort(.internalServerError, reason: "Route names an invalid IAM action and node")
+        }
+
+        // VM clients poll the object route until a delete's row is reaped, and
+        // absence is the documented terminal condition. Resolve the same IAM
+        // tree slice authorization needs before evaluating the object: a
+        // missing leaf must return 404 rather than fail Cedar's ancestry check
+        // as a misleading 403. The resolution is request-cached, so an existing
+        // VM still pays only the authorization walk it already required.
+        if check.node.type == .virtualMachine {
+            let resolution = try await IAMResourceTree.resolve(
+                check.node, cache: request.iamCache, on: request.db)
+            guard resolution.leafResolved else { throw Abort(.notFound) }
         }
 
         let decision = try await IAMAuthorizer.authorize(

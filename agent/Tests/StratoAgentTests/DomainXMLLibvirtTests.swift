@@ -564,6 +564,98 @@ struct DomainXMLLibvirtTests {
         }
     }
 
+    /// Reproduces STR-304 at the boundary only a running libvirt domain has:
+    /// the live guest and its persistent definition can contain different
+    /// devices. The production detach plan is used to converge a normal attach,
+    /// then replayed once from each half-applied state.
+    @Test(
+        "network hot-unplug converges live and persistent definitions across replay",
+        .enabled(if: startsGuests, "STRATO_LIBVIRT_TEST_START is not set"))
+    func liveNetworkDetachRecoversPartialDefinitions() throws {
+        let bootROM = try #require(Self.hostBootROM)
+        let architecture = try #require(Self.hostArchitecture)
+        let name = "strato-network-detach-\(ProcessInfo.processInfo.processIdentifier)"
+        let mac = "52:54:00:aa:bb:30"
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let disk = directory.appendingPathComponent("disk.raw")
+        FileManager.default.createFile(atPath: disk.path, contents: nil)
+        try FileHandle(forWritingTo: disk).truncate(atOffset: 1024 * 1024)
+        let input = DomainXMLInput(
+            vmId: name, vmDirectory: directory.path,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
+                console: ConsoleSpec()),
+            disks: [ResolvedDisk(attachment: .file(path: disk.path, format: .raw))],
+            networks: [], architecture: architecture,
+            accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
+            firmware: .monolithic(path: bootROM))
+        let document = Self.defineable(
+            try DomainXMLBuilder.build(input), name: name, substitutingFirmware: false)
+        let attached = """
+            <interface type='ethernet'>
+              <mac address='\(mac)'/>
+              <model type='virtio'/>
+            </interface>
+            """ + "\n"
+        let detached = DomainDeviceXML.detachNetwork(macAddress: mac)
+
+        try Self.withDefinedDomain(name: name, document: document) { _ in
+            let started = try Self.run(["start", name])
+            try #require(started.status == 0, "the network detach guest would not start: \(started.output)")
+
+            func attachToBothDefinitions() throws {
+                let result = try Self.changeDevice(
+                    "attach-device", fragment: attached, domain: name, flags: ["--live", "--config"])
+                try #require(result.status == 0, "network hot-plug failed: \(result.output)")
+                try #require(
+                    try Self.waitForNetworkInterface(
+                        domain: name, macAddress: mac, scope: .live, present: true),
+                    "the hot-plugged NIC never appeared in live XML")
+                try #require(
+                    try Self.waitForNetworkInterface(
+                        domain: name, macAddress: mac, scope: .config, present: true),
+                    "the hot-plugged NIC never appeared in persistent XML")
+                #expect(try Self.networkDetachPlan(domain: name, macAddress: mac).scopes == [.live, .config])
+            }
+
+            // The ordinary path removes the live device first, then config.
+            try attachToBothDefinitions()
+            try Self.convergeNetworkDetach(domain: name, macAddress: mac)
+            #expect(try Self.networkDetachPlan(domain: name, macAddress: mac).scopes.isEmpty)
+
+            // The reported failure boundary: config changed, QEMU still owns
+            // the live interface. Replay must target only live state.
+            try attachToBothDefinitions()
+            let configOnly = try Self.changeDevice(
+                "detach-device", fragment: detached, domain: name, flags: ["--config"])
+            try #require(configOnly.status == 0, "config-only detach failed: \(configOnly.output)")
+            try #require(
+                try Self.waitForNetworkInterface(
+                    domain: name, macAddress: mac, scope: .config, present: false),
+                "the config-only detach never left the partial state")
+            #expect(try Self.networkDetachPlan(domain: name, macAddress: mac).scopes == [.live])
+            try Self.convergeNetworkDetach(domain: name, macAddress: mac)
+            #expect(try Self.networkDetachPlan(domain: name, macAddress: mac).scopes.isEmpty)
+
+            // The inverse partial state is just as replayable.
+            try attachToBothDefinitions()
+            let liveOnly = try Self.changeDevice(
+                "detach-device", fragment: detached, domain: name, flags: ["--live"])
+            try #require(liveOnly.status == 0, "live-only detach failed: \(liveOnly.output)")
+            try #require(
+                try Self.waitForNetworkInterface(
+                    domain: name, macAddress: mac, scope: .live, present: false),
+                "the live-only detach never left the inverse partial state")
+            #expect(try Self.networkDetachPlan(domain: name, macAddress: mac).scopes == [.config])
+            try Self.convergeNetworkDetach(domain: name, macAddress: mac)
+            #expect(try Self.networkDetachPlan(domain: name, macAddress: mac).scopes.isEmpty)
+        }
+    }
+
     // MARK: - Property 4: a widened definition is one libvirt still accepts
 
     /// The half of STR-187 that only a daemon can answer, and it is two
@@ -764,6 +856,61 @@ struct DomainXMLLibvirtTests {
         try fragment.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         return try run(["attach-device", domain, file.path, "--config"]).status == 0
+    }
+
+    private static func networkDetachPlan(
+        domain: String, macAddress: String
+    ) throws -> DomainNetworkDetachPlan {
+        try DomainNetworkDetachPlan(
+            macAddress: macAddress,
+            liveDomainXML: run(["dumpxml", domain]).output,
+            inactiveDomainXML: run(["dumpxml", "--inactive", domain]).output)
+    }
+
+    /// Applies the same independently replayable scope order as
+    /// `LibvirtService.detachNetworkInterface`, against a real daemon.
+    private static func convergeNetworkDetach(domain: String, macAddress: String) throws {
+        let fragment = DomainDeviceXML.detachNetwork(macAddress: macAddress)
+        for scope in try networkDetachPlan(domain: domain, macAddress: macAddress).scopes {
+            let flag = scope == .live ? "--live" : "--config"
+            let result = try changeDevice(
+                "detach-device", fragment: fragment, domain: domain, flags: [flag])
+            try #require(result.status == 0, "\(flag) network detach failed: \(result.output)")
+            try #require(
+                try waitForNetworkInterface(
+                    domain: domain, macAddress: macAddress, scope: scope, present: false),
+                "\(flag) network detach did not converge in domain XML")
+        }
+    }
+
+    private static func waitForNetworkInterface(
+        domain: String,
+        macAddress: String,
+        scope: DomainNetworkDetachScope,
+        present: Bool
+    ) throws -> Bool {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while ContinuousClock.now < deadline {
+            let xml =
+                try scope == .live
+                ? run(["dumpxml", domain]).output
+                : run(["dumpxml", "--inactive", domain]).output
+            let contains = try DomainNetworkInventory.macAddresses(inDomainXML: xml)
+                .contains(macAddress)
+            if contains == present { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return false
+    }
+
+    private static func changeDevice(
+        _ command: String, fragment: String, domain: String, flags: [String]
+    ) throws -> (status: Int32, output: String) {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("\(domain)-network-device.xml")
+        try fragment.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        return try run([command, domain, file.path] + flags)
     }
 
     /// Defines `document`, hands the resulting `dumpxml` to `body`, and undefines
