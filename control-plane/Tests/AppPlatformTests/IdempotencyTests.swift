@@ -224,7 +224,13 @@ struct IdempotencyTests {
 
     @Test("an in-flight duplicate waits for the winner and never reaches the mutation")
     func inFlightDuplicateSerializes() async throws {
-        let app = try await Application.makeForTesting()
+        // The winner parks inside an open transaction while the duplicate and
+        // this test body each need a connection of their own. With Fluent's
+        // default single connection per event loop, the duplicate's
+        // `db.transaction` can starve behind the winner's parked connection
+        // whenever both land on the same loop of the shared two-loop group,
+        // and the whole suite hangs on the resulting three-way latch deadlock.
+        let app = try await Application.makeForTesting(maxConnectionsPerEventLoop: 4)
         do {
             try await configure(app)
             try await app.autoMigrate()
@@ -273,6 +279,29 @@ struct IdempotencyTests {
             }
 
             await secondEnteredTransaction.wait()
+            // Release the winner only once the duplicate's INSERT is visibly
+            // blocked on the winner's uncommitted reservation, so the test
+            // exercises PostgreSQL's in-flight wait every run rather than the
+            // easier committed-row conflict.
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct WaiterCount: Decodable { let count: Int }
+            let blockedDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while true {
+                let waiters = try await sql.raw(
+                    """
+                    SELECT COUNT(*) AS count FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND wait_event_type = 'Lock'
+                      AND query ILIKE '%idempotency_keys%'
+                    """
+                ).first(decoding: WaiterCount.self)
+                if (waiters?.count ?? 0) > 0 { break }
+                if ContinuousClock.now > blockedDeadline {
+                    Issue.record("The duplicate reserve never blocked on the winner's reservation")
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
             await releaseFirst.signal()
             try await first.value
             #expect(await second.value)
