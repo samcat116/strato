@@ -325,8 +325,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     // MARK: - SandboxRuntimeService
 
     func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease? {
-        try await ensureWarmTemplateSweep()
         jailUIDReleaseReady.remove(sandboxId)
+        guard jailUIDPolicy.requiresLease else { return nil }
+        try await ensureWarmTemplateSweep()
         return try jailUIDPolicy.lease(for: sandboxId, from: &jailUIDs)
     }
 

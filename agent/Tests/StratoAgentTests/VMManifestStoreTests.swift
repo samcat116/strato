@@ -237,22 +237,45 @@ struct VMManifestStoreTests {
         #expect(loaded.vsockCID == nil)
     }
 
+    @Test("An explicitly unjailed sandbox stays UID-less across restart")
+    func unjailedSandboxRoundTrip() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+        let spec = SandboxSpec(image: "alpine:3", cpus: 2, memoryBytes: 2048)
+
+        store.save([
+            "sandbox-a": VMManifestEntry(
+                sandboxSpec: spec, jailUID: nil, jailerUsed: false)
+        ])
+
+        let loaded = try #require(store.load().loadedEntries["sandbox-a"])
+        #expect(loaded.kind == .sandbox)
+        #expect(loaded.jailUID == nil)
+        #expect(loaded.jailerUsed == false)
+        #expect(!loaded.needsLegacyJailUIDAdoption)
+    }
+
     @Test("A sandbox entry written before STR-290 decodes without a jail uid")
     func entryWithoutSandboxJailUIDDecodes() throws {
         let encoded = try JSONEncoder().encode(
             VMManifestEntry(
                 sandboxSpec: SandboxSpec(image: "alpine:3", cpus: 2, memoryBytes: 2048),
-                jailUID: 250_123))
+                jailUID: 250_123,
+                jailerUsed: true))
         var object = try #require(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(object["jailUID"] != nil)
         object.removeValue(forKey: "jailUID")
+        object.removeValue(forKey: "jailerUsed")
 
         let legacy = try JSONSerialization.data(withJSONObject: object)
         let decoded = try JSONDecoder().decode(VMManifestEntry.self, from: legacy)
 
         #expect(decoded.kind == .sandbox)
         #expect(decoded.jailUID == nil)
+        #expect(decoded.jailerUsed == nil)
+        #expect(decoded.needsLegacyJailUIDAdoption)
     }
 
     @Test("Recording a jail uid preserves the sandbox's durable history")
@@ -268,6 +291,7 @@ struct VMManifestStoreTests {
         #expect(recorded.sandboxSpec?.cpus == entry.sandboxSpec?.cpus)
         #expect(recorded.appliedEdges == entry.appliedEdges)
         #expect(recorded.jailUID == 250_123)
+        #expect(recorded.jailerUsed == true)
     }
 
     @Test("A legacy sandbox uid adoption is durable across the next manifest load")
@@ -396,6 +420,31 @@ struct VMManifestStoreTests {
         let quarantined = try #require(store.load().loadedQuarantined["sandbox-future"])
         #expect(quarantined.jailUID == 250_123)
         #expect(quarantined.kind == .sandbox)
+    }
+
+    @Test("A quarantined unjailed sandbox preserves its explicit UID-less state")
+    func quarantinedEntrySalvagesUnjailedState() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+        store.save([
+            "sandbox-future": VMManifestEntry(
+                sandboxSpec: SandboxSpec(image: "alpine:3", cpus: 1, memoryBytes: 1024),
+                jailerUsed: false)
+        ])
+        var raw = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: store.path)))
+                as? [String: Any])
+        var future = try #require(raw["sandbox-future"] as? [String: Any])
+        future["hypervisorType"] = "future-firecracker"
+        raw["sandbox-future"] = future
+        try JSONSerialization.data(withJSONObject: raw).write(to: URL(fileURLWithPath: store.path))
+
+        let quarantined = try #require(store.load().loadedQuarantined["sandbox-future"])
+        #expect(quarantined.jailUID == nil)
+        #expect(quarantined.jailerUsed == false)
+        #expect(quarantined.kind == .sandbox)
+        #expect(!quarantined.needsLegacyJailUIDAdoption)
     }
 
     @Test("A path-only manifest disk recovers only from a managed desired identity")

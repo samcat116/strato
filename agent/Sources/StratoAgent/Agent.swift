@@ -3005,14 +3005,15 @@ extension Agent {
             manifestReadFailure = nil
             sandboxJailUIDRecoveryBlockedReason = nil
             quarantinedWorkloads = quarantined
-            // STR-290 migration: a nil field is an old manifest, not an
-            // invitation to allocate a different identity. Recover the owner
-            // of a surviving jail when possible; otherwise replay the exact
-            // historical hash base (including the retired 100000 default),
-            // then persist it before any new sandbox can be created.
+            // STR-290 migration: a nil jailUID on an entry with no recorded
+            // creation mode is an old manifest, not an invitation to allocate
+            // a different identity. Explicitly unjailed entries keep nil.
+            // Recover a surviving jail's owner when possible; otherwise replay
+            // the exact historical hash base (including the retired 100000
+            // default), then persist it before any new sandbox can be created.
             var adoptedLegacyJailUIDs: [String: UInt32] = [:]
             for id in entries.keys.sorted() {
-                guard let entry = entries[id], entry.kind == .sandbox, entry.jailUID == nil,
+                guard let entry = entries[id], entry.needsLegacyJailUIDAdoption,
                     let uid = legacyJailUID(for: id)
                 else { continue }
                 entries[id] = entry.recordingJailUID(uid)
@@ -3150,7 +3151,7 @@ extension Agent {
         var claims: [(id: String, uid: UInt32)] =
             entries.compactMap { id, entry in entry.jailUID.map { (id, $0) } }
             + quarantined.compactMap { id, entry in entry.jailUID.map { (id, $0) } }
-        for (id, entry) in quarantined where entry.jailUID == nil && entry.effectiveKind == .sandbox {
+        for (id, entry) in quarantined where entry.needsLegacyJailUIDAdoption {
             guard let uid = legacyJailUID(for: id) else { continue }
             claims.append((id, uid))
             let result = sandboxJailUIDs.reserve(uid, for: id)
@@ -4306,31 +4307,33 @@ extension Agent: ReconcileActuator {
             throw SandboxRuntimeError.sandboxNotFound(item.id)
         }
 
-        // Adoption is allowed only with the durable identity this process was
-        // originally created under. Startup normally restored this claim
-        // before the runtime was built; repeating the reservation here makes
-        // the invariant explicit on recovery/retry paths too.
-        guard let jailUID = entry.jailUID else {
-            throw SandboxRuntimeError.jailIdentityUnavailable(
-                "sandbox \(item.id) has no persisted jail uid/gid assignment")
-        }
-        switch await runtime.reserveJailUID(jailUID, for: item.id) {
-        case .reserved, .unchanged:
-            break
-        case .conflict(let holder):
-            // Both processes may already exist under this legacy collision.
-            // Keep the uid poisoned against every new create, but use the
-            // manifest value to reconnect this particular existing jail.
-            logger.warning(
-                "Re-adopting a legacy sandbox whose jail uid/gid is duplicated",
-                metadata: [
-                    "strato.sandbox.id": .string(item.id),
-                    "uid": .stringConvertible(jailUID),
-                    "otherSandboxId": .string(holder),
-                ])
-        case .notAssignable:
-            throw SandboxRuntimeError.jailIdentityUnavailable(
-                "manifest uid/gid \(jailUID) is not a usable jail identity")
+        // Jailed adoption is allowed only with the durable identity this
+        // process was created under. An explicitly unjailed entry has no host
+        // identity to reserve and must remain usable after restart.
+        let jailUID = entry.jailUID
+        if entry.jailerUsed != false {
+            guard let jailUID else {
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "sandbox \(item.id) has no persisted jail uid/gid assignment")
+            }
+            switch await runtime.reserveJailUID(jailUID, for: item.id) {
+            case .reserved, .unchanged:
+                break
+            case .conflict(let holder):
+                // Both processes may already exist under this legacy collision.
+                // Keep the uid poisoned against every new create, but use the
+                // manifest value to reconnect this particular existing jail.
+                logger.warning(
+                    "Re-adopting a legacy sandbox whose jail uid/gid is duplicated",
+                    metadata: [
+                        "strato.sandbox.id": .string(item.id),
+                        "uid": .stringConvertible(jailUID),
+                        "otherSandboxId": .string(holder),
+                    ])
+            case .notAssignable:
+                throw SandboxRuntimeError.jailIdentityUnavailable(
+                    "manifest uid/gid \(jailUID) is not a usable jail identity")
+            }
         }
 
         let status: SandboxStatus
@@ -5975,6 +5978,7 @@ extension Agent: ReconcileActuator {
         let provisionalEntry = VMManifestEntry(
             sandboxSpec: desired.spec,
             jailUID: jailUIDLease?.uid,
+            jailerUsed: runtime.requiresJailUID,
             appliedEdges: (previousManaged ?? previousOrphan)?.appliedEdges)
         managedSandboxes[item.id] = provisionalEntry
         orphanedSandboxes.removeValue(forKey: item.id)
@@ -6149,7 +6153,7 @@ extension Agent: ReconcileActuator {
             return
         }
         let jailUID = entry.jailUID
-        if runtime.requiresJailUID, jailUID == nil {
+        if runtime.requiresJailUID, entry.jailerUsed != false, jailUID == nil {
             throw SandboxRuntimeError.jailIdentityUnavailable(
                 "sandbox \(item.id) has no persisted jail uid/gid")
         }

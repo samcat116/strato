@@ -47,6 +47,19 @@ public struct VMManifestEntry: Codable, Sendable {
     /// either here lets startup reservation report a corrupt manifest claim
     /// rather than silently rewriting it.
     public private(set) var jailUID: UInt32?
+    /// Whether this sandbox was created through the Firecracker jailer.
+    ///
+    /// False is an explicit, durable statement that the sandbox has no host
+    /// jail identity. Nil is reserved for VMs and sandbox manifests written
+    /// before this fact was recorded; only those legacy sandbox entries may
+    /// adopt the historical hash-derived uid during startup.
+    public private(set) var jailerUsed: Bool?
+    /// True only for the ambiguous pre-marker shape that needs one-time
+    /// STR-290 adoption. A marked jailed entry with no uid is corrupt and must
+    /// fail closed rather than receiving a newly invented identity.
+    public var needsLegacyJailUIDAdoption: Bool {
+        kind == .sandbox && jailUID == nil && jailerUsed == nil
+    }
     /// The edge nonces this host has already applied for the workload — the
     /// last reboot and the last restore (ADR 0001 stage 9, STR-151).
     ///
@@ -99,6 +112,7 @@ public struct VMManifestEntry: Codable, Sendable {
         self.sandboxSpec = nil
         self.vsockCID = vsockCID
         self.jailUID = nil
+        self.jailerUsed = nil
         self.appliedEdges = appliedEdges
         self.firecrackerMMDSPolicyApplied = firecrackerMMDSPolicyApplied
         self.firecrackerMMDSInterfaces = firecrackerMMDSInterfaces
@@ -109,6 +123,7 @@ public struct VMManifestEntry: Codable, Sendable {
     public init(
         sandboxSpec: SandboxSpec,
         jailUID: UInt32? = nil,
+        jailerUsed: Bool? = nil,
         appliedEdges: AppliedEdgeNonces? = nil
     ) {
         self.kind = .sandbox
@@ -119,6 +134,7 @@ public struct VMManifestEntry: Codable, Sendable {
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil
         self.jailUID = jailUID
+        self.jailerUsed = jailerUsed
         self.appliedEdges = appliedEdges
         self.firecrackerMMDSPolicyApplied = nil
         self.firecrackerMMDSInterfaces = nil
@@ -156,6 +172,7 @@ public struct VMManifestEntry: Codable, Sendable {
             "a sandbox jail uid must be a concrete non-root identity")
         var copy = self
         copy.jailUID = uid
+        copy.jailerUsed = true
         return copy
     }
 
@@ -262,6 +279,14 @@ public struct QuarantinedManifestEntry: Sendable {
     /// have a live process and owned files under this identity, so the uid stays
     /// unavailable to new sandboxes even though this build cannot route it.
     public let jailUID: UInt32?
+    /// Salvaged creation-time jailer state. False prevents a future-schema,
+    /// explicitly unjailed sandbox from acquiring an invented legacy uid.
+    public let jailerUsed: Bool?
+    /// The quarantined equivalent of
+    /// ``VMManifestEntry.needsLegacyJailUIDAdoption``.
+    public var needsLegacyJailUIDAdoption: Bool {
+        effectiveKind == .sandbox && jailUID == nil && jailerUsed == nil
+    }
     /// Why this entry could not be used, for the log and the operator.
     public let reason: String
     /// The entry as read, for verbatim re-persistence.
@@ -275,6 +300,7 @@ public struct QuarantinedManifestEntry: Sendable {
         diskBytes: Int64,
         vsockCID: UInt32?,
         jailUID: UInt32?,
+        jailerUsed: Bool? = nil,
         reason: String,
         raw: CodableValue
     ) {
@@ -285,6 +311,7 @@ public struct QuarantinedManifestEntry: Sendable {
         self.diskBytes = diskBytes
         self.vsockCID = vsockCID
         self.jailUID = jailUID
+        self.jailerUsed = jailerUsed
         self.reason = reason
         self.raw = raw
     }
@@ -617,6 +644,7 @@ private struct PartiallyDecodedManifest: Decodable {
             diskBytes: reservation?.diskBytes ?? 0,
             vsockCID: salvaged?.vsockCID,
             jailUID: salvaged?.jailUID,
+            jailerUsed: salvaged?.jailerUsed,
             reason: reason,
             raw: raw
         )
@@ -651,9 +679,10 @@ private struct SalvagedEntry: Decodable {
     let sandboxSpec: Reservation?
     let vsockCID: UInt32?
     let jailUID: UInt32?
+    let jailerUsed: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case kind, hypervisorType, spec, sandboxSpec, vsockCID, jailUID
+        case kind, hypervisorType, spec, sandboxSpec, vsockCID, jailUID, jailerUsed
     }
 
     init(from decoder: any Decoder) throws {
@@ -664,6 +693,7 @@ private struct SalvagedEntry: Decodable {
         sandboxSpec = try? c.decodeIfPresent(Reservation.self, forKey: .sandboxSpec)
         vsockCID = try? c.decodeIfPresent(UInt32.self, forKey: .vsockCID)
         jailUID = try? c.decodeIfPresent(UInt32.self, forKey: .jailUID)
+        jailerUsed = try? c.decodeIfPresent(Bool.self, forKey: .jailerUsed)
     }
 }
 
