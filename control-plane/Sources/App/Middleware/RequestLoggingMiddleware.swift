@@ -1,3 +1,4 @@
+import StratoShared
 import Vapor
 
 /// Emits exactly one structured `http_request` log line per request — method,
@@ -24,11 +25,7 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
         }
 
         func log(status: HTTPResponseStatus, error: (any Error)? = nil) {
-            var routeSegments: [String]?
-            if let matchedRoute = request.route {
-                routeSegments = matchedRoute.path.map { "\($0)" }
-            }
-            let route = MetricsMiddleware.routeLabel(fromSegments: routeSegments)
+            let route = request.safeLogRoute
             var metadata: Logger.Metadata = [
                 "method": .string(request.method.rawValue),
                 "http.route": .string(route),
@@ -104,6 +101,21 @@ extension ErrorMiddleware {
             default:
                 reason = environment.isRelease ? "Something went wrong." : String(describing: error)
                 (status, headers) = (.internalServerError, [:])
+            }
+
+            let route = request.safeLogRoute
+            let metadata: Logger.Metadata = [
+                "method": .string(request.method.rawValue),
+                "http.route": .string(route),
+                "path": .string(route),
+                "status": .stringConvertible(status.code),
+                "error": .string(String(reflecting: type(of: error))),
+                LogMetadata.Key.requestID: .string(request.id),
+            ]
+            if status.code >= 500 {
+                request.logger.error("http_request_error", metadata: metadata)
+            } else {
+                request.logger.info("http_request_error", metadata: metadata)
             }
 
             let body: Response.Body
