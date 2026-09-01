@@ -250,14 +250,18 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     }
 
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
-        let path = request.url.path
-
         guard let routeClass = Self.classify(request: request) else {
             // Boot refuses to start with an unclassified route registered
             // (`assertAllRoutesClassified`), so this is a request for a path
             // that matches no route at all — or a gap in that assertion.
             // Either way: default deny.
-            request.logger.error("Request for unclassified path denied", metadata: ["path": .string(path)])
+            let route = request.secretSafeLogPath
+            request.logger.error(
+                "Request for unclassified path denied",
+                metadata: [
+                    "http.route": .string(route),
+                    "path": .string(route),
+                ])
             throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
 
@@ -317,10 +321,12 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         guard response.status.code < 400, response.status != .switchingProtocols else { return }
         guard !request.iamAuthState.decisionEvaluated.withLockedValue({ $0 }) else { return }
 
+        let route = request.secretSafeLogPath
         request.logger.error(
             "Mutating handler served without an authorization decision",
             metadata: [
-                "path": .string(request.url.path),
+                "http.route": .string(route),
+                "path": .string(route),
                 "method": .string(request.method.rawValue),
             ])
         if request.application.environment == .testing {

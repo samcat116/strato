@@ -35,6 +35,7 @@ struct LoggingContractTests {
         #expect(entry.message == "http_request")
         #expect(entry.error == nil)
         #expect(entry.metadata["method"] == "GET")
+        #expect(entry.metadata["http.route"] == "/auth/claim/:token")
         #expect(entry.metadata["path"] == "/auth/claim/:token")
         #expect(entry.metadata["status"] == .stringConvertible(204))
         #expect(entry.metadata["durationMs"] != nil)
@@ -94,15 +95,18 @@ struct LoggingContractTests {
 
         let rateLimitEntry = try #require(
             capture.handler.entries.first { $0.message == "rate_limit_exceeded" })
+        #expect(rateLimitEntry.metadata["http.route"] == "/auth/claim/:token")
         #expect(rateLimitEntry.metadata["path"] == "/auth/claim/:token")
         let errorEntry = try #require(
-            capture.handler.entries.first { $0.metadata["url"] != nil })
-        #expect(errorEntry.metadata["url"] == "/auth/claim/:token")
+            capture.handler.entries.first { $0.message == "http_request_error" })
+        #expect(errorEntry.metadata["http.route"] == "/auth/claim/:token")
+        #expect(errorEntry.metadata["path"] == "/auth/claim/:token")
+        #expect(errorEntry.error == nil)
         capture.expectNoSecrets([validSecret, invalidSecret])
     }
 
-    @Test("Request failures retain their typed error")
-    func requestFailureRetainsTypedError() async throws {
+    @Test("Request failures retain a stable error type without rendering the error")
+    func requestFailureRetainsStableErrorType() async throws {
         let capture = InMemoryLogCapture(label: "request-error-contract")
 
         try await withApplication(logger: capture.logger) { app in
@@ -121,11 +125,11 @@ struct LoggingContractTests {
             capture.handler.entries.first { $0.message == "http_request" })
         #expect(entry.level == .error)
         #expect(entry.message == "http_request")
-        let error = try #require(entry.error)
-        #expect(error is RouteFailure)
+        #expect(entry.error == nil)
+        #expect(entry.metadata["error"]?.description == String(reflecting: RouteFailure.self))
+        #expect(entry.metadata["http.route"] == "/contract-error")
         #expect(entry.metadata["path"] == "/contract-error")
         #expect(entry.metadata["status"] == .stringConvertible(500))
-        #expect(entry.metadata["error"] == nil)
     }
 
     @Test("Request metadata remains task-local across structured async work")
