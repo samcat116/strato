@@ -36,9 +36,11 @@ import Logging
 /// trigger costs at most two runs — one leading, one trailing for whatever
 /// arrived while the leading run was still in flight.
 ///
-/// The clock is injected as a concrete `ContinuousClock` rather than an
-/// `any Clock`, matching `DesiredStatePoller`: the tests run in real time with a
-/// short interval, which is the repo's existing bargain.
+/// The clock is injected as a concrete `ContinuousClock` rather than a generic
+/// one: the tests run in real time with a short interval, which is the repo's
+/// existing bargain. (`DesiredStatePoller` used to share it, until asserting
+/// its backoff schedule meant its tests could no longer afford to sleep for
+/// real — STR-291.)
 public actor CoalescingTrigger {
     public typealias Action = @Sendable () async -> Void
 

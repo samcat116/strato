@@ -473,6 +473,18 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             throw Abort(.internalServerError, reason: "Route names an invalid IAM action and node")
         }
 
+        // VM clients poll the object route until a delete's row is reaped, and
+        // absence is the documented terminal condition. Resolve the same IAM
+        // tree slice authorization needs before evaluating the object: a
+        // missing leaf must return 404 rather than fail Cedar's ancestry check
+        // as a misleading 403. The resolution is request-cached, so an existing
+        // VM still pays only the authorization walk it already required.
+        if check.node.type == .virtualMachine {
+            let resolution = try await IAMResourceTree.resolve(
+                check.node, cache: request.iamCache, on: request.db)
+            guard resolution.leafResolved else { throw Abort(.notFound) }
+        }
+
         let decision = try await IAMAuthorizer.authorize(
             principal: principal,
             action: check.action,

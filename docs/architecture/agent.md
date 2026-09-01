@@ -97,6 +97,23 @@ default) funnels into `launchAgent`.
   and is exactly the bug: a wrong server-side "unchanged" would then strand the
   agent on stale desired state forever, with no error anywhere.
 
+  Every unhappy path is paced (STR-291). A fetch that throws and a fetch that
+  completes but returns something unusable — an undecodable payload, a wrong
+  message type, a `304` answering an unconditional request, an unexpected
+  status — share one 1s → 30s doubling backoff, reset only by a response the
+  loop could actually use (a delivered `200`, or a conditional `304`). The
+  unusable cases are the ones that matter: they drop the ETag, so every retry
+  is an unconditional request the control plane must answer with a freshly
+  assembled full payload, and their trigger is usually a property of the
+  control plane's *output*, so it fires for the whole site at once — unpaced,
+  a bad deploy became a correlated full-assembly storm against Postgres. A
+  conditional `304` re-polls immediately only when the round trip actually
+  consumed the server's hold window; answered faster, the loop sleeps out a
+  one-second floor, so an instant-`304` server (or intermediary) cannot spin
+  the pair. The first unusable response in a streak logs at `error` (repeats
+  at `warning`, paced by the backoff itself), and the poller counts
+  `unusableResponses` alongside `deliveredSyncs`/`notModifiedResponses`.
+
   The WebSocket is still dialed and still carries consoles, exec, log
   forwarding, heartbeats, and observed state. Only desired state moves.
 
@@ -634,11 +651,13 @@ metadata listener for `imds` — has two shapes:
 
 Both non-passthrough shapes also install and enable the **QEMU guest agent**
 (issue #563) so stock cloud images gain verified shutdown and guest IP
-reporting without image changes. The no-caller path uses cloud-init's
-native `packages:` key; the multipart path installs it from a `text/x-shellscript`
-part instead, because a caller cloud-config's own `packages:` list would replace
-a merged key under cloud-init's `dict(replace)+list()` policy (the same reason
-console setup travels as a script part).
+reporting without image changes. Both use the same best-effort shell script,
+which skips package installation when the image already contains QGA and does
+not fail cloud-init when package repositories are unavailable (STR-305). The
+no-caller path embeds it in `runcmd`; the multipart path carries it as a
+`text/x-shellscript` part so a caller cloud-config cannot replace it under
+cloud-init's `dict(replace)+list()` policy (the same reason console setup
+travels as a script part).
 
 ## QEMU guest agent (qga)
 

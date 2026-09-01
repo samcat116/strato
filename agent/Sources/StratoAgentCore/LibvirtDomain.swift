@@ -246,6 +246,14 @@ public enum LibvirtDomain {
     /// deleted to the control plane.
     public static let listAllDomains: UInt32 = 0
 
+    /// `virDomainDeviceModifyFlags.VIR_DOMAIN_AFFECT_LIVE` — apply only to the
+    /// running guest.
+    ///
+    /// Network detach uses this independently from `AFFECT_CONFIG`: libvirt
+    /// does not apply a combined request atomically, so a replay must be able
+    /// to finish whichever definition still contains the NIC (STR-304).
+    public static let affectLive: UInt32 = 1 << 0
+
     /// `virDomainDeviceModifyFlags.VIR_DOMAIN_AFFECT_LIVE | _CONFIG` — apply to
     /// the running guest *and* to the persistent definition.
     ///
@@ -259,9 +267,7 @@ public enum LibvirtDomain {
     /// The same reasoning covers a resize: a change deferred "to the next
     /// boot" only happens at all if the next boot reads it, and here the next
     /// boot reads the definition.
-    public static let affectLiveAndConfig: UInt32 =
-        (1 << 0)  // VIR_DOMAIN_AFFECT_LIVE
-        | (1 << 1)  // VIR_DOMAIN_AFFECT_CONFIG
+    public static let affectLiveAndConfig: UInt32 = affectLive | affectConfig
 
     /// `VIR_DOMAIN_AFFECT_CONFIG` alone — for an inactive domain, which has no
     /// live state to affect and answers `VIR_ERR_OPERATION_INVALID` to a

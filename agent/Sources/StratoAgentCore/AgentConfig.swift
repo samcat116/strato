@@ -433,7 +433,7 @@ public struct AgentConfig {
     /// spin.
     public var desiredStateFullRefetchInterval: Duration {
         guard let seconds = desiredStateFullRefetchSeconds else {
-            return DesiredStatePoller.defaultFullRefetchInterval
+            return DesiredStatePoller<ContinuousClock>.defaultFullRefetchInterval
         }
         return .seconds(max(1, seconds))
     }
