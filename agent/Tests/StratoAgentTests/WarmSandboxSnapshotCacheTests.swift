@@ -271,7 +271,7 @@ struct WarmSandboxSnapshotCacheTests {
             [.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: abandoned)
         let live = try cache.makeStagingDirectory()
 
-        try cache.removeAbandonedStaging()
+        cache.removeAbandonedStaging()
 
         #expect(!FileManager.default.fileExists(atPath: abandoned), "old staging must be removed")
         #expect(FileManager.default.fileExists(atPath: live), "a live build's staging must survive")
@@ -279,28 +279,27 @@ struct WarmSandboxSnapshotCacheTests {
         // The ungated startup sweep (no build can be in flight) collects
         // everything, however fresh — a restart shortly after a crash must
         // not strand young debris behind the age gate forever.
-        try cache.removeAbandonedStaging(olderThan: 0)
+        cache.removeAbandonedStaging(olderThan: 0)
         #expect(!FileManager.default.fileExists(atPath: live))
     }
 
-    @Test("startup staging cleanup fails closed on enumeration or removal errors")
-    func abandonedStagingCleanupErrorsAreVisible() throws {
+    @Test("startup staging cleanup errors do not block the caller")
+    func abandonedStagingCleanupErrorsDoNotThrow() throws {
         let root = try makeTempRoot()
         defer { try? FileManager.default.removeItem(atPath: root) }
         let cache = WarmSandboxSnapshotCache(rootPath: root)
         let staging = try cache.makeStagingDirectory()
 
-        #expect(throws: CocoaError.self) {
-            try cache.removeAbandonedStaging(
+        for failure in [
+            FailingWarmCacheFileManager.FailurePoint.enumeration,
+            FailingWarmCacheFileManager.FailurePoint.removal,
+        ] {
+            let failures = cache.removeAbandonedStaging(
                 olderThan: 0,
-                fileManager: FailingWarmCacheFileManager(.enumeration))
-        }
-        #expect(FileManager.default.fileExists(atPath: staging))
-
-        #expect(throws: CocoaError.self) {
-            try cache.removeAbandonedStaging(
-                olderThan: 0,
-                fileManager: FailingWarmCacheFileManager(.removal))
+                fileManager: FailingWarmCacheFileManager(failure))
+            #expect(failures.count == 1)
+            #expect(failures[0].path == (failure == .enumeration ? root : staging))
+            #expect(!failures[0].reason.isEmpty)
         }
         #expect(FileManager.default.fileExists(atPath: staging))
     }

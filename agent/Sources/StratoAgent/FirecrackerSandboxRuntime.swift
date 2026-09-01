@@ -2758,7 +2758,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // can start (first create, before maybeStartWarmTemplateBuild), so
         // no staging directory can be live here regardless of age. A restart
         // shortly after a crash would otherwise skip the debris forever.
-        try warmCache.removeAbandonedStaging(olderThan: 0)
+        for failure in warmCache.removeAbandonedStaging(olderThan: 0) {
+            logger.warning(
+                "Abandoned warm-template staging cleanup failed; sandbox creation will continue",
+                metadata: [
+                    "path": .string(failure.path),
+                    "error": .string(failure.reason),
+                ])
+        }
         var leaked: Set<String> = []
         let storageNames = try directoryContentsIfPresent(atPath: sandboxStoragePath)
         leaked.formUnion(storageNames.filter { $0.hasPrefix("warm-template-") })

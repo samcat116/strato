@@ -135,6 +135,14 @@ public struct WarmSnapshotEntry: Sendable, Equatable {
 /// directory-mtime-as-last-use, so a `touch` on lookup keeps hot entries
 /// resident.
 public struct WarmSandboxSnapshotCache: Sendable {
+    /// One abandoned staging path housekeeping could not inspect or remove.
+    /// Staging debris consumes disk but cannot identify or authorize a live
+    /// workload, so callers report these failures without gating creation.
+    public struct StagingCleanupFailure: Sendable, Equatable {
+        public let path: String
+        public let reason: String
+    }
+
     public static let memoryFile = "memory.snap"
     public static let vmstateFile = "vmstate.snap"
     public static let rootfsFile = "rootfs.ext4"
@@ -258,17 +266,21 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// pass 0 to collect everything regardless of age or mtime readability;
     /// the default hour-long gate keeps a live build's staging safe
     /// otherwise (and skips entries whose mtime cannot be read, since
-    /// liveness cannot be ruled out for them).
+    /// liveness cannot be ruled out for them). Inspection and removal failures
+    /// are returned for operator reporting; cache debris is housekeeping and
+    /// must not gate unrelated workload creation.
+    @discardableResult
     public func removeAbandonedStaging(
         olderThan: TimeInterval = 3600, now: Date = Date(), fileManager: FileManager = .default
-    ) throws {
+    ) -> [StagingCleanupFailure] {
         let names: [String]
         do {
             names = try fileManager.contentsOfDirectory(atPath: rootPath)
         } catch {
-            guard !Self.isFileNotFound(error) else { return }
-            throw error
+            guard !Self.isFileNotFound(error) else { return [] }
+            return [StagingCleanupFailure(path: rootPath, reason: error.localizedDescription)]
         }
+        var failures: [StagingCleanupFailure] = []
         for name in names where name.hasPrefix(".staging-") {
             let path = rootPath + "/" + name
             if olderThan > 0 {
@@ -283,9 +295,11 @@ public struct WarmSandboxSnapshotCache: Sendable {
                     // A concurrent housekeeping pass won the race.
                     continue
                 }
-                throw error
+                failures.append(
+                    StagingCleanupFailure(path: path, reason: error.localizedDescription))
             }
         }
+        return failures
     }
 
     private static func isFileNotFound(_ error: any Error) -> Bool {
