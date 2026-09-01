@@ -29,7 +29,6 @@ final class OrganizationMemberAuthzTests {
 
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Authz Org")

@@ -257,40 +257,17 @@ public struct SPIFFETrustBundle: Sendable {
     /// X.509 CA certificates (PEM-encoded)
     public let x509Authorities: [String]
 
-    /// JWT signing keys (for JWT-SVID validation)
-    public let jwtAuthorities: [JWTAuthority]?
-
     /// When this bundle was last refreshed
     public let refreshedAt: Date
 
     public init(
         trustDomain: String,
         x509Authorities: [String],
-        jwtAuthorities: [JWTAuthority]? = nil,
         refreshedAt: Date = Date()
     ) {
         self.trustDomain = trustDomain
         self.x509Authorities = x509Authorities
-        self.jwtAuthorities = jwtAuthorities
         self.refreshedAt = refreshedAt
-    }
-}
-
-/// A JWT signing key authority
-public struct JWTAuthority: Sendable {
-    /// Key ID
-    public let keyID: String
-
-    /// Public key (PEM or JWK)
-    public let publicKey: String
-
-    /// Expiration time (optional)
-    public let expiresAt: Date?
-
-    public init(keyID: String, publicKey: String, expiresAt: Date? = nil) {
-        self.keyID = keyID
-        self.publicKey = publicKey
-        self.expiresAt = expiresAt
     }
 }
 
@@ -304,7 +281,6 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
     case svidExpired
     case trustBundleUnavailable
     case connectionFailed(String)
-    case attestationFailed(String)
     case parseError(String)
     /// The Workload API returned no JWT-SVID for the requested audience.
     case noJWTSVIDAvailable
@@ -339,8 +315,6 @@ public enum SPIFFEError: Error, LocalizedError, Sendable {
             return "Trust bundle not available"
         case .connectionFailed(let reason):
             return "Failed to connect to SPIRE: \(reason)"
-        case .attestationFailed(let reason):
-            return "Workload attestation failed: \(reason)"
         case .parseError(let details):
             return "Failed to parse SPIFFE data: \(details)"
         case .noJWTSVIDAvailable:

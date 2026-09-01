@@ -94,17 +94,19 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
       toast.error("MTU must be a whole number from 68 to 65535");
       return;
     }
+    const payload = {
+      networkId,
+      mtu: parsedMTU,
+      securityGroupIds:
+        attachSecurityGroupIds.length > 0
+          ? attachSecurityGroupIds
+          : undefined,
+    };
     void run({
       busyKey: "attach",
-      request: () =>
-        vmsApi.attachInterface(vm.id, {
-          networkId,
-          mtu: parsedMTU,
-          securityGroupIds:
-            attachSecurityGroupIds.length > 0
-              ? attachSecurityGroupIds
-              : undefined,
-        }),
+      intentKey: JSON.stringify(["POST", `/api/vms/${vm.id}/interfaces`, payload]),
+      request: (idempotencyKey) =>
+        vmsApi.attachInterface(vm.id, payload, idempotencyKey),
       watch: {
         kind: "attach",
         resourceKind: "virtual_machine",
@@ -120,7 +122,9 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
     if (!nic.id) return;
     void run({
       busyKey: nic.id,
-      request: () => vmsApi.detachInterface(vm.id, nic.id!),
+      intentKey: JSON.stringify(["DELETE", `/api/vms/${vm.id}/interfaces/${nic.id}`, null]),
+      request: (idempotencyKey) =>
+        vmsApi.detachInterface(vm.id, nic.id!, idempotencyKey),
       watch: {
         kind: "detach",
         resourceKind: "virtual_machine",
@@ -137,7 +141,9 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
     const retryingDetach = nic.attachmentState === "detach_failed";
     void run({
       busyKey: nic.id,
-      request: () => vmsApi.retryInterface(vm.id, nic.id!),
+      intentKey: JSON.stringify(["POST", `/api/vms/${vm.id}/interfaces/${nic.id}/retry`, null]),
+      request: (idempotencyKey) =>
+        vmsApi.retryInterface(vm.id, nic.id!, idempotencyKey),
       watch: {
         kind: retryingDetach ? "detach" : "attach",
         resourceKind: "virtual_machine",

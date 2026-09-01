@@ -5,6 +5,9 @@ import Logging
 
 @Suite("AgentConfig Tests")
 struct AgentConfigTests {
+    private static let invalidLogLevelMessage =
+        "Invalid configuration: log level must be one of trace, debug, info, notice, "
+        + "warning, error, critical, got 'verbose'"
 
     // Helper to create and clean up temporary directories
     func withTempDirectory<T>(_ body: (URL) async throws -> T) async rethrows -> T {
@@ -444,7 +447,7 @@ struct AgentConfigTests {
     @Test("A uid base without room for the per-sandbox range is rejected")
     func invalidSandboxJailerUidBaseRejected() async throws {
         try await withTempDirectory { tempDirectory in
-            for bad in ["0", "-5", "4294967295"] {
+            for bad in ["0", "-5", "65535", "4294901760", "4294967295"] {
                 let tomlContent = """
                     control_plane_url = "ws://localhost:8080/agent/ws"
                     sandbox_jailer_uid_base = \(bad)
@@ -455,6 +458,23 @@ struct AgentConfigTests {
                 await #expect(throws: AgentConfigError.self) {
                     try await loadConfig(from: configPath)
                 }
+            }
+        }
+    }
+
+    @Test("The jailer uid base accepts the configured floor and highest non-wrapping range")
+    func sandboxJailerUidBaseBoundariesAccepted() async throws {
+        try await withTempDirectory { tempDirectory in
+            for accepted in ["65536", "4294901759"] {
+                let tomlContent = """
+                    control_plane_url = "ws://localhost:8080/agent/ws"
+                    sandbox_jailer_uid_base = \(accepted)
+                    """
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+                let config = try await loadConfig(from: configPath)
+                #expect(config.sandboxJailerUidBase == UInt32(accepted))
             }
         }
     }
@@ -499,7 +519,9 @@ struct AgentConfigTests {
         #expect(
             AgentConfig.defaultSandboxJailerChrootDir(vmStoragePath: "/var/lib/strato/vms")
                 == "/var/lib/strato/vms/jailer")
-        #expect(AgentConfig.defaultSandboxJailerUidBase == 100_000)
+        #expect(AgentConfig.minimumSandboxJailerUidBase == 65_536)
+        #expect(AgentConfig.legacySandboxJailerUidBase == 100_000)
+        #expect(AgentConfig.defaultSandboxJailerUidBase == 0x7000_0000)
     }
 
     // MARK: - TOML Loading Tests
@@ -534,10 +556,47 @@ struct AgentConfigTests {
             let config = try await loadConfig(from: configPath)
 
             #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
-            #expect(config.logLevel == "info")
+            #expect(config.logLevel == .info)
             #expect(config.networkMode == .ovn)
             #expect(config.enableHVF == false)
             #expect(config.enableKVM == true)
+        }
+    }
+
+    @Test(
+        "TOML accepts every representative log threshold",
+        arguments: [AgentLogLevel.trace, .info, .warning])
+    func loadSupportedTOMLLogLevel(_ level: AgentLogLevel) async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            log_level = "\(level.rawValue)"
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try await loadConfig(from: configPath)
+
+            #expect(config.logLevel == level)
+        }
+    }
+
+    @Test("TOML rejects an unsupported log threshold")
+    func rejectInvalidTOMLLogLevel() async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            log_level = "verbose"
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            do {
+                _ = try await loadConfig(from: configPath)
+                Issue.record("Expected unsupported TOML log level to fail")
+            } catch let error as AgentConfigError {
+                #expect(error.localizedDescription == Self.invalidLogLevelMessage)
+            } catch {
+                Issue.record("Expected AgentConfigError, got \(error)")
+            }
         }
     }
 
@@ -1024,7 +1083,7 @@ struct AgentConfigTests {
                 ])
 
             #expect(config.controlPlaneURL == "ws://environment:8080/agent/ws")
-            #expect(config.logLevel == "debug")
+            #expect(config.logLevel == .debug)
             #expect(config.networkMode == .user)
             #expect(config.enableKVM == false)
             #expect(config.qemuMemoryOverheadMB == 768)
@@ -1049,10 +1108,35 @@ struct AgentConfigTests {
             ])
 
         #expect(config.controlPlaneURL == "ws://environment:8080/agent/ws")
-        #expect(config.logLevel == "trace")
+        #expect(config.logLevel == .trace)
         #expect(config.vmStoragePath == AgentConfig.defaultVMStoragePath)
         #expect(config.simulation?.enabled == true)
         #expect(config.simulation?.cpuCores == 24)
+    }
+
+    @Test(
+        "Environment accepts every representative log threshold",
+        arguments: [AgentLogLevel.trace, .info, .warning])
+    func loadSupportedEnvironmentLogLevel(_ level: AgentLogLevel) async throws {
+        let config = try await AgentConfig.loadDefaultConfig(
+            searchPaths: [],
+            environmentVariables: ["LOG_LEVEL": level.rawValue])
+
+        #expect(config.logLevel == level)
+    }
+
+    @Test("Environment rejects an unsupported log threshold")
+    func rejectInvalidEnvironmentLogLevel() async {
+        do {
+            _ = try await AgentConfig.loadDefaultConfig(
+                searchPaths: [],
+                environmentVariables: ["LOG_LEVEL": "verbose"])
+            Issue.record("Expected unsupported environment log level to fail")
+        } catch let error as AgentConfigError {
+            #expect(error.localizedDescription == Self.invalidLogLevelMessage)
+        } catch {
+            Issue.record("Expected AgentConfigError, got \(error)")
+        }
     }
 
     @Test("Invalid environment value reports its logical key")

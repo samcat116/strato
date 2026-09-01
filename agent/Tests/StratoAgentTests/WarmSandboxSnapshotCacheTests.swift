@@ -4,6 +4,27 @@ import Testing
 
 @testable import StratoAgentCore
 
+private final class FailingWarmCacheFileManager: FileManager, @unchecked Sendable {
+    enum FailurePoint: Equatable { case enumeration, removal }
+
+    private let failurePoint: FailurePoint
+
+    init(_ failurePoint: FailurePoint) {
+        self.failurePoint = failurePoint
+        super.init()
+    }
+
+    override func contentsOfDirectory(atPath path: String) throws -> [String] {
+        if failurePoint == .enumeration { throw CocoaError(.fileReadNoPermission) }
+        return try super.contentsOfDirectory(atPath: path)
+    }
+
+    override func removeItem(atPath path: String) throws {
+        if failurePoint == .removal { throw CocoaError(.fileWriteNoPermission) }
+        try super.removeItem(atPath: path)
+    }
+}
+
 /// Coverage for the warm-start template snapshot cache (issue #426): key
 /// derivation, the lookup/publish/invalidate lifecycle, and the LRU sweep
 /// integration. Pure filesystem — no Firecracker required.
@@ -260,6 +281,27 @@ struct WarmSandboxSnapshotCacheTests {
         // not strand young debris behind the age gate forever.
         cache.removeAbandonedStaging(olderThan: 0)
         #expect(!FileManager.default.fileExists(atPath: live))
+    }
+
+    @Test("startup staging cleanup errors do not block the caller")
+    func abandonedStagingCleanupErrorsDoNotThrow() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+        let staging = try cache.makeStagingDirectory()
+
+        for failure in [
+            FailingWarmCacheFileManager.FailurePoint.enumeration,
+            FailingWarmCacheFileManager.FailurePoint.removal,
+        ] {
+            let failures = cache.removeAbandonedStaging(
+                olderThan: 0,
+                fileManager: FailingWarmCacheFileManager(failure))
+            #expect(failures.count == 1)
+            #expect(failures[0].path == (failure == .enumeration ? root : staging))
+            #expect(!failures[0].reason.isEmpty)
+        }
+        #expect(FileManager.default.fileExists(atPath: staging))
     }
 
     // MARK: - Eviction

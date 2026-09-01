@@ -88,7 +88,6 @@ final class VMNetworkSelectionTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
 
             let builder = TestDataBuilder(db: app.db)
             let user = try await builder.createUser(username: "netseluser", email: "netsel@example.com")
@@ -189,6 +188,8 @@ final class VMNetworkSelectionTests {
             #expect(nics.map(\.orderIndex) == [0, 1])
             #expect(nics.map(\.deviceName) == ["net0", "net1"])
             #expect(nics.map(\.mtu) == [1400, 9000])
+            #expect(nics.allSatisfy { MACAddress(allocated: $0.macAddress) != nil })
+            #expect(Set(nics.map(\.macAddress)).count == 2)
             #expect(Set(nics.compactMap(\.ipv4Address?.address)).count == 2)
             #expect(
                 try await VMInterfaceSecurityGroup.query(on: app.db)

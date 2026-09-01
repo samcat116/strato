@@ -7,7 +7,7 @@ import type {
   OrganizationMember,
   CreateOrganizationRequest,
   UpdateOrganizationRequest,
-} from "@/types/api";
+} from "@/types/api-contracts";
 
 export const organizationsApi = {
   list(signal?: AbortSignal): Promise<Organization[]> {

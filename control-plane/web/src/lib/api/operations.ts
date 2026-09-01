@@ -1,7 +1,7 @@
 // Async VM operation endpoints (202 Accepted + polling)
 
 import { api } from "./client";
-import type { Operation } from "@/types/api";
+import type { Operation } from "@/types/api-contracts";
 
 export const operationsApi = {
   get(id: string): Promise<Operation> {

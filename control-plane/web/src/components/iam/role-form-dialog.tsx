@@ -1,5 +1,7 @@
 "use client";
 
+import { confirmAction } from "@/providers/confirmation-provider";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -265,7 +267,7 @@ function RoleForm({
     // with the canonical permit for the selected actions — confirm first.
     if (isEdit && !advanced && customCedar) {
       if (
-        !window.confirm(
+        !await confirmAction(
           "This role has custom Cedar conditions the action picker can't represent. Saving from the picker replaces them with the canonical permit for the selected actions, which may widen access. Continue?"
         )
       ) {

@@ -7,6 +7,7 @@ import ArgumentParser
 import Foundation
 import Logging
 import StratoAgentCore
+import StratoShared
 
 @main
 struct StratoAgent: AsyncParsableCommand {
@@ -58,6 +59,17 @@ struct AgentOptions: ParsableArguments {
     var debug: Bool = false
 }
 
+enum AgentLoggingMetadata {
+    static func base(instanceID: UUID = UUID()) -> Logger.Metadata {
+        [
+            LogMetadata.Key.serviceName: .string("strato-agent"),
+            LogMetadata.Key.serviceInstanceID: .string(instanceID.uuidString),
+            LogMetadata.Key.serviceVersion: .string(BuildInfo.version),
+            "vcs.revision": .string(BuildInfo.gitSHA),
+        ]
+    }
+}
+
 extension StratoAgent {
     struct Run: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -75,16 +87,16 @@ extension StratoAgent {
 
 /// Launch path for `run`.
 private func launchAgent(options: AgentOptions) async throws {
-    // Set up custom logging with clean timestamps (no timezone suffix)
+    let processLoggingMetadata = DynamicLogMetadata(AgentLoggingMetadata.base())
+    // Keep configuration failures visible without consuming swift-log's single
+    // process-wide bootstrap before the final threshold is known.
     let debug = options.debug
-    LoggingSystem.bootstrap { label in
-        var handler = CustomLogHandler(label: label)
-        handler.logLevel = debug ? .debug : .info
-        return handler
+    let startupLogHandlerFactory = AgentLogHandlerFactory(
+        logLevel: debug ? .debug : .info,
+        metadataProvider: processLoggingMetadata.provider)
+    var logger = Logger(label: "strato-agent.bootstrap") { label in
+        startupLogHandlerFactory.makeHandler(label: label)
     }
-
-    var logger = Logger(label: "strato-agent")
-    logger.logLevel = debug ? .debug : .info
 
     // Load configuration from file or defaults
     let config: AgentConfig
@@ -96,12 +108,21 @@ private func launchAgent(options: AgentOptions) async throws {
             config = try await AgentConfig.loadDefaultConfig(logger: logger)
         }
     } catch {
-        logger.error("Failed to load agent configuration: \(error)")
+        logger.error("Failed to load agent configuration: \(startupErrorDescription(error))")
         throw ExitCode.failure
     }
 
     // Override config values with command-line arguments if provided
-    let finalLogLevel = options.logLevel ?? config.logLevel ?? "info"
+    let finalLogLevel: AgentLogLevel
+    do {
+        finalLogLevel = try AgentLogLevel.resolve(
+            commandLineValue: options.logLevel,
+            configuredValue: config.logLevel,
+            debug: debug)
+    } catch {
+        logger.error("Failed to load agent configuration: \(startupErrorDescription(error))")
+        throw ExitCode.failure
+    }
     let finalAgentID = options.agentID ?? ProcessInfo.processInfo.hostName
 
     // The agent authenticates solely with its SPIRE-issued X.509 SVID, so the
@@ -155,6 +176,11 @@ private func launchAgent(options: AgentOptions) async throws {
         config.sandboxJailerChrootDir
         ?? AgentConfig.defaultSandboxJailerChrootDir(vmStoragePath: finalVMStoragePath)
     let finalSandboxJailerUidBase = config.sandboxJailerUidBase ?? AgentConfig.defaultSandboxJailerUidBase
+    // Manifests written before STR-290 do not carry their assignment. Preserve
+    // the old default solely for that one-time adoption; an explicit operator
+    // base remains its own legacy base.
+    let legacySandboxJailerUidBase =
+        config.sandboxJailerUidBase ?? AgentConfig.legacySandboxJailerUidBase
 
     // Resolve hypervisor type
     let finalHypervisorType = config.hypervisorType ?? AgentConfig.defaultHypervisorType
@@ -186,13 +212,18 @@ private func launchAgent(options: AgentOptions) async throws {
     let finalHardwareAcceleration = false
     #endif
 
-    // Update log level based on final configuration
-    logger.logLevel = debug ? .debug : Logger.Level(rawValue: finalLogLevel) ?? .info
+    processLoggingMetadata[metadataKey: LogMetadata.Key.agentName] = .string(finalAgentID)
+    // Bootstrap exactly once with the final level. Every fresh subsystem or
+    // dependency logger created after this point receives the same threshold.
+    let logHandlerFactory = AgentLogHandlerFactory(
+        logLevel: finalLogLevel,
+        metadataProvider: processLoggingMetadata.provider)
+    logHandlerFactory.bootstrap()
+    logger = Logger(label: "strato-agent")
 
     logger.info(
         "Starting Strato Agent",
         metadata: [
-            "agentID": .string(finalAgentID),
             "webSocketURL": .string(finalWebSocketURL),
             "vmStoragePath": .string(finalVMStoragePath),
             "volumeStoragePath": .string(finalVolumeStoragePath),
@@ -210,7 +241,7 @@ private func launchAgent(options: AgentOptions) async throws {
             "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
             "qemuMemoryOverheadMB": .stringConvertible(
                 config.qemuMemoryOverheadMB ?? AgentConfig.defaultQEMUMemoryOverheadMB),
-            "logLevel": .string(finalLogLevel),
+            "logLevel": .string(finalLogLevel.rawValue),
             "simulation": .string(finalSimulation?.enabled == true ? "enabled" : "disabled"),
         ])
 
@@ -266,6 +297,7 @@ private func launchAgent(options: AgentOptions) async throws {
         sandboxJailerBinaryPath: finalSandboxJailerBinaryPath,
         sandboxJailerChrootDir: finalSandboxJailerChrootDir,
         sandboxJailerUidBase: finalSandboxJailerUidBase,
+        legacySandboxJailerUidBase: legacySandboxJailerUidBase,
         sandboxWarmStart: config.sandboxWarmStart ?? true,
         sandboxWarmCacheMaxSizeBytes: config.sandboxWarmCacheMaxSizeBytes,
         hypervisorType: finalHypervisorType,
@@ -334,6 +366,15 @@ private func launchAgent(options: AgentOptions) async throws {
     }
 
     exitImmediately(0)
+}
+
+private func startupErrorDescription(_ error: any Error) -> String {
+    if let localizedError = error as? any LocalizedError,
+        let description = localizedError.errorDescription
+    {
+        return description
+    }
+    return String(describing: error)
 }
 
 /// How long after a termination signal the agent gives graceful shutdown before

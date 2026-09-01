@@ -19,7 +19,7 @@ import {
   quotaErrorMessage,
   type QuotaCreateTarget,
 } from "@/lib/hooks";
-import type { ResourceQuota } from "@/types/api";
+import type { HierarchyQuota } from "@/types/api";
 import { toast } from "sonner";
 
 interface QuotaDialogProps {
@@ -28,7 +28,7 @@ interface QuotaDialogProps {
   /** Present when creating a new quota. */
   target?: QuotaCreateTarget;
   /** Present when editing an existing quota. */
-  quota?: ResourceQuota;
+  quota?: HierarchyQuota;
   /** Human-readable name of the entity the quota applies to. */
   scopeLabel: string;
   /** Environments available when creating a project-scoped quota. */
@@ -60,7 +60,7 @@ const emptyForm: QuotaForm = {
   isEnabled: true,
 };
 
-function formFromQuota(quota: ResourceQuota | undefined): QuotaForm {
+function formFromQuota(quota: HierarchyQuota | undefined): QuotaForm {
   if (!quota) return emptyForm;
   // Swift omits nil optional fields when encoding, while older payloads may
   // still carry an explicit null. Normalize both wire shapes to the form's
@@ -148,7 +148,7 @@ export function QuotaDialog({
     }
 
     try {
-      if (isEdit && quota) {
+      if (isEdit && quota?.id) {
         await updateQuota.mutateAsync({
           quotaId: quota.id,
           data: {

@@ -206,6 +206,27 @@ struct UEFIVarstoreTests {
         }
     }
 
+    @Test("A full varstore filesystem is blocked and keeps its remedy")
+    func diskFullIsBlocked() async throws {
+        try await withTemporaryDirectory { directory in
+            let recorder = Recorder()
+            await recorder.fail(status: 1, message: "qemu-img: No space left on device")
+            let varstore = UEFIVarstore(logger: logger, runSubprocess: recorder.runner)
+            let path = VMDirectoryLayout.nvram(vmDirectory: directory)
+
+            let error = await #expect(throws: UEFIVarstoreError.self) {
+                try await varstore.materialize(at: path, from: "/vars.fd")
+            }
+
+            guard case .insufficientDiskSpace(let reason) = error else {
+                Issue.record("expected insufficientDiskSpace, got \(String(describing: error))")
+                return
+            }
+            #expect(error?.failureClassification == .blocked)
+            #expect(reason.contains("No space left on device"))
+        }
+    }
+
     /// A partial left by a crashed run is discarded rather than published: it
     /// is not a resumable download, and its bytes are the previous attempt's.
     @Test("A partial from a crashed run is discarded, not published")
@@ -261,14 +282,11 @@ struct UEFIVarstoreTests {
         }
     }
 
-    /// The template is a static file the distro's EDK2 package installed, so
-    /// nothing about a failed conversion self-heals. Saying so is what stops
-    /// the reconciler spending a VM's whole per-generation retry budget
-    /// re-running the same doomed qemu-img instead of reporting the fix once.
-    @Test("A varstore failure is permanent, so the reconciler stops rather than retries")
-    func failuresAreClassifiedPermanent() {
+    @Test("Stable varstore failures are permanent while ENOSPC is blocked")
+    func failuresAreClassifiedByRemedy() {
         #expect(UEFIVarstoreError.toolUnavailable("").failureClassification == .permanent)
         #expect(UEFIVarstoreError.conversionFailed("").failureClassification == .permanent)
         #expect(UEFIVarstoreError.formatMismatch("").failureClassification == .permanent)
+        #expect(UEFIVarstoreError.insufficientDiskSpace("").failureClassification == .blocked)
     }
 }

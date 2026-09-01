@@ -1,4 +1,4 @@
-import VMDetailPage from "../detail/page";
+import { VMDetailPage } from "@/components/vms/vm-detail-page";
 
 export default async function VMRoute({
   params,

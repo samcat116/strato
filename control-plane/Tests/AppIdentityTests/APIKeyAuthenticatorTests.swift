@@ -52,7 +52,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
@@ -88,7 +87,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         _ = try await createTestAPIKey(for: user, on: app.db)
@@ -123,7 +121,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
@@ -155,7 +152,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         // Create a test route that requires authentication
         app.routes.all.removeAll()
@@ -184,7 +180,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         _ = try await createTestAPIKey(for: user, on: app.db)
@@ -222,7 +217,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, isActive: false)
@@ -257,7 +251,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let expiredDate = Date().addingTimeInterval(-86400)  // 1 day ago
@@ -293,7 +286,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let futureDate = Date().addingTimeInterval(86400)  // 1 day from now
@@ -332,7 +324,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
@@ -370,7 +361,6 @@ struct APIKeyAuthenticatorTests {
         let app = try await Application.makeForTesting()
 
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
@@ -425,7 +415,6 @@ struct APIKeyAuthenticatorTests {
     func testReadScopeAllowsGet() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, restriction: .readOnly)
@@ -448,7 +437,6 @@ struct APIKeyAuthenticatorTests {
     func testReadScopeForbidsPost() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db, restriction: .readOnly)
@@ -472,7 +460,6 @@ struct APIKeyAuthenticatorTests {
     func testReadOnlyCLISessionForbidsPost() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let accessToken = CLISession.generateAccessToken()
@@ -514,7 +501,6 @@ struct APIKeyAuthenticatorTests {
     func testScopeDenialRecorded() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
         // Enable decision-row recording (off by default under .testing), after
         // configure resets the config and before the recorder is lazily built.
         app.iamDecisionLogConfig.recordDecisions = true
@@ -565,7 +551,6 @@ struct APIKeyAuthenticatorTests {
     func testUnrestrictedKeyAllowsReadAndWrite() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
@@ -600,7 +585,6 @@ struct APIKeyAuthenticatorTests {
     func testActionRestrictedKeyCannotMutateIdentityPlane() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
-        try await app.autoMigrate()
 
         let user = try await createTestUser(on: app.db)
         let restriction = try CredentialRestriction.validated(

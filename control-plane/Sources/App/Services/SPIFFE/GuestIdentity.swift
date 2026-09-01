@@ -84,7 +84,7 @@ enum GuestIdentity {
         configuration: ControlPlaneConfiguration,
         on db: any Database
     ) async throws -> String {
-        let platform = configuration.string(.spireTrustDomain)!
+        let platform = configuration.requiredString(.spireTrustDomain)
         guard configuration.bool(.spireOrgTrustDomainsEnabled) == true, let organizationID else {
             return platform
         }

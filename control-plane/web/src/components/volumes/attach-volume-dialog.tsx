@@ -65,12 +65,14 @@ export function AttachVolumeDialog({
 
     // Accepted, not performed: MutationWatcher toasts once the agent has
     // actually presented the disk (backend STR-148).
+    const payload = {
+      vmId,
+      deviceName: deviceName.trim() || undefined,
+    };
     await run({
-      request: () =>
-        volumesApi.attach(volume.id!, {
-          vmId,
-          deviceName: deviceName.trim() || undefined,
-        }),
+      intentKey: JSON.stringify(["POST", `/api/volumes/${volume.id}/attach`, payload]),
+      request: (idempotencyKey) =>
+        volumesApi.attach(volume.id!, payload, idempotencyKey),
       watch: {
         kind: "attach",
         resourceKind: "volume",

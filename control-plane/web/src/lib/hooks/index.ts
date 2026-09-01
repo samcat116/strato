@@ -6,6 +6,16 @@ export {
 } from "./use-vms";
 export { useSites } from "./use-sites";
 export {
+  useCephCluster,
+  useRegisterCephCluster,
+  useUpdateCephCluster,
+  useDeleteCephCluster,
+  useCephProjectAccess,
+  useConfigureCephProjectAccess,
+  useDeleteCephProjectAccess,
+  useProjectStoragePools,
+} from "./use-ceph-storage";
+export {
   useStorageDevices,
   useSetStorageDeviceOsdEligibility,
 } from "./use-storage-devices";
@@ -151,7 +161,7 @@ export {
   quotaErrorMessage,
 } from "./use-quotas";
 export type { QuotaCreateTarget } from "./use-quotas";
-export { useHierarchy, useHierarchySearch } from "./use-hierarchy";
+export { useHierarchy } from "./use-hierarchy";
 export { usePermissions } from "./use-permissions";
 export { useCurrentOrgAccess } from "./use-current-org-access";
 export {
@@ -167,7 +177,15 @@ export {
   useRevokeProjectWorkload,
   projectMemberErrorMessage,
 } from "./use-project-members";
-export { useNetworks, useInvalidateNetworks } from "./use-networks";
+export {
+  useNetworks,
+  useInvalidateNetworks,
+  useNetworkACL,
+  useCreateNetworkACL,
+  useDeleteNetworkACL,
+  useCreateNetworkACLRule,
+  useDeleteNetworkACLRule,
+} from "./use-networks";
 export {
   useSecurityGroups,
   useInvalidateSecurityGroups,

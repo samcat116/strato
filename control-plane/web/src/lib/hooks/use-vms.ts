@@ -5,9 +5,9 @@ import { makeResourceQueryHooks } from "./use-resource-queries";
 const hooks = makeResourceQueryHooks({
   queryKey: "vms",
   scopeKey: "orgId",
-  list: (organizationId) => vmsApi.list(organizationId),
-  get: (id) => vmsApi.get(id),
-  listSnapshots: (id) => vmsApi.listSnapshots(id),
+  list: (organizationId, signal) => vmsApi.list(organizationId, signal),
+  get: (id, signal) => vmsApi.get(id, signal),
+  listSnapshots: (id, signal) => vmsApi.listSnapshots(id, signal),
   listRefetchInterval: 5000, // Poll every 5 seconds
 });
 

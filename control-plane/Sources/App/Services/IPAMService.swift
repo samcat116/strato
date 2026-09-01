@@ -1,6 +1,5 @@
 import Fluent
 import Foundation
-import SQLKit
 import StratoShared
 
 /// Control-plane IP address management: allocates static NIC addresses from a
@@ -71,24 +70,29 @@ enum IPAMService {
     /// project (issue #765), so a name-keyed lock would merge two tenants'
     /// pools into one lock and serialize unrelated allocations.
     ///
-    /// Postgres only: `pg_advisory_xact_lock` is held until the enclosing
+    /// PostgreSQL-only: `pg_advisory_xact_lock` is held until the enclosing
     /// transaction ends, giving cross-replica serialization (see
-    /// `QuotaEnforcementService.lockQuotas` for the same pattern).
-    private static func lockAllocations(key: String, on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
-        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
+    /// `QuotaEnforcementService.lockQuotas` for the same pattern). Unsupported
+    /// database dialects fail rather than silently skipping the invariant.
+    static func lockNetworkAllocations(
+        _ networkIDs: some Sequence<UUID>,
+        on db: any Database
+    ) async throws {
+        try await AdvisoryLock.acquireTransactionLocks(.ipam, objectIDs: networkIDs, on: db)
     }
 
-    /// Lock key for a logical network's address pool.
-    private static func allocationLockKey(networkID: UUID) -> String {
-        "ipam:\(networkID.uuidString)"
+    private static func lockNetworkAllocation(_ networkID: UUID, on db: any Database) async throws {
+        try await AdvisoryLock.acquireTransactionLock(.object(.ipam, id: networkID), on: db)
     }
 
-    /// Lock key for a floating IP pool's address range. Keyed on the id for
-    /// the same reason as networks: pool names are unique only within their
-    /// owning org or folder (STR-105).
-    private static func allocationLockKey(floatingIPPoolID: UUID) -> String {
-        "fip:\(floatingIPPoolID.uuidString)"
+    /// Keyed on the id because pool names are unique only within their owning
+    /// org or folder (STR-105).
+    private static func lockFloatingIPPoolAllocation(
+        _ poolID: UUID,
+        on db: any Database
+    ) async throws {
+        try await AdvisoryLock.acquireTransactionLock(
+            .object(.floatingIPPool, id: poolID), on: db)
     }
 
     /// Allocates the lowest free host address in `network`'s subnet.
@@ -101,7 +105,7 @@ enum IPAMService {
         // races are serialized by the advisory lock, which no unique index
         // covers.
         let networkID = try network.requireID()
-        try await lockAllocations(key: allocationLockKey(networkID: networkID), on: db)
+        try await lockNetworkAllocation(networkID, on: db)
         let usedVM = try await VMInterfaceAddress.query(on: db)
             .filter(\.$logicalNetwork.$id == networkID)
             .filter(\.$family == IPFamily.ipv4.rawValue)
@@ -178,7 +182,7 @@ enum IPAMService {
         // Union of VM and sandbox interface IDs on the network (issue #416),
         // for the same reason as the v4 path, under the same advisory lock.
         let networkID = try network.requireID()
-        try await lockAllocations(key: allocationLockKey(networkID: networkID), on: db)
+        try await lockNetworkAllocation(networkID, on: db)
         let usedVM = try await VMInterfaceAddress.query(on: db)
             .filter(\.$logicalNetwork.$id == networkID)
             .filter(\.$family == IPFamily.ipv6.rawValue)
@@ -254,7 +258,7 @@ enum IPAMService {
     /// saves the new row.
     static func allocateFloatingIP(for pool: FloatingIPPool, on db: Database) async throws -> String {
         let poolID = try pool.requireID()
-        try await lockAllocations(key: allocationLockKey(floatingIPPoolID: poolID), on: db)
+        try await lockFloatingIPPoolAllocation(poolID, on: db)
         let used = try await FloatingIP.query(on: db)
             .filter(\.$pool.$id == poolID)
             .all()

@@ -9,7 +9,7 @@ type SnapshotAdmissionSandbox = Pick<
 
 function sandbox(
   status: SandboxStatus,
-  hypervisorId: string | null,
+  hypervisorId: string | undefined,
   observedGeneration: number
 ): SnapshotAdmissionSandbox {
   return {
@@ -25,14 +25,14 @@ function sandbox(
 
 describe("sandboxCanBeSnapshotted", () => {
   it("rejects a newly created cold sandbox before placement and confirmation", () => {
-    expect(sandboxCanBeSnapshotted(sandbox("Stopped", null, 0))).toBe(false);
+    expect(sandboxCanBeSnapshotted(sandbox("Stopped", undefined, 0))).toBe(false);
   });
 
   it("requires both placement and an observed generation", () => {
     expect(sandboxCanBeSnapshotted(sandbox("Stopped", "agent-1", 0))).toBe(
       false
     );
-    expect(sandboxCanBeSnapshotted(sandbox("Stopped", null, 1))).toBe(false);
+    expect(sandboxCanBeSnapshotted(sandbox("Stopped", undefined, 1))).toBe(false);
   });
 
   it.each(["Running", "Stopped", "Exited"] satisfies SandboxStatus[])(

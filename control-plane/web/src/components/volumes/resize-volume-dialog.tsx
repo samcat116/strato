@@ -63,8 +63,11 @@ export function ResizeVolumeDialog({
       return;
     }
 
+    const payload = { sizeGB: newSize };
     await run({
-      request: () => volumesApi.resize(volume.id!, { sizeGB: newSize }),
+      intentKey: JSON.stringify(["POST", `/api/volumes/${volume.id}/resize`, payload]),
+      request: (idempotencyKey) =>
+        volumesApi.resize(volume.id!, payload, idempotencyKey),
       watch: {
         kind: "resize",
         resourceKind: "volume",

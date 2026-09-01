@@ -73,13 +73,19 @@ struct ResourceConditions: Content, Equatable {
     /// offline, reports no phase either.
     let phase: String?
     /// The last convergence attempt that failed, or nil if the most recent
-    /// attempt succeeded. Present alongside a newer `targetGeneration` while a
-    /// retry is in flight: the failure stands until something converges.
+    /// attempt succeeded. "Failed" means the agent refused or could not apply
+    /// that attempt; it does not necessarily mean the agent gave up. A blocked
+    /// failure at `targetGeneration` remains degraded while every sync retries
+    /// it, and success later clears the condition without a generation bump.
+    /// The condition can also stand alongside a newer `targetGeneration` while
+    /// that newer mutation is in flight.
     let degraded: Degraded?
 
     /// Why a resource is not converging, and since when.
     struct Degraded: Content, Equatable {
-        /// The agent's error from the failed attempt, verbatim.
+        /// The agent's error from the failed attempt, or a control-plane
+        /// projection error that prevented this generation from reaching the
+        /// agent.
         let reason: String
         /// The generation whose convergence produced `reason`. Compare with
         /// `targetGeneration` to tell a failure of the state currently being
@@ -202,6 +208,18 @@ extension VM: TimestampedConvergenceObservable {}
 extension Sandbox: TimestampedConvergenceObservable {}
 extension Volume: ConvergenceObservable {}
 
+/// A control-plane projection failure cannot ride the agent-owned convergence
+/// columns: the agent is still reporting against its last successful sync and
+/// would clear them on its next heartbeat. VMs are currently the only resource
+/// family whose assembler can reject one entry independently.
+protocol DesiredStateAssemblyFailureObservable: AnyObject {
+    var desiredStateAssemblyError: String? { get set }
+    var desiredStateAssemblyErrorGeneration: Int64? { get set }
+    var desiredStateAssemblyErrorAt: Date? { get set }
+}
+
+extension VM: DesiredStateAssemblyFailureObservable {}
+
 /// A resource whose `conditions` block and `isConverged` predicate are one
 /// derivation over one set of columns.
 ///
@@ -229,14 +247,16 @@ protocol ConvergenceDerived: ConvergenceObservable {
 extension ConvergenceDerived {
     /// Derived on read — the client-facing answer to "is this mutation done?".
     var conditions: ResourceConditions {
-        ResourceConditions(
+        let assemblyFailure = self as? any DesiredStateAssemblyFailureObservable
+        return ResourceConditions(
             targetGeneration: generation,
             observedGeneration: observedGeneration,
             desiredSatisfied: desiredSatisfied,
             phase: convergencePhase,
-            lastError: lastError,
-            failedGeneration: failedGeneration,
-            lastErrorAt: (self as? any TimestampedConvergenceObservable)?.lastErrorAt
+            lastError: assemblyFailure?.desiredStateAssemblyError ?? lastError,
+            failedGeneration: assemblyFailure?.desiredStateAssemblyErrorGeneration ?? failedGeneration,
+            lastErrorAt: assemblyFailure?.desiredStateAssemblyErrorAt
+                ?? (self as? any TimestampedConvergenceObservable)?.lastErrorAt
         )
     }
 
@@ -313,13 +333,6 @@ where IDValue == UUID {
     func adoptReconciliationState(from committed: Self)
 }
 
-enum ConvergenceTimeoutClaimOutcome: Equatable, Sendable {
-    case claimed
-    case alreadyClaimed
-    case superseded(actualGeneration: Int64)
-    case missing
-}
-
 extension ConvergingResource {
     @discardableResult
     func advanceDesiredStateGeneration(
@@ -362,58 +375,12 @@ extension ConvergingResource {
         return true
     }
 
-    /// Claims the right to declare this resource's outstanding convergence
-    /// timed out, by clearing the deadline in a conditional `UPDATE`.
-    ///
-    /// This is what makes the stuck-convergence sweep safe to run on every
-    /// replica *and* exactly-once per deadline (STR-147). Marking degraded is
-    /// idempotent and convergent on its own — the state two replicas write is
-    /// the same — but the completion webhook is not, so the claim decides which
-    /// pass gets to emit it. `AND convergence_deadline IS NOT NULL` is
-    /// evaluated by PostgreSQL under the row lock, so of two racing sweeps
-    /// exactly one updates a row — the compare-and-swap the retired
-    /// stuck-operation sweep needed a cluster lock to approximate.
-    func claimConvergenceTimeout(on db: any Database) async throws
-        -> ConvergenceTimeoutClaimOutcome
-    {
-        guard let sql = db as? any SQLDatabase else {
-            throw ConvergenceWriteError.unsupportedDatabase
-        }
-        let claimed = try await sql.raw(
-            """
-            UPDATE \(ident: Self.schema)
-            SET convergence_deadline = NULL
-            WHERE id = \(bind: try requireID())
-              AND generation = \(bind: generation)
-              AND convergence_deadline IS NOT NULL
-            RETURNING id
-            """
-        ).all(decoding: ClaimedConvergenceRow.self)
-        if !claimed.isEmpty {
-            convergenceDeadline = nil
-            return .claimed
-        }
-
-        guard
-            let current = try await sql.raw(
-                "SELECT generation FROM \(ident: Self.schema) WHERE id = \(bind: try requireID())"
-            ).first(decoding: CurrentConvergenceGeneration.self)
-        else { return .missing }
-        guard current.generation == generation else {
-            return .superseded(actualGeneration: current.generation)
-        }
-        return .alreadyClaimed
-    }
 }
 
-/// `RETURNING id` from the claim above. A file-scope type because a generic
-/// function cannot nest one.
+/// The row identifier selected while locking a converging resource. A
+/// file-scope type because a generic function cannot nest one.
 private struct ClaimedConvergenceRow: Decodable {
     let id: UUID
-}
-
-private struct CurrentConvergenceGeneration: Decodable {
-    let generation: Int64
 }
 
 extension ConvergingResource {
@@ -455,6 +422,9 @@ extension VM: ConvergingResource {
         lastError = committed.lastError
         failedGeneration = committed.failedGeneration
         lastErrorAt = committed.lastErrorAt
+        desiredStateAssemblyError = committed.desiredStateAssemblyError
+        desiredStateAssemblyErrorGeneration = committed.desiredStateAssemblyErrorGeneration
+        desiredStateAssemblyErrorAt = committed.desiredStateAssemblyErrorAt
         divergenceDetectedAt = committed.divergenceDetectedAt
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
@@ -503,6 +473,9 @@ extension Volume: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .volume }
     var projectID: UUID { $project.id }
     func placementAgentIDs(on db: any Database) async throws -> [String] {
+        if try await VolumeService.pool(of: self, on: db)?.mode == .ceph {
+            return reconcilerAgentId.map { [$0] } ?? []
+        }
         if desiredStatus == .absent {
             return try await VolumeService.agentIDsWithPhysicalReplicas(of: self, on: db)
         }
@@ -532,6 +505,13 @@ extension Volume: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         observedSizeBytes = committed.observedSizeBytes
         finalizers = committed.finalizers
+        // Canonical RBD attachment and Ceph execution ownership are written
+        // by observed-state application and reachability failover. Every API
+        // mutation saves the whole Fluent model after taking this lock, so it
+        // must adopt both or a request snapshot can overwrite a racing report
+        // or move the reconciler back to an unavailable host.
+        diskAttachment = committed.diskAttachment
+        reconcilerAgentId = committed.reconcilerAgentId
         // The desired size, for the same read-modify-write reason as the
         // attachment below: `accept` saves the whole model, so an attach or a
         // throttle accepted while a resize commits would write its pre-request

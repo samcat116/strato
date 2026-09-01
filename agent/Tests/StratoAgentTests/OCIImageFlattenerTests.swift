@@ -55,6 +55,59 @@ struct OCIImageFlattenerTests {
         #expect(contents(root + "/etc/keep") == "kept")
     }
 
+    @Test("ENOSPC while writing a layer is a blocked disk-space failure")
+    func writeENOSPC() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        var layer = TarTestBuilder()
+        layer.addFile("large", content: Data("content".utf8))
+        let layerPath = try writeLayer(layer, in: dir, name: "full.tar")
+        let flattener = try OCIImageFlattener(
+            rootPath: dir + "/root", logger: Logger(label: "test"), applyOwnership: false,
+            writeContent: { _, _ in throw POSIXError(.ENOSPC) })
+
+        do {
+            try flattener.apply(layerTarPath: layerPath)
+            Issue.record("expected insufficientDiskSpace")
+        } catch let error as OCIError {
+            guard case .insufficientDiskSpace = error else {
+                Issue.record("expected insufficientDiskSpace, got \(error)")
+                return
+            }
+            #expect(error.failureClassification == .blocked)
+        } catch {
+            Issue.record("expected insufficientDiskSpace, got \(error)")
+        }
+    }
+
+    @Test("ENOSPC while creating a layer file is a blocked disk-space failure")
+    func createENOSPC() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        var layer = TarTestBuilder()
+        layer.addFile("inode", content: Data())
+        let layerPath = try writeLayer(layer, in: dir, name: "inode-full.tar")
+        let flattener = try OCIImageFlattener(
+            rootPath: dir + "/root", logger: Logger(label: "test"), applyOwnership: false,
+            createFile: { _ in throw POSIXError(.ENOSPC) },
+            writeContent: { handle, content in try handle.write(contentsOf: content) })
+
+        do {
+            try flattener.apply(layerTarPath: layerPath)
+            Issue.record("expected insufficientDiskSpace")
+        } catch let error as OCIError {
+            guard case .insufficientDiskSpace = error else {
+                Issue.record("expected insufficientDiskSpace, got \(error)")
+                return
+            }
+            #expect(error.failureClassification == .blocked)
+        } catch {
+            Issue.record("expected insufficientDiskSpace, got \(error)")
+        }
+    }
+
     @Test("whiteouts remove lower-layer entries")
     func whiteouts() throws {
         let dir = try makeTempDir()

@@ -28,6 +28,8 @@ public enum HostPreflight {
         case volumeStorageDirectory = "volume_storage_dir"
         case imageCacheDirectory = "image_cache_dir"
         case firecrackerSocketDirectory = "firecracker_socket_dir"
+        case firecrackerPIDFDSupport = "firecracker_pidfd"
+        case sandboxJailerUIDRange = "sandbox_jailer_uid_range"
         case qemuImgBinary = "qemu-img"
         case uefiFirmware = "uefi_firmware"
         case qemuFirmwareDescriptors = "qemu_firmware_descriptors"
@@ -89,6 +91,54 @@ public enum HostPreflight {
         case unsupportedPlatform(String)
     }
 
+    /// Whether Firecracker process supervision can pin process identities
+    /// against PID reuse with Linux pidfds.
+    public enum FirecrackerPIDFDSupport: Sendable, Equatable {
+        case available
+        case unavailable(String)
+        case unsupportedPlatform(String)
+    }
+
+    /// One host identity database file, captured by the caller so the jailer
+    /// range check stays pure and tests never inspect the machine running them.
+    public enum HostIdentityFile: Sendable, Equatable {
+        /// The complete file contents.
+        case contents(String)
+        /// The path does not exist. This is valid only for the optional
+        /// subordinate-id databases (`/etc/subuid` and `/etc/subgid`).
+        case missing
+        /// The path exists but could not be read. A reason is retained for the
+        /// operator-facing preflight remediation.
+        case unreadable(String)
+    }
+
+    /// Inputs for proving that the uid/gid range assigned to jailed sandbox
+    /// processes is not already owned or delegated on this host.
+    public struct SandboxJailerUIDRangeInputs: Sendable, Equatable {
+        public var mode: SandboxJailerMode
+        public var uidBase: UInt32
+        public var passwd: HostIdentityFile
+        public var group: HostIdentityFile
+        public var subuid: HostIdentityFile
+        public var subgid: HostIdentityFile
+
+        public init(
+            mode: SandboxJailerMode,
+            uidBase: UInt32,
+            passwd: HostIdentityFile,
+            group: HostIdentityFile,
+            subuid: HostIdentityFile,
+            subgid: HostIdentityFile
+        ) {
+            self.mode = mode
+            self.uidBase = uidBase
+            self.passwd = passwd
+            self.group = group
+            self.subuid = subuid
+            self.subgid = subgid
+        }
+    }
+
     /// Everything the preflight needs to know about this agent's
     /// configuration, resolved by the caller so the checks stay pure.
     public struct Inputs: Sendable {
@@ -98,6 +148,8 @@ public enum HostPreflight {
         public var qemuImgPath: String
         /// nil when Firecracker cannot exist on this platform (non-Linux).
         public var firecrackerSocketDirectory: String?
+        /// nil when Firecracker cannot exist on this platform (non-Linux).
+        public var firecrackerPIDFDSupport: FirecrackerPIDFDSupport?
         /// The resolved firmware path for this host's architecture — the CODE
         /// image of the split pair when one resolved, else the monolithic
         /// image — or nil when no candidate exists.
@@ -141,6 +193,9 @@ public enum HostPreflight {
         public var globalReversePathFilter: Int?
         /// Free-space floor for the advisory disk-space check.
         public var minimumFreeDiskBytes: Int64
+        /// Host identity databases used to prove the sandbox jail uid/gid
+        /// range is unassigned. Nil skips the Linux-only check.
+        public var sandboxJailerUIDRange: SandboxJailerUIDRangeInputs?
 
         public init(
             vmStoragePath: String,
@@ -148,6 +203,7 @@ public enum HostPreflight {
             imageCachePath: String,
             qemuImgPath: String,
             firecrackerSocketDirectory: String? = nil,
+            firecrackerPIDFDSupport: FirecrackerPIDFDSupport? = nil,
             firmwarePath: String? = nil,
             tpmSupport: LibvirtProbe.TPMSupport = .unknown("not probed"),
             qemuFirmwareDescriptorPath: String? = nil,
@@ -162,13 +218,15 @@ public enum HostPreflight {
             searchPath: String = ProcessInfo.processInfo.environment["PATH"]
                 ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             globalReversePathFilter: Int? = HostPreflight.readGlobalReversePathFilter(),
-            minimumFreeDiskBytes: Int64 = 1 << 30  // 1 GiB
+            minimumFreeDiskBytes: Int64 = 1 << 30,  // 1 GiB
+            sandboxJailerUIDRange: SandboxJailerUIDRangeInputs? = nil
         ) {
             self.vmStoragePath = vmStoragePath
             self.volumeStoragePath = volumeStoragePath
             self.imageCachePath = imageCachePath
             self.qemuImgPath = qemuImgPath
             self.firecrackerSocketDirectory = firecrackerSocketDirectory
+            self.firecrackerPIDFDSupport = firecrackerPIDFDSupport
             self.firmwarePath = firmwarePath
             self.tpmSupport = tpmSupport
             self.qemuFirmwareDescriptorPath = qemuFirmwareDescriptorPath
@@ -182,6 +240,7 @@ public enum HostPreflight {
             self.searchPath = searchPath
             self.globalReversePathFilter = globalReversePathFilter
             self.minimumFreeDiskBytes = minimumFreeDiskBytes
+            self.sandboxJailerUIDRange = sandboxJailerUIDRange
         }
     }
 
@@ -259,6 +318,20 @@ public enum HostPreflight {
             return check.supported && check.passed
         }
 
+        /// Whether the configured sandbox jail uid/gid range is free of host
+        /// accounts and subordinate-id delegations. True when the Linux-only
+        /// check was not requested.
+        public var sandboxJailerUIDRangeReady: Bool {
+            !failed(.sandboxJailerUIDRange)
+        }
+
+        /// Why the sandbox jail uid/gid range is unusable, for the jailer
+        /// resolver and sandbox capability report.
+        public var sandboxJailerUIDRangeFailureDetail: String? {
+            guard let check = check(.sandboxJailerUIDRange), !check.passed else { return nil }
+            return check.detail
+        }
+
         /// Whether this host's libvirt is usable: reachable at
         /// `qemu:///system` and new enough. True when the libvirt checks were
         /// skipped, which is the non-Linux case — there the QEMU probe already
@@ -306,6 +379,10 @@ public enum HostPreflight {
                     !check.passed
                 {
                     reason = check.detail
+                } else if hypervisor.type == .firecracker,
+                    let check = check(.firecrackerPIDFDSupport), !check.passed
+                {
+                    reason = check.detail
                 }
 
                 guard let unavailabilityReason = reason else { return hypervisor }
@@ -339,6 +416,12 @@ public enum HostPreflight {
                 ensureWritableDirectory(
                     firecrackerSocketDir, kind: .firecrackerSocketDirectory,
                     configKey: "firecracker_socket_dir"))
+            if let pidfdSupport = inputs.firecrackerPIDFDSupport {
+                checks.append(checkFirecrackerPIDFD(pidfdSupport))
+            }
+        }
+        if let jailerUIDRange = inputs.sandboxJailerUIDRange {
+            checks.append(checkSandboxJailerUIDRange(jailerUIDRange))
         }
 
         checks.append(checkQemuImg(inputs.qemuImgPath))
@@ -439,6 +522,139 @@ public enum HostPreflight {
     }
 
     // MARK: - Individual checks
+
+    public static func checkFirecrackerPIDFD(_ support: FirecrackerPIDFDSupport) -> Check {
+        switch support {
+        case .available:
+            return .pass(.firecrackerPIDFDSupport)
+        case .unavailable(let reason):
+            return .fail(
+                .firecrackerPIDFDSupport,
+                "Firecracker process supervision requires pidfd_open and pidfd_send_signal: \(reason). "
+                    + "Use Linux kernel 5.3 or newer and allow both system calls in the agent service sandbox")
+        case .unsupportedPlatform(let reason):
+            return .unsupported(.firecrackerPIDFDSupport, reason)
+        }
+    }
+
+    /// Proves that `[uidBase, uidBase + 65536)` is not a host uid/gid or a
+    /// delegated subordinate-id range. The snapshots are injected so this is a
+    /// pure parser and interval check; the caller owns reading the four named
+    /// host files.
+    public static func checkSandboxJailerUIDRange(_ inputs: SandboxJailerUIDRangeInputs) -> Check {
+        let severity: Severity = inputs.mode == .required ? .gating : .advisory
+        guard inputs.mode != .disabled else {
+            return .pass(.sandboxJailerUIDRange, severity: severity)
+        }
+
+        let start = UInt64(inputs.uidBase)
+        let count = UInt64(SandboxJailerConfig.uidCount)
+        let end = start + count
+        guard end <= UInt64(UInt32.max) else {
+            return .fail(
+                .sandboxJailerUIDRange, severity: severity,
+                "sandbox_jailer_uid_base \(inputs.uidBase) does not leave room for the "
+                    + "\(SandboxJailerConfig.uidCount)-id jail uid/gid range")
+        }
+        let jailRange = start..<end
+
+        var problems: [String] = []
+        problems.append(
+            contentsOf: accountIDProblems(
+                inputs.passwd, path: "/etc/passwd", idName: "uid", jailRange: jailRange))
+        problems.append(
+            contentsOf: accountIDProblems(
+                inputs.group, path: "/etc/group", idName: "gid", jailRange: jailRange))
+        problems.append(
+            contentsOf: subordinateIDProblems(
+                inputs.subuid, path: "/etc/subuid", idName: "uid", jailRange: jailRange))
+        problems.append(
+            contentsOf: subordinateIDProblems(
+                inputs.subgid, path: "/etc/subgid", idName: "gid", jailRange: jailRange))
+
+        guard problems.isEmpty else {
+            return .fail(
+                .sandboxJailerUIDRange, severity: severity,
+                "sandbox jail uid/gid range \(start)..<\(end) is not isolated on this host: "
+                    + problems.joined(separator: "; ")
+                    + ". Reassign the conflicting host identity or subordinate range, or choose and reserve a "
+                    + "non-overlapping sandbox_jailer_uid_base")
+        }
+        return .pass(.sandboxJailerUIDRange, severity: severity)
+    }
+
+    private static func accountIDProblems(
+        _ file: HostIdentityFile,
+        path: String,
+        idName: String,
+        jailRange: Range<UInt64>
+    ) -> [String] {
+        switch file {
+        case .missing:
+            return ["required \(path) is missing"]
+        case .unreadable(let reason):
+            return ["cannot read required \(path): \(reason)"]
+        case .contents(let contents):
+            return colonRecords(contents).compactMap { lineNumber, fields in
+                guard fields.count >= 3, let id = UInt64(fields[2]) else {
+                    return "cannot parse \(idName) on \(path) line \(lineNumber)"
+                }
+                guard jailRange.contains(id) else { return nil }
+                let name = fields[0].isEmpty ? "<unnamed>" : fields[0]
+                return "\(path) entry '\(name)' uses \(idName) \(id)"
+            }
+        }
+    }
+
+    private static func subordinateIDProblems(
+        _ file: HostIdentityFile,
+        path: String,
+        idName: String,
+        jailRange: Range<UInt64>
+    ) -> [String] {
+        switch file {
+        case .missing:
+            // The subordinate-id files are optional. Their absence means this
+            // host delegates no file-backed subordinate ids of that kind.
+            return []
+        case .unreadable(let reason):
+            // An existing but unreadable optional database cannot be treated
+            // like an absent one: it may contain a conflicting delegation.
+            return ["cannot read \(path): \(reason)"]
+        case .contents(let contents):
+            return colonRecords(contents).compactMap { lineNumber, fields in
+                guard fields.count >= 3,
+                    let start = UInt64(fields[1]),
+                    let count = UInt64(fields[2]),
+                    count > 0
+                else {
+                    return "cannot parse subordinate \(idName) range on \(path) line \(lineNumber)"
+                }
+                let (end, overflow) = start.addingReportingOverflow(count)
+                guard !overflow else {
+                    return "subordinate \(idName) range overflows on \(path) line \(lineNumber)"
+                }
+                guard start < jailRange.upperBound, jailRange.lowerBound < end else { return nil }
+                let owner = fields[0].isEmpty ? "<unnamed>" : fields[0]
+                return "\(path) delegates \(idName)s \(start)..<\(end) to '\(owner)'"
+            }
+        }
+    }
+
+    /// Non-empty, non-comment colon records with their one-based line number.
+    /// Empty fields stay present so a malformed numeric field fails closed.
+    private static func colonRecords(_ contents: String) -> [(Int, [String])] {
+        contents.split(separator: "\n", omittingEmptySubsequences: false).enumerated().compactMap {
+            offset, rawLine in
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return nil }
+            return (
+                offset + 1,
+                line.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+            )
+        }
+    }
 
     /// Whether `net.ipv4.conf.all.rp_filter` leaves the resolver's foot able to
     /// receive guest queries (STR-40).

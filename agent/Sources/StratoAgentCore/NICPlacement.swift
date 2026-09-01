@@ -1,7 +1,7 @@
 import Foundation
 
 /// The uid/gid a jailed sandbox's network devices must be owned by — the same
-/// pair `SandboxJailPlan` derives for the jail itself.
+/// allocated pair `SandboxJailPlan` carries for the jail itself.
 ///
 /// It is create-only. A jailed Firecracker's `TUNSETIFF` succeeds against a
 /// pre-existing TAP only when the device's owner matches the caller (the jailer

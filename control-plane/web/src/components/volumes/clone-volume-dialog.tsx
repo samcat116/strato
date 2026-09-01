@@ -48,12 +48,14 @@ export function CloneVolumeDialog({
     // The accepted mutation is a `create` on the *clone*, not an operation
     // on the source: cloning is a create strategy on the new volume's
     // desired entry (backend STR-148), so the source is only ever read.
+    const payload = {
+      name: trimmedName,
+      description: description.trim() || undefined,
+    };
     await run({
-      request: () =>
-        volumesApi.clone(volume.id!, {
-          name: trimmedName,
-          description: description.trim() || undefined,
-        }),
+      intentKey: JSON.stringify(["POST", `/api/volumes/${volume.id}/clone`, payload]),
+      request: (idempotencyKey) =>
+        volumesApi.clone(volume.id!, payload, idempotencyKey),
       watch: {
         kind: "create",
         resourceKind: "volume",

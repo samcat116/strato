@@ -34,6 +34,35 @@ struct SnapshotReconciliationTests {
         #expect(decoded.generation == 7)
         #expect(decoded.capture?.sandboxMode == .stop)
         #expect(decoded.export?.uploads.count == 1)
+        #expect(decoded.volumeStorage == nil)
+    }
+
+    @Test("A volume snapshot carries its Ceph backend without a parent volume entry")
+    func volumeSnapshotStorageRoundTrips() throws {
+        let storage = DesiredVolumeStorage.ceph(
+            CephVolumeStorage(
+                clusterId: Fixtures.uuidA,
+                fsid: "11111111-2222-4333-8444-555555555555",
+                pool: "volumes",
+                namespace: "project-a",
+                clientName: "client.strato-project-a",
+                monEndpoints: ["v2:mon.example:3300"],
+                credentialId: Fixtures.uuidB,
+                keyring: "[client.strato-project-a]\nkey = secret",
+                messengerMode: .secure))
+        let entry = DesiredSnapshotState(
+            snapshotId: UUID(), kind: .volumeSnapshot, parentId: UUID(),
+            desiredStatus: .absent, generation: 8, volumeStorage: storage)
+
+        #expect(try roundTrip(entry).volumeStorage == storage)
+
+        // Optional by design: a v53/pre-Ceph snapshot entry still decodes and
+        // uses the agent's legacy parent-volume fallback.
+        let legacyJSON = """
+            {"snapshotId":"\(UUID().uuidString)","kind":"VolumeSnapshot",
+             "parentId":"\(UUID().uuidString)","desiredStatus":"Absent","generation":1}
+            """
+        #expect(try decodeJSON(DesiredSnapshotState.self, from: legacyJSON).volumeStorage == nil)
     }
 
     /// The strict decode is deliberate and shared with `DesiredVMStatus`: an

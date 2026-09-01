@@ -11,6 +11,7 @@ import SwiftFirecracker
 actor FirecrackerService: HypervisorService {
     private let logger: Logger
     private let storage: (any StorageBackend)?
+    private let diskRealizer: any FirecrackerDiskRealizing
     private let imageSource: (any ImageSource)?
     private let vmStoragePath: String
     private let firecrackerBinaryPath: String
@@ -26,6 +27,9 @@ actor FirecrackerService: HypervisorService {
     private var firecrackerClient: FirecrackerClient?
     private var vmManagers: [String: FirecrackerManager] = [:]
     private var vmSpecs: [String: VMSpec] = [:]
+    /// Host-only krbd mappings. The manifest and `vmSpecs` retain canonical
+    /// `.rbd` coordinates; `/dev/rbdN` is never reported as volume identity.
+    private var realizedDisks: [String: [FirecrackerRealizedDisk]] = [:]
     /// Exact pre-boot MMDS interface policy installed in each managed VMM.
     /// The VM-level metadata switch participates in this list even though it
     /// does not live in `VMSpec.networks`.
@@ -37,6 +41,7 @@ actor FirecrackerService: HypervisorService {
     init(
         logger: Logger,
         storage: (any StorageBackend)? = nil,
+        diskRealizer: (any FirecrackerDiskRealizing)? = nil,
         imageSource: (any ImageSource)? = nil,
         vmStoragePath: String,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
@@ -46,6 +51,7 @@ actor FirecrackerService: HypervisorService {
     ) {
         self.logger = logger
         self.storage = storage
+        self.diskRealizer = diskRealizer ?? LocalFirecrackerDiskRealizer()
         self.imageSource = imageSource
         self.vmStoragePath = vmStoragePath
         self.firecrackerBinaryPath = firecrackerBinaryPath
@@ -75,16 +81,29 @@ actor FirecrackerService: HypervisorService {
         vsockCID: UInt32? = nil
     ) async throws {
         let bootArtifacts = try await resolveBootArtifacts(spec: spec, imageInfo: imageInfo)
-        try await createVM(
-            vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
-            networkAttachments: networkAttachments, metadata: metadata)
+        // A failed re-adoption can leave a provisional reference to a durable
+        // mapping while proving that the old VMM is gone. Keep it alive until
+        // the replacement has acquired its own reference, then release exactly
+        // the provisional one. A failed replacement retains it for retry/delete.
+        let retainedDisks = realizedDisks.removeValue(forKey: vmId) ?? []
+        do {
+            try await createVM(
+                vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
+                networkAttachments: networkAttachments, metadata: metadata)
+        } catch {
+            if !retainedDisks.isEmpty {
+                realizedDisks[vmId, default: []].append(contentsOf: retainedDisks)
+            }
+            throw error
+        }
+        try await releaseRetainedDisks(retainedDisks, vmId: vmId)
     }
 
     private func createVM(
         vmId: String, spec: VMSpec, bootArtifacts: FirecrackerBootArtifacts,
         networkAttachments: [ResolvedNetworkAttachment], metadata: InstanceMetadata?
     ) async throws {
-        logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Creating Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
 
         // Firecracker can only realize TAP attachments. Reject anything else up
         // front instead of silently launching the VM without its NICs.
@@ -118,14 +137,21 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.invalidConfiguration(
                 "Firecracker VM \(vmId) has no realized managed boot volume")
         }
+        let realizedBoot = try await diskRealizer.realize(
+            bootAttachment, readOnly: bootVolume.readonly)
+        // Track the canonical-to-host realization immediately. Any later
+        // configuration failure must retain a failed unmap for delete/retry.
+        realizedDisks[vmId, default: []].append(realizedBoot)
         let bootPath: String
         do {
-            bootPath = try FirecrackerDiskAttachment.hostPath(for: bootAttachment)
+            bootPath = try FirecrackerDiskAttachment.hostPath(for: realizedBoot.realized)
         } catch FirecrackerDiskAttachment.Error.nativeRBD {
+            await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
             throw HypervisorServiceError.notSupported(
                 "Firecracker cannot open a native RBD attachment; map it through krbd first")
         }
         guard FileManager.default.fileExists(atPath: bootPath) else {
+            await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
             throw HypervisorServiceError.diskError(
                 "boot volume \(bootVolume.volumeId) for VM \(vmId) has no file at \(bootPath) on this host")
         }
@@ -133,15 +159,20 @@ actor FirecrackerService: HypervisorService {
             id: bootVolume.volumeId.uuidString, path: bootPath, readOnly: bootVolume.readonly
         )
 
-        // MMDS carries the complete cloud-init document. Firecracker's 50 KiB
-        // default API limit is smaller than Strato's accepted user data before
-        // the surrounding EC2 tree is added, so raise this VMM's finite limit
-        // before any API request can seed or later refresh the snapshot.
-        let manager = try await client.createVM(
-            vmId: vmId,
-            httpAPIMaxPayloadSize: FirecrackerMMDSInterfacePlan.payloadLimitBytes)
-
+        var processWasSpawned = false
         do {
+            // MMDS carries the complete cloud-init document. Firecracker's 50
+            // KiB default API limit is smaller than Strato's accepted user
+            // data before the surrounding EC2 tree is added, so raise this
+            // VMM's finite limit before any API request can seed or later
+            // refresh the snapshot. Process creation belongs inside the same
+            // cleanup boundary as configuration: a spawn failure occurs after
+            // krbd realization and must release that exact reference too.
+            let manager = try await client.createVM(
+                vmId: vmId,
+                httpAPIMaxPayloadSize: FirecrackerMMDSInterfacePlan.payloadLimitBytes)
+            processWasSpawned = true
+
             // Configure machine
             let machineConfig = MachineConfig(
                 vcpuCount: spec.cpus,
@@ -207,15 +238,19 @@ actor FirecrackerService: HypervisorService {
             vmSpecs[vmId] = spec
             mmdsInterfaces[vmId] = configuredMMDSInterfaces
         } catch {
-            // `FirecrackerClient.createVM` has already spawned and registered
-            // the process. No caller can clean it up through this service yet,
-            // because the manager is intentionally unpublished until the full
-            // configuration succeeds.
-            await discardPartialVMM(vmId: vmId, client: client)
+            // A manager return proves `FirecrackerClient.createVM` spawned and
+            // registered the process. No caller can clean it up through this
+            // service yet because publication waits for full configuration.
+            // If createVM itself threw, its own failure path owns any partial
+            // process and there is no registered manager for us to destroy.
+            if processWasSpawned {
+                await discardPartialVMM(vmId: vmId, client: client)
+            }
+            await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
             throw error
         }
 
-        logger.info("Firecracker VM created successfully", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM created successfully", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func bootVM(vmId: String) async throws {
@@ -223,9 +258,9 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Booting Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Booting Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.start()
-        logger.info("Firecracker VM booted successfully", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM booted successfully", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func shutdownVM(vmId: String) async throws {
@@ -233,10 +268,10 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Shutting down Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Shutting down Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         // Firecracker doesn't have graceful shutdown, send Ctrl+Alt+Del or destroy
         try await manager.sendCtrlAltDel()
-        logger.info("Shutdown signal sent to Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Shutdown signal sent to Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func rebootVM(vmId: String) async throws {
@@ -244,9 +279,9 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Rebooting Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Rebooting Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.sendCtrlAltDel()
-        logger.info("Reboot signal sent to Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Reboot signal sent to Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func pauseVM(vmId: String) async throws {
@@ -254,9 +289,9 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Pausing Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Pausing Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.pause()
-        logger.info("Firecracker VM paused", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM paused", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func resumeVM(vmId: String) async throws {
@@ -264,13 +299,13 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
 
-        logger.info("Resuming Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Resuming Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
         try await manager.resume()
-        logger.info("Firecracker VM resumed", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM resumed", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     func deleteVM(vmId: String) async throws {
-        logger.info("Deleting Firecracker VM", metadata: ["vmId": .string(vmId)])
+        logger.info("Deleting Firecracker VM", metadata: ["strato.vm.id": .string(vmId)])
 
         // Destroy the VM through the client (network attachments are torn down
         // by the agent's NetworkOrchestrator after this returns).
@@ -281,29 +316,36 @@ actor FirecrackerService: HypervisorService {
         // and nothing of this VM's on disk — and in particular the removal
         // below must not run without a preceding teardown, since it would
         // unlink the rootfs of a VM that could still be executing it.
-        guard let client = firecrackerClient else {
-            logger.info("Firecracker VM had nothing to tear down", metadata: ["vmId": .string(vmId)])
-            return
-        }
-        if vmManagers[vmId] != nil {
-            try await client.destroyVM(vmId: vmId)
+        if let client = firecrackerClient {
+            if vmManagers[vmId] != nil {
+                try await client.destroyVM(vmId: vmId)
+            } else {
+                try await destroyWithoutSession(vmId: vmId, client: client)
+            }
+        } else if vmManagers[vmId] != nil {
+            throw HypervisorServiceError.hypervisorNotInstalled(firecrackerBinaryPath)
         } else {
-            try await destroyWithoutSession(vmId: vmId, client: client)
+            logger.info(
+                "Firecracker VM had no process to tear down; continuing durable disk cleanup",
+                metadata: ["strato.vm.id": .string(vmId)])
         }
 
-        // Clean up local state
+        // The VMM is gone. Remove its control state before krbd cleanup so a
+        // failed unmap can retry delete without trying to destroy the same
+        // process twice. Keep realizedDisks until each release succeeds.
         vmManagers.removeValue(forKey: vmId)
         vmSpecs.removeValue(forKey: vmId)
         mmdsPayloads.removeValue(forKey: vmId)
         mmdsInterfaces.removeValue(forKey: vmId)
+        try await releaseRealizedDisks(vmId: vmId)
 
         // Remove the VM's directory, which holds the rootfs materialized at
         // create. Same rule as the QEMU driver: one recursive removal rather
         // than a list of files that a later addition can fall off (#969),
         // reached only once the teardown above has returned without throwing.
-        await reclaimVMDirectory(vmId: vmId)
+        removeVMFiles(vmId: vmId)
 
-        logger.info("Firecracker VM deleted", metadata: ["vmId": .string(vmId)])
+        logger.info("Firecracker VM deleted", metadata: ["strato.vm.id": .string(vmId)])
     }
 
     /// Leaves the host with no Firecracker process for `vmId` when this service
@@ -321,7 +363,7 @@ actor FirecrackerService: HypervisorService {
         guard FileManager.default.fileExists(atPath: socketPath) else {
             logger.warning(
                 "Deleting a Firecracker VM with no manager and no API socket; assuming nothing is left to tear down",
-                metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+                metadata: ["strato.vm.id": .string(vmId), "socket": .string(socketPath)])
             return
         }
 
@@ -331,7 +373,7 @@ actor FirecrackerService: HypervisorService {
             logger.warning(
                 "VM has no live Firecracker behind its API socket; deleting what it left on this host",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "socket": .string(socketPath),
                     "error": .string(error.localizedDescription),
                 ])
@@ -340,7 +382,7 @@ actor FirecrackerService: HypervisorService {
 
         logger.warning(
             "Deleting a VM whose Firecracker is alive but had no manager on this agent",
-            metadata: ["vmId": .string(vmId), "socket": .string(socketPath)])
+            metadata: ["strato.vm.id": .string(vmId), "socket": .string(socketPath)])
         try await client.destroyVM(vmId: vmId)
     }
 
@@ -356,9 +398,24 @@ actor FirecrackerService: HypervisorService {
             // rather than unlink the rootfs of a VM it is still driving.
             logger.error(
                 "Refusing to reclaim the directory of a VM with a live control session",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
             return
         }
+        do {
+            try await releaseRealizedDisks(vmId: vmId)
+        } catch {
+            logger.error(
+                "Could not release a Firecracker VM's durable disk mappings; retaining its files for retry",
+                metadata: [
+                    "strato.vm.id": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
+            return
+        }
+        removeVMFiles(vmId: vmId)
+    }
+
+    private func removeVMFiles(vmId: String) {
         VMDirectoryLayout.removeDirectory(vmStoragePath: vmStoragePath, vmId: vmId, logger: logger)
         try? FileManager.default.removeItem(
             atPath: Self.adoptionSocketPath(socketDirectory: socketDirectory, vmId: vmId))
@@ -422,8 +479,14 @@ actor FirecrackerService: HypervisorService {
         if vmManagers[vmId] != nil {
             // Already managed (e.g. a replayed sync raced re-adoption): adoption
             // is satisfied, just report the current status.
+            try await adoptBootDiskIfNeeded(vmId: vmId, spec: spec)
             return try await getVMStatus(vmId: vmId)
         }
+
+        // Acquire the durable disk realization first. When the deterministic
+        // socket then proves the process is gone, orphan cleanup still has the
+        // canonical-to-device reference it needs to unmap krbd safely.
+        try await adoptBootDiskIfNeeded(vmId: vmId, spec: spec)
 
         let socketPath = Self.adoptionSocketPath(socketDirectory: socketDirectory, vmId: vmId)
         guard FileManager.default.fileExists(atPath: socketPath) else {
@@ -448,7 +511,7 @@ actor FirecrackerService: HypervisorService {
         logger.info(
             "Re-adopting orphaned Firecracker VM",
             metadata: [
-                "vmId": .string(vmId),
+                "strato.vm.id": .string(vmId),
                 "socket": .string(socketPath),
             ])
 
@@ -475,6 +538,33 @@ actor FirecrackerService: HypervisorService {
         return Self.vmStatus(from: info.state)
     }
 
+    private func adoptBootDiskIfNeeded(vmId: String, spec: VMSpec) async throws {
+        guard realizedDisks[vmId] == nil else { return }
+        guard let bootVolume = spec.volumes.first(where: { $0.bootOrder == 0 }),
+            let bootAttachment = bootVolume.attachment
+        else {
+            throw HypervisorServiceError.invalidConfiguration(
+                "Firecracker VM \(vmId) has no realized managed boot volume")
+        }
+
+        let realizedBoot = try await diskRealizer.adopt(
+            bootAttachment, readOnly: bootVolume.readonly)
+        realizedDisks[vmId] = [realizedBoot]
+        let bootPath: String
+        do {
+            bootPath = try FirecrackerDiskAttachment.hostPath(for: realizedBoot.realized)
+        } catch {
+            await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
+            throw HypervisorServiceError.diskError(
+                "re-adopted boot volume \(bootVolume.volumeId) has no usable host block device")
+        }
+        guard FileManager.default.fileExists(atPath: bootPath) else {
+            await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
+            throw HypervisorServiceError.diskError(
+                "re-adopted boot volume \(bootVolume.volumeId) is missing at \(bootPath)")
+        }
+    }
+
     /// Replaces the VMM-local MMDS snapshot for a managed VM. MMDS remains
     /// configured only on the NICs selected before boot; this live PUT updates
     /// the data behind those interfaces without rebuilding or restarting the
@@ -493,7 +583,7 @@ actor FirecrackerService: HypervisorService {
         mmdsPayloads[vmId] = payload
         logger.info(
             "Refreshed Firecracker MMDS snapshot",
-            metadata: ["vmId": .string(vmId), "bytes": .stringConvertible(payload.count)])
+            metadata: ["strato.vm.id": .string(vmId), "bytes": .stringConvertible(payload.count)])
     }
 
     func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {
@@ -519,7 +609,7 @@ actor FirecrackerService: HypervisorService {
 
         logger.info(
             "Replacing Firecracker VMM to reconfigure MMDS interfaces",
-            metadata: ["vmId": .string(vmId)])
+            metadata: ["strato.vm.id": .string(vmId)])
         if let manager = vmManagers[vmId] {
             try await quiesceForReplacement(vmId: vmId, manager: manager, client: client)
             try await client.destroyVM(vmId: vmId)
@@ -529,12 +619,71 @@ actor FirecrackerService: HypervisorService {
             mmdsInterfaces.removeValue(forKey: vmId)
         }
 
-        // A failed replacement has already removed the old manager. Its next
-        // level-triggered retry must start here rather than failing vmNotFound.
-        // createVM owns cleanup for any new process that fails configuration.
-        try await createVM(
-            vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
-            networkAttachments: networkAttachments, metadata: metadata)
+        // A replacement realizes the same canonical disk once more before it
+        // is published. Retain the old reference until that succeeds so the
+        // krbd mapping remains live throughout the handoff, then drop exactly
+        // one reference. On failure, keep the old reference for delete/retry.
+        let retainedDisks = realizedDisks.removeValue(forKey: vmId) ?? []
+        do {
+            try await createVM(
+                vmId: vmId, spec: spec, bootArtifacts: bootArtifacts,
+                networkAttachments: networkAttachments, metadata: metadata)
+        } catch {
+            if !retainedDisks.isEmpty {
+                realizedDisks[vmId, default: []].append(contentsOf: retainedDisks)
+            }
+            throw error
+        }
+        try await releaseRetainedDisks(retainedDisks, vmId: vmId)
+    }
+
+    /// Releases references retained across a VMM replacement. A failed final
+    /// unmap is put back under the VM so a later delete can retry it.
+    private func releaseRetainedDisks(
+        _ retained: [FirecrackerRealizedDisk], vmId: String
+    ) async throws {
+        for (index, disk) in retained.enumerated() {
+            do {
+                try await diskRealizer.release(disk)
+            } catch {
+                realizedDisks[vmId, default: []].append(contentsOf: retained[index...])
+                throw error
+            }
+        }
+    }
+
+    /// Final deletion path. Remove one handle only after its underlying
+    /// reference was released, so a failure retries the exact remaining set.
+    private func releaseRealizedDisks(vmId: String) async throws {
+        while let disk = realizedDisks[vmId]?.first {
+            try await diskRealizer.release(disk)
+            realizedDisks[vmId]?.removeFirst()
+        }
+        realizedDisks.removeValue(forKey: vmId)
+    }
+
+    /// Best-effort cleanup while preserving the primary create/adoption error.
+    /// The mapping remains in `realizedDisks` on failure and is therefore not
+    /// forgotten when reconciliation later deletes or replaces the VM.
+    private func releaseTrackedDiskAfterFailedCreate(
+        _ disk: FirecrackerRealizedDisk, vmId: String
+    ) async {
+        do {
+            try await diskRealizer.release(disk)
+            if let index = realizedDisks[vmId]?.firstIndex(of: disk) {
+                realizedDisks[vmId]?.remove(at: index)
+            }
+            if realizedDisks[vmId]?.isEmpty == true {
+                realizedDisks.removeValue(forKey: vmId)
+            }
+        } catch {
+            logger.error(
+                "Could not release a Firecracker disk after VM setup failed; retaining it for delete/retry",
+                metadata: [
+                    "strato.vm.id": .string(vmId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     private func resolveBootArtifacts(
@@ -594,12 +743,12 @@ actor FirecrackerService: HypervisorService {
             }
             logger.info(
                 "Firecracker guest shut down cleanly before VMM replacement",
-                metadata: ["vmId": .string(vmId)])
+                metadata: ["strato.vm.id": .string(vmId)])
         } catch {
             if (try? await client.waitForVMExit(vmId: vmId, timeout: .milliseconds(0))) == true {
                 logger.info(
                     "Firecracker VMM exited while quiescing for replacement",
-                    metadata: ["vmId": .string(vmId)])
+                    metadata: ["strato.vm.id": .string(vmId)])
                 return
             }
             if restorePauseOnFailure {
@@ -609,7 +758,7 @@ actor FirecrackerService: HypervisorService {
                     logger.error(
                         "Could not restore paused state after Firecracker shutdown failed",
                         metadata: [
-                            "vmId": .string(vmId),
+                            "strato.vm.id": .string(vmId),
                             "error": .string(error.localizedDescription),
                         ])
                 }
@@ -629,7 +778,7 @@ actor FirecrackerService: HypervisorService {
             logger.error(
                 "Failed to discard partially configured Firecracker VMM",
                 metadata: [
-                    "vmId": .string(vmId),
+                    "strato.vm.id": .string(vmId),
                     "error": .string(error.localizedDescription),
                 ])
         }

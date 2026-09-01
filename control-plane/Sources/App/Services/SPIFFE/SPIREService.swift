@@ -181,8 +181,8 @@ public struct SPIREServiceConfig: Sendable {
     /// Load configuration from the validated startup snapshot.
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> SPIREServiceConfig {
         return SPIREServiceConfig(
-            enabled: configuration.bool(.spireEnabled)!,
-            trustDomain: configuration.string(.spireTrustDomain)!,
+            enabled: configuration.bool(.spireEnabled),
+            trustDomain: configuration.requiredString(.spireTrustDomain),
             bundleEndpointURL: configuration.string(.spireBundleEndpointURL),
             trustBundlePath: configuration.string(.spireTrustBundlePath),
             bundleRefreshInterval: configuration.double(.spireBundleRefreshInterval)
@@ -400,7 +400,7 @@ public actor SPIREService {
         logger.debug(
             "Certificate validated successfully",
             metadata: [
-                "spiffeID": .string(claimedID.uri),
+                "strato.agent.identity": .string(claimedID.uri),
                 "trustDomain": .string(claimedID.trustDomain),
                 "organizationId": .string(organizationID?.uuidString ?? "platform"),
             ])

@@ -59,7 +59,11 @@ public enum StratoClient {
             transport: transport,
             // Outermost first: the authentication middleware has to see a 401
             // and retry before the error mapper turns it into a thrown error.
-            middlewares: [ErrorMappingMiddleware(), AuthenticationMiddleware(session: session)]
+            middlewares: [
+                ErrorMappingMiddleware(),
+                IdempotencyKeyMiddleware(),
+                AuthenticationMiddleware(session: session),
+            ]
         )
         return AuthenticatedSession(client: client, credentials: session)
     }

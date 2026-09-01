@@ -151,6 +151,7 @@ function ProviderForm({
           jwksURI: jwksURI.trim() || undefined,
           endSessionEndpoint: endSessionEndpoint.trim() || undefined,
           scopes: scopeList.length > 0 ? scopeList : undefined,
+          enabled: true,
           useNonce,
         });
         toast.success(`Provider "${name.trim()}" created`);

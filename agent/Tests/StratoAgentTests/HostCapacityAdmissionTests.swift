@@ -17,10 +17,14 @@ struct HostCapacityAdmissionTests {
 
         let claim = try #require(
             try ledger.claim(
-                HostReservation(cpus: 4, memoryBytes: 8 * gib), snapshot: snapshot, agentName: "hv-03"))
+                HostReservation(cpus: 4, memoryBytes: 8 * gib),
+                desiredWorkloadReservation: HostReservation(cpus: 4, memoryBytes: 8 * gib),
+                snapshot: snapshot, agentName: "hv-03"))
         #expect(claim.reservation == HostReservation(cpus: 4, memoryBytes: 8 * gib))
         #expect(throws: HostCapacityAdmissionError.self) {
-            try ledger.claim(HostReservation(cpus: 1), snapshot: snapshot, agentName: "hv-03")
+            try ledger.claim(
+                HostReservation(cpus: 1), desiredWorkloadReservation: HostReservation(cpus: 1),
+                snapshot: snapshot, agentName: "hv-03")
         }
     }
 
@@ -33,19 +37,25 @@ struct HostCapacityAdmissionTests {
             reserved: HostReservation(cpus: 4, memoryBytes: 4 * gib))
         let first = try #require(
             try ledger.claim(
-                HostReservation(cpus: 3, memoryBytes: 3 * gib), snapshot: stale, agentName: "hv"))
+                HostReservation(cpus: 3, memoryBytes: 3 * gib),
+                desiredWorkloadReservation: HostReservation(cpus: 3, memoryBytes: 3 * gib),
+                snapshot: stale, agentName: "hv"))
         #expect(ledger.revision == initialRevision + 1)
 
         #expect(throws: HostCapacityAdmissionError.self) {
             try ledger.claim(
-                HostReservation(cpus: 2, memoryBytes: 2 * gib), snapshot: stale, agentName: "hv")
+                HostReservation(cpus: 2, memoryBytes: 2 * gib),
+                desiredWorkloadReservation: HostReservation(cpus: 2, memoryBytes: 2 * gib),
+                snapshot: stale, agentName: "hv")
         }
 
         ledger.release(first)
         #expect(ledger.revision == initialRevision + 2)
         #expect(
             try ledger.claim(
-                HostReservation(cpus: 2, memoryBytes: 2 * gib), snapshot: stale, agentName: "hv") != nil)
+                HostReservation(cpus: 2, memoryBytes: 2 * gib),
+                desiredWorkloadReservation: HostReservation(cpus: 2, memoryBytes: 2 * gib),
+                snapshot: stale, agentName: "hv") != nil)
     }
 
     @Test("shrink is never credited before success and passes on a full host")
@@ -61,7 +71,28 @@ struct HostCapacityAdmissionTests {
 
         var ledger = HostCapacityAdmissionLedger()
         let full = HostCapacitySnapshot(total: current, reserved: current)
-        #expect(try ledger.claim(HostReservation(), snapshot: full, agentName: "hv") == nil)
+        #expect(
+            try ledger.claim(
+                HostReservation(),
+                desiredWorkloadReservation: HostReservation(cpus: 4, memoryBytes: 4 * gib),
+                snapshot: full, agentName: "hv") == nil)
+    }
+
+    @Test("mixed resize impossibility is judged by the desired footprint")
+    func mixedResizeUsesDesiredFootprint() throws {
+        let current = HostReservation(cpus: 8, memoryBytes: 8 * gib)
+        let desired = HostReservation(cpus: 4, memoryBytes: 12 * gib)
+        let snapshot = HostCapacitySnapshot(
+            total: HostReservation(cpus: 6, memoryBytes: 16 * gib),
+            reserved: current)
+        var ledger = HostCapacityAdmissionLedger()
+
+        let claim = try ledger.claim(
+            .positiveDelta(from: current, to: desired),
+            desiredWorkloadReservation: desired,
+            snapshot: snapshot, agentName: "hv")
+
+        #expect(claim?.reservation == HostReservation(memoryBytes: 4 * gib))
     }
 
     @Test("boot validation detects raw overcommit and unknown inventory")
@@ -74,10 +105,14 @@ struct HostCapacityAdmissionTests {
             reserved: HostReservation(), inventoryKnown: false)
         let ledger = HostCapacityAdmissionLedger()
         #expect(throws: HostCapacityAdmissionError.self) {
-            try ledger.validateExistingReservation(snapshot: overcommitted, agentName: "hv")
+            try ledger.validateExistingReservation(
+                HostReservation(cpus: 4, memoryBytes: 4 * gib),
+                snapshot: overcommitted, agentName: "hv")
         }
         #expect(throws: HostCapacityAdmissionError.self) {
-            try ledger.validateExistingReservation(snapshot: unknown, agentName: "hv")
+            try ledger.validateExistingReservation(
+                HostReservation(cpus: 4, memoryBytes: 4 * gib),
+                snapshot: unknown, agentName: "hv")
         }
     }
 
@@ -92,9 +127,13 @@ struct HostCapacityAdmissionTests {
             total: HostReservation(cpus: Int.max, memoryBytes: Int64.max),
             reserved: HostReservation(cpus: Int.max - 1, memoryBytes: Int64.max - 1))
         _ = try ledger.claim(
-            HostReservation(cpus: 1, memoryBytes: 1), snapshot: snapshot, agentName: "hv")
+            HostReservation(cpus: 1, memoryBytes: 1),
+            desiredWorkloadReservation: HostReservation(cpus: 1, memoryBytes: 1),
+            snapshot: snapshot, agentName: "hv")
         #expect(throws: HostCapacityAdmissionError.self) {
-            try ledger.claim(HostReservation(cpus: 1), snapshot: snapshot, agentName: "hv")
+            try ledger.claim(
+                HostReservation(cpus: 1), desiredWorkloadReservation: HostReservation(cpus: 1),
+                snapshot: snapshot, agentName: "hv")
         }
     }
 
@@ -198,16 +237,76 @@ struct HostCapacityAdmissionTests {
                 == HostReservation(cpus: 3, memoryBytes: 768 * 1024 * 1024))
     }
 
-    @Test("capacity refusals are permanent and actionable")
+    @Test("capacity refusals are blocked and actionable")
     func refusalClassification() {
         let error = HostCapacityAdmissionError(
             agentName: "hv-03", resource: .memory,
             available: HostReservation(memoryBytes: 12 * gib),
             required: HostReservation(memoryBytes: 64 * gib))
-        #expect(error.failureClassification == .permanent)
+        #expect(error.failureClassification == .blocked)
         #expect(error.localizedDescription.contains("agent `hv-03`"))
         #expect(error.localizedDescription.contains("12 GiB"))
         #expect(error.localizedDescription.contains("64 GiB"))
+    }
+
+    @Test("neighbour contention is blocked but an impossible workload is permanent")
+    func contentionAndImpossibleRequests() throws {
+        let snapshot = HostCapacitySnapshot(
+            total: HostReservation(cpus: 8, memoryBytes: 16 * gib),
+            reserved: HostReservation(cpus: 7, memoryBytes: 14 * gib))
+        var ledger = HostCapacityAdmissionLedger()
+
+        do {
+            _ = try ledger.claim(
+                HostReservation(cpus: 2, memoryBytes: 2 * gib),
+                desiredWorkloadReservation: HostReservation(cpus: 6, memoryBytes: 10 * gib),
+                snapshot: snapshot, agentName: "hv")
+            Issue.record("contention should refuse the claim")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.failureClassification == .blocked)
+        }
+
+        do {
+            _ = try ledger.claim(
+                HostReservation(cpus: 5, memoryBytes: 9 * gib),
+                desiredWorkloadReservation: HostReservation(cpus: 9, memoryBytes: 17 * gib),
+                snapshot: snapshot, agentName: "hv")
+            Issue.record("a workload larger than the host should be refused")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.failureClassification == .permanent)
+            #expect(error.localizedDescription.contains("8 total vCPUs"))
+            #expect(error.localizedDescription.contains("9 vCPUs"))
+        }
+    }
+
+    @Test("boot is permanent only when this workload alone exceeds the host")
+    func existingReservationClassification() {
+        let snapshot = HostCapacitySnapshot(
+            total: HostReservation(cpus: 8, memoryBytes: 16 * gib),
+            reserved: HostReservation(cpus: 10, memoryBytes: 20 * gib))
+        let ledger = HostCapacityAdmissionLedger()
+
+        do {
+            try ledger.validateExistingReservation(
+                HostReservation(cpus: 4, memoryBytes: 8 * gib),
+                snapshot: snapshot, agentName: "hv")
+            Issue.record("aggregate overcommit should refuse boot")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.failureClassification == .blocked)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        do {
+            try ledger.validateExistingReservation(
+                HostReservation(cpus: 9, memoryBytes: 8 * gib),
+                snapshot: snapshot, agentName: "hv")
+            Issue.record("an intrinsically oversized workload should refuse boot")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.failureClassification == .permanent)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
     }
 }
 

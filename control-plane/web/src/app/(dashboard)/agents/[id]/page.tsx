@@ -1,4 +1,4 @@
-import AgentDetailPage from "../detail/page";
+import { AgentDetailPage } from "@/components/agents/agent-detail-page";
 
 export default async function AgentPage({
   params,

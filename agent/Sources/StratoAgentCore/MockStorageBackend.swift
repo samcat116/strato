@@ -181,7 +181,10 @@ public actor MockStorageBackend: StorageBackend {
         persist()
     }
 
-    public func resizeVolume(volumePath: String, newSizeBytes: Int64) async throws {
+    public func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {
+        guard case .file(let volumePath, _) = attachment else {
+            throw StorageBackendError.volumeNotFound(String(describing: attachment))
+        }
         guard let id = volumes.first(where: { $0.value.path == volumePath })?.key else {
             throw StorageBackendError.volumeNotFound(volumePath)
         }
@@ -194,7 +197,9 @@ public actor MockStorageBackend: StorageBackend {
 
     // MARK: - Snapshots
 
-    public func createSnapshot(volumeId: String, snapshotId: String, volumePath: String) async throws -> String {
+    public func createSnapshot(
+        volumeId: String, snapshotId: String, attachment _: DiskAttachment
+    ) async throws -> String {
         guard volumes[volumeId] != nil else {
             throw StorageBackendError.volumeNotFound(volumeId)
         }
@@ -217,9 +222,9 @@ public actor MockStorageBackend: StorageBackend {
 
     // MARK: - Clone / info
 
-    public func cloneVolume(sourceVolumeId: String, sourcePath: String, targetVolumeId: String) async throws
-        -> DiskAttachment
-    {
+    public func cloneVolume(
+        sourceVolumeId: String, sourceAttachment _: DiskAttachment, targetVolumeId: String
+    ) async throws -> DiskAttachment {
         guard let source = volumes[sourceVolumeId] else {
             throw StorageBackendError.volumeNotFound(sourceVolumeId)
         }
@@ -245,7 +250,10 @@ public actor MockStorageBackend: StorageBackend {
         return result
     }
 
-    public func volumeInfo(volumePath: String) async throws -> VolumeInfoResult {
+    public func volumeInfo(attachment: DiskAttachment) async throws -> VolumeInfoResult {
+        guard case .file(let volumePath, _) = attachment else {
+            throw StorageBackendError.volumeNotFound(String(describing: attachment))
+        }
         guard let volume = volumes.first(where: { $0.value.path == volumePath })?.value else {
             throw StorageBackendError.volumeNotFound(volumePath)
         }

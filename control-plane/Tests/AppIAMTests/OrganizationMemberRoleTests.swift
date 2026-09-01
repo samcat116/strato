@@ -31,7 +31,6 @@ final class OrganizationMemberRoleTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Role Org")
             let admin = try await builder.createUser(

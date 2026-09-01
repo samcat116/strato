@@ -76,7 +76,7 @@ public struct CloudInitProvisioner {
                     logger.warning(
                         "Desired hostname is not a valid DNS label; booting under a derived name instead",
                         metadata: [
-                            "vmId": .string(vmId),
+                            "strato.vm.id": .string(vmId),
                             "hostname": .string(hostname.debugDescription),
                             "localHostname": .string(localHostname),
                         ])
@@ -457,9 +457,7 @@ public struct CloudInitProvisioner {
 
             # Enable getty on serial console
             runcmd:
-              - systemctl enable --now serial-getty@ttyS0.service || true
-              - systemctl enable --now serial-getty@ttyAMA0.service || true
-              - systemctl enable --now serial-getty@hvc0.service || true
+              - '\(Self.serialGettySetupCommand)'
               # Start the guest agent (installed above) without a reboot.
               - systemctl enable --now qemu-guest-agent 2>/dev/null || systemctl enable --now qemu-ga 2>/dev/null || true
               # Apply the hot-plug rules now, and online anything already
@@ -531,14 +529,19 @@ public struct CloudInitProvisioner {
         # without modifying the disk image.
         sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\\"console=tty0 console=ttyS0,115200 console=ttyAMA0,115200 console=hvc0\\"/" /etc/default/grub || true
         update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg 2>/dev/null || true
-        systemctl enable --now serial-getty@ttyS0.service || true
-        systemctl enable --now serial-getty@ttyAMA0.service || true
-        systemctl enable --now serial-getty@hvc0.service || true
+        \(Self.serialGettySetupCommand)
         # Emit a marker so we can verify console output quickly
         echo '[cloud-init] console marker' > /dev/ttyS0 2>/dev/null || true
         echo '[cloud-init] console marker' > /dev/ttyAMA0 2>/dev/null || true
         echo '[cloud-init] console marker' > /dev/hvc0 2>/dev/null || true
         """
+
+    /// Starts a getty only for serial devices present in this guest. Calling
+    /// `systemctl --now` for an absent architecture-specific device waits for
+    /// systemd's device-job timeout before it fails.
+    static let serialGettySetupCommand =
+        #"for device in ttyS0 ttyAMA0 hvc0; do [ -c "/dev/$device" ] || continue; "#
+        + #"systemctl enable --now "serial-getty@$device.service" || true; done"#
 
     /// Installs and enables the QEMU guest agent as a shell script, run by
     /// cloud-init's scripts-user stage. Used only in the multipart (caller)

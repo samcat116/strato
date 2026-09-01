@@ -3,13 +3,10 @@ import Foundation
 /// Boot source configuration for direct kernel boot
 /// Maps to PUT /boot-source API endpoint
 public struct BootSource: Codable, Sendable {
-    /// Path to the kernel image (vmlinux format, uncompressed)
     let kernelImagePath: String
 
-    /// Path to the initramfs (optional)
     let initrdPath: String?
 
-    /// Kernel command line arguments
     let bootArgs: String?
 
     enum CodingKeys: String, CodingKey {

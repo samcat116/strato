@@ -3,71 +3,26 @@ import Foundation
 // MARK: - WebSocket Message Types
 
 public enum MessageType: String, Codable, Sendable {
-    // Agent registration and heartbeat
     case agentRegister = "agent_register"
     case agentRegisterResponse = "agent_register_response"
     case agentHeartbeat = "agent_heartbeat"
     case agentUnregister = "agent_unregister"
-    // `agent_update` (v6–v27) is gone: the agent's build is desired state, not
-    // an action, and rides the sync as `DesiredStateMessage.desiredAgentUpdate`
-    // (v7+). The operator's "update now" assigns that field rather than
-    // dispatching a command (ADR 0001 stage 6).
 
-    // No VM frames remain. `vm_reboot` and `vm_restore` were removed in wire
-    // v34 (ADR 0001 stage 9, STR-151): both are *edges* rather than states, and
-    // an edge becomes a state once "how many times it was asked" is part of the
-    // state — so they ride `DesiredVMState.rebootGeneration` and
-    // `DesiredVMState.restore` as monotonic nonces the agent applies once and
-    // records durably. `vm_checkpoint` and `vm_snapshot_delete` went at v33: a
-    // checkpoint's *result* is a durable artifact, so it rides
-    // `DesiredStateMessage.snapshots` and is confirmed through
-    // `ObservedStateReport.snapshots` (STR-150).
-
-    // Network topology has no imperative messages: it is level-triggered from
-    // `DesiredStateMessage.networks` alone. The removed `network_*` frames
-    // named their OVN objects after user-chosen network names — which two
-    // projects may now share (issue #765) — and no control plane had sent them
-    // since desired-state sync landed.
-
-    // Volume operations (QEMU only - not supported for Firecracker).
-    //
-    // `volume_create`, `volume_delete`, `volume_attach`, `volume_detach`,
-    // `volume_resize` and `volume_clone` were removed in wire v31: volumes are
-    // desired state now (ADR 0001 stage 5, STR-148), realized from
-    // `DesiredStateMessage.volumes` and confirmed through
-    // `ObservedStateReport.volumes`. `volume_info` followed in v32 (stage 7,
-    // STR-149) — a read is not an action, and the control plane answers it
-    // from the observed report it already stores. `volume_snapshot` and
-    // `volume_snapshot_delete` went at v33 (stage 8, STR-150), onto
-    // `DesiredStateMessage.snapshots`. Nothing volume-shaped is left here.
-
-    // Console operations
     case consoleConnect = "console_connect"
     case consoleDisconnect = "console_disconnect"
     case consoleData = "console_data"
     case consoleConnected = "console_connected"
     case consoleDisconnected = "console_disconnected"
 
-    // Reconciliation state sync (protocol version >= 2)
     case desiredState = "desired_state"
     case observedState = "observed_state"
 
-    // Responses. Not correlated any more: the control plane's generic
-    // pending-request apparatus went with the last imperative exchange (ADR
-    // 0001 stage 11, STR-152), so nothing awaits a `requestId`. What survives
-    // is control-plane → agent only, and unsolicited in both directions that
-    // matter — an ACK the agent logs (register, heartbeat, unregister) and a
-    // registration rejection the agent's reconnect loop reads for its
-    // `ErrorMessage.code`.
+    // Unsolicited acknowledgements and registration failures.
     case success = "success"
     case error = "error"
-    // VM Logs
     case vmLog = "vm_log"
 
-    // Guest exec/attach and sandbox workload logs. Exec messages are a stream,
-    // not request/response: they are
-    // correlated by `sessionId`, ordered by the WebSocket, and never answered
-    // with `success`/`error`.
+    // Live streams and recorded replay are keyed by sessionId.
     case guestExecStart = "guest_exec_start"
     case guestExecStarted = "guest_exec_started"
     case guestExecInput = "guest_exec_input"
@@ -76,20 +31,10 @@ public enum MessageType: String, Codable, Sendable {
     case guestExecExit = "guest_exec_exit"
     case guestExecClose = "guest_exec_close"
     case guestExecClosed = "guest_exec_closed"
+    case guestExecRecordedState = "guest_exec_recorded_state"
+    case guestExecRecordedAck = "guest_exec_recorded_ack"
 
     case sandboxLog = "sandbox_log"
-
-    // No sandbox lifecycle frames remain either. `sandbox_restore` went with
-    // `vm_restore` at v34 and for the same reason (STR-151), onto
-    // `DesiredSandboxState.restore`; `sandbox_snapshot_create`,
-    // `sandbox_snapshot_delete` and `sandbox_snapshot_export` went at v33
-    // (STR-150) — the first two are the artifact's existence, the third is
-    // *where* it exists, and all three are states on
-    // `DesiredStateMessage.snapshots`.
-    //
-    // What is left in this enum, beyond registration and the two reconciliation
-    // frames, is exactly the category ADR 0001 always meant to keep imperative:
-    // live byte pipes with a human on the end.
 }
 
 // MARK: - Base Message Protocol
@@ -406,18 +351,10 @@ public struct ImageInfo: Codable, Sendable {
     }
 }
 
-// `VMOperationMessage` — the generic "do this verb to this VM" envelope — went
-// with `vm_reboot` at wire v34 (STR-151). It outlived the imperative lifecycle
-// frames of v10 by carrying exactly one verb, and that verb is a nonce now.
-
 // MARK: - Response Messages
 
-/// An unsolicited acknowledgement — registration, heartbeat, unregister. The
-/// `data` field went with the correlation apparatus (STR-152): every typed
-/// reply that used to ride it (volume info, snapshot metadata, checkpoint
-/// results) is now a field on `ObservedStateReport`, so nothing has a payload
-/// to return. `requestId` echoes the acknowledged frame's id for log
-/// correlation only; no sender awaits it.
+/// An unsolicited registration, heartbeat, or unregister acknowledgement.
+/// `requestId` is retained for log correlation; no sender awaits it.
 public struct SuccessMessage: WebSocketMessage {
     public var type: MessageType { .success }
     public let requestId: String
@@ -734,22 +671,6 @@ public struct ConsoleDisconnectedMessage: WebSocketMessage {
         self.reason = reason
     }
 }
-
-// MARK: - Volume Operation Messages (QEMU only)
-
-// The volume message section is empty by design. `volume_create`,
-// `volume_delete`, `volume_attach`, `volume_detach`, `volume_resize` and
-// `volume_clone` became desired state at wire v31 (STR-148); `volume_info` was
-// deleted at v32 as a read that was never an action (STR-149); and
-// `volume_snapshot`/`volume_snapshot_delete` became desired *artifacts* at v33
-// (STR-150). What each carried now lives on `DesiredVolumeState`,
-// `ObservedVolumeState`, `DesiredSnapshotState` or `ObservedSnapshotState` —
-// or, for the thin-provisioning triple `volume_info` reported, nowhere, having
-// had no reader.
-
-// `VolumeStatusResponse` went with `volume_snapshot` at wire v33 (STR-150).
-// It was the last imperative volume reply, and what it carried — status and
-// storage path — is `ObservedVolumeState` / `ObservedSnapshotFacts` now.
 
 // MARK: - Message Envelope
 

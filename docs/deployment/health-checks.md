@@ -1,7 +1,7 @@
-# Health Checks and Zero-Downtime Deploys
+# Health Checks and Controlled Deploys
 
 The control plane exposes three unauthenticated endpoints under `/health`. They
-are the contract a load balancer, `readinessProbe`, or blue/green cutover script
+are the contract a load balancer, `readinessProbe`, or deployment cutover script
 depends on, so it is worth being precise about what each one promises.
 
 ## The endpoints
@@ -125,6 +125,14 @@ terminationDrain:
 terminationGracePeriodSeconds: 60
 ```
 
+The control-plane Deployment uses `Recreate`, not `RollingUpdate`. This is a
+correctness boundary for STR-275: the legacy one-argument advisory locks and the
+current two-argument locks occupy disjoint PostgreSQL keyspaces, so replicas on
+opposite sides of that change cannot safely serve together. Kubernetes drains
+and terminates every old pod before creating the new set. The probes and drain
+window still protect in-flight work, but a chart upgrade has a brief period with
+no serving control-plane pod.
+
 Endpoint removal and `SIGTERM` are delivered concurrently, and endpoint removal
 is asynchronous — kube-proxy, the ingress, and any external load balancer learn
 about it at their own pace. The `preStop` sleep holds `SIGTERM` back until that
@@ -149,7 +157,19 @@ through.
 
 ## Blue/green cutover
 
-With the above in place the sequence is:
+::: warning Advisory-lock keyspace cutover
+Do not use blue/green overlap when moving from a build before STR-275 to a build
+that contains it. Stop every old control-plane process sharing the database,
+wait for its database sessions to close, and only then start green. Moving
+traffic away from blue or marking it unready is insufficient: an old process can
+still run background work or receive an existing agent connection. The Helm
+chart enforces this boundary for its own Deployment with `Recreate`; separately
+managed Deployments, releases, and one-off containers are the operator's
+responsibility.
+:::
+
+Between builds that use the same advisory-lock keyspace, an independently
+managed blue/green deployment can use this sequence:
 
 1. Bring up the green replicas. They bind their port only after migrations and
    boot-time backfills finish, and report `healthy` once every required

@@ -45,10 +45,23 @@ extension AgentService: AgentDispatch {
 /// "stop" during a slow start actually wants. The one place overlap was more
 /// than a race in name is the resize path's quota delta, and that is guarded
 /// where it belongs, by recomputing the delta inside the mutation transaction.
+/// `Idempotency-Key` is a separate concern: it collapses two deliveries of one
+/// caller intent while leaving two independently keyed intents free to overlap.
 struct ResourceMutation {
     /// The agent seam. Injected so tests substitute a fake for the live actor.
     let agentDispatch: any AgentDispatch
     let logger: Logger
+    let idempotencyContext: IdempotencyRequestContext?
+
+    init(
+        agentDispatch: any AgentDispatch,
+        logger: Logger,
+        idempotencyContext: IdempotencyRequestContext? = nil
+    ) {
+        self.agentDispatch = agentDispatch
+        self.logger = logger
+        self.idempotencyContext = idempotencyContext
+    }
 
     /// How an accepted mutation reaches the agent after the transaction
     /// commits. The uniform scaffolding — background hand-off, drain guards,
@@ -107,6 +120,7 @@ struct ResourceMutation {
     /// writes the whole row, so without the refresh a racing mutation's
     /// generation bump would be lost and a concurrent observed-state report's
     /// `observedGeneration` would be written *backwards*.
+    ///
     @discardableResult
     func accept<R: ConvergingResource>(
         _ kind: VMOperationKind,
@@ -117,8 +131,56 @@ struct ResourceMutation {
         app: Application,
         applying mutation: @escaping @Sendable (any Database) async throws -> Void = { _ in }
     ) async throws -> Accepted {
+        try await accept(
+            kind, on: resource, actor: actor, dispatch: strategy, on: db, app: app,
+            beforeResourceLock: { _ in },
+            idempotencyResponseBody: { _, _, _ in nil },
+            applying: mutation)
+    }
+
+    /// Variant for responses that must be retained before the resource can be
+    /// removed, notably deletes. Requiring the label keeps ordinary trailing
+    /// mutation closures source-compatible with the original overload.
+    @discardableResult
+    func accept<R: ConvergingResource>(
+        _ kind: VMOperationKind,
+        on resource: R,
+        actor: MutationActor,
+        dispatch strategy: Dispatch,
+        on db: any Database,
+        app: Application,
+        idempotencyResponseBody:
+            @escaping @Sendable (R, Accepted, any Database) async throws -> Data?,
+        applying mutation: @escaping @Sendable (any Database) async throws -> Void
+    ) async throws -> Accepted {
+        try await accept(
+            kind, on: resource, actor: actor, dispatch: strategy, on: db, app: app,
+            beforeResourceLock: { _ in },
+            idempotencyResponseBody: idempotencyResponseBody,
+            applying: mutation)
+    }
+
+    /// The narrow escape hatch for a cross-row invariant whose advisory lock
+    /// must precede the resource row lock. `beforeResourceLock` runs as the
+    /// first statement in the same transaction. Both closures are required and
+    /// labeled so an ordinary trailing mutation closure cannot bind here.
+    @discardableResult
+    func accept<R: ConvergingResource>(
+        _ kind: VMOperationKind,
+        on resource: R,
+        actor: MutationActor,
+        dispatch strategy: Dispatch,
+        on db: any Database,
+        app: Application,
+        beforeResourceLock: @escaping @Sendable (any Database) async throws -> Void,
+        idempotencyResponseBody:
+            @escaping @Sendable (R, Accepted, any Database) async throws -> Data?,
+        applying mutation: @escaping @Sendable (any Database) async throws -> Void
+    ) async throws -> Accepted {
         let resourceID = try resource.requireID()
         let (accepted, placementAgentIDs) = try await db.transaction { db in
+            try await IdempotencyService.reserve(idempotencyContext, actor: actor, on: db)
+            try await beforeResourceLock(db)
             guard try await resource.lockAndRefresh(on: db) else {
                 throw Abort(
                     .notFound,
@@ -162,8 +224,24 @@ struct ResourceMutation {
                 actor: actor,
                 scope: scope,
                 on: db)
+            let accepted = Accepted(
+                mutationID: try event.requireID(), targetGeneration: resource.generation)
+            let responseBody: Data?
+            if idempotencyContext == nil {
+                responseBody = nil
+            } else {
+                responseBody = try await idempotencyResponseBody(resource, accepted, db)
+            }
+            try await IdempotencyService.complete(
+                idempotencyContext,
+                actor: actor,
+                resourceKind: R.operationResourceKind,
+                resourceID: resourceID,
+                accepted: accepted,
+                responseBody: responseBody,
+                on: db)
             return (
-                Accepted(mutationID: try event.requireID(), targetGeneration: resource.generation),
+                accepted,
                 try await resource.placementAgentIDs(on: db)
             )
         }
@@ -308,12 +386,17 @@ extension Application {
     /// access rather than stored — the same idiom as
     /// `resourceOperationCoordinator`.
     var resourceMutation: ResourceMutation {
-        ResourceMutation(agentDispatch: agentService, logger: logger)
+        ResourceMutation(agentDispatch: agentService, logger: logger, idempotencyContext: nil)
     }
 }
 
 extension Request {
-    var resourceMutation: ResourceMutation { application.resourceMutation }
+    var resourceMutation: ResourceMutation {
+        ResourceMutation(
+            agentDispatch: application.agentService,
+            logger: logger,
+            idempotencyContext: idempotencyContext)
+    }
 }
 
 // MARK: - Convergence outcomes
@@ -332,6 +415,68 @@ enum ResourceConvergence {
         case alreadyRecorded
         case superseded(actualGeneration: Int64)
         case missing
+    }
+
+    enum FailureRecordingContext: Sendable {
+        /// A direct dispatch failure, or any caller whose model still reflects
+        /// the durable resource row.
+        case resourceState
+        /// The observed-state applier has already mirrored the agent's failure
+        /// onto its in-memory model. The supplied generation and deadline state
+        /// are what the row carried before that report. A live deadline means a
+        /// previously reported blocked error is still an unfinished mutation,
+        /// so a later terminal report must settle it rather than look duplicate.
+        case observedReport(previousFailureGeneration: Int64?, hadActiveDeadline: Bool)
+        /// The deadline sweep locked and refreshed this generation while its
+        /// deadline remained expired. It must settle even when a blocked report
+        /// already exposed the same generation as degraded.
+        case expiredDeadline
+    }
+
+    /// Finalizes one model returned by the overdue-deadline query, if the same
+    /// generation is still overdue after locking and refreshing its row.
+    ///
+    /// The refresh and verdict share one transaction. A successful agent
+    /// report that commits first therefore clears the deadline and is observed
+    /// here; a report that arrives later waits behind this lock and sees the
+    /// terminal state. Splitting the deadline claim from `recordFailure` would
+    /// leave a gap where a success could commit before this stale model was
+    /// saved back over it.
+    @discardableResult
+    static func recordExpiredDeadline<R: ConvergingResource>(
+        _ resource: R,
+        mutation: VMOperationKind,
+        now: Date,
+        timeoutReason: String,
+        on db: any Database
+    ) async throws -> WriteOutcome {
+        let expectedGeneration = resource.generation
+        return try await db.transaction { tx -> WriteOutcome in
+            guard try await resource.lockAndRefresh(on: tx) else { return .missing }
+            guard resource.generation == expectedGeneration else {
+                return .superseded(actualGeneration: resource.generation)
+            }
+            guard let deadline = resource.convergenceDeadline, deadline <= now else {
+                return .alreadyRecorded
+            }
+
+            // Preserve the prior sweep behavior for a row that is already
+            // converged when locked: close its stale deadline without emitting
+            // a second convergence outcome.
+            if resource.isConverged {
+                resource.convergenceDeadline = nil
+                try await resource.save(on: tx)
+                return .alreadyRecorded
+            }
+
+            let reason =
+                resource.failedGeneration == resource.generation
+                ? resource.lastError ?? timeoutReason
+                : timeoutReason
+            return try await recordFailure(
+                resource, mutation: mutation, reason: reason,
+                telemetryReason: "stuck_convergence", context: .expiredDeadline, on: tx)
+        }
     }
 
     /// Marks a resource degraded for `reason` and resolves the in-flight state
@@ -358,31 +503,42 @@ enum ResourceConvergence {
     /// error on every heartbeat — does nothing. Returns whether this call
     /// recorded it.
     ///
-    /// `alreadyRecordedAt` is the failure generation the resource carried
-    /// *before* the caller touched it, for the one caller that has already
-    /// mirrored the agent's own `failedGeneration` onto the in-memory model by
-    /// this point (`ObservedStateApplier`). Without it, that mirror would trip
-    /// the guard on the very first report of a failure and nothing would ever
-    /// be recorded. Everyone else leaves it nil and the guard reads the model.
+    /// `context` distinguishes the three views callers can hold. The observed
+    /// applier supplies the failure generation and deadline state from before
+    /// it mirrored the report, so that mirror cannot suppress the first
+    /// terminal verdict or a terminal verdict that follows a blocked report at
+    /// the same generation. A deadline sweep deliberately bypasses the
+    /// failure-pair guard after it locks and rechecks the expired deadline: a
+    /// blocked report exposes the remedy before the deadline but is not a
+    /// terminal verdict, and the sweep must still resolve intent and enqueue
+    /// the failure webhook. Direct callers read the model as usual.
     ///
     /// Note that the resolution *bumps the generation*: abandoning an
     /// unachieved intent is itself a desired-state change
     /// (`revertDesiredToObserved`), so `failedGeneration` ends one behind
     /// `generation`. That is the shape `ResourceConditions` documents — a
     /// failure that stands against a newer target — and it is why the
-    /// stuck-convergence sweep claims the deadline rather than relying on this
-    /// guard to stay true across passes.
+    /// stuck-convergence sweep locks and rechecks the deadline rather than
+    /// relying on this guard to stay true across passes.
     @discardableResult
     static func recordFailure<R: ConvergingResource>(
         _ resource: R,
         mutation: VMOperationKind,
         reason: String,
         telemetryReason: String,
-        alreadyRecordedAt: Int64?? = nil,
+        context: FailureRecordingContext = .resourceState,
         on db: any Database
     ) async throws -> WriteOutcome {
         let expectedGeneration = resource.generation
-        let recorded = alreadyRecordedAt ?? resource.failedGeneration
+        let recorded: Int64?
+        switch context {
+        case .resourceState:
+            recorded = resource.failedGeneration
+        case .observedReport(let previousFailureGeneration, let hadActiveDeadline):
+            recorded = hadActiveDeadline ? nil : previousFailureGeneration
+        case .expiredDeadline:
+            recorded = nil
+        }
         if recorded == expectedGeneration {
             let outcome = try await db.transaction { tx -> WriteOutcome in
                 switch try await DesiredStateGenerationWriter.lockCurrent(
@@ -533,5 +689,15 @@ struct AcceptedMutation<Resource: Content>: Content {
         let response = Response(status: .accepted)
         try response.content.encode(self)
         return response
+    }
+
+    /// JSON bytes suitable for retaining with an idempotency claim inside the
+    /// mutation transaction. Delete replay cannot depend on the resource row
+    /// still existing when the caller retries.
+    func encodedBody() throws -> Data {
+        guard let data = try acceptedResponse().body.data else {
+            throw Abort(.internalServerError, reason: "The accepted mutation response had no body")
+        }
+        return data
     }
 }

@@ -18,14 +18,24 @@ struct VolumeAgentSelectionTests {
     private func makeAgent(
         id: String,
         hypervisors: [HypervisorSupport],
-        status: AgentStatus = .online,
-        wireProtocolVersion: Int? = WireProtocol.currentVersion
+        status: AgentStatus = .online
     ) -> Agent {
+        let checkedAt = Date()
+        let dependencyObservations =
+            hypervisors.contains(where: { $0.type == .qemu })
+            ? [
+                NodeDependencyObservation(
+                    id: .libvirt, role: .compute, desiredState: .required,
+                    ownership: .observeOnly, supervisorState: .active,
+                    compatibility: .compatible, functionalState: .healthy,
+                    checkedAt: checkedAt, affectedCapabilities: [.qemuPlacement])
+            ] : []
         let agent = Agent(
             id: UUID(),
             name: id,
             hostname: "host-\(id)",
             version: "1.0",
+            siteID: UUID(),
             status: status,
             resources: AgentResources(
                 totalCPU: 8,
@@ -36,9 +46,10 @@ struct VolumeAgentSelectionTests {
                 availableDisk: 50
             ),
             hypervisors: hypervisors,
-            lastHeartbeat: Date()
+            dependencyObservations: dependencyObservations,
+            dependencyObservationsReceivedAt: dependencyObservations.isEmpty ? nil : checkedAt,
+            lastHeartbeat: checkedAt
         )
-        agent.wireProtocolVersion = wireProtocolVersion
         return agent
     }
 

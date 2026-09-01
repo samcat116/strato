@@ -162,9 +162,11 @@ let package = Package(
         .testTarget(
             name: "StratoAgentTests",
             dependencies: [
+                "StratoAgent",
                 "StratoAgentCore",
                 "StratoAgentSPIFFE",
                 .product(name: "StratoShared", package: "shared"),
+                .product(name: "InMemoryLogging", package: "swift-log"),
                 // A loopback HTTP origin for the artifact-downloader tests.
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -181,6 +183,9 @@ let package = Package(
                 // Constructing the daemon errors and stat payloads the libvirt
                 // translation layer is asserted against.
                 .product(name: "Libvirt", package: "swift-libvirt"),
+                .product(
+                    name: "SwiftFirecracker", package: "SwiftFirecracker",
+                    condition: .when(platforms: [.linux])),
             ],
             // Golden documents are read from the source tree via #filePath, not
             // from a resource bundle, so SwiftPM should leave them alone.

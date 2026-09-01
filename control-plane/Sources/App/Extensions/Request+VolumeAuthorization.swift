@@ -14,12 +14,6 @@ extension Request {
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the volume
     ///   does not exist, `.forbidden` if the user lacks `action` on it.
     func authorizedVolume(_ volumeID: UUID, action: String) async throws -> Volume {
-        guard let volume = try await Volume.find(volumeID, on: db) else {
-            throw Abort(.notFound)
-        }
-
-        try await authorize(action, on: IAMNode(type: .volume, id: volumeID))
-
-        return volume
+        try await authorizedResource(volumeID, as: Volume.self, nodeType: .volume, action: action)
     }
 }

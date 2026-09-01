@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { ResourceListControls, useResourceList } from "@/components/ui/resource-list-controls";
+import { ProjectRequiredState } from "@/components/ui/project-required-state";
 import { SnapshotTable, CreateSnapshotDialog } from "@/components/volumes";
 import {
   useVolumes,
@@ -17,7 +18,7 @@ import { useProjectContext } from "@/providers";
 
 export default function SnapshotsPage() {
   const [createOpen, setCreateOpen] = useState(false);
-  const { currentProject } = useProjectContext();
+  const { currentProject, isLoading: projectsLoading } = useProjectContext();
   const volumesQuery = useVolumes(currentProject?.id);
   const snapshotsQuery = useProjectVolumeSnapshots(currentProject?.id);
   const { data: volumes = [], isLoading: volumesLoading } = volumesQuery;
@@ -73,18 +74,28 @@ export default function SnapshotsPage() {
       <Card className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold text-foreground">
-            {currentProject ? currentProject.name : "All"} Snapshots (
-            {snapshots.length})
+            {projectsLoading
+              ? "Loading project…"
+              : currentProject
+                ? `${currentProject.name} Snapshots (${snapshots.length})`
+                : "Snapshots"
+            }
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <ResourceListControls label="snapshots" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
-          <SnapshotTable
-            snapshots={list.pageItems}
-            volumes={volumes}
-            isLoading={volumesLoading || snapshotsLoading}
-            onRefresh={invalidateVolumes}
-          />
+          {!projectsLoading && !currentProject ? (
+            <ProjectRequiredState resource="Snapshots" />
+          ) : (
+            <>
+              <ResourceListControls label="snapshots" query={list.query} onQueryChange={list.setQuery} page={list.page} onPageChange={list.setPage} totalPages={list.totalPages} filteredCount={list.filteredCount} totalCount={list.totalCount} pageSize={list.pageSize} />
+              <SnapshotTable
+                snapshots={list.pageItems}
+                volumes={volumes}
+                isLoading={volumesLoading || snapshotsLoading || projectsLoading}
+                onRefresh={invalidateVolumes}
+              />
+            </>
+          )}
         </CardContent>
       </Card>
 

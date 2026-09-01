@@ -17,7 +17,6 @@ final class IAMAuthorizerTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             // Enable decision-row recording (off by default under .testing).
             // After configure — which resets the config from the environment —
             // and before the recorder is lazily built with it at boot.
@@ -408,7 +407,6 @@ final class IAMAuthorizerBackstopTests {
         let app = try await Application.makeForTesting()
         do {
             try await configure(app)
-            try await app.autoMigrate()
             app.iamDecisionLogConfig.recordDecisions = true
             try await test(app)
         } catch {
@@ -576,10 +574,13 @@ final class IAMAuthorizerBackstopTests {
         #expect(M.classify(path: "/api/projects/\(id)/images/\(id)/download") == .isPublic)
         #expect(M.classify(path: "/api/sandboxes/\(id)/snapshots/\(id)/artifacts/rootfs") == .isPublic)
         #expect(M.classify(path: "/agent/desired-state") == .isPublic)
+        #expect(M.classify(path: "/api/agent-enrollments/install") == .isPublic)
+        #expect(M.classify(path: "/api/agent-enrollments/bootstrap") == .isPublic)
         // Matched exactly, not by prefix: neither a sibling under `/agent/` nor
         // a longer path that merely starts with it may inherit public access.
         #expect(M.classify(path: "/agent/something-else") == nil)
         #expect(M.classify(path: "/agent/desired-state-history") == nil)
+        #expect(M.classify(path: "/api/agent-enrollments/bootstrap-history") == .handlerChecked)
         // Identity-plane.
         #expect(M.classify(path: "/api/api-keys") == .loginOnly)
         #expect(M.classify(path: "/api/authorization/check") == .loginOnly)

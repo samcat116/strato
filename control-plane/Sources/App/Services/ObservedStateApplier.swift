@@ -92,8 +92,9 @@ struct ObservedStateApplier {
                     metadata: [
                         "resourceKind": .string(R.operationResourceKind.rawValue),
                         "resourceId": .string(resourceID.uuidString),
-                        "reportingAgentId": .string(agentId),
-                        "currentAgentId": .string(placementAgentIDs.joined(separator: ",")),
+                        "strato.agent.reporting.id": .string(agentId),
+                        "strato.agent.current.ids": .array(
+                            placementAgentIDs.sorted().map { .string($0) }),
                     ])
                 return nil
             }
@@ -143,7 +144,7 @@ struct ObservedStateApplier {
             app.logger.warning(
                 "Ignoring the workload half of an observed-state report: the agent cannot enumerate its own workloads",
                 metadata: [
-                    "agentId": .string(report.agentId),
+                    "strato.agent.id": .string(report.agentId),
                     "reason": .string(manifest.reason),
                 ])
             return UnrecognizedOutcome()
@@ -487,7 +488,7 @@ struct ObservedStateApplier {
                 app.logger.info(
                     "Agent no longer holds a workload it claimed; claim retired",
                     metadata: [
-                        "agentId": .string(report.agentId),
+                        "strato.agent.id": .string(report.agentId),
                         "resourceKind": .string(key.kind.rawValue),
                         "resourceId": .string(key.id.uuidString),
                         "disposition": .string(claim.disposition.rawValue),
@@ -590,7 +591,7 @@ struct ObservedStateApplier {
                     app.logger.notice(
                         "Agent holds a workload with no control-plane record; authorizing teardown",
                         metadata: [
-                            "agentId": .string(report.agentId),
+                            "strato.agent.id": .string(report.agentId),
                             "resourceKind": .string(key.kind.rawValue),
                             "resourceId": .string(key.id.uuidString),
                             "observedStatus": .string(entry.status ?? "unknown"),
@@ -624,17 +625,20 @@ struct ObservedStateApplier {
                     ? AgentWorkloadClaim.heldRowPresentReason
                     : AgentWorkloadClaim.heldOtherAgentBucket, default: 0] += 1
             if existing?.disposition != .held || existing?.reason != reason {
+                var metadata: Logger.Metadata = [
+                    "strato.agent.id": .string(report.agentId),
+                    "resourceKind": .string(key.kind.rawValue),
+                    "resourceId": .string(key.id.uuidString),
+                    "observedStatus": .string(entry.status ?? "unknown"),
+                ]
+                if let placementAgentID = placement.agentId {
+                    metadata["strato.agent.placement.id"] = .string(placementAgentID)
+                }
                 app.logger.error(
                     onThisAgent
                         ? "Agent holds a workload its own desired-state sync omitted; withholding teardown (sync assembly bug)"
                         : "Agent holds a workload placed on a different agent record; withholding teardown (re-point required)",
-                    metadata: [
-                        "agentId": .string(report.agentId),
-                        "resourceKind": .string(key.kind.rawValue),
-                        "resourceId": .string(key.id.uuidString),
-                        "placedOnAgentId": .string(placement.agentId ?? "none"),
-                        "observedStatus": .string(entry.status ?? "unknown"),
-                    ])
+                    metadata: metadata)
                 Telemetry.workloadTeardownWithheld(
                     reason: onThisAgent
                         ? AgentWorkloadClaim.heldRowPresentReason
@@ -774,7 +778,7 @@ struct ObservedStateApplier {
             app.logger.debug(
                 "VM converging on agent",
                 metadata: [
-                    "vmId": .string(vmID.uuidString),
+                    "strato.vm.id": .string(vmID.uuidString),
                     "phase": .string(effectivePhase ?? ""),
                     "targetGeneration": .stringConvertible(vm.generation),
                 ])
@@ -817,7 +821,7 @@ struct ObservedStateApplier {
                 app.logger.warning(
                     "VM state drifted with nothing in flight",
                     metadata: [
-                        "vmId": .string(vmID.uuidString),
+                        "strato.vm.id": .string(vmID.uuidString),
                         "previousStatus": .string(previous.rawValue),
                         "observedStatus": .string(observed.status.rawValue),
                     ])
@@ -831,12 +835,19 @@ struct ObservedStateApplier {
 
         let failedCurrentGeneration =
             observed.lastError != nil && observed.failedGeneration == vm.generation
-        // No deadline means no user mutation is outstanding. This is a
-        // steady-state repair failure: persist exactly what the agent observed,
-        // but retain the desired state and generation so the level-triggered
-        // loop can heal it later. In particular, do not synthesize a stale
-        // mutation outcome from whichever resource event happens to be latest.
-        if failedCurrentGeneration, vm.convergenceDeadline == nil {
+        // A blocked refusal is both an actionable error and an unfinished
+        // convergence attempt. The agent will re-drive it at this generation,
+        // so retain desired state and the deadline while persisting the
+        // degraded reason. The deadline sweep remains the backstop if the host
+        // never recovers. An unclassified failure from an older agent keeps the
+        // historical terminal behavior.
+        //
+        // With no deadline, no user mutation is outstanding. That is a
+        // steady-state repair failure and follows the same retain-and-retry
+        // path regardless of classification.
+        if failedCurrentGeneration,
+            observed.failureClassification == .blocked || vm.convergenceDeadline == nil
+        {
             if changed {
                 try await vm.save(on: db)
             }
@@ -902,7 +913,10 @@ struct ObservedStateApplier {
 
             let outcome = try await ResourceConvergence.recordFailure(
                 vm, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: vm.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 // A repeat of an already-recorded failure: nothing was
                 // persisted by the call above, so this report's own changes
@@ -1118,14 +1132,14 @@ struct ObservedStateApplier {
             case .reaped:
                 app.logger.info(
                     "VM deletion confirmed by agent report; record removed",
-                    metadata: ["vmId": .string(vmID.uuidString), "agentId": .string(agentId)])
+                    metadata: ["strato.vm.id": .string(vmID.uuidString), "strato.agent.id": .string(agentId)])
             case .held(let remaining):
                 // Other participants still owe cleanup. Logged on every report
                 // until they finish, so this stays at debug.
                 app.logger.debug(
                     "VM teardown confirmed by agent report; awaiting finalizers",
                     metadata: [
-                        "vmId": .string(vmID.uuidString), "agentId": .string(agentId),
+                        "strato.vm.id": .string(vmID.uuidString), "strato.agent.id": .string(agentId),
                         "finalizers": .string(remaining.joined(separator: ",")),
                     ])
             case .alreadyGone, .notTerminating:
@@ -1165,8 +1179,8 @@ struct ObservedStateApplier {
         app.logger.warning(
             "VM missing from agent observed-state report; marking as error until re-converged",
             metadata: [
-                "vmId": .string(vmID.uuidString),
-                "agentId": .string(agentId),
+                "strato.vm.id": .string(vmID.uuidString),
+                "strato.agent.id": .string(agentId),
                 "previousStatus": .string(previous.rawValue),
             ])
     }
@@ -1199,7 +1213,7 @@ struct ObservedStateApplier {
             app.logger.debug(
                 "Sandbox converging on agent",
                 metadata: [
-                    "sandboxId": .string(sandboxID.uuidString),
+                    "strato.sandbox.id": .string(sandboxID.uuidString),
                     "phase": .string(observed.convergencePhase ?? ""),
                     "targetGeneration": .stringConvertible(sandbox.generation),
                 ])
@@ -1223,7 +1237,7 @@ struct ObservedStateApplier {
                 app.logger.warning(
                     "Sandbox state drifted with nothing in flight",
                     metadata: [
-                        "sandboxId": .string(sandboxID.uuidString),
+                        "strato.sandbox.id": .string(sandboxID.uuidString),
                         "previousStatus": .string(previous.rawValue),
                         "observedStatus": .string(observed.status.rawValue),
                     ])
@@ -1240,10 +1254,12 @@ struct ObservedStateApplier {
 
         let failedCurrentGeneration =
             observed.lastError != nil && observed.failedGeneration == sandbox.generation
-        // A failure with no deadline belongs to steady-state repair, not to a
-        // pending mutation. Keep intent and generation intact and emit no
-        // operation outcome; a later same-generation retry can still recover.
-        if failedCurrentGeneration, sandbox.convergenceDeadline == nil {
+        // Blocked failures remain active mutations because the agent will
+        // re-drive them at this generation. A failure with no deadline is a
+        // steady-state repair and retains intent for the same reason.
+        if failedCurrentGeneration,
+            observed.failureClassification == .blocked || sandbox.convergenceDeadline == nil
+        {
             if changed {
                 try await sandbox.save(on: db)
             }
@@ -1279,7 +1295,10 @@ struct ObservedStateApplier {
             }
             let outcome = try await ResourceConvergence.recordFailure(
                 sandbox, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: sandbox.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await sandbox.save(on: db)
             }
@@ -1304,12 +1323,12 @@ struct ObservedStateApplier {
             case .reaped:
                 app.logger.info(
                     "Sandbox deletion confirmed by agent report; record removed",
-                    metadata: ["sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId)])
+                    metadata: ["strato.sandbox.id": .string(sandboxID.uuidString), "strato.agent.id": .string(agentId)])
             case .held(let remaining):
                 app.logger.debug(
                     "Sandbox teardown confirmed by agent report; awaiting finalizers",
                     metadata: [
-                        "sandboxId": .string(sandboxID.uuidString), "agentId": .string(agentId),
+                        "strato.sandbox.id": .string(sandboxID.uuidString), "strato.agent.id": .string(agentId),
                         "finalizers": .string(remaining.joined(separator: ",")),
                     ])
             case .alreadyGone, .notTerminating:
@@ -1340,8 +1359,8 @@ struct ObservedStateApplier {
         app.logger.warning(
             "Sandbox missing from agent observed-state report; marking as error until re-converged",
             metadata: [
-                "sandboxId": .string(sandboxID.uuidString),
-                "agentId": .string(agentId),
+                "strato.sandbox.id": .string(sandboxID.uuidString),
+                "strato.agent.id": .string(agentId),
                 "previousStatus": .string(previous.rawValue),
             ])
     }
@@ -1366,25 +1385,68 @@ struct ObservedStateApplier {
         // idempotence guard with nothing recorded.
         let wasConverged = volume.isConverged
         let failedBefore = volume.failedGeneration
-
-        try await recordReplicaObservation(
-            volumeID: volumeID, agentId: agentId, observed: observed,
-            desiredGeneration: volume.generation, on: db)
-        let requiredReplicas = try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id == volumeID)
-            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
-            .all()
-        let allReplicasSettled =
-            !requiredReplicas.isEmpty
-            && requiredReplicas.allSatisfy {
-                $0.state == .healthy && $0.generation >= volume.generation
+        let volumePool = try await VolumeService.pool(of: volume, on: db)
+        let isCeph = volumePool?.mode == .ceph
+        let observedCephAttachment: DiskAttachment?
+        if isCeph, observed.present, let attachment = observed.attachment {
+            guard
+                case .rbd(
+                    let poolName, let imageName, let namespace, let user, let monEndpoints,
+                    let clusterID, let credentialID, let configPath
+                ) = attachment,
+                poolName == volumePool?.cephPoolName,
+                namespace == volumePool?.cephNamespace,
+                clusterID == volumePool?.$cephCluster.id,
+                imageName == CephVolumeStorage.imageName(volumeId: volumeID),
+                let cluster = try await CephCluster.find(clusterID, on: db),
+                monEndpoints == cluster.monEndpoints,
+                configPath
+                    == "/var/lib/strato/ceph/\(clusterID.uuidString.lowercased())/\(credentialID.uuidString.lowercased())/ceph.conf",
+                let access = try await CephProjectAccess.query(on: db)
+                    .filter(\.$keyringSecret.$id == credentialID).first(),
+                access.id == volumePool?.$cephProjectAccess.id,
+                access.$cluster.id == clusterID,
+                user == String(access.clientName.dropFirst("client.".count))
+            else {
+                throw Abort(
+                    .unprocessableEntity,
+                    reason: "Ceph reconciler reported an attachment outside the volume's configured pool or credential")
             }
+            observedCephAttachment = attachment
+        } else {
+            observedCephAttachment = nil
+        }
         let generationBeforeTarget = max(0, volume.generation - 1)
-        let aggregateObservedGeneration =
-            requiredReplicas.map { replica in
-                replica.state == .healthy
-                    ? replica.generation : min(replica.generation, generationBeforeTarget)
-            }.min() ?? 0
+        let allStorageSettled: Bool
+        let aggregateObservedGeneration: Int64
+        if isCeph {
+            allStorageSettled =
+                observed.present
+                && observedCephAttachment != nil
+                && observed.convergencePhase == nil
+                && observed.observedGeneration >= volume.generation
+            aggregateObservedGeneration =
+                observed.present
+                ? observed.observedGeneration : min(observed.observedGeneration, generationBeforeTarget)
+        } else {
+            try await recordReplicaObservation(
+                volumeID: volumeID, agentId: agentId, observed: observed,
+                desiredGeneration: volume.generation, on: db)
+            let requiredReplicas = try await VolumeReplica.query(on: db)
+                .filter(\.$volume.$id == volumeID)
+                .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
+                .all()
+            allStorageSettled =
+                !requiredReplicas.isEmpty
+                && requiredReplicas.allSatisfy {
+                    $0.state == .healthy && $0.generation >= volume.generation
+                }
+            aggregateObservedGeneration =
+                requiredReplicas.map { replica in
+                    replica.state == .healthy
+                        ? replica.generation : min(replica.generation, generationBeforeTarget)
+                }.min() ?? 0
+        }
         let failedAtTarget =
             observed.lastError != nil && observed.failedGeneration == volume.generation
         let nextPhase: String?
@@ -1394,12 +1456,12 @@ struct ObservedStateApplier {
             nextPhase = observed.convergencePhase
             nextError = observed.lastError
             nextFailedGeneration = observed.failedGeneration
-        } else if allReplicasSettled {
+        } else if allStorageSettled {
             nextPhase = nil
             nextError = nil
             nextFailedGeneration = nil
         } else {
-            nextPhase = observed.convergencePhase ?? "waiting for replicas"
+            nextPhase = observed.convergencePhase ?? (isCeph ? "waiting for Ceph image" : "waiting for replicas")
             nextError = volume.errorMessage
             nextFailedGeneration = volume.failedGeneration
         }
@@ -1408,6 +1470,13 @@ struct ObservedStateApplier {
             lastError: nextError,
             failedGeneration: nextFailedGeneration
         )
+
+        if isCeph, let attachment = observedCephAttachment,
+            volume.diskAttachment != attachment
+        {
+            volume.diskAttachment = attachment
+            changed = true
+        }
 
         // The size the image actually has (STR-199) — recorded here for the same
         // reason the path is, and with the same asymmetry as the applied I/O
@@ -1514,7 +1583,7 @@ struct ObservedStateApplier {
         }
 
         // Still converging: progress only, never a settled status.
-        if observed.convergencePhase != nil {
+        if observed.convergencePhase != nil || (isCeph && !allStorageSettled) {
             if changed {
                 try await volume.save(on: db)
             }
@@ -1555,6 +1624,15 @@ struct ObservedStateApplier {
             volume.status = derived
             changed = true
         }
+        // Preserve the desired state and deadline for an actionable refusal
+        // the agent is still retrying. Replica and status facts above still
+        // land, including the degraded reason.
+        if failedAtTarget, observed.failureClassification == .blocked {
+            if changed {
+                try await volume.save(on: db)
+            }
+            return normalizedDesiredSize
+        }
         let settlesConvergence =
             volume.desiredStatus != .absent
             && ((!wasConverged && volume.isConverged)
@@ -1575,7 +1653,10 @@ struct ObservedStateApplier {
                 )?.mutation ?? .create
             let outcome = try await ResourceConvergence.recordFailure(
                 volume, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: volume.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await volume.save(on: db)
             }
@@ -1603,7 +1684,7 @@ struct ObservedStateApplier {
     // MARK: - Snapshot artifacts (STR-150)
 
     /// One family's half of a report. Written once and applied three times:
-    /// the diff, the convergence quartet, the derived status and the
+    /// the diff, the convergence metadata, the derived status and the
     /// absent-then-reap dance are identical across the families, and only what
     /// the captured facts *mean* differs — which each model absorbs in
     /// `applyCapturedFacts`.
@@ -1621,9 +1702,17 @@ struct ObservedStateApplier {
                 // would apply one family's facts to another's row, so it is
                 // checked rather than assumed.
                 guard observed.kind == A.artifactKind else { continue }
-                try await withLockedCurrent(artifact, reportedBy: agentId, on: db) { artifact, tx in
+                let shouldEnforceStorageQuota = try await withLockedCurrent(
+                    artifact, reportedBy: agentId, on: db
+                ) { artifact, tx in
                     try await applyObservedSnapshotState(
                         artifact: artifact, observed: observed, on: tx)
+                }
+                if shouldEnforceStorageQuota == true {
+                    // Start quota enforcement only after the row-locking
+                    // transaction commits. A quota-triggered delete takes the
+                    // lineage advisory lock before it locks this row.
+                    try await enforceStorageQuota(on: artifact, on: db)
                 }
             } else {
                 try await withLockedCurrent(artifact, reportedBy: agentId, on: db) { artifact, tx in
@@ -1640,7 +1729,7 @@ struct ObservedStateApplier {
         artifact: A,
         observed: ObservedSnapshotState,
         on db: Database
-    ) async throws {
+    ) async throws -> Bool {
         let artifactID = try artifact.requireID()
         try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for the reasons the VM path
@@ -1677,7 +1766,7 @@ struct ObservedStateApplier {
             if changed {
                 try await artifact.save(on: db)
             }
-            return
+            return false
         }
 
         if observed.observedGeneration > artifact.observedGeneration {
@@ -1693,6 +1782,17 @@ struct ObservedStateApplier {
             changed = true
         }
 
+        // A blocked capture/export keeps its requested intent until a later
+        // same-generation report succeeds or the convergence deadline expires.
+        let failedCurrentGeneration =
+            observed.lastError != nil && observed.failedGeneration == artifact.generation
+        if failedCurrentGeneration, observed.failureClassification == .blocked {
+            if changed {
+                try await artifact.save(on: db)
+            }
+            return footprintChanged
+        }
+
         let settlesConvergence =
             artifact.desiredStatus != .absent
             && ((!wasConverged && artifact.isConverged)
@@ -1701,7 +1801,7 @@ struct ObservedStateApplier {
             if changed {
                 try await artifact.save(on: db)
             }
-            return
+            return false
         }
 
         if !wasConverged, artifact.isConverged {
@@ -1713,15 +1813,16 @@ struct ObservedStateApplier {
                 )?.mutation ?? .create
             let outcome = try await ResourceConvergence.recordFailure(
                 artifact, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+                telemetryReason: "convergence_failed",
+                context: .observedReport(
+                    previousFailureGeneration: failedBefore,
+                    hadActiveDeadline: artifact.convergenceDeadline != nil), on: db)
             if outcome == .alreadyRecorded, changed {
                 try await artifact.save(on: db)
             }
         }
 
-        if footprintChanged {
-            try await enforceStorageQuota(on: artifact, on: db)
-        }
+        return footprintChanged
     }
 
     /// Re-checks the storage pool at the moment the agent's real footprint
@@ -1757,11 +1858,11 @@ struct ObservedStateApplier {
                     projectID: scope.projectID, environment: scope.environment, on: db)
             else { return }
 
-            artifact.lastError =
+            let failureReason =
                 "Snapshot's actual size exceeded storage quota '\(violated)' and was deleted"
-            try await artifact.save(on: db)
             _ = try await SnapshotArtifactMutation.delete(
-                artifact, actor: .system, on: db, app: app)
+                artifact, actor: .system, on: db, app: app,
+                failureReason: failureReason)
 
             let artifactID = try artifact.requireID()
             app.logger.notice(
@@ -1802,7 +1903,7 @@ struct ObservedStateApplier {
                     metadata: [
                         "resourceKind": .string(A.operationResourceKind.rawValue),
                         "resourceId": .string(artifactID.uuidString),
-                        "agentId": .string(agentId),
+                        "strato.agent.id": .string(agentId),
                     ])
             }
             return
@@ -1829,7 +1930,7 @@ struct ObservedStateApplier {
             metadata: [
                 "resourceKind": .string(A.operationResourceKind.rawValue),
                 "resourceId": .string(artifactID.uuidString),
-                "agentId": .string(agentId),
+                "strato.agent.id": .string(agentId),
             ])
     }
 
@@ -1848,6 +1949,19 @@ struct ObservedStateApplier {
         let volumeID = try volume.requireID()
 
         if volume.desiredStatus == .absent {
+            if try await VolumeService.pool(of: volume, on: db)?.mode == .ceph {
+                switch try await ResourceFinalizerService.clear(
+                    .agentAbsent, from: volume, on: db, app: app)
+                {
+                case .reaped:
+                    app.logger.info(
+                        "Ceph volume deletion confirmed by reconciler; record removed",
+                        metadata: ["volumeId": .string(volumeID.uuidString), "agentId": .string(agentId)])
+                case .held, .alreadyGone, .notTerminating:
+                    break
+                }
+                return
+            }
             // One report only confirms one physical copy is gone. Remove that
             // replica and keep the shared finalizer until every physical copy,
             // including degraded, resyncing, and faulted copies, has
@@ -1863,8 +1977,9 @@ struct ObservedStateApplier {
                     "Volume replica teardown confirmed; awaiting other replicas",
                     metadata: [
                         "volumeId": .string(volumeID.uuidString),
-                        "agentId": .string(agentId),
-                        "remainingAgentIds": .string(remainingAgentIDs.joined(separator: ",")),
+                        "strato.agent.id": .string(agentId),
+                        "strato.agent.remaining.ids": .array(
+                            remainingAgentIDs.sorted().map { .string($0) }),
                     ])
                 return
             }
@@ -1874,12 +1989,12 @@ struct ObservedStateApplier {
             case .reaped:
                 app.logger.info(
                     "Volume deletion confirmed by agent report; record removed",
-                    metadata: ["volumeId": .string(volumeID.uuidString), "agentId": .string(agentId)])
+                    metadata: ["volumeId": .string(volumeID.uuidString), "strato.agent.id": .string(agentId)])
             case .held(let remaining):
                 app.logger.debug(
                     "Volume teardown confirmed by agent report; awaiting finalizers",
                     metadata: [
-                        "volumeId": .string(volumeID.uuidString), "agentId": .string(agentId),
+                        "volumeId": .string(volumeID.uuidString), "strato.agent.id": .string(agentId),
                         "finalizers": .string(remaining.joined(separator: ",")),
                     ])
             case .alreadyGone, .notTerminating:
@@ -1912,7 +2027,7 @@ struct ObservedStateApplier {
             "Volume missing from agent observed-state report; marking as error until re-converged",
             metadata: [
                 "volumeId": .string(volumeID.uuidString),
-                "agentId": .string(agentId),
+                "strato.agent.id": .string(agentId),
                 "previousStatus": .string(previous.rawValue),
             ])
     }

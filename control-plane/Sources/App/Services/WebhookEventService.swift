@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -116,6 +117,127 @@ struct QuotaUsageSnapshot: Sendable {
     }
 }
 
+/// Serializes admission per subscription and enforces the durable outbox's
+/// pending-row ceiling. Callers that are not already inside a transaction must
+/// wrap this operation in one so the subscription lock, inserts, and shedding
+/// commit together.
+enum WebhookOutbox {
+    static let maxPendingDeliveriesPerSubscription = 10_000
+
+    static func droppedReason(limit: Int) -> String {
+        "Dropped because the subscription exceeded the \(limit) pending delivery limit"
+    }
+
+    private struct DroppedDelivery: Decodable {
+        let id: UUID
+    }
+
+    @discardableResult
+    static func enqueue(
+        _ deliveries: [WebhookDelivery],
+        pendingLimit: Int = maxPendingDeliveriesPerSubscription,
+        on db: Database
+    ) async throws -> Set<UUID> {
+        guard !deliveries.isEmpty else { return [] }
+        let subscriptionIDs = Set(deliveries.map { $0.$subscription.id })
+        try await lockSubscriptions(subscriptionIDs, on: db)
+        for delivery in deliveries {
+            try await delivery.save(on: db)
+        }
+        return try await enforcePendingCeiling(
+            for: subscriptionIDs, pendingLimit: pendingLimit, on: db)
+    }
+
+    static func lockSubscriptions(_ subscriptionIDs: Set<UUID>, on db: Database) async throws {
+        guard let sql = db as? SQLDatabase, !subscriptionIDs.isEmpty else { return }
+        let orderedIDs = subscriptionIDs.sorted(by: { $0.uuidString < $1.uuidString })
+        // One ordered lock statement avoids both N round trips and deadlocks
+        // when overlapping events fan out to several subscriptions.
+        try await sql.raw(
+            """
+            SELECT id
+            FROM webhook_subscriptions
+            WHERE id IN (\(binds: orderedIDs))
+            ORDER BY id
+            FOR UPDATE
+            """
+        ).run()
+    }
+
+    /// Keep the newest pending rows and persist an explicit terminal verdict
+    /// on the oldest eligible overflow. An active POST is never a shedding
+    /// candidate: an explicit lease must be expired, and a future legacy
+    /// schedule gets one full claim-lease grace period after its last update.
+    @discardableResult
+    static func enforcePendingCeiling(
+        for subscriptionIDs: Set<UUID>,
+        pendingLimit: Int = maxPendingDeliveriesPerSubscription,
+        protecting protectedDeliveryID: UUID? = nil,
+        on db: Database
+    ) async throws -> Set<UUID> {
+        precondition(pendingLimit > 0)
+        guard let sql = db as? SQLDatabase else { return [] }
+        var dropped = Set<UUID>()
+        for subscriptionID in subscriptionIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            let hasNoProtectedDelivery = protectedDeliveryID == nil
+            let protectedDeliveryID = protectedDeliveryID ?? UUID()
+            let rows = try await sql.raw(
+                """
+                WITH overflow_count AS MATERIALIZED (
+                    SELECT greatest(
+                        count(*) - \(bind: pendingLimit), 0
+                    )::bigint AS value
+                    FROM webhook_deliveries
+                    WHERE subscription_id = \(bind: subscriptionID)
+                      -- Keep this literal aligned with the partial shedding index.
+                      -- A parameterized status predicate may not use a partial
+                      -- index after PostgreSQL selects a generic plan.
+                      AND status = 'pending'
+                ), overflow AS MATERIALIZED (
+                    SELECT id
+                    FROM webhook_deliveries
+                    WHERE subscription_id = \(bind: subscriptionID)
+                      AND status = 'pending'
+                      AND (claimed_until IS NULL OR claimed_until <= now())
+                      AND (
+                          next_attempt_at <= now()
+                          OR updated_at <= now()
+                              - (\(bind: WebhookDeliveryService.claimLeaseSeconds) * interval '1 second')
+                      )
+                      AND (\(bind: hasNoProtectedDelivery) OR id <> \(bind: protectedDeliveryID))
+                    ORDER BY created_at NULLS FIRST, id
+                    LIMIT (SELECT value FROM overflow_count)
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE webhook_deliveries AS delivery
+                SET status = \(bind: WebhookDeliveryStatus.dropped.rawValue),
+                    claimed_until = NULL,
+                    last_error = \(bind: Self.droppedReason(limit: pendingLimit)),
+                    -- The previous version prunes every non-pending row by
+                    -- created_at. Preserve the real enqueue time separately
+                    -- and advance its retention anchor so a rolling replica
+                    -- cannot erase a newly visible drop verdict.
+                    enqueued_at = COALESCE(delivery.enqueued_at, delivery.created_at),
+                    created_at = now(),
+                    updated_at = now()
+                FROM overflow
+                WHERE delivery.id = overflow.id
+                  AND delivery.status = 'pending'
+                  AND (delivery.claimed_until IS NULL OR delivery.claimed_until <= now())
+                  AND (
+                      delivery.next_attempt_at <= now()
+                      OR delivery.updated_at <= now()
+                          - (\(bind: WebhookDeliveryService.claimLeaseSeconds) * interval '1 second')
+                  )
+                RETURNING delivery.id
+                """
+            ).all(decoding: DroppedDelivery.self)
+            dropped.formUnion(rows.map(\.id))
+        }
+        return dropped
+    }
+}
+
 /// Enqueues webhook events into the `webhook_deliveries` outbox.
 ///
 /// `enqueue` is the transactional entry point: called on the same `Database`
@@ -144,20 +266,22 @@ enum WebhookEvents {
         guard !matching.isEmpty else { return }
 
         let payload = try event.encodedPayload()
-        for subscription in matching {
-            let delivery = WebhookDelivery(
+        let deliveries = try matching.map { subscription in
+            WebhookDelivery(
                 subscriptionID: try subscription.requireID(),
                 eventID: event.id,
                 eventType: event.type,
                 payload: payload)
-            try await delivery.save(on: db)
         }
+        try await WebhookOutbox.enqueue(deliveries, on: db)
     }
 
     /// Non-throwing wrapper for call sites outside a transaction.
     static func emit(_ event: WebhookEvent, on db: Database, logger: Logger) async {
         do {
-            try await enqueue(event, on: db)
+            try await db.transaction { tx in
+                try await enqueue(event, on: tx)
+            }
         } catch {
             logger.error(
                 "Failed to enqueue webhook event",
@@ -170,13 +294,6 @@ enum WebhookEvents {
     }
 
     // MARK: - Operation completion (the chokepoint sources)
-
-    // There were three sources; there are two. `enqueueOperationCompletion`
-    // hung off `ResourceOperation.completeIfPending` and went with it
-    // (STR-152). The two below are the same guarantee moved to where the
-    // outcome is now decided — a resource's convergence, and the finalizer
-    // reap — and both still commit their outbox row in the transaction that
-    // writes the transition, which is what makes the event fire exactly once.
 
     /// Enqueue `operation.completed`/`operation.failed` for a lifecycle
     /// mutation whose outcome is now settled by the resource's own conditions

@@ -446,12 +446,12 @@ public enum DomainRedefinition {
         // takes has to be a multiple of it.
         let block =
             existing.flatMap { memoryValue($0.child(named: "target")?.child(named: "block")) }
-            ?? MemoryHotplugPlan.blockBytes(architecture: architecture)
+            ?? QEMUMemoryReservation.blockBytes(architecture: architecture)
         guard block > 0 else {
             refusals.append("the domain's memory device declares no usable block size")
             return .unchanged
         }
-        let requestedHotplug = MemoryHotplugPlan.alignedHotplugBytes(spec: spec, architecture: architecture)
+        let requestedHotplug = QEMUMemoryReservation.alignedHotplugBytes(spec: spec, architecture: architecture)
         let size = requestedHotplug - (requestedHotplug % block)
         let total = spec.memoryBytes + size
         guard total > currentTotal else { return .unchanged }

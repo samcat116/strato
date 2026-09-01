@@ -30,16 +30,15 @@ The following test suites have been created:
   - Error message descriptions
   - Default config path constants
 
-### 2. CustomLogHandlerTests (10 tests)
+### 2. CustomLogHandlerTests (7 tests)
 - **Location**: `StratoAgentTests/CustomLogHandlerTests.swift`
-- **Coverage**: Tests for the custom logging handler implementation
+- **Coverage**: JSON Lines and SwiftLog event contract for the agent handler
 - **Tests include**:
-  - Log handler initialization
-  - Log level filtering and management
-  - Metadata handling (subscription, merging)
-  - Integration with Swift's Logging framework
-  - Different metadata value types
-  - **Parameterized test** for all log levels (trace, debug, info, notice, warning, error, critical)
+  - Typed `LogEvent.error` preservation
+  - Deterministic nested metadata and insertion-order-independent alias precedence
+  - JSON escaping and fractional UTC timestamps
+  - Message, metadata, and total-record byte ceilings with truncation signals
+  - Atomic concurrent writes through the production serialization boundary
 
 ### 3. NetworkModeTests (5 tests)
 - **Location**: `StratoAgentTests/NetworkModeTests.swift`
@@ -62,7 +61,7 @@ To run specific test suites:
 
 ```bash
 swift test --filter "AgentConfig Tests"
-swift test --filter "CustomLogHandler Tests"
+swift test --filter "Custom log handler"
 swift test --filter "NetworkMode Tests"
 ```
 
@@ -94,14 +93,8 @@ agent/
 
 ## Test Results
 
-Latest test run (all passing ✅):
-
-```
-✔ Test run with 29 tests passed
-  ├── AgentConfig Tests: 16 tests passed
-  ├── CustomLogHandler Tests: 10 tests passed (1 parameterized with 7 runs)
-  └── NetworkMode Tests: 5 tests passed
-```
+Use the current `swift test` summary as the source of truth. The suite grows
+regularly, so this document does not pin a repository-wide test count.
 
 ## Test Quality
 
