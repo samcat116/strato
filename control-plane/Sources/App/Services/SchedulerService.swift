@@ -351,12 +351,13 @@ final class SchedulerService: Sendable {
     /// listener capability because an OVN host can disable that service or
     /// fail one of its startup prerequisites.
     static func placementRequirements(
-        for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil
+        for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil,
+        diskBytes: Int64? = nil
     ) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
-            disk: vm.disk,
+            disk: diskBytes ?? vm.disk,
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
             requiresInterVMNetworking: vm.metadataSource == .imds,

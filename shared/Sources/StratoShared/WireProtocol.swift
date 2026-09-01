@@ -11,9 +11,22 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 54 adds recorded
-    /// guest-exec replay and acknowledgement; version 53 adds network ACL state.
-    public static let currentVersion = 54
+    /// The only wire/schema version this build accepts. Version 56 adds recorded
+    /// guest-exec replay and acknowledgement. Version 55 carries the
+    /// permanent Ceph credential-revocation ledger to every client in a site.
+    /// Version 54 carries a
+    /// volume snapshot's backend independently of its parent volume entry so
+    /// off-agent Ceph snapshot replay and deletion remain routable (STR-155).
+    /// Version 53 adds typed local/Ceph desired-volume configuration and
+    /// complete RBD attachment coordinates. Version 52 adds the agent's complete optional
+    /// whole-disk inventory (STR-156). Version 51 replaces
+    /// file-only volume paths with file, block-device, or RBD disk attachments
+    /// (STR-154). Version 50 preserves stdout/stderr identity on guest-exec
+    /// output for captured VM commands (STR-79). Version 49 added the agent metadata-service capability used
+    /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
+    /// contract (STR-237), and v46's authoritative native-OVN load-balancer
+    /// state and observations (STR-28).
+    public static let currentVersion = 56
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

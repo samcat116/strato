@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Guest Exec Messages (STR-78/STR-260; resource kind v44, session kind/state v54)
+// MARK: - Guest Exec Messages (STR-78/STR-260; resource kind v44, session kind/state v56)
 //
 // Control plane ⟷ agent messages carrying an exec session inside a guest. The
 // resource discriminator selects either a VM or a sandbox; the session-kind

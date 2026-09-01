@@ -451,6 +451,20 @@ struct DesiredStateAssembler {
         // set (STR-150).
         let volumes = try await desiredVolumes(agentId: agentId, on: db)
         let snapshots = try await desiredSnapshots(agentId: agentId, on: db)
+        // Credential revocations are scoped to the site's lifetime, not its
+        // current cluster registration. Replay every row forever so an agent
+        // that was offline, re-enrolled, or newly added still removes stale
+        // Ceph keyrings, configs, and libvirt secrets.
+        let siteID = try site.requireID()
+        let cephCredentialRevocations = try await CephCredentialRevocation.query(on: db)
+            .filter(\.$site.$id == siteID)
+            .sort(\.$createdAt)
+            .sort(\.$id)
+            .all()
+            .map {
+                DesiredCephCredentialRevocation(
+                    clusterId: $0.clusterID, credentialId: $0.credentialID)
+            }
 
         // The DNS zones this agent realizes. Two backends read one list:
         //
@@ -486,6 +500,7 @@ struct DesiredStateAssembler {
             tombstones: try await tombstones(agentId: agentId, on: db),
             volumes: volumes,
             snapshots: snapshots,
+            cephCredentialRevocations: cephCredentialRevocations,
             dnsZones: dnsZones)
     }
 
@@ -695,15 +710,25 @@ struct DesiredStateAssembler {
         // one per snapshot: assembly runs on every poll of every agent, so an
         // N+1 here is a per-sync cost that grows with the host's snapshot count.
         var attachedVMIds: [UUID: UUID] = [:]
+        var snapshotVolumeStorage: [UUID: DesiredVolumeStorage] = [:]
         if !volumeSnapshots.isEmpty {
             let volumeIDs = Set(volumeSnapshots.map(\.$volume.id))
-            for volume in try await Volume.query(on: db).filter(\.$id ~~ Array(volumeIDs)).all() {
+            let parentVolumes = try await Volume.query(on: db)
+                .filter(\.$id ~~ Array(volumeIDs)).all()
+            snapshotVolumeStorage = try await desiredVolumeStorages(
+                for: parentVolumes, on: db)
+            for volume in parentVolumes {
                 guard let volumeID = volume.id, let vmID = volume.$vm.id else { continue }
                 attachedVMIds[volumeID] = vmID
             }
         }
         for snapshot in volumeSnapshots {
             guard let snapshotId = snapshot.id else { continue }
+            guard let storage = snapshotVolumeStorage[snapshot.$volume.id] else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "Volume snapshot references a missing parent storage configuration")
+            }
             entries.append(
                 DesiredSnapshotState(
                     snapshotId: snapshotId,
@@ -719,7 +744,8 @@ struct DesiredStateAssembler {
                     // outlives the request that made it, and the volume may have
                     // been attached since.
                     capture: DesiredSnapshotCapture(
-                        attachedVMId: attachedVMIds[snapshot.$volume.id])))
+                        attachedVMId: attachedVMIds[snapshot.$volume.id]),
+                    volumeStorage: storage))
         }
 
         for snapshot in try await VMSnapshot.placed(onAgent: agentId, on: db) {
@@ -766,20 +792,20 @@ struct DesiredStateAssembler {
 
     /// Every volume placed on this agent, as desired entries (STR-148).
     ///
-    /// Two things are worth noting about what this does *not* do. It does not
-    /// carry a storage path: the agent owns path layout and reports it back, so
-    /// a path here would be the control plane telling the agent something the
-    /// agent told it. And it does not carry a pool: placement is expressed by
-    /// *which agent's sync the entry appears in*, and a second encoding of the
-    /// same fact is a thing that can drift.
+    /// It never carries a host path: the backend owns attachment realization
+    /// and reports the canonical attachment back. Local ownership is expressed
+    /// by replica scope; Ceph carries the external cluster coordinates and its
+    /// write-only project credential because every eligible client can reach
+    /// the same image.
     private func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
-        let replicaScope = try await VolumeService.replicaScope(onAgent: agentId, on: db)
-        guard !replicaScope.allVolumeIDs.isEmpty else { return [] }
+        let scopedVolumes = try await VolumeService.volumes(onAgent: agentId, on: db)
+        let scopedVolumeIDs = scopedVolumes.compactMap(\.id)
+        guard !scopedVolumeIDs.isEmpty else { return [] }
         let volumes = try await Volume.query(on: db)
-            .filter(\.$id ~~ Array(replicaScope.allVolumeIDs))
+            .filter(\.$id ~~ scopedVolumeIDs)
             .with(\.$sourceImage) { $0.with(\.$artifacts) }
             .all()
-            .filter(replicaScope.includes)
+        let volumeStorages = try await desiredVolumeStorages(for: volumes, on: db)
         let attachedVMIDs = Array(Set(volumes.compactMap(\.$vm.id)))
         let attachmentVMs: [UUID: (agentId: String, hypervisorType: HypervisorType)]
         if attachedVMIDs.isEmpty {
@@ -899,6 +925,7 @@ struct DesiredStateAssembler {
                     generation: volume.generation,
                     sizeBytes: volume.size,
                     format: volume.format.rawValue,
+                    storage: volumeStorages[volumeId] ?? .local,
                     source: source,
                     attachment: attachment,
                     // Emitted whether or not the volume is attached: a ceiling
@@ -908,6 +935,95 @@ struct DesiredStateAssembler {
                     ioLimits: volume.ioLimits))
         }
         return entries
+    }
+
+    /// Resolve the durable pool/access graph into the agent's write-only Ceph
+    /// configuration. The encrypted keyring is decrypted only while building
+    /// the mTLS desired-state message and is never copied into an API DTO or an
+    /// observed disk attachment.
+    private func desiredVolumeStorages(
+        for volumes: [Volume], on db: any Database
+    ) async throws -> [UUID: DesiredVolumeStorage] {
+        let poolIDs = Array(Set(volumes.compactMap(\.$pool.id)))
+        let pools =
+            poolIDs.isEmpty
+            ? []
+            : try await StoragePool.query(on: db)
+                .filter(\.$id ~~ poolIDs).all()
+        let poolsByID = Dictionary(
+            uniqueKeysWithValues: pools.compactMap { pool in
+                pool.id.map { ($0, pool) }
+            })
+        let cephPools = pools.filter { $0.mode == .ceph }
+        let clusterIDs = Array(Set(cephPools.compactMap(\.$cephCluster.id)))
+        let accessIDs = Array(Set(cephPools.compactMap(\.$cephProjectAccess.id)))
+        let clusters =
+            clusterIDs.isEmpty
+            ? []
+            : try await CephCluster.query(on: db)
+                .filter(\.$id ~~ clusterIDs).all()
+        let accesses =
+            accessIDs.isEmpty
+            ? []
+            : try await CephProjectAccess.query(on: db)
+                .filter(\.$id ~~ accessIDs).all()
+        let clustersByID = Dictionary(
+            uniqueKeysWithValues: clusters.compactMap { cluster in
+                cluster.id.map { ($0, cluster) }
+            })
+        let accessesByID = Dictionary(
+            uniqueKeysWithValues: accesses.compactMap { access in
+                access.id.map { ($0, access) }
+            })
+        let secretIDs = Array(Set(accesses.map(\.$keyringSecret.id)))
+        let secrets =
+            secretIDs.isEmpty
+            ? []
+            : try await StoredSecret.query(on: db)
+                .filter(\.$id ~~ secretIDs).all()
+        let secretsByID = Dictionary(
+            uniqueKeysWithValues: secrets.compactMap { secret in
+                secret.id.map { ($0, secret) }
+            })
+
+        var result: [UUID: DesiredVolumeStorage] = [:]
+        for volume in volumes {
+            guard let volumeID = volume.id else { continue }
+            guard let poolID = volume.$pool.id, let pool = poolsByID[poolID], pool.mode == .ceph else {
+                result[volumeID] = .local
+                continue
+            }
+            guard let clusterID = pool.$cephCluster.id,
+                let accessID = pool.$cephProjectAccess.id,
+                let cephPoolName = pool.cephPoolName,
+                let namespace = pool.cephNamespace,
+                let cluster = clustersByID[clusterID],
+                let access = accessesByID[accessID],
+                access.$cluster.id == clusterID,
+                access.$project.id == volume.$project.id,
+                let secret = secretsByID[access.$keyringSecret.id]
+            else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "Ceph volume has an incomplete or inconsistent storage pool")
+            }
+            result[volumeID] = .ceph(
+                CephVolumeStorage(
+                    clusterId: clusterID,
+                    fsid: cluster.fsid,
+                    pool: cephPoolName,
+                    namespace: namespace,
+                    clientName: access.clientName,
+                    monEndpoints: cluster.monEndpoints,
+                    // Runtime identity follows the secret version, not the
+                    // stable project-access row. A rotated cephx key therefore
+                    // receives a new deterministic libvirt/config identity and
+                    // the retired UUID can remain in the revocation ledger.
+                    credentialId: access.$keyringSecret.id,
+                    keyring: try app.secretsEncryption.decrypt(secret.encryptedValue),
+                    messengerMode: .secure))
+        }
+        return result
     }
 
     /// The teardowns this sync authorizes (STR-98).

@@ -1,3 +1,4 @@
+import Foundation
 import StratoShared
 import Testing
 
@@ -20,8 +21,10 @@ struct FirecrackerDiskAttachmentTests {
         #expect(throws: FirecrackerDiskAttachment.Error.nativeRBD) {
             try FirecrackerDiskAttachment.hostPath(
                 for: .rbd(
-                    pool: "volumes", image: "root", user: "client.project",
-                    monHosts: ["mon-1:6789"]))
+                    pool: "volumes", image: "root", namespace: "project",
+                    user: "project", monEndpoints: ["v2:mon-1:3300"],
+                    clusterId: UUID(), credentialId: UUID(),
+                    configPath: "/var/lib/strato/ceph/client/ceph.conf"))
         }
     }
 }

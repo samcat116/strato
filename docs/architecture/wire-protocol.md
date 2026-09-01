@@ -111,7 +111,7 @@ schema-enforced policy. This is an exact-version payload change, not a
 `supportsNetworkACLs` capability: the existing live overlay-network capability
 already decides whether an agent may author OVN topology.
 
-Wire v54 makes `GuestExecStartMessage.sessionKind` required: `interactive`
+Wire v56 makes `GuestExecStartMessage.sessionKind` required: `interactive`
 sessions remain live streams whose frontend owns their lifetime, while
 `recorded` sessions survive a control-plane WebSocket reconnect for as long as
 the same agent process remains alive. It also adds a level-triggered recorded
@@ -165,7 +165,7 @@ bump and a coordinated deployment of both sides.
 | `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
-| `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v44+) plus required `sessionKind` (`interactive` or `recorded`, v54+) |
+| `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v44+) plus required `sessionKind` (`interactive` or `recorded`, v56+) |
 | `guest_exec_recorded_ack` | Retires one terminal recorded-session snapshot after the control plane durably commits or deliberately discards its outcome |
 
 Everything the control plane sends is now the sync, live byte-stream control,
@@ -194,7 +194,7 @@ Nothing in the agent → control plane direction is a generic *reply*.
 uncorrelated (STR-152); the agent stopped sending them entirely at the same
 change.
 
-### Recorded exec reconnect state (STR-260, wire v54)
+### Recorded exec reconnect state (STR-260, wire v56)
 
 `GuestExecRecordedStateMessage` is a complete level-triggered snapshot, never
 an output delta. Its `stdout` and `stderr` fields contain the full base64-encoded
