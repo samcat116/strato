@@ -101,9 +101,10 @@ final class ResourceFinalizerTests {
 
     // MARK: - Stamping
 
-    @Test("DELETE on a placed VM stamps agent.absent and leaves the row standing")
+    @Test("DELETE on a placed VM stamps agent and boot-volume finalizers")
     func deleteStampsAgentAbsent() async throws {
         try await withFinalizerApp { app, _, _, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             try await self.placeOnAgent(app: app, vm: vm)
             let vmID = try vm.requireID()
 
@@ -117,13 +118,18 @@ final class ResourceFinalizerTests {
             // `ResourceOperation`'s FK-lessness unnecessary.
             let terminating = try #require(try await VM.find(vmID, on: app.db))
             #expect(terminating.desiredStatus == .absent)
-            #expect(terminating.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+            #expect(
+                terminating.finalizers == [
+                    ResourceFinalizer.agentAbsent.rawValue,
+                    ResourceFinalizer.bootVolumeAbsent.rawValue,
+                ])
         }
     }
 
     @Test("An unplaced VM stamps nothing and is reaped by the direct path")
     func unplacedVMStampsNothing() async throws {
         try await withFinalizerApp { app, _, _, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             let vmID = try vm.requireID()
             #expect(vm.hypervisorId == nil)
 
@@ -298,6 +304,7 @@ final class ResourceFinalizerTests {
     @Test("An offline agent's VM is reaped by the direct path, and the reap records it")
     func offlineAgentDirectPathReaps() async throws {
         try await withFinalizerApp { app, _, _, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             // Placed on an agent that was never registered: online lookup
             // fails, so DELETE takes the direct path rather than state sync.
             vm.hypervisorId = UUID().uuidString
@@ -320,6 +327,7 @@ final class ResourceFinalizerTests {
     @Test("The direct path records nothing terminal while another finalizer holds the row")
     func offlineAgentDirectPathRecordsNothingWhenHeld() async throws {
         try await withFinalizerApp { app, _, _, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             vm.hypervisorId = UUID().uuidString
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue, Self.foreign.rawValue]
             vm.setFixtureDesiredStatus(.absent)

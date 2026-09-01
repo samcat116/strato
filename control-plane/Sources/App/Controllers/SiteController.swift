@@ -367,7 +367,7 @@ struct SiteController: RouteCollection {
         }
 
         // A move is a removal from the old site too, so it must honor the same
-        // invariant as removeAgent: never orphan a site's topology authority.
+        // invariant as agent deregistration: never orphan a site's topology authority.
         // Overwriting site_id while another site still designates this agent as
         // its network controller would leave that site pointing at a
         // non-member, silently stopping reconciliation of all its networks.

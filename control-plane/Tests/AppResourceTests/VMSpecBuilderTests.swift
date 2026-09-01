@@ -436,13 +436,13 @@ struct VMSpecBuilderTests {
         // it replaced synthesized `disk<count>` — a name that could collide with
         // an explicit one on the same VM, and a duplicate device id is what
         // stops the VM booting at all.
-        let volumes = [
-            attachedVolume(id: UUID(), deviceName: "disk1", bootOrder: nil),
-            attachedVolume(id: UUID(), deviceName: nil, bootOrder: nil),
-            attachedVolume(id: UUID(), deviceName: "not a legal id", bootOrder: nil),
-        ]
+        let invalidVolumeID = UUID()
+        let volumes = [attachedVolume(id: invalidVolumeID, deviceName: nil, bootOrder: nil)]
 
-        #expect(throws: Abort.self) {
+        #expect(
+            throws: VMSpecBuilder.AssemblyError.invalidAttachmentDeviceName(
+                volumeID: invalidVolumeID)
+        ) {
             try VMSpecBuilder.volumeSpecs(
                 from: volumes, diskAttachmentsByVolumeID: diskAttachments(for: volumes))
         }

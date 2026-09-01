@@ -769,7 +769,7 @@ CREATE TABLE public.resource_events (
     created_at timestamp with time zone NOT NULL,
     phase text DEFAULT 'requested'::text NOT NULL,
     CONSTRAINT ck_resource_events_actor_type_enum CHECK ((actor_type = ANY (ARRAY['user'::text, 'service_account'::text, 'workload'::text, 'system'::text]))),
-    CONSTRAINT ck_resource_events_mutation_enum CHECK ((mutation = ANY (ARRAY['create'::text, 'boot'::text, 'shutdown'::text, 'reboot'::text, 'pause'::text, 'resume'::text, 'delete'::text, 'resize'::text, 'snapshot'::text, 'snapshot_delete'::text, 'restore'::text, 'snapshot_export'::text, 'attach'::text, 'detach'::text, 'throttle'::text]))),
+    CONSTRAINT ck_resource_events_mutation_enum CHECK ((mutation = ANY (ARRAY['create'::text, 'boot'::text, 'shutdown'::text, 'reboot'::text, 'pause'::text, 'resume'::text, 'run'::text, 'delete'::text, 'resize'::text, 'snapshot'::text, 'snapshot_delete'::text, 'restore'::text, 'snapshot_export'::text, 'attach'::text, 'detach'::text, 'throttle'::text]))),
     CONSTRAINT ck_resource_events_phase_enum CHECK ((phase = ANY (ARRAY['requested'::text, 'completed'::text, 'failed'::text]))),
     CONSTRAINT ck_resource_events_resource_kind_enum CHECK ((resource_kind = ANY (ARRAY['virtual_machine'::text, 'sandbox'::text, 'volume'::text, 'volume_snapshot'::text, 'vm_checkpoint'::text, 'sandbox_snapshot'::text])))
 );

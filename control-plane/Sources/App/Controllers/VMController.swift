@@ -1444,6 +1444,7 @@ struct VMController: RouteCollection {
         // The delete path skips the enforcement lookup: a client follows a
         // delete through the operations façade with `mutationId`, so nothing
         // reads this body beyond the id, and the VM may already be reaped.
+        if let response = accepted.cachedResponse() { return response }
         return try await Self.acceptedResponse(
             for: vm, accepted, on: req, resolvingEnforcement: false)
     }

@@ -55,24 +55,27 @@ struct VolumeAttachProjectContainmentTests {
                     description: "A second project the caller also has rights in",
                     organization: org)
 
+            let poolID = try await StoragePool.defaultPool(on: app.db).requireID()
+            let agentID = try await builder.registerAgent(
+                on: app, named: "attach-containment-agent")
             let volume = Volume(
                 name: "containment-volume",
                 description: "volume under the project-containment guard",
                 projectID: volumeProject.id!, environment: volumeEnvironment,
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
-                createdByID: admin.id!)
+                createdByID: admin.id!, poolID: poolID)
             try await volume.save(on: app.db)
             try await placeVolume(
                 volume,
-                on: "agent-that-is-not-connected",
+                on: agentID,
                 at: "/var/lib/strato/volumes/containment/volume.qcow2",
                 using: app.db
             )
 
             let vm = try await builder.createVM(
                 name: "containment-vm", project: vmProject, environment: vmEnvironment)
-            vm.hypervisorId = "agent-that-is-not-connected"
+            vm.hypervisorId = agentID
             try await vm.save(on: app.db)
 
             try await test(app, volume, vm, token)
@@ -116,19 +119,11 @@ struct VolumeAttachProjectContainmentTests {
                 #expect(!res.body.string.contains("belongs to a different project"))
             }
 
-            // The volume in this fixture is on no agent, so `.stateSync`
-            // dispatch degrades it immediately and `resolveForStuckOperation`
-            // reverts the attachment — an unachieved intent left in place would
-            // replay on every later sync. A rejected attach is therefore still
-            // indistinguishable from never having been requested, just by a
-            // different mechanism than the old in-band revert.
-            var reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            for _ in 0..<100 where reloaded.conditions.degraded == nil {
-                try await Task.sleep(for: .milliseconds(50))
-                reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            }
-            #expect(reloaded.conditions.degraded != nil)
-            #expect(reloaded.$vm.id == nil)
+            // Acceptance records the attachment intent. Convergence belongs to
+            // the volume lifecycle; this regression only pins that a valid
+            // same-project request reaches that boundary.
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(reloaded.$vm.id == vm.id)
         }
     }
 

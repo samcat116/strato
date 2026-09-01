@@ -490,6 +490,7 @@ struct SandboxController: RouteCollection {
             try await ResourceFinalizerService.stampForDeletion(sandbox, on: db)
             sandbox.setDesiredStatus(.absent)
         }
+        if let response = accepted.cachedResponse() { return response }
         return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
     }
 

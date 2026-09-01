@@ -481,6 +481,7 @@ struct VolumeController: RouteCollection {
             "Volume deletion requested",
             metadata: ["volumeId": .string(volumeID.uuidString)])
 
+        if let response = accepted.cachedResponse() { return response }
         return try await AcceptedMutation(
             VolumeService.response(for: volume, on: req.db), accepted
         ).acceptedResponse()
@@ -1277,6 +1278,7 @@ struct VolumeController: RouteCollection {
                 "volumeId": .string(volume.id!.uuidString),
             ])
 
+        if let response = accepted.cachedResponse() { return response }
         return try AcceptedMutation(SnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 

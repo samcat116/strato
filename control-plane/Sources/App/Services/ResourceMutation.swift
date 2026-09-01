@@ -95,6 +95,23 @@ struct ResourceMutation {
     struct Accepted: Sendable {
         let mutationID: UUID
         let targetGeneration: Int64
+        /// The canonical response captured in the mutation transaction for an
+        /// idempotent delete. Returning these exact bytes prevents background
+        /// finalizer work from changing the first response before it is encoded.
+        let responseBody: Data?
+
+        init(mutationID: UUID, targetGeneration: Int64, responseBody: Data? = nil) {
+            self.mutationID = mutationID
+            self.targetGeneration = targetGeneration
+            self.responseBody = responseBody
+        }
+
+        func cachedResponse() -> Response? {
+            guard let responseBody else { return nil }
+            var headers = HTTPHeaders()
+            headers.contentType = .json
+            return Response(status: .accepted, headers: headers, body: .init(data: responseBody))
+        }
     }
 
     /// Wraps a dispatch-work failure with a locating prefix so it reads well as
@@ -224,14 +241,18 @@ struct ResourceMutation {
                 actor: actor,
                 scope: scope,
                 on: db)
-            let accepted = Accepted(
+            let acceptedIdentity = Accepted(
                 mutationID: try event.requireID(), targetGeneration: resource.generation)
             let responseBody: Data?
             if idempotencyContext == nil {
                 responseBody = nil
             } else {
-                responseBody = try await idempotencyResponseBody(resource, accepted, db)
+                responseBody = try await idempotencyResponseBody(resource, acceptedIdentity, db)
             }
+            let accepted = Accepted(
+                mutationID: acceptedIdentity.mutationID,
+                targetGeneration: acceptedIdentity.targetGeneration,
+                responseBody: responseBody)
             try await IdempotencyService.complete(
                 idempotencyContext,
                 actor: actor,

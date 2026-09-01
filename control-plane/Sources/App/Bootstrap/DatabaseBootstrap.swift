@@ -174,5 +174,10 @@ extension Application {
         // be blocked by an unhandled constraint on the tables that declared no
         // rule.
         migrations.add(MakeCreatorReferencesNullable())
+
+        // VM command execution records a `run` resource event. The Swift enum
+        // gained that case before the database check constraint did, so repair
+        // both preserved databases and the current-schema baseline.
+        migrations.add(AddRunResourceEventMutation())
     }
 }

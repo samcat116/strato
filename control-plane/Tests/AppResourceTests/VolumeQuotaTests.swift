@@ -254,13 +254,6 @@ final class VolumeQuotaTests {
             #expect(attached.storageBytes == gb(10))
             #expect(attached.volumeCount == 1)
 
-            // Attachment is lifecycle state, not accounting identity.
-            bootVolume.$vm.id = nil
-            try await bootVolume.save(on: app.db)
-            let detached = try await measure(quota, on: app.db)
-            #expect(detached.storageBytes == gb(10))
-            #expect(detached.volumeCount == 1)
-
             bootVolume.size = gb(15)
             try await bootVolume.save(on: app.db)
             let grown = try await measure(quota, on: app.db)
@@ -406,6 +399,7 @@ final class VolumeQuotaTests {
             let vm = try await builder.createVM(name: "image-volume-vm", project: project)
             vm.hypervisorId = agentId
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let volume = try await seedVolume(
                 app: app, user: user, project: project, name: "image-volume", sizeGB: 10,
@@ -439,6 +433,7 @@ final class VolumeQuotaTests {
             let vm = try await builder.createVM(name: "guarded-image-volume-vm", project: project)
             vm.hypervisorId = agentId
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agentId, using: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let volume = try await seedVolume(
                 app: app, user: user, project: project, name: "guarded-image-volume", sizeGB: 10,

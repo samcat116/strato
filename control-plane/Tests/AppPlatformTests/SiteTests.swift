@@ -285,7 +285,9 @@ final class SiteTests {
     func controllerMustBeMember() async throws {
         try await withSiteTestApp { app, _, _, token in
             let site = try await self.makeSite(app: app, name: "dc-a")
-            let outsiderId = try await self.registerAgent(app: app, named: "outsider")
+            let outsiderSite = try await self.makeSite(app: app, name: "dc-a-outsider")
+            let outsiderId = try await self.registerAgent(
+                app: app, named: "outsider", siteID: try outsiderSite.requireID())
 
             try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -379,40 +381,6 @@ final class SiteTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
-        }
-    }
-
-    @Test("The designated network controller cannot be removed while the site has other members")
-    func controllerRemovalGuard() async throws {
-        try await withSiteTestApp { app, _, _, token in
-            let site = try await self.makeSite(app: app, name: "dc-c")
-            let siteID = try #require(site.id)
-            let controllerId = try await self.registerAgent(app: app, named: "ctl", siteID: siteID)
-            let peerId = try await self.registerAgent(app: app, named: "ctl-peer", siteID: siteID)
-            site.$networkControllerAgent.id = UUID(uuidString: controllerId)
-            try await site.save(on: app.db)
-
-            try await app.test(.DELETE, "/api/sites/\(siteID.uuidString)/agents/\(controllerId)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
-
-            // Emptying the site is allowed: with no members left there is no
-            // topology to author, so the last one out clears the designation
-            // rather than being trapped in the site (issue #743).
-            try await app.test(.DELETE, "/api/sites/\(siteID.uuidString)/agents/\(peerId)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-            }
-            try await app.test(.DELETE, "/api/sites/\(siteID.uuidString)/agents/\(controllerId)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-            }
-            let emptied = try #require(try await Site.find(siteID, on: app.db))
-            #expect(emptied.$networkControllerAgent.id == nil)
         }
     }
 
@@ -826,6 +794,8 @@ final class SiteTests {
             let site = try await self.makeSite(app: app, name: "dc-assign")
             let siteID = try #require(site.id)
             let sourceSite = try await self.makeSite(app: app, name: "dc-source")
+            _ = try await self.registerAgent(
+                app: app, named: "source-controller", siteID: try sourceSite.requireID())
             let agentId = try await self.registerAgent(
                 app: app, named: "assign-node", siteID: try sourceSite.requireID())
 

@@ -281,7 +281,7 @@ struct SecretsEncryptionServiceTests {
         }
     }
 
-    @Test("Rotation rewraps all four stored-secret columns to the primary")
+    @Test("Rotation rewraps every populated stored-secret column to the primary")
     func rotationRewrapsAllTables() async throws {
         try await withTestApp { app in
             let builder = TestDataBuilder(db: app.db)
@@ -325,7 +325,13 @@ struct SecretsEncryptionServiceTests {
                 on: app.db, logger: app.logger)
             #expect(report.totalRewrapped == 4)
             #expect(report.totalUnopenable == 0)
-            #expect(report.tables.allSatisfy { $0.rewrapped == 1 && $0.unopenable == 0 })
+            #expect(report.tables.count == 5)
+            #expect(report.tables.count(where: { $0.rewrapped == 1 }) == 4)
+            #expect(
+                report.tables.contains {
+                    $0.table == "stored_secrets.encrypted_value" && $0.rewrapped == 0
+                        && $0.unopenable == 0
+                })
 
             let values = [
                 try #require(try await OIDCProvider.find(provider.id, on: app.db)?.clientSecret),

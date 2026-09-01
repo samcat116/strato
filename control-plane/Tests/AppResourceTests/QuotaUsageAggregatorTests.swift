@@ -48,11 +48,14 @@ struct QuotaUsageAggregatorTests {
         let marketingProject = try await builder.createProject(name: "Campaigns", description: "p", ou: marketing)
 
         // VMs: two environments in the nested project, one apiece elsewhere.
-        _ = try await builder.createVM(name: "direct-dev", project: directProject)
-        _ = try await builder.createVM(name: "team-dev", project: teamAProject)
-        _ = try await builder.createVM(
+        let directDev = try await builder.createVM(name: "direct-dev", project: directProject)
+        let teamDev = try await builder.createVM(name: "team-dev", project: teamAProject)
+        let teamProd = try await builder.createVM(
             name: "team-prod", project: teamAProject, environment: "production")
-        _ = try await builder.createVM(name: "mkt-dev", project: marketingProject)
+        let marketingDev = try await builder.createVM(name: "mkt-dev", project: marketingProject)
+        for vm in [directDev, teamDev, teamProd, marketingDev] {
+            try await attachBootVolume(to: vm, on: nil, using: db)
+        }
 
         // Sandboxes draw from the same vCPU/memory pools.
         _ = try await builder.createSandbox(name: "team-sbx", project: teamAProject)
@@ -82,14 +85,27 @@ struct QuotaUsageAggregatorTests {
         let snapshotQuery = SandboxSnapshot.query(on: db)
             .filter(\.$project.$id ~~ projectIDs)
             .filter(\.$status != .error)
+        let volumeQuery = Volume.query(on: db).filter(\.$project.$id ~~ projectIDs)
+        let volumeSnapshotQuery = VolumeSnapshot.query(on: db)
+            .filter(\.$project.$id ~~ projectIDs)
+            .filter(\.$status != .error)
+        let vmSnapshotQuery = VMSnapshot.query(on: db)
+            .filter(\.$project.$id ~~ projectIDs)
+            .filter(\.$status != .error)
         if let environment {
             vmQuery.filter(\.$environment == environment)
             sandboxQuery.filter(\.$environment == environment)
             snapshotQuery.filter(\.$environment == environment)
+            volumeQuery.filter(\.$environment == environment)
+            volumeSnapshotQuery.filter(\.$environment == environment)
+            vmSnapshotQuery.filter(\.$environment == environment)
         }
         let vms = try await vmQuery.all()
         let sandboxes = try await sandboxQuery.all()
         let snapshots = try await snapshotQuery.all()
+        let volumes = try await volumeQuery.all()
+        let volumeSnapshots = try await volumeSnapshotQuery.all()
+        let vmSnapshots = try await vmSnapshotQuery.all()
 
         let snapshotBytes = snapshots.reduce(Int64(0)) { total, snapshot in
             let exported = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
@@ -100,10 +116,13 @@ struct QuotaUsageAggregatorTests {
             vcpus: vms.reduce(0) { $0 + $1.cpu } + sandboxes.reduce(0) { $0 + $1.cpus },
             memoryBytes: vms.reduce(Int64(0)) { $0 + $1.memory }
                 + sandboxes.reduce(Int64(0)) { $0 + $1.memory },
-            storageBytes: vms.reduce(Int64(0)) { $0 + $1.disk } + snapshotBytes,
+            storageBytes: volumes.reduce(Int64(0)) { $0 + $1.size }
+                + volumeSnapshots.reduce(Int64(0)) { $0 + $1.size }
+                + vmSnapshots.reduce(Int64(0)) { $0 + ($1.size ?? 0) }
+                + snapshotBytes,
             vmCount: vms.count,
             sandboxCount: sandboxes.count,
-            volumeCount: 0,
+            volumeCount: volumes.count,
             networkCount: 0
         )
     }
@@ -120,6 +139,7 @@ struct QuotaUsageAggregatorTests {
         #expect(measured.storageBytes == expected.storageBytes, label)
         #expect(measured.vmCount == expected.vmCount, label)
         #expect(measured.sandboxCount == expected.sandboxCount, label)
+        #expect(measured.volumeCount == expected.volumeCount, label)
     }
 
     @Test("Aggregates match a full-row reduce for every scope shape")

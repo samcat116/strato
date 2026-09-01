@@ -58,13 +58,14 @@ struct VolumeAttachmentTests {
         user: User,
         project: Project
     ) async throws -> Volume {
+        let poolID = try await StoragePool.defaultPool(on: app.db).requireID()
         let volume = Volume(
             name: name,
             description: "",
             projectID: try project.requireID(), environment: "development",
             size: 10 * 1024 * 1024 * 1024,
             status: vm == nil ? .available : .attached,
-            createdByID: try user.requireID())
+            createdByID: try user.requireID(), poolID: poolID)
         if let vm {
             volume.$vm.id = try vm.requireID()
             volume.deviceName = deviceName ?? "disk0"
@@ -153,6 +154,7 @@ struct VolumeAttachmentTests {
             // on no agent, so `.stateSync` dispatch degrades the mutation and
             // `resolveForStuckOperation` reverts the attachment behind us.
             let replacement = try await builder.createVM(name: "replacement-vm", project: project)
+            try await attachBootVolume(to: replacement, on: nil, using: app.db)
             try await attach(volume, to: replacement, token: token, on: app, expecting: .accepted)
         }
     }
@@ -181,14 +183,15 @@ struct VolumeAttachmentTests {
     @Test("An attach naming a device that is already taken on the VM is refused")
     func duplicateDeviceNameIsRefused() async throws {
         try await withAttachmentApp { app, _, admin, project, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             try await makeVolume(
-                named: "first-volume", attachedTo: vm, deviceName: "disk0",
+                named: "first-volume", attachedTo: vm, deviceName: "disk1",
                 on: app, user: admin, project: project)
             let second = try await makeVolume(
                 named: "second-volume", on: app, user: admin, project: project)
 
             try await attach(
-                second, to: vm, deviceName: "disk0", token: token, on: app,
+                second, to: vm, deviceName: "disk1", token: token, on: app,
                 expecting: .conflict, reason: "already in use on this VM")
 
             // Refused before anything was written.
@@ -201,6 +204,7 @@ struct VolumeAttachmentTests {
     @Test("An attach naming a device a hypervisor would refuse is rejected at the boundary")
     func illegalDeviceNameIsRejected() async throws {
         try await withAttachmentApp { app, _, admin, project, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             let volume = try await makeVolume(
                 named: "illegal-name-volume", on: app, user: admin, project: project)
 
@@ -321,14 +325,15 @@ struct VolumeAttachmentTests {
     @Test("An attach reusing a boot order already on the VM is refused")
     func duplicateBootOrderIsRefused() async throws {
         try await withAttachmentApp { app, _, admin, project, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             try await makeVolume(
-                named: "boot-first", attachedTo: vm, deviceName: "disk0", bootOrder: 1,
+                named: "boot-first", attachedTo: vm, deviceName: "disk1", bootOrder: 1,
                 on: app, user: admin, project: project)
             let second = try await makeVolume(
                 named: "boot-second", on: app, user: admin, project: project)
 
             try await attach(
-                second, to: vm, deviceName: "disk1", bootOrder: 1, token: token, on: app,
+                second, to: vm, deviceName: "disk2", bootOrder: 1, token: token, on: app,
                 expecting: .conflict, reason: "Boot order 1 is already in use")
         }
     }
@@ -336,6 +341,7 @@ struct VolumeAttachmentTests {
     @Test("A negative boot order is rejected")
     func negativeBootOrderIsRejected() async throws {
         try await withAttachmentApp { app, _, admin, project, vm, token in
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
             let volume = try await makeVolume(
                 named: "negative-boot-order", on: app, user: admin, project: project)
 

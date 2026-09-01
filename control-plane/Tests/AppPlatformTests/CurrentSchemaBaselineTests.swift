@@ -9,7 +9,7 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "6d05e0afd3bcc68a68bb3a17f09b2333"
+    private static let expectedCatalogMD5 = "220eb30af136e3bee2f6f292574ae3f9"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -54,6 +54,25 @@ struct CurrentSchemaBaselineTests {
             let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
 
             let migration = AddGuestAgentEnabledToVM()
+            try await migration.prepare(on: app.db)
+            try await migration.prepare(on: app.db)
+
+            #expect(try await catalogMD5(on: app.db) == catalogBeforeUpgrade)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("The resource-event run upgrade leaves a fresh schema unchanged")
+    func resourceEventRunUpgradeIsIdempotentOnFreshSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            try await CurrentSchemaBaseline().prepare(on: app.db)
+            let catalogBeforeUpgrade = try await catalogMD5(on: app.db)
+
+            let migration = AddRunResourceEventMutation()
             try await migration.prepare(on: app.db)
             try await migration.prepare(on: app.db)
 
