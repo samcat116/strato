@@ -345,6 +345,18 @@ final class UserControllerTests: BaseTestCase {
             #expect(try #require(await SandboxSnapshot.find(sandboxSnapshot.id, on: app.db)).$createdBy.id == nil)
             #expect(try #require(await WebhookSubscription.find(webhook.id, on: app.db)).$createdBy.id == nil)
             #expect(try #require(await SSFStream.find(stream.id, on: app.db)).$createdBy.id == nil)
+
+            // And the surviving artifact stays mutable: its deletion rides
+            // `SnapshotArtifactMutation` through `ResourceMutation.accept`'s
+            // locked whole-model save, which must not write the deleted
+            // creator back into `created_by_id` and trip the FK.
+            try await app.test(
+                .DELETE, "/api/vms/\(try vm.requireID())/snapshots/\(vmSnapshot.id!)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: admin.token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
         }
     }
 
