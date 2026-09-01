@@ -1020,11 +1020,15 @@ package func attachBootVolume(
     // Placement admission requires the boot volume to name its pool; the
     // schema baseline seeds the default pool in every test database.
     let poolID = try await StoragePool.defaultPool(on: db).requireID()
+    // An unplaced volume is still converging: `.attached` and an owning
+    // `attachedAgentId` only once a host actually holds it, matching what
+    // placement writes — adoption repoints ownership by that field.
     let boot = Volume(
         name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
         environment: vm.environment, size: vm.disk, format: .qcow2,
-        volumeType: .boot, status: .attached, createdByID: ownerID,
-        poolID: poolID)
+        volumeType: .boot, status: agentID == nil ? .creating : .attached,
+        createdByID: ownerID, poolID: poolID)
+    boot.attachedAgentId = agentID
     boot.$vm.id = try vm.requireID()
     boot.deviceName = VolumeDeviceName.disk(0).rawValue
     boot.bootOrder = 0
