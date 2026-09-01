@@ -1,0 +1,33 @@
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_65a00e8ad4ab37::t_213fc179b9320b 464-473
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_65a00e8ad4ab37::t_711802f34c9cd8 500-501,505,551
+  s_65a00e8ad4ab37::t_6cc2bf04ad4a13 11-40,127-160,164-166,168-169,171-179,181,183-207,217-225,482-495
+  s_65a00e8ad4ab37::t_1ed492c0e981e3 517-519,563-565
+  s_65a00e8ad4ab37::t_70e8f67a48c03a 210,212
+  s_65a00e8ad4ab37::t_29b462eda36112 91,98
+  s_65a00e8ad4ab37::t_63340204646929 161-163
+  s_65a00e8ad4ab37::t_a521ff93068b2e 226,525-526,528-541,548-549,571-573
+  s_65a00e8ad4ab37::t_daf2044befa2da 209,211,213-216
+  s_65a00e8ad4ab37::t_89a183a1eb11c6 227,527
+  s_65a00e8ad4ab37::t_336dc39889bd46 228-260,262-291,496-499,502-504,506-516,520-524,542-547,550,552-562,566-570
+  s_65a00e8ad4ab37::t_069ad7f1f01dde 261
+  s_65a00e8ad4ab37::t_8e9cf2a4caac1d 167,170,180,182
+  s_65a00e8ad4ab37::t_86b59978e22839 208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3c4aa6f7215ff74da9e34e578f9bc8521cfba94c",
+  "prompts": {},
+  "sessions": {
+    "s_65a00e8ad4ab37": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae3-0bc2-7d01-8347-bcc58cb53596",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    }
+  }
+}
