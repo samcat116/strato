@@ -5,6 +5,22 @@ import NIOCore
 import StratoAgentCore
 import StratoShared
 
+enum DomainNetworkDetachConvergence {
+    static func run(
+        observe: () async throws -> DomainNetworkDetachPlan,
+        detach: (DomainNetworkDetachScope) async throws -> Void
+    ) async throws -> Bool {
+        var didDetach = false
+        // A restart can repopulate live XML from config between steps, so a
+        // plan is valid for one detach only.
+        while let scope = try await observe().scopes.first {
+            didDetach = true
+            try await detach(scope)
+        }
+        return didDetach
+    }
+}
+
 /// The QEMU backend, driven through **libvirtd** (issue #902).
 ///
 /// The only driver `HypervisorType.qemu` has: the agent used to spawn
@@ -1405,22 +1421,16 @@ actor LibvirtService: HypervisorService {
             }
             let macAddress = mac.description
             let dom = try await domain(vmId)
-            let isLive = LibvirtDomain.holdsResources(
-                rawState: try await state(of: dom, vmId: vmId))
-            let liveDomainXML = isLive ? try await domainXML(dom, vmId: vmId) : nil
-            let persistentDomainXML = try await inactiveDomainXML(dom, vmId: vmId)
-            let plan = try DomainNetworkDetachPlan(
-                macAddress: macAddress,
-                liveDomainXML: liveDomainXML,
-                inactiveDomainXML: persistentDomainXML)
-            guard !plan.scopes.isEmpty else {
-                logger.info(
-                    "Network interface is already absent from live and persistent definitions; treating the detach as a no-op",
-                    metadata: ["strato.vm.id": .string(vmId), "mac": .string(macAddress)])
-                return
-            }
-            let xml = DomainDeviceXML.detachNetwork(macAddress: macAddress)
-            for scope in plan.scopes {
+            let didDetach = try await DomainNetworkDetachConvergence.run {
+                let isLive = LibvirtDomain.holdsResources(
+                    rawState: try await state(of: dom, vmId: vmId))
+                let liveDomainXML = isLive ? try await domainXML(dom, vmId: vmId) : nil
+                let persistentDomainXML = try await inactiveDomainXML(dom, vmId: vmId)
+                return try DomainNetworkDetachPlan(
+                    macAddress: macAddress,
+                    liveDomainXML: liveDomainXML,
+                    inactiveDomainXML: persistentDomainXML)
+            } detach: { scope in
                 let stage: String
                 let flags: UInt32
                 switch scope {
@@ -1431,12 +1441,18 @@ actor LibvirtService: HypervisorService {
                     stage = "libvirt-detach-network-config"
                     flags = LibvirtDomain.affectConfig
                 }
+                let xml = DomainDeviceXML.detachNetwork(macAddress: macAddress)
                 try await call(stage, vmId: vmId) { client, deadline in
                     try await client.domainDetachDeviceFlags(
                         dom: dom, xml: xml, flags: flags, deadline: deadline)
                 }
                 try await waitForNetworkInterfaceAbsent(
                     macAddress: macAddress, scope: scope, dom: dom, vmId: vmId)
+            }
+            if !didDetach {
+                logger.info(
+                    "Network interface is already absent from live and persistent definitions; treating the detach as a no-op",
+                    metadata: ["strato.vm.id": .string(vmId), "mac": .string(macAddress)])
             }
         }
     }
