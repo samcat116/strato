@@ -19,6 +19,7 @@ final class VMAuthorizationTests {
     /// membership carries no role binding, so they can list but not read any
     /// VM), plus an org, a project, and one VM.
     private func withVMTestApp(
+        systemAdmin: Bool = false,
         _ test: (Application, User, VM, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
@@ -31,7 +32,7 @@ final class VMAuthorizationTests {
                 username: "vmauthuser",
                 email: "vmauth@example.com",
                 displayName: "VM Auth User",
-                isSystemAdmin: false
+                isSystemAdmin: systemAdmin
             )
             let org = try await builder.createOrganization(name: "VM Auth Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "member")
@@ -120,6 +121,51 @@ final class VMAuthorizationTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
+        }
+    }
+
+    @Test("GET /api/vms/:id returns 404 for a random ID before object authorization")
+    func showMissingVMReturnsNotFound() async throws {
+        try await withVMTestApp(systemAdmin: true) { app, _, _, _, token in
+            let missingVMID = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+
+            try await app.test(.GET, "/api/vms/\(missingVMID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+
+            let objectDecisions = try await IAMDecisionLog.query(on: app.db)
+                .filter(\.$nodeID == missingVMID)
+                .count()
+            #expect(objectDecisions == 0)
+        }
+    }
+
+    @Test("Polling a VM after deletion returns 404")
+    func showDeletedVMReturnsNotFound() async throws {
+        try await withVMTestApp { app, user, vm, project, token in
+            try await self.grant(.viewer, to: user, onProject: project, app: app)
+            let vmID = try vm.requireID()
+
+            // Model the finalizer's terminal delete state: the caller could
+            // read this VM before its row was reaped and keeps polling the same
+            // URL afterward.
+            vm.desiredStatus = .absent
+            try await vm.save(on: app.db)
+            #expect(try await VM.reap(vm, on: app.db, app: app))
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+
+            try await app.test(.GET, "/api/vms/\(vmID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+
+            let objectDecisions = try await IAMDecisionLog.query(on: app.db)
+                .filter(\.$nodeID == vmID)
+                .count()
+            #expect(objectDecisions == 0)
         }
     }
 

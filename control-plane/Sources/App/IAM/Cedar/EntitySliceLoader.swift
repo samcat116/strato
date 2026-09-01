@@ -265,7 +265,8 @@ enum EntitySliceLoader {
             slices[target] = slice(
                 for: target,
                 resolution: resolutions[target.node]
-                    ?? IAMResourceTree.Resolution(chain: [target.node], leaf: IAMLeafFacts()),
+                    ?? IAMResourceTree.Resolution(
+                        chain: [target.node], leaf: IAMLeafFacts(), leafResolved: false),
                 userFacts: userFacts,
                 bindings: bindings,
                 hostsForeignWorkloads: foreignWorkloads[target.node])
