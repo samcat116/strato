@@ -19,7 +19,6 @@ struct OperationWaiterTests {
         status: String, error: String? = nil,
         resourceKind: String = "virtual_machine", kind: String = "boot"
     ) -> String {
-        // Deliberately omit the deprecated `vmId`: generated clients must not require it.
         let errorField = error.map { ", \"error\": \"\($0)\"" } ?? ""
         return """
             {"id": "\(operationID)", "resourceKind": "\(resourceKind)",

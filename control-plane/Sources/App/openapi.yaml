@@ -9859,14 +9859,6 @@ components:
         id:
           type: string
           format: uuid
-        vmId:
-          type: string
-          format: uuid
-          deprecated: true
-          description: >-
-            Deprecated compatibility alias equal to `resourceId`; it remains
-            populated during its deprecation cycle, but clients must use
-            `resourceKind`/`resourceId` instead.
         resourceKind:
           $ref: "#/components/schemas/OperationResourceKind"
         resourceId:

@@ -366,7 +366,8 @@ final class VMOperationTests {
                 let operation = try res.content.decode(OperationResponse.self)
                 #expect(operation.kind == .boot)
                 #expect(operation.status == .failed)
-                #expect(operation.vmId == vm.id)
+                #expect(operation.resourceKind == .virtualMachine)
+                #expect(operation.resourceId == vm.id)
                 #expect(operation.error?.isEmpty == false)
             }
         }
@@ -491,7 +492,8 @@ final class VMOperationTests {
                 #expect(res.status == .ok)
                 let body = try res.content.decode(OperationResponse.self)
                 #expect(body.id == eventID)
-                #expect(body.vmId == vm.id)
+                #expect(body.resourceKind == .virtualMachine)
+                #expect(body.resourceId == vm.id)
             }
 
             // A user with no binding on the VM cannot read its operation.
