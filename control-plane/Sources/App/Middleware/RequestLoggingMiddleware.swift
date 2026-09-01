@@ -26,13 +26,9 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
         }
 
         func log(status: HTTPResponseStatus, error: (any Error)? = nil) {
-            var routeSegments: [String]?
-            if let matchedRoute = request.route {
-                routeSegments = matchedRoute.path.map { "\($0)" }
-            }
             let metadata: Logger.Metadata = [
                 "method": .string(request.method.rawValue),
-                "path": .string(Self.routePath(fromSegments: routeSegments)),
+                "path": .string(request.secretSafeLogPath),
                 "status": .stringConvertible(status.code),
                 "durationMs": .stringConvertible(elapsedMilliseconds()),
             ]
@@ -57,9 +53,29 @@ struct RequestLoggingMiddleware: AsyncMiddleware {
             throw error
         }
     }
+}
 
-    static func routePath(fromSegments segments: [String]?) -> String {
-        guard let segments else { return "unmatched" }
-        return "/" + segments.joined(separator: "/")
+extension Request {
+    /// A path that is safe to copy into process logs.
+    ///
+    /// Prefer the matched route because its parameters remain placeholders. A
+    /// middleware that rejects before routing cannot see `route`; recognize the
+    /// one credential-bearing pre-routing path explicitly and fail closed for
+    /// every other unmatched request rather than logging attacker-controlled
+    /// path components.
+    var secretSafeLogPath: String {
+        if let route {
+            return "/" + route.path.map { "\($0)" }.joined(separator: "/")
+        }
+
+        let components = url.path.split(separator: "/")
+        if components.count == 3,
+            components[0] == "auth",
+            components[1] == "claim"
+        {
+            return "/auth/claim/:token"
+        }
+
+        return "unmatched"
     }
 }

@@ -44,10 +44,13 @@ extension Application {
     /// Replaces Vapor's default route logger, which renders the concrete URL
     /// path before routing and can therefore expose credentials such as account
     /// claim tokens. `RequestLoggingMiddleware` is the sole access log and emits
-    /// only the matched route pattern when request logging is enabled.
+    /// only the matched route pattern when request logging is enabled. The
+    /// sanitizer immediately inside `ErrorMiddleware` also removes concrete
+    /// paths and queries before Vapor reports a thrown request error.
     func installSecretSafeBaseMiddleware() {
         var base = Middlewares()
         base.use(ErrorMiddleware.default(environment: environment))
+        base.use(SecretSafeErrorLogPathMiddleware())
         middleware = base
     }
 
