@@ -126,21 +126,30 @@ public protocol HypervisorService: Actor, Sendable {
     /// for exactly those backends. It exists
     /// for `LibvirtService`, where the domain document is written at create and
     /// the next boot reads *that* rather than the spec: a VM's hot-plug slots,
-    /// its memory headroom, its vCPU maximum, and its persistent disk boot order
-    /// would otherwise remain whatever an older definition recorded.
+    /// its memory headroom, and its vCPU maximum would otherwise remain whatever
+    /// an older definition recorded.
     ///
     /// Called before `bootVM` or a stopped-domain resize, and **never for a VM
     /// being created**, whose configuration was built from this spec moments
     /// earlier. Boot treats it as best effort, since a VM that comes up at the
-    /// ceiling or boot metadata it already had is strictly better than one that
-    /// does not come up; a stopped resize treats failure as incomplete
-    /// convergence. What the rewrite could not deliver surfaces where it is
-    /// actionable — on the attach or resize that wanted it.
+    /// ceiling it already had is strictly better than one that does not come up;
+    /// a stopped resize treats failure as incomplete convergence. What the
+    /// rewrite could not deliver surfaces where it is actionable — on the attach
+    /// or resize that wanted it.
     ///
     /// - Parameters:
     ///   - vmId: The VM identifier
     ///   - spec: The desired spec this boot is converging on
     func redefineVM(vmId: String, spec: VMSpec) async throws
+
+    /// Converges a persistent backend's disk boot metadata before a stopped VM
+    /// boots. Backends that rebuild their VM from the current spec on every
+    /// spawn have no stored definition and use the default no-op.
+    ///
+    /// Unlike `redefineVM`, this is required rather than best effort: booting
+    /// after a failed rewrite can make a VM start from the wrong volume while
+    /// the reconciliation still appears successful.
+    func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws
 
     /// Converges guest-bootstrap state that a persistent backend created with
     /// an older agent before a stopped VM boots. Backends that rebuild their
@@ -476,6 +485,8 @@ public extension HypervisorService {
     /// from a stored configuration) need nothing before a boot: a spawn that
     /// reads the spec has no stored ceiling to widen.
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
+
+    func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws {}
 
     func convergeGuestBootstrap(
         vmId: String, spec: VMSpec,

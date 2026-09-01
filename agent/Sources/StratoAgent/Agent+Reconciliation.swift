@@ -679,7 +679,7 @@ extension Agent: ReconcileActuator {
                 logger.warning(
                     """
                     Could not update this VM's stored configuration before booting it; it starts with the \
-                    hot-plug slots, size ceilings, and disk boot metadata it already had
+                    hot-plug slots and size ceilings it already had
                     """,
                     metadata: [
                         "strato.vm.id": .string(item.id), "error": .string(error.localizedDescription),
@@ -687,6 +687,15 @@ extension Agent: ReconcileActuator {
             }
         }
         do {
+            // A domain created by an older agent may have no persistent disk
+            // boot metadata even though its desired volumes are ordered. This
+            // migration must succeed before boot; otherwise libvirt can start
+            // the VM from the wrong volume while reconciliation reports success.
+            if !item.steps.contains(.create), !item.steps.contains(.restore) {
+                try await service.convergeDiskBootOrder(
+                    vmId: item.id, volumes: desired.spec.volumes)
+            }
+
             // Existing IMDS VMs may carry a seed and persistent definition
             // created before the NoCloudNet bootstrap repair. Re-realizing the
             // NICs is idempotent and gives the provisioner the current guest

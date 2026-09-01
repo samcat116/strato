@@ -85,12 +85,13 @@ enum DomainNetworkDetachConvergence {
 /// any restart.
 ///
 /// `redefineVM` is where that difference goes (STR-187). It runs on a stopped
-/// domain only, widens exactly those three ceilings, and repairs persistent disk
-/// boot order for domains created by older agents. `attachDisk` performs the
-/// same narrow boot-order edit after a device change reaches CONFIG, because
-/// inserting a newly ordered disk may renumber every existing one. Both start
-/// from libvirt's inactive XML and leave every unrelated element as libvirt
-/// wrote it.
+/// domain only and widens exactly those three ceilings. Before boot,
+/// `convergeDiskBootOrder` separately repairs persistent disk boot order for
+/// domains created by older agents; unlike capacity widening, that repair is a
+/// required boot precondition. `attachDisk` performs the same narrow boot-order
+/// edit after a device change reaches CONFIG, because inserting a newly ordered
+/// disk may renumber every existing one. Both boot-order paths start from
+/// libvirt's inactive XML and leave every unrelated element as libvirt wrote it.
 ///
 /// ## Lifecycle events
 ///
@@ -705,9 +706,8 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// Rewrites a stopped domain's definition so it can satisfy `spec`: capacity
-    /// ceilings are widened (STR-187), and persistent disk boot order is repaired
-    /// for attachments that converged before STR-308.
+    /// Rewrites a stopped domain's definition so its capacity ceilings can
+    /// satisfy `spec` (STR-187).
     ///
     /// This is the boot-time persistent-definition rewrite, and the two
     /// conditions guarding it are why that is safe. It runs **only on an
@@ -738,16 +738,12 @@ actor LibvirtService: HypervisorService {
                     "This VM's definition could not be widened to what its spec asks for",
                     metadata: ["strato.vm.id": .string(vmId), "detail": .string(refusal)])
             }
-            let bootOrderXML = try DomainRedefinition.applyingBootOrder(
-                toInactiveDomainXML: widening.xml ?? inactiveXML,
-                volumes: spec.volumes)
-            guard let xml = bootOrderXML ?? widening.xml else { return }
+            guard let xml = widening.xml else { return }
 
             logger.info(
                 "Updating the persistent domain definition before boot",
                 metadata: [
                     "strato.vm.id": .string(vmId),
-                    "diskBootOrderUpdated": .stringConvertible(bootOrderXML != nil),
                     "addedHotplugPorts": .stringConvertible(widening.addedHotplugPorts),
                     "memoryCeilingBytes": widening.memoryCeilingBytes.map {
                         .stringConvertible($0)
@@ -760,6 +756,34 @@ actor LibvirtService: HypervisorService {
                 client, deadline in
                 try await client.domainDefineXML(xml: xml, deadline: deadline)
             }
+        }
+    }
+
+    /// Repairs disk boot metadata in a stopped domain created by an older
+    /// agent. This is separate from the best-effort capacity rewrite above:
+    /// failure must keep the VM stopped so it cannot boot from the wrong disk.
+    func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws {
+        try await perform("converge-disk-boot-order", vmId: vmId) {
+            let dom = try await domain(vmId)
+            guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
+                return
+            }
+
+            guard
+                let persistentXML = try DomainRedefinition.applyingBootOrder(
+                    toInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
+                    volumes: volumes)
+            else { return }
+
+            _ = try await call(
+                "libvirt-define-disk-boot-order", vmId: vmId,
+                seconds: StageBudget.hypervisorSpawnSeconds
+            ) { client, deadline in
+                try await client.domainDefineXML(xml: persistentXML, deadline: deadline)
+            }
+            logger.info(
+                "Updated the persistent libvirt disk boot order before boot",
+                metadata: ["strato.vm.id": .string(vmId)])
         }
     }
 
