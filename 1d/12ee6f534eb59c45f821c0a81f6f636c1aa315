@@ -1,0 +1,19 @@
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_e5ac99cc916fa3::t_b1edb6da8a8412 1023-1025,1029-1031
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1d12ee6f534eb59c45f821c0a81f6f636c1aa315",
+  "prompts": {},
+  "sessions": {
+    "s_e5ac99cc916fa3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1500b831-541e-4965-9195-470335336b8d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
