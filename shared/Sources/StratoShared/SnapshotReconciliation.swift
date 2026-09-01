@@ -171,6 +171,12 @@ public struct DesiredSnapshotState: Codable, Sendable {
     /// How to capture the artifact if it is not here yet. Nil means the
     /// defaults for `kind`.
     public let capture: DesiredSnapshotCapture?
+    /// Volume artifacts only: the backend coordinates that own the snapshot.
+    /// This travels independently of the parent volume entry because a Ceph
+    /// snapshot remains deletable from any configured client agent after the
+    /// parent volume has moved off this host. Nil for VM/sandbox artifacts and
+    /// for pre-v54 senders.
+    public let volumeStorage: DesiredVolumeStorage?
     /// Where a copy of the artifact should also exist, if anywhere.
     public let export: DesiredSnapshotExport?
 
@@ -181,6 +187,7 @@ public struct DesiredSnapshotState: Codable, Sendable {
         desiredStatus: DesiredSnapshotStatus,
         generation: Int64,
         capture: DesiredSnapshotCapture? = nil,
+        volumeStorage: DesiredVolumeStorage? = nil,
         export: DesiredSnapshotExport? = nil
     ) {
         self.snapshotId = snapshotId
@@ -189,6 +196,7 @@ public struct DesiredSnapshotState: Codable, Sendable {
         self.desiredStatus = desiredStatus
         self.generation = generation
         self.capture = capture
+        self.volumeStorage = volumeStorage
         self.export = export
     }
 }

@@ -1385,25 +1385,68 @@ struct ObservedStateApplier {
         // idempotence guard with nothing recorded.
         let wasConverged = volume.isConverged
         let failedBefore = volume.failedGeneration
-
-        try await recordReplicaObservation(
-            volumeID: volumeID, agentId: agentId, observed: observed,
-            desiredGeneration: volume.generation, on: db)
-        let requiredReplicas = try await VolumeReplica.query(on: db)
-            .filter(\.$volume.$id == volumeID)
-            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
-            .all()
-        let allReplicasSettled =
-            !requiredReplicas.isEmpty
-            && requiredReplicas.allSatisfy {
-                $0.state == .healthy && $0.generation >= volume.generation
+        let volumePool = try await VolumeService.pool(of: volume, on: db)
+        let isCeph = volumePool?.mode == .ceph
+        let observedCephAttachment: DiskAttachment?
+        if isCeph, observed.present, let attachment = observed.attachment {
+            guard
+                case .rbd(
+                    let poolName, let imageName, let namespace, let user, let monEndpoints,
+                    let clusterID, let credentialID, let configPath
+                ) = attachment,
+                poolName == volumePool?.cephPoolName,
+                namespace == volumePool?.cephNamespace,
+                clusterID == volumePool?.$cephCluster.id,
+                imageName == CephVolumeStorage.imageName(volumeId: volumeID),
+                let cluster = try await CephCluster.find(clusterID, on: db),
+                monEndpoints == cluster.monEndpoints,
+                configPath
+                    == "/var/lib/strato/ceph/\(clusterID.uuidString.lowercased())/\(credentialID.uuidString.lowercased())/ceph.conf",
+                let access = try await CephProjectAccess.query(on: db)
+                    .filter(\.$keyringSecret.$id == credentialID).first(),
+                access.id == volumePool?.$cephProjectAccess.id,
+                access.$cluster.id == clusterID,
+                user == String(access.clientName.dropFirst("client.".count))
+            else {
+                throw Abort(
+                    .unprocessableEntity,
+                    reason: "Ceph reconciler reported an attachment outside the volume's configured pool or credential")
             }
+            observedCephAttachment = attachment
+        } else {
+            observedCephAttachment = nil
+        }
         let generationBeforeTarget = max(0, volume.generation - 1)
-        let aggregateObservedGeneration =
-            requiredReplicas.map { replica in
-                replica.state == .healthy
-                    ? replica.generation : min(replica.generation, generationBeforeTarget)
-            }.min() ?? 0
+        let allStorageSettled: Bool
+        let aggregateObservedGeneration: Int64
+        if isCeph {
+            allStorageSettled =
+                observed.present
+                && observedCephAttachment != nil
+                && observed.convergencePhase == nil
+                && observed.observedGeneration >= volume.generation
+            aggregateObservedGeneration =
+                observed.present
+                ? observed.observedGeneration : min(observed.observedGeneration, generationBeforeTarget)
+        } else {
+            try await recordReplicaObservation(
+                volumeID: volumeID, agentId: agentId, observed: observed,
+                desiredGeneration: volume.generation, on: db)
+            let requiredReplicas = try await VolumeReplica.query(on: db)
+                .filter(\.$volume.$id == volumeID)
+                .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
+                .all()
+            allStorageSettled =
+                !requiredReplicas.isEmpty
+                && requiredReplicas.allSatisfy {
+                    $0.state == .healthy && $0.generation >= volume.generation
+                }
+            aggregateObservedGeneration =
+                requiredReplicas.map { replica in
+                    replica.state == .healthy
+                        ? replica.generation : min(replica.generation, generationBeforeTarget)
+                }.min() ?? 0
+        }
         let failedAtTarget =
             observed.lastError != nil && observed.failedGeneration == volume.generation
         let nextPhase: String?
@@ -1413,12 +1456,12 @@ struct ObservedStateApplier {
             nextPhase = observed.convergencePhase
             nextError = observed.lastError
             nextFailedGeneration = observed.failedGeneration
-        } else if allReplicasSettled {
+        } else if allStorageSettled {
             nextPhase = nil
             nextError = nil
             nextFailedGeneration = nil
         } else {
-            nextPhase = observed.convergencePhase ?? "waiting for replicas"
+            nextPhase = observed.convergencePhase ?? (isCeph ? "waiting for Ceph image" : "waiting for replicas")
             nextError = volume.errorMessage
             nextFailedGeneration = volume.failedGeneration
         }
@@ -1427,6 +1470,13 @@ struct ObservedStateApplier {
             lastError: nextError,
             failedGeneration: nextFailedGeneration
         )
+
+        if isCeph, let attachment = observedCephAttachment,
+            volume.diskAttachment != attachment
+        {
+            volume.diskAttachment = attachment
+            changed = true
+        }
 
         // The size the image actually has (STR-199) — recorded here for the same
         // reason the path is, and with the same asymmetry as the applied I/O
@@ -1533,7 +1583,7 @@ struct ObservedStateApplier {
         }
 
         // Still converging: progress only, never a settled status.
-        if observed.convergencePhase != nil {
+        if observed.convergencePhase != nil || (isCeph && !allStorageSettled) {
             if changed {
                 try await volume.save(on: db)
             }
@@ -1899,6 +1949,19 @@ struct ObservedStateApplier {
         let volumeID = try volume.requireID()
 
         if volume.desiredStatus == .absent {
+            if try await VolumeService.pool(of: volume, on: db)?.mode == .ceph {
+                switch try await ResourceFinalizerService.clear(
+                    .agentAbsent, from: volume, on: db, app: app)
+                {
+                case .reaped:
+                    app.logger.info(
+                        "Ceph volume deletion confirmed by reconciler; record removed",
+                        metadata: ["volumeId": .string(volumeID.uuidString), "agentId": .string(agentId)])
+                case .held, .alreadyGone, .notTerminating:
+                    break
+                }
+                return
+            }
             // One report only confirms one physical copy is gone. Remove that
             // replica and keep the shared finalizer until every physical copy,
             // including degraded, resyncing, and faulted copies, has

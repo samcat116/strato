@@ -56,15 +56,16 @@ extension Application {
         }
         middleware.use(sessions.middleware)
 
-        // At-rest encryption for all four recoverable-secret columns. Malformed
+        // At-rest encryption for all recoverable-secret tables. Malformed
         // primary or previous keys fail startup. An absent key remains compatible
-        // with never-encrypted deployments; the post-migration audit refuses
-        // startup if any ciphertext already exists.
+        // with never-encrypted legacy deployments; the post-migration audit
+        // refuses startup if ciphertext exists, and Ceph credential writes fail
+        // closed until encryption is enabled.
         let secretsEncryption = try SecretsEncryptionService.fromConfiguration(controlPlaneConfiguration)
         self.secretsEncryption = secretsEncryption
         if !secretsEncryption.isEnabled {
             logger.warning(
-                "STRATO_SECRET_ENCRYPTION_KEY is not set — recoverable OIDC, SSF, registry, and webhook secrets will be stored unencrypted only if this deployment has no existing ciphertext. Generate a key with `openssl rand -hex 32` and set it to enable encryption at rest."
+                "STRATO_SECRET_ENCRYPTION_KEY is not set — legacy recoverable secrets remain compatible only while this deployment has no ciphertext, and Ceph credential writes are disabled. Generate a key with `openssl rand -hex 32` and set it to enable encryption at rest."
             )
         }
 

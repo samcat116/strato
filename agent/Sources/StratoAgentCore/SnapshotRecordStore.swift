@@ -29,6 +29,10 @@ public struct SnapshotRecord: Codable, Sendable, Equatable {
     /// deleting it needs the pair — the agent re-derives an artifact's location
     /// from (parent, snapshot) exactly as it did at capture.
     public let parentId: UUID
+    /// Backend coordinates used for a volume snapshot. Optional so records
+    /// written before wire v54 remain readable; legacy entries fall back to a
+    /// current parent volume only when no authoritative snapshot value exists.
+    public let volumeStorage: DesiredVolumeStorage?
     public var facts: ObservedSnapshotFacts
     /// Whether this host has finished streaming the artifact to the export
     /// slots a sync asked for. Durable, so an agent restart mid-rollout does
@@ -39,14 +43,47 @@ public struct SnapshotRecord: Codable, Sendable, Equatable {
         snapshotId: UUID,
         kind: SnapshotArtifactKind,
         parentId: UUID,
+        volumeStorage: DesiredVolumeStorage? = nil,
         facts: ObservedSnapshotFacts,
         exported: Bool = false
     ) {
         self.snapshotId = snapshotId
         self.kind = kind
         self.parentId = parentId
+        self.volumeStorage = volumeStorage
         self.facts = facts
         self.exported = exported
+    }
+}
+
+/// One ordering for volume-snapshot backend identity, shared by capture and
+/// deletion so a later refactor cannot reintroduce a local default ahead of
+/// the durable Ceph coordinates.
+public enum VolumeSnapshotStorageRouting {
+    public static func resolve(
+        desiredStorage: DesiredVolumeStorage?,
+        recordedStorage: DesiredVolumeStorage?,
+        currentParentStorage: DesiredVolumeStorage?
+    ) -> DesiredVolumeStorage {
+        recordedStorage ?? desiredStorage ?? currentParentStorage ?? .local
+    }
+}
+
+/// Removes durable copies of a revoked Ceph credential from snapshot metadata.
+/// Snapshot records predate the revocation ledger and carry full desired
+/// storage so an off-parent delete can still route; that includes the keyring,
+/// so a credential tombstone must scrub records that are no longer desired.
+public enum SnapshotRecordCredentialScrubber {
+    public static func removing(
+        clusterId: UUID,
+        credentialId: UUID,
+        from records: [UUID: SnapshotRecord]
+    ) -> [UUID: SnapshotRecord] {
+        records.filter { _, record in
+            guard case .ceph(let configuration) = record.volumeStorage else { return true }
+            return configuration.clusterId != clusterId
+                || configuration.credentialId != credentialId
+        }
     }
 }
 
@@ -161,7 +198,12 @@ public struct SnapshotRecordStore: Sendable {
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(
                 Dictionary(uniqueKeysWithValues: records.map { ($0.key.uuidString, $0.value) }))
-            try DurableFileWriter().write(data, to: path)
+            // A volume-snapshot record carries its Ceph desired storage so a
+            // later agent can route deletion after the parent volume moves.
+            // That storage includes the cephx keyring; publish the inventory
+            // with owner-only permissions, including when replacing a legacy
+            // file that was created with the writer's ordinary 0666 mode.
+            try DurableFileWriter().write(data, to: path, permissions: 0o600)
             return true
         } catch {
             logger.error("Failed to write snapshot records at \(path): \(error)")

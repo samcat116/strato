@@ -791,6 +791,11 @@ protocol ReconcilableDesired: Sendable {
     var generation: Int64 { get }
     /// True when the entry asks for the workload to not exist on this host.
     var wantsAbsent: Bool { get }
+    /// Whether an absent local observation still requires a backend delete.
+    /// Most workloads are host-owned, so no observation means there is
+    /// nothing left to delete. Shared storage is different: an RBD snapshot
+    /// can exist in Ceph while this replacement client has no local record.
+    var requiresDeleteWhenUnobserved: Bool { get }
     /// Steps converging `observed` toward this entry's desired status; empty
     /// when the observation already satisfies it.
     func convergenceSteps(from observed: ObservedStatus) -> [ReconcileStep]
@@ -814,6 +819,7 @@ extension ReconcilableDesired {
     /// state to apply them in.
     var edges: DesiredEdges { .none }
     var wantsRunning: Bool { false }
+    var requiresDeleteWhenUnobserved: Bool { false }
 }
 
 extension DesiredVMState: ReconcilableDesired {
@@ -907,6 +913,12 @@ struct FamilyScopedSnapshot<Family: SnapshotArtifactFamily>: ReconcilableDesired
     var workloadId: UUID { entry.snapshotId }
     var generation: Int64 { entry.generation }
     var wantsAbsent: Bool { entry.desiredStatus == .absent }
+    var requiresDeleteWhenUnobserved: Bool {
+        guard wantsAbsent, Family.artifactKind == .volumeSnapshot,
+            case .ceph = entry.volumeStorage
+        else { return false }
+        return true
+    }
     var asTarget: ReconcileTarget { .snapshot(entry) }
 
     /// A freshly captured artifact exists on this host and nowhere else, so the
@@ -2198,7 +2210,11 @@ public actor Reconciler {
                 continue
             case nil:
                 if entry.wantsAbsent {
-                    steps = []  // already absent; just record the generation
+                    // Host-owned bytes are already absent. A namespaced RBD
+                    // snapshot is cluster-owned, however, so a replacement
+                    // client must issue the deterministic idempotent delete
+                    // even though its local SnapshotRecord inventory is empty.
+                    steps = entry.requiresDeleteWhenUnobserved ? [.delete] : []
                 } else {
                     steps = [.create] + entry.convergenceSteps(from: entry.statusAfterCreate)
                 }

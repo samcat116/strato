@@ -121,8 +121,8 @@ struct VolumeController: RouteCollection {
         // reason nothing counted them: a quota's scope predicate filters on it.
         let environment = try project.resolveEnvironment(request.environment)
 
-        // Validate format and volume type
-        let format = try VolumeNaming.parseFormat(request.format)
+        // Validate volume type. Format is pool-dependent and is resolved once
+        // the selected backend is known below.
         let volumeType = try VolumeNaming.parseVolumeType(request.volumeType)
         guard volumeType == .data else {
             throw Abort(
@@ -179,15 +179,19 @@ struct VolumeController: RouteCollection {
 
         try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
 
-        // Every volume lives in a pool; without a pool-selection API yet,
-        // that's the default local pool seeded by migration.
-        let pool = try await StoragePool.defaultPool(on: req.db)
-        guard pool.mode == .local else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Storage pool '\(pool.name)' uses replicated mode, which is not supported by the host-local storage backend"
-            )
+        // Omission preserves the historical default-local behavior exactly.
+        // An explicit Ceph pool must belong to this project through its scoped
+        // access row; a pool id is never an authority shortcut.
+        let pool = try await StoragePool.resolveForCreate(
+            requestedPoolID: request.poolId, projectID: projectId, on: req.db)
+        let format: VolumeFormat
+        if pool.mode == .ceph {
+            format = try request.format.map(VolumeNaming.parseFormat) ?? .raw
+            guard format == .raw else {
+                throw Abort(.badRequest, reason: "Ceph RBD volumes require format 'raw'")
+            }
+        } else {
+            format = try VolumeNaming.parseFormat(request.format)
         }
 
         // Create volume record
@@ -213,7 +217,7 @@ struct VolumeController: RouteCollection {
         let userID = try user.requireID()
         // Bind to a `let` so the `@Sendable` dispatch closure captures an
         // immutable copy rather than the mutable `sourceImage` var.
-        let poolMemberIds = pool.memberAgentIds
+        let poolID = try pool.requireID()
 
         // How long the create has to converge before the stuck-convergence
         // sweep marks the volume degraded, stamped with the insert so a
@@ -278,18 +282,42 @@ struct VolumeController: RouteCollection {
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable db in
                 let agents = await app.agentService.getAgentList()
-                guard
-                    let agentId = VolumeService.selectVolumeAgent(
-                        from: agents, memberAgentIds: poolMemberIds)?.id?.uuidString
-                else {
-                    throw ResourceMutation.WorkError(
-                        "No agent is available to host this volume: it needs an online, "
-                            + "QEMU-capable agent in the volume's local pool.")
+                guard let currentPool = try await StoragePool.find(poolID, on: db) else {
+                    throw ResourceMutation.WorkError("The selected storage pool no longer exists")
                 }
-                try await VolumeReplica(
-                    volumeID: volumeId, agentId: agentId, state: .provisioning
-                ).create(on: db)
-                await app.agentService.syncDesiredState(agentId: agentId)
+                switch currentPool.mode {
+                case .ceph:
+                    guard
+                        let agentId = VolumeService.selectCephReconciler(
+                            from: agents, pool: currentPool)?.id?.uuidString
+                    else {
+                        throw ResourceMutation.WorkError(
+                            "No configured Ceph client is online in storage pool '\(currentPool.name)'.")
+                    }
+                    if try await VolumeService.assignInitialCephReconciler(
+                        volumeID: volumeId,
+                        expectedGeneration: accepted.targetGeneration,
+                        agentID: agentId,
+                        on: db)
+                    {
+                        await app.agentService.syncDesiredState(agentId: agentId)
+                    }
+                case .local:
+                    guard
+                        let agentId = VolumeService.selectVolumeAgent(
+                            from: agents, memberAgentIds: currentPool.memberAgentIds)?.id?.uuidString
+                    else {
+                        throw ResourceMutation.WorkError(
+                            "No agent is available to host this volume: it needs an online, "
+                                + "QEMU-capable agent in the volume's local pool.")
+                    }
+                    try await VolumeReplica(
+                        volumeID: volumeId, agentId: agentId, state: .provisioning
+                    ).create(on: db)
+                    await app.agentService.syncDesiredState(agentId: agentId)
+                case .replicated:
+                    throw ResourceMutation.WorkError("Replicated storage pools are not executable")
+                }
             },
             app: app)
 
@@ -376,11 +404,18 @@ struct VolumeController: RouteCollection {
         let volumeID = try volume.requireID()
         let userID = try user.requireID()
         let app = req.application
+        let volumePool = try await VolumeService.pool(of: volume, on: req.db)
+        let isCeph = volumePool?.mode == .ceph
+        if isCeph, try await reachableAgentHolding(volume, req: req) == nil {
+            throw Abort(.conflict, reason: "No configured Ceph client is online to delete this volume")
+        }
         // Every physical copy owes teardown, regardless of replica health or
         // current agent reachability. Offline agents leave the deletion
         // pending rather than silently orphaning bytes.
-        let physicalAgentIDs = try await VolumeService.agentIDsWithPhysicalReplicas(
-            of: volume, on: req.db)
+        let physicalAgentIDs =
+            isCeph
+            ? volume.reconcilerAgentId.map { [$0] } ?? []
+            : try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: req.db)
         let strategy: ResourceMutation.Dispatch =
             !physicalAgentIDs.isEmpty
             ? .stateSync
@@ -388,8 +423,10 @@ struct VolumeController: RouteCollection {
                 // The initial lookup happens outside ResourceMutation's row
                 // lock. Refuse to reap if a placement raced with it, and drive
                 // the newly discovered copies through desired-state teardown.
-                let racedAgentIDs = try await VolumeService.agentIDsWithPhysicalReplicas(
-                    of: volume, on: db)
+                let racedAgentIDs =
+                    isCeph
+                    ? volume.reconcilerAgentId.map { [$0] } ?? []
+                    : try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: db)
                 if !racedAgentIDs.isEmpty {
                     for agentID in racedAgentIDs {
                         await app.agentService.syncDesiredState(agentId: agentID)
@@ -429,8 +466,12 @@ struct VolumeController: RouteCollection {
             // before the mark, and never re-stamp a terminating volume: doing
             // so would resurrect a token its participants already cleared.
             if !volume.isTerminating {
+                let teardownAgentIDs =
+                    isCeph
+                    ? volume.reconcilerAgentId.map { [$0] } ?? []
+                    : try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: db)
                 volume.finalizers =
-                    try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: db).isEmpty
+                    teardownAgentIDs.isEmpty
                     ? [] : [ResourceFinalizer.agentAbsent.rawValue]
             }
             volume.setDesiredStatus(.absent)
@@ -513,13 +554,22 @@ struct VolumeController: RouteCollection {
         // reconciler to discover: a `400` now is a far better answer than a
         // `202` that degrades a minute later, and the same-agent constraint is
         // a fact about the request, not about convergence.
+        guard let poolForAttachment = try await volume.$pool.get(on: req.db) else {
+            throw Abort(.internalServerError, reason: "Volume references a missing storage pool")
+        }
+        var vmAgentForAttachment: Agent?
         if let vmHypervisorId = vm.hypervisorId {
-            let pool = try await volume.$pool.get(on: req.db)
             let replicaAgentIds = try await VolumeService.agentIDs(holding: volume, on: req.db)
+            guard let vmAgentID = UUID(uuidString: vmHypervisorId),
+                let vmAgent = try await Agent.find(vmAgentID, on: req.db)
+            else {
+                throw Abort(.conflict, reason: "VM's assigned agent no longer exists")
+            }
 
             guard
                 StoragePool.agentCanReach(
-                    agentId: vmHypervisorId, pool: pool, replicaAgentIds: replicaAgentIds)
+                    agent: vmAgent, pool: poolForAttachment,
+                    replicaAgentIds: replicaAgentIds)
             else {
                 throw Abort(
                     .badRequest,
@@ -527,6 +577,13 @@ struct VolumeController: RouteCollection {
                         "Volume is not reachable from the VM's agent. Volume is on '\(replicaAgentIds.joined(separator: ", "))', VM is on '\(vmHypervisorId)'"
                 )
             }
+            vmAgentForAttachment = vmAgent
+        } else if poolForAttachment.mode == .ceph {
+            // Local attachment historically may precede placement. Ceph
+            // cannot: the VM host is the desired-state execution owner, and
+            // accepting without one would leave the volume on its old client
+            // with no later transition that moves it.
+            throw Abort(.conflict, reason: "Ceph attachment requires a placed VM")
         }
 
         // A device name from the request body becomes a hypervisor object id,
@@ -548,10 +605,26 @@ struct VolumeController: RouteCollection {
             throw Abort(.internalServerError, reason: "The volume's project no longer exists")
         }
 
+        let attachmentPoolMode = poolForAttachment.mode
+        let attachmentVMHost = vmAgentForAttachment?.id?.uuidString
+        let previousReconciler = volume.reconcilerAgentId
         let accepted = try await req.resourceMutation.accept(
             .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable tx in
+            if attachmentPoolMode == .ceph,
+                let currentReconciler = volume.reconcilerAgentId,
+                let vmHost = attachmentVMHost,
+                currentReconciler != vmHost,
+                !volume.isConverged
+            {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "The previous Ceph detach has not converged on its current client. "
+                        + "Wait for the volume's observed generation before attaching it on another host.")
+            }
+
             // A cloned or image-backed volume is materialized at the source's
             // virtual size, which can exceed the size the caller requested.
             // Wait until the owning agent has measured it, then reserve any
@@ -597,6 +670,19 @@ struct VolumeController: RouteCollection {
                 bootOrder: bootOrder,
                 readonly: readonly,
                 on: tx)
+            if attachmentPoolMode == .ceph {
+                guard let vmHost = attachmentVMHost else {
+                    throw Abort(.conflict, reason: "Ceph attachment requires a placed VM")
+                }
+                volume.reconcilerAgentId = vmHost
+            }
+        }
+
+        if attachmentPoolMode == .ceph,
+            let previousReconciler,
+            previousReconciler != volume.reconcilerAgentId
+        {
+            await req.application.agentService.syncDesiredState(agentId: previousReconciler)
         }
 
         req.logger.info(
@@ -713,7 +799,7 @@ struct VolumeController: RouteCollection {
                 reason: "New size (\(request.sizeGB) GB) must be larger than current size (\(volume.sizeGB) GB)")
         }
 
-        guard try await VolumeService.agentHolding(volume, on: req.db) != nil else {
+        guard try await reachableAgentHolding(volume, req: req) != nil else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
 
@@ -812,7 +898,7 @@ struct VolumeController: RouteCollection {
 
         try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
 
-        guard try await VolumeService.agentHolding(volume, on: req.db) != nil else {
+        guard try await reachableAgentHolding(volume, req: req) != nil else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
 
@@ -889,11 +975,14 @@ struct VolumeController: RouteCollection {
         // request: a desired entry has to appear in exactly one agent's sync,
         // and a volume that moves must not silently orphan its snapshots into
         // another host's tombstone set.
-        guard let agentId = try await VolumeService.agentHolding(volume, on: req.db) else {
+        guard let agentId = try await reachableAgentHolding(volume, req: req) else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
-        try await SnapshotArtifactMutation.requireCaptureCapableAgent(
-            agentId, kind: .volumeSnapshot, app: req.application)
+        let pool = try await VolumeService.pool(of: volume, on: req.db)
+        if pool?.mode != .ceph {
+            try await SnapshotArtifactMutation.requireCaptureCapableAgent(
+                agentId, kind: .volumeSnapshot, app: req.application)
+        }
 
         let userID = try user.requireID()
         let snapshot = VolumeSnapshot(
@@ -980,10 +1069,12 @@ struct VolumeController: RouteCollection {
         }
         try await requireReadableCloneSource(sourceVolume, on: req.db)
 
-        let sourceAgentIds = try await VolumeService.agentIDs(holding: sourceVolume, on: req.db)
-        guard !sourceAgentIds.isEmpty else {
+        guard let sourceAgentId = try await reachableAgentHolding(sourceVolume, req: req) else {
             throw Abort(.conflict, reason: "Source volume is not provisioned on any hypervisor")
         }
+        let sourceAgentIds = [sourceAgentId]
+        let sourcePool = try await VolumeService.pool(of: sourceVolume, on: req.db)
+        let sourceIsCeph = sourcePool?.mode == .ceph
 
         // The clone is materialized on the source's agent — a clone reads the
         // source's file, so the two must be co-located — and therefore lives in
@@ -1007,6 +1098,9 @@ struct VolumeController: RouteCollection {
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         newVolume.setDesiredStatus(.present)
         newVolume.generation = 1
+        if sourceIsCeph {
+            newVolume.reconcilerAgentId = sourceAgentIds.first
+        }
 
         let userID = try user.requireID()
         // Same create-only transaction as the ordinary volume path: reserve
@@ -1057,11 +1151,13 @@ struct VolumeController: RouteCollection {
             .create, resourceType: Volume.self, resourceID: newVolumeID,
             targetGeneration: accepted.targetGeneration, agentIDs: sourceAgentIds,
             strategy: .placement { @Sendable db in
-                try await db.transaction { tx in
-                    for agentId in sourceAgentIds {
-                        try await VolumeReplica(
-                            volumeID: newVolumeID, agentId: agentId, state: .provisioning
-                        ).create(on: tx)
+                if !sourceIsCeph {
+                    try await db.transaction { tx in
+                        for agentId in sourceAgentIds {
+                            try await VolumeReplica(
+                                volumeID: newVolumeID, agentId: agentId, state: .provisioning
+                            ).create(on: tx)
+                        }
                     }
                 }
                 for agentId in sourceAgentIds {
@@ -1185,6 +1281,18 @@ struct VolumeController: RouteCollection {
     }
 
     // MARK: - Helper Methods
+
+    /// Resolves the current executor and rings the former one when a Ceph
+    /// client failover changes ownership. The new agent is included in the
+    /// mutation's post-commit placement dispatch; the old sync removes this
+    /// volume from its desired set immediately when it is still connected.
+    private func reachableAgentHolding(_ volume: Volume, req: Request) async throws -> String? {
+        let resolution = try await VolumeService.resolveAgentHolding(volume, on: req.db)
+        if resolution.changed, let previous = resolution.previousAgentID {
+            await req.application.agentService.syncDesiredState(agentId: previous)
+        }
+        return resolution.agentID
+    }
 
     /// Fetch a volume and check permission, mirroring
     /// `fetchVMWithAction`/`fetchSandboxWithAction`.

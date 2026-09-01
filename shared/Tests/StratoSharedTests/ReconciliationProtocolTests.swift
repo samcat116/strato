@@ -417,7 +417,8 @@ struct ReconciliationProtocolTests {
         // would have it sweep the site's rows.
         let nonAuthoritative = """
             {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
-             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[]}
+             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[],
+             "cephCredentialRevocations":[]}
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))
