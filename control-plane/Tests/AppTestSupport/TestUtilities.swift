@@ -1014,6 +1014,48 @@ package func placeVolume(
     return replica
 }
 
+/// Attach the canonical managed boot volume to a saved test VM and place it on
+/// the agent. Every live VM must carry exactly one such volume (writable disk0
+/// at boot order 0) or `VMSpecBuilder` refuses to assemble it — since STR-287
+/// the assembler then omits the VM from the sync instead of failing it, so a
+/// test that expects its VM to appear in assembled desired state needs this.
+@discardableResult
+package func attachBootVolume(
+    to vm: VM, on agentID: String?, using db: any Database
+) async throws -> Volume {
+    let ownerID: UUID
+    if let owner = try await User.query(on: db).sort(\.$createdAt).first() {
+        ownerID = try owner.requireID()
+    } else {
+        let owner = try await TestDataBuilder(db: db).createUser(
+            username: "boot-volume-owner", email: "boot-volume-owner@example.com")
+        ownerID = try owner.requireID()
+    }
+    // Placement admission requires the boot volume to name its pool; the
+    // schema baseline seeds the default pool in every test database.
+    let poolID = try await StoragePool.defaultPool(on: db).requireID()
+    // An unplaced volume is still converging: `.attached` and an owning
+    // `attachedAgentId` only once a host actually holds it, matching what
+    // placement writes — adoption repoints ownership by that field.
+    let boot = Volume(
+        name: "\(vm.name)-boot", description: "", projectID: vm.$project.id,
+        environment: vm.environment, size: vm.disk, format: .qcow2,
+        volumeType: .boot, status: agentID == nil ? .creating : .attached,
+        createdByID: ownerID, poolID: poolID)
+    boot.attachedAgentId = agentID
+    boot.$vm.id = try vm.requireID()
+    boot.deviceName = VolumeDeviceName.disk(0).rawValue
+    boot.bootOrder = 0
+    boot.generation = 1
+    boot.observedGeneration = 1
+    try await boot.save(on: db)
+    try await placeVolume(
+        boot, on: agentID,
+        at: "/var/lib/strato/volumes/\(try boot.requireID())/volume.qcow2",
+        state: .healthy, using: db)
+    return boot
+}
+
 private func sqlDatabaseForTest(_ db: any Database) throws -> any SQLDatabase {
     guard let sql = db as? any SQLDatabase else {
         throw TestSetupError.message("conditioned binding fixtures need a SQL database")

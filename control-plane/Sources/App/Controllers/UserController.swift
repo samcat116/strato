@@ -381,15 +381,105 @@ struct UserController: RouteCollection {
         }
 
         try await req.db.transaction { db in
+            // The refusal check runs inside the deletion transaction and locks
+            // every volume the user created, because an attach commits through
+            // `ResourceMutation.accept`'s `SELECT ... FOR UPDATE` on the same
+            // row: an attach in flight either committed first and is counted
+            // here, or waits out this transaction and lands after the user row
+            // is gone — equivalent to attaching after the delete, which the
+            // contract allows. Checked outside the transaction, an attach
+            // could slip between the count and the delete and silently bypass
+            // the documented attached-volume refusal.
+            try await requireDeletableCreatorReferences(userID, on: db)
+
             // Mirror rows (memberships, group memberships, project members)
             // cascade with the user row; role bindings have no FK by design
             // and must be swept by principal — across every org, because a
             // departing user's bindings do not live only in their own org
             // (cross-org bindings, issue #485).
             try await RoleBindingService.revokeAll(principalType: .user, principalID: userID, on: db)
-            try await user.delete(on: db)
+
+            // The pre-flight above and this delete are not one atomic step, so
+            // a token minted in between still fires `scim_tokens`' RESTRICT.
+            // Translate the database's refusal into the same answer the check
+            // gives — the deleteProject pattern — instead of a 500.
+            do {
+                try await user.delete(on: db)
+            } catch let error as any DatabaseError where error.isConstraintFailure {
+                throw Abort(
+                    .conflict,
+                    reason: "Cannot delete user: resources they created still reference them. "
+                        + "Delete those resources first.")
+            }
         }
         return .noContent
+    }
+
+    /// Refuses a delete that live infrastructure or an accountable credential
+    /// still hangs on (STR-297). Creator references are attribution and go
+    /// null with the user (`MakeCreatorReferencesNullable`), so most created
+    /// resources survive their creator untouched. Two cases stay a checked
+    /// `409` naming the remedy:
+    ///
+    /// * a volume the user created that is *attached to a VM* — live storage
+    ///   in active use should be dealt with deliberately, not have its
+    ///   attribution silently dropped while a guest runs against it;
+    /// * a SCIM token, whose FK is deliberately RESTRICT — a provisioning
+    ///   credential is something its creator is accountable for, and the raw
+    ///   constraint violation used to surface as a 500.
+    ///
+    /// Must run inside the deletion transaction. Two locks make the check
+    /// unskippable rather than advisory:
+    ///
+    /// * **the user row first**, because every creator-reference INSERT takes
+    ///   `FOR KEY SHARE` on it through the FK, which conflicts with
+    ///   `FOR UPDATE`. A VM create minting an attached boot volume writes a
+    ///   *new* row with `vm_id` and `created_by_id` already set, so no volume
+    ///   lock can catch it — it either commits before this lock and is
+    ///   scanned below, or waits out the transaction and fails its FK against
+    ///   the deleted row;
+    /// * **every volume the user created**, detached ones included, since
+    ///   those are exactly the rows whose attachment state could otherwise
+    ///   flip between this count and the delete — an attach commits through
+    ///   `ResourceMutation.accept`'s `FOR UPDATE` on the same row.
+    ///
+    /// The SCIM count needs no lock of its own: a token minted concurrently
+    /// now waits on the user-row lock, and the RESTRICT constraint plus the
+    /// caller's `isConstraintFailure` translation backstop it regardless.
+    private func requireDeletableCreatorReferences(_ userID: UUID, on db: Database) async throws {
+        guard let sql = db as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "User deletion requires a SQL database")
+        }
+        _ = try await sql.raw(
+            "SELECT id FROM \(ident: User.schema) WHERE id = \(bind: userID) FOR UPDATE"
+        ).all(decodingColumn: "id", as: UUID.self)
+        let volumeAttachments = try await sql.raw(
+            """
+            SELECT vm_id IS NOT NULL AS attached FROM volumes
+            WHERE created_by_id = \(bind: userID)
+            FOR UPDATE
+            """
+        ).all(decodingColumn: "attached", as: Bool.self)
+        let attachedVolumes = volumeAttachments.count(where: { $0 })
+        if attachedVolumes > 0 {
+            let noun = attachedVolumes == 1 ? "volume" : "volumes"
+            throw Abort(
+                .conflict,
+                reason: "Cannot delete user: \(attachedVolumes) \(noun) they created "
+                    + "\(attachedVolumes == 1 ? "is" : "are") attached to a VM. "
+                    + "Detach or delete those volumes first.")
+        }
+
+        let scimTokens = try await SCIMToken.query(on: db)
+            .filter(\.$createdBy.$id == userID)
+            .count()
+        if scimTokens > 0 {
+            let noun = scimTokens == 1 ? "token" : "tokens"
+            throw Abort(
+                .conflict,
+                reason: "Cannot delete user: they created \(scimTokens) SCIM provisioning \(noun). "
+                    + "Delete those tokens first.")
+        }
     }
 
     // MARK: - WebAuthn Registration

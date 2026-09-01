@@ -3065,7 +3065,11 @@ paths:
     delete:
       operationId: deleteUser
       summary: Delete a user
-      description: Callers may only delete their own account unless they are a system admin.
+      description: >-
+        Callers may only delete their own account unless they are a system admin.
+        Resources the user created survive with their attribution cleared;
+        the delete is refused with `409` while a volume they created is still
+        attached to a VM or a SCIM token they created still exists.
       tags: [Users]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -3073,6 +3077,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/users/me/passkeys:
     get:
       operationId: listMyPasskeys

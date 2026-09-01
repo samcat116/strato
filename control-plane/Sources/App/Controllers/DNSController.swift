@@ -305,7 +305,7 @@ struct DNSController: RouteCollection {
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
                 .conflict,
-                reason: "A \(request.type.rawValue) record with that value already exists at "
+                reason: "\(request.type.recordDescription(capitalized: true)) with that value already exists at "
                     + "'\(DNSName.qualified(name: name, inZone: zone.name))'")
         }
         await req.application.agentService.syncDesiredStateToFleet()
@@ -358,7 +358,7 @@ struct DNSController: RouteCollection {
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
                 .conflict,
-                reason: "A \(record.type.rawValue) record with that value already exists at "
+                reason: "\(record.type.recordDescription(capitalized: true)) with that value already exists at "
                     + "'\(DNSName.qualified(name: record.name, inZone: zone.name))'")
         }
         await req.application.agentService.syncDesiredStateToFleet()

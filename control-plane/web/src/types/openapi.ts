@@ -2040,7 +2040,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a user
-         * @description Callers may only delete their own account unless they are a system admin.
+         * @description Callers may only delete their own account unless they are a system admin. Resources the user created survive with their attribution cleared; the delete is refused with `409` while a volume they created is still attached to a VM or a SCIM token they created still exists.
          */
         delete: operations["deleteUser"];
         options?: never;
@@ -14205,6 +14205,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listMyPasskeys: {

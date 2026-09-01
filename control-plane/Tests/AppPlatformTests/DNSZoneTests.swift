@@ -14,6 +14,10 @@ import AppTestSupport
 @Suite("DNS Zone Tests", .serialized)
 final class DNSZoneTests {
 
+    private struct ErrorBody: Content {
+        let reason: String
+    }
+
     private func withDNSTestApp(
         _ test: (Application, User, Organization, Project, String) async throws -> Void
     ) async throws {
@@ -673,6 +677,68 @@ final class DNSZoneTests {
         }
     }
 
+    @Test("Duplicate RRset values name every record type grammatically on create and update")
+    func duplicateRecordConflictMessages() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let zone = try await createZone(app: app, token: token, project: project)
+            let fixtures: [(type: DNSRecordType, first: String, second: String, description: String)] = [
+                (.a, "192.0.2.10", "192.0.2.11", "An A record"),
+                (.aaaa, "2001:db8::10", "2001:db8::11", "An AAAA record"),
+                (.txt, "first value", "second value", "A TXT record"),
+                (
+                    .srv, "10 5 443 first.acme.internal", "10 5 443 second.acme.internal",
+                    "An SRV record"
+                ),
+                (.ptr, "first.acme.internal", "second.acme.internal", "A PTR record"),
+            ]
+
+            // CNAME is deliberately absent: its owner-name exclusivity rule
+            // prevents a second CNAME from joining an RRset, so neither unique
+            // constraint handler is reachable for that type.
+            for fixture in fixtures {
+                let owner = "duplicate-\(fixture.type.rawValue.lowercased())"
+                var secondID: UUID?
+                for (value, captureID) in [(fixture.first, false), (fixture.second, true)] {
+                    try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        try req.content.encode(
+                            CreateDNSRecordRequest(name: owner, type: fixture.type, value: value))
+                    } afterResponse: { res in
+                        #expect(res.status == .ok)
+                        if captureID {
+                            secondID = try res.content.decode(DNSRecordResponse.self).id
+                        }
+                    }
+                }
+
+                let expected =
+                    "\(fixture.description) with that value already exists at "
+                    + "'\(owner).acme.internal'"
+                try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateDNSRecordRequest(
+                            name: owner, type: fixture.type, value: fixture.first))
+                } afterResponse: { res in
+                    #expect(res.status == .conflict)
+                    let reason = try res.content.decode(ErrorBody.self).reason
+                    #expect(reason == expected)
+                }
+
+                try await app.test(
+                    .PUT, "/api/dns-zones/\(zone.id)/records/\(try #require(secondID))"
+                ) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateDNSRecordRequest(value: fixture.first))
+                } afterResponse: { res in
+                    #expect(res.status == .conflict)
+                    let reason = try res.content.decode(ErrorBody.self).reason
+                    #expect(reason == expected)
+                }
+            }
+        }
+    }
+
     @Test("An RRset shares one TTL and view, on write and through the assembler")
     func rrsetSettingsAreUniform() async throws {
         try await withDNSTestApp { app, _, _, project, token in
@@ -1125,6 +1191,65 @@ final class DNSZoneTests {
             #expect(reloaded.$primaryDNSZone.id == nil)
             let attachments = try await DNSZoneNetwork.query(on: app.db).count()
             #expect(attachments == 0)
+        }
+    }
+
+    @Test("Primary-zone promotion names every clashing record type grammatically")
+    func primaryAssignmentRecordConflictMessages() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let fixtures: [(type: DNSRecordType, value: String, description: String)] = [
+                (.a, "192.0.2.10", "an A record"),
+                (.aaaa, "2001:db8::10", "an AAAA record"),
+                (.cname, "target.example.test", "a CNAME record"),
+                (.txt, "promotion guard", "a TXT record"),
+                (.srv, "10 5 443 target.example.test", "an SRV record"),
+                (.ptr, "target.example.test", "a PTR record"),
+            ]
+
+            for fixture in fixtures {
+                let label = fixture.type.rawValue.lowercased()
+                let zoneName = "promotion-\(label).internal"
+                let zone = try await createZone(
+                    app: app, token: token, project: project, name: zoneName)
+                let network = try await builder.createNetwork(
+                    name: "promotion-\(label)", project: project)
+                let networkID = try network.requireID()
+                try await createVM(
+                    app: app, project: project, network: network, hostname: "shared-host",
+                    addresses: [("192.168.1.70", .ipv4, 24)])
+
+                try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateDNSRecordRequest(
+                            name: "shared-host", type: fixture.type, value: fixture.value))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+
+                let expected =
+                    "Zone '\(zoneName)' already has \(fixture.description) at "
+                    + "'shared-host', which a VM on this network would register as; delete the "
+                    + "record or rename the VM first"
+                try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        AttachDNSZoneRequest(networkId: networkID, primary: true))
+                } afterResponse: { res in
+                    #expect(res.status == .conflict)
+                    let reason = try res.content.decode(ErrorBody.self).reason
+                    #expect(reason == expected)
+                }
+
+                let reloaded = try #require(
+                    try await LogicalNetwork.find(networkID, on: app.db))
+                #expect(reloaded.$primaryDNSZone.id == nil)
+                let attachmentCount = try await DNSZoneNetwork.query(on: app.db)
+                    .filter(\.$logicalNetwork.$id == networkID)
+                    .count()
+                #expect(attachmentCount == 0)
+            }
         }
     }
 

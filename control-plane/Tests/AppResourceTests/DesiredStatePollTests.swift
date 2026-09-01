@@ -42,7 +42,21 @@ struct DesiredStatePollTests {
         siteID: UUID? = nil,
         organizationID: UUID? = nil
     ) async throws -> Agent {
-        try await TestDataBuilder(db: app.db).createAgent(
+        let builder = TestDataBuilder(db: app.db)
+        // Agents are organization-scoped, and most of these tests register
+        // theirs before creating any org — the transport under test doesn't
+        // care which org the agent lives in, so make sure one exists.
+        let scopeID: UUID
+        if let organizationID {
+            scopeID = organizationID
+        } else if let existing = try await Organization.query(on: app.db)
+            .sort(\.$createdAt).first()
+        {
+            scopeID = try existing.requireID()
+        } else {
+            scopeID = try await builder.createOrganization(name: "Poll Fixture Org").requireID()
+        }
+        return try await builder.createAgent(
             named: name,
             hostname: "\(name).test",
             resources: AgentResources(
@@ -50,7 +64,7 @@ struct DesiredStatePollTests {
                 totalMemory: 1 << 33, availableMemory: 1 << 33,
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
             siteID: siteID,
-            organizationScope: organizationID.map(OrganizationScope.organization))
+            organizationScope: .organization(scopeID))
     }
 
     private func poll(
@@ -90,6 +104,7 @@ struct DesiredStatePollTests {
             let vm = try await builder.createVM(name: "poll-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agent.id!.uuidString, using: app.db)
 
             let response = try await self.poll(app: app, port: port)
 
@@ -293,6 +308,7 @@ struct DesiredStatePollTests {
             let vm = try await builder.createVM(name: "doorbell-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agent.id!.uuidString, using: app.db)
 
             await app.agentService.syncDesiredState(agentId: agent.id!.uuidString)
 
@@ -429,6 +445,7 @@ struct DesiredStatePollTests {
             let vm = try await builder.createVM(name: "burst-vm", project: project)
             vm.hypervisorId = agent.id!.uuidString
             try await vm.save(on: app.db)
+            try await attachBootVolume(to: vm, on: agent.id!.uuidString, using: app.db)
 
             // Twenty rings back to back, well inside the coalescing window.
             for _ in 0..<20 {

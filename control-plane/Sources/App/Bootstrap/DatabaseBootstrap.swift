@@ -134,6 +134,10 @@ extension Application {
         // eligibility intent. Missing disks remain rows until their agent is removed.
         migrations.add(CreateStorageDevices())
 
+        // STR-300: Fluent binds `[StorageDeviceUse]` as `text[]`; repair the
+        // original `jsonb[]` column so non-empty agent inventories can persist.
+        migrations.add(FixStorageDeviceUsesArrayType())
+
         // STR-288: one fleet-wide ledger owns VM and sandbox NIC MAC uniqueness.
         // Existing addresses are retained exactly; incompatible legacy rows make
         // this migration fail closed with their interface ids.
@@ -168,5 +172,11 @@ extension Application {
         // enqueue time across mixed-version drop retention, and add the partial
         // queue index used by fair claims and per-subscription shedding.
         migrations.add(AddWebhookDeliveryClaimLease())
+
+        // STR-297: creator references are attribution, not ownership. Deleting a
+        // user must never cascade their volumes, snapshots or images away — nor
+        // be blocked by an unhandled constraint on the tables that declared no
+        // rule.
+        migrations.add(MakeCreatorReferencesNullable())
     }
 }

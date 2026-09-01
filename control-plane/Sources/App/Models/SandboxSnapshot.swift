@@ -171,8 +171,9 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     @OptionalField(key: "expires_at")
     var expiresAt: Date?
 
-    @Parent(key: "created_by_id")
-    var createdBy: User
+    // Attribution, not ownership (STR-297): nulled when the creator is deleted.
+    @OptionalParent(key: "created_by_id")
+    var createdBy: User?
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
