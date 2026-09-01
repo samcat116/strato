@@ -109,6 +109,17 @@ use in code, tests, docs, and review. Architecture-level maps live in
   conditions (`OperationFacade`). Kept because a **delete**'s outcome is the one
   a resource cannot report about itself.
 
+- **Creator reference** — `created_by_id` (`images.uploaded_by_id`): the
+  convenience join a list view renders, *attribution rather than ownership*.
+  Nullable and `ON DELETE SET NULL` everywhere (STR-297) — deleting a user
+  nulls the reference and must never delete or block the resource it points
+  at, because half the schema once said otherwise: a CASCADE here silently
+  destroyed volumes, snapshots and images, and the reconciler then tombstoned
+  the surviving bytes as strays. Durable attribution is the resource event,
+  never this column. Two checked exceptions in `UserController.delete`, both
+  `409`s naming a remedy: a SCIM token (its FK stays RESTRICT — a credential
+  the creator is accountable for) and a volume still attached to a VM.
+
 - **AgentDispatch** — the seam a mutation depends on to reach agents
   (`agentIsOnline`, `syncDesiredState`). Production adapter: `AgentService`.
   Test adapter: an in-memory fake, so the accept path is testable without an

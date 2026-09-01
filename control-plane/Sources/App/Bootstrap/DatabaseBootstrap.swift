@@ -168,5 +168,11 @@ extension Application {
         // enqueue time across mixed-version drop retention, and add the partial
         // queue index used by fair claims and per-subscription shedding.
         migrations.add(AddWebhookDeliveryClaimLease())
+
+        // STR-297: creator references are attribution, not ownership. Deleting a
+        // user must never cascade their volumes, snapshots or images away — nor
+        // be blocked by an unhandled constraint on the tables that declared no
+        // rule.
+        migrations.add(MakeCreatorReferencesNullable())
     }
 }

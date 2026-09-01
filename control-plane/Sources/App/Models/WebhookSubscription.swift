@@ -57,8 +57,9 @@ final class WebhookSubscription: Model, @unchecked Sendable {
     @OptionalField(key: "failing_since")
     var failingSince: Date?
 
-    @Parent(key: "created_by_id")
-    var createdBy: User
+    // Attribution, not ownership (STR-297): nulled when the creator is deleted.
+    @OptionalParent(key: "created_by_id")
+    var createdBy: User?
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
