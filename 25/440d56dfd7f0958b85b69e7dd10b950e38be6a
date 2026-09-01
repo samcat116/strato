@@ -1,0 +1,25 @@
+control-plane/Sources/App/Services/OperationFacade.swift
+  s_06678f2411899f::t_e4848bb32a05e1 410
+  s_06678f2411899f::t_0b1abf7e684faa 411-413
+control-plane/Tests/AppResourceTests/OperationResponseContractTests.swift
+  s_06678f2411899f::t_e4848bb32a05e1 8-9,25-26,28,32-33
+  s_06678f2411899f::t_3ac8f411b05da5 24
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_06678f2411899f::t_410efb8a99c774 347-348,473-474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "25440d56dfd7f0958b85b69e7dd10b950e38be6a",
+  "prompts": {},
+  "sessions": {
+    "s_06678f2411899f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a71-2d9a-77c1-ba69-ee7b0359f87e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
