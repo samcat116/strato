@@ -1,0 +1,41 @@
+.claude/settings.json
+  s_e96ba4ae06c4bf::t_2e772d9cb602fb 7-48,51,56-70,74-89
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_a6d4dbdf06299d::t_c57f3c388216ee 132,134,167,203-204,206,229,231
+  s_a6d4dbdf06299d::t_4fe3ce3669aefa 58-63,88,133,148,168,205,230
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_a6d4dbdf06299d::t_c57f3c388216ee 268
+  s_a6d4dbdf06299d::t_4fe3ce3669aefa 269
+control-plane/Tests/AppIAMTests/VMAuthorizationTests.swift
+  s_a6d4dbdf06299d::t_60f5ad3fe55311 154
+  s_a6d4dbdf06299d::t_737b05d03cee2c 148,151-153,155-156
+  s_a6d4dbdf06299d::t_baeea12b005c88 127-128,130-147,149-150,157-171
+  s_a6d4dbdf06299d::t_c57f3c388216ee 22,35,129
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_a6d4dbdf06299d::t_c57f3c388216ee 476-484,486-487
+  s_a6d4dbdf06299d::t_4fe3ce3669aefa 485
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "5cbb9efb737b4714eb58908ce244f958b341b261",
+  "prompts": {},
+  "sessions": {
+    "s_a6d4dbdf06299d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a8a-3a5e-7ef0-99ae-211f09fe6e32",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
