@@ -485,34 +485,59 @@ struct WebhookOutboxTests {
         }
     }
 
-    @Test("A manually re-enqueued delivery displaces older pending work at the ceiling")
-    func protectedRedeliveryRemainsPendingAtCeiling() async throws {
+    @Test("A manually re-enqueued delivery remains newer than existing pending work")
+    func manualRedeliveryRefreshesQueueOrder() async throws {
         try await withTestApp { app in
             let fixture = try await makeFixture(app)
             let subscription = try await makeSubscription(app, fixture: fixture)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let originalEnqueueTime = Date().addingTimeInterval(-3 * 3_600)
             let redelivered = WebhookDelivery(
                 subscriptionID: subscription.id!, eventID: UUID(),
                 eventType: .webhookTest, payload: "{\"redelivered\":true}")
             redelivered.status = WebhookDeliveryStatus.dropped.rawValue
             redelivered.lastError = WebhookOutbox.droppedReason(limit: 2)
             try await redelivered.save(on: app.db)
+            try await sql.raw(
+                """
+                UPDATE webhook_deliveries
+                SET enqueued_at = \(bind: originalEnqueueTime),
+                    created_at = \(bind: originalEnqueueTime)
+                WHERE id = \(bind: redelivered.id!)
+                """
+            ).run()
 
             for index in 0..<2 {
                 let pending = WebhookDelivery(
                     subscriptionID: subscription.id!, eventID: UUID(),
                     eventType: .webhookTest, payload: "{\"pending\":\(index)}")
                 try await pending.save(on: app.db)
+                let pendingCreatedAt = Date().addingTimeInterval(Double(index - 2) * 3_600)
+                try await sql.raw(
+                    """
+                    UPDATE webhook_deliveries
+                    SET created_at = \(bind: pendingCreatedAt)
+                    WHERE id = \(bind: pending.id!)
+                    """
+                ).run()
             }
 
+            let path =
+                "/api/organizations/\(fixture.organization.id!.uuidString)"
+                + "/webhooks/\(subscription.id!.uuidString)"
+                + "/deliveries/\(redelivered.id!.uuidString)/redeliver"
+            try await app.test(.POST, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.apiToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // Model the next enqueue's ceiling pass, where the manual
+            // redelivery is no longer protected by its original transaction.
             try await app.db.transaction { tx in
                 try await WebhookOutbox.lockSubscriptions([subscription.id!], on: tx)
-                redelivered.status = WebhookDeliveryStatus.pending.rawValue
-                redelivered.lastError = nil
-                redelivered.nextAttemptAt = Date()
-                try await redelivered.save(on: tx)
                 try await WebhookOutbox.enforcePendingCeiling(
-                    for: [subscription.id!], pendingLimit: 2,
-                    protecting: redelivered.id!, on: tx)
+                    for: [subscription.id!], pendingLimit: 2, on: tx)
             }
 
             let rows = try await WebhookDelivery.query(on: app.db).all()
@@ -521,6 +546,9 @@ struct WebhookOutboxTests {
             let reloaded = try #require(
                 try await WebhookDelivery.find(redelivered.id, on: app.db))
             #expect(reloaded.statusValue == .pending)
+            #expect(try #require(reloaded.createdAt) > Date().addingTimeInterval(-60))
+            #expect(
+                abs(try #require(reloaded.enqueuedAt).timeIntervalSince(originalEnqueueTime)) < 0.01)
         }
     }
 

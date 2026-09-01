@@ -229,9 +229,16 @@ struct WebhookSubscriptionController: RouteCollection {
                 throw Abort(.conflict, reason: "Delivery is already pending")
             }
 
+            let requeuedAt = Date()
             delivery.status = WebhookDeliveryStatus.pending.rawValue
             delivery.attempts = 0
-            delivery.nextAttemptAt = Date()
+            delivery.nextAttemptAt = requeuedAt
+            // `created_at` is the pending-queue ordering timestamp during the
+            // compatibility rollout. Refresh it when terminal work re-enters
+            // the queue so a later ceiling pass does not immediately shed the
+            // redelivery as the oldest pending row. `enqueued_at` remains the
+            // immutable timestamp returned by the delivery API.
+            delivery.createdAt = requeuedAt
             delivery.claimedUntil = nil
             delivery.lastAttemptAt = nil
             delivery.responseStatus = nil
