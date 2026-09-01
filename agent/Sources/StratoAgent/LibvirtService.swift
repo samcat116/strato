@@ -84,12 +84,14 @@ enum DomainNetworkDetachConvergence {
 /// driver, which re-spawned from the current spec and so widened all three on
 /// any restart.
 ///
-/// `redefineVM` is where that difference goes (STR-187). It is the **one** other
-/// place the document is written, it runs on a stopped domain only, and it
-/// widens exactly those three ceilings — leaving every other element of the
-/// document as libvirt wrote it. So the remedy for all of them is now "stop and
-/// start the VM", which is what `attachDisk` and `resizeMemory` say when they
-/// hit one.
+/// `redefineVM` is where that difference goes (STR-187). It runs on a stopped
+/// domain only and widens exactly those three ceilings. Before boot,
+/// `convergeDiskBootOrder` separately repairs persistent disk boot order for
+/// domains created by older agents; unlike capacity widening, that repair is a
+/// required boot precondition. `attachDisk` performs the same narrow boot-order
+/// edit after a device change reaches CONFIG, because inserting a newly ordered
+/// disk may renumber every existing one. Both boot-order paths start from
+/// libvirt's inactive XML and leave every unrelated element as libvirt wrote it.
 ///
 /// ## Lifecycle events
 ///
@@ -704,12 +706,11 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// Rewrites a stopped domain's definition so it can satisfy `spec`
-    /// (STR-187) — see `DomainRedefinition` for what that means and, more to the
-    /// point, for what it deliberately leaves alone.
+    /// Rewrites a stopped domain's definition so its capacity ceilings can
+    /// satisfy `spec` (STR-187).
     ///
-    /// This is the one place the domain document is written a second time, and
-    /// the two conditions guarding it are why that is safe. It runs **only on an
+    /// This is the boot-time persistent-definition rewrite, and the two
+    /// conditions guarding it are why that is safe. It runs **only on an
     /// inactive domain**, because the ports it counts are the ones libvirt's own
     /// address allocator assigned and a running domain's document describes a
     /// guest that is already holding them; and it defines **only a document that
@@ -729,9 +730,9 @@ actor LibvirtService: HypervisorService {
                 return
             }
 
+            let inactiveXML = try await inactiveDomainXML(dom, vmId: vmId)
             let widening = try DomainRedefinition.widening(
-                forInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
-                spec: spec, architecture: .current)
+                forInactiveDomainXML: inactiveXML, spec: spec, architecture: .current)
             for refusal in widening.refusals {
                 logger.warning(
                     "This VM's definition could not be widened to what its spec asks for",
@@ -740,7 +741,7 @@ actor LibvirtService: HypervisorService {
             guard let xml = widening.xml else { return }
 
             logger.info(
-                "Widening the domain definition before boot",
+                "Updating the persistent domain definition before boot",
                 metadata: [
                     "strato.vm.id": .string(vmId),
                     "addedHotplugPorts": .stringConvertible(widening.addedHotplugPorts),
@@ -755,6 +756,31 @@ actor LibvirtService: HypervisorService {
                 client, deadline in
                 try await client.domainDefineXML(xml: xml, deadline: deadline)
             }
+        }
+    }
+
+    /// Repairs disk boot metadata in the persistent definition, including while
+    /// its live domain is running. This is separate from the best-effort
+    /// capacity rewrite above: failure must prevent the next start or restart
+    /// so the VM cannot boot from the wrong disk.
+    func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws {
+        try await perform("converge-disk-boot-order", vmId: vmId) {
+            let dom = try await domain(vmId)
+            guard
+                let persistentXML = try DomainRedefinition.applyingBootOrder(
+                    toInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
+                    volumes: volumes)
+            else { return }
+
+            _ = try await call(
+                "libvirt-define-disk-boot-order", vmId: vmId,
+                seconds: StageBudget.hypervisorSpawnSeconds
+            ) { client, deadline in
+                try await client.domainDefineXML(xml: persistentXML, deadline: deadline)
+            }
+            logger.info(
+                "Updated the persistent libvirt disk boot order for the next start",
+                metadata: ["strato.vm.id": .string(vmId)])
         }
     }
 
@@ -926,32 +952,22 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// Reboots the guest, treating a domain that is already down as satisfying
-    /// the request.
+    /// Restarts the guest from its persistent definition.
     ///
-    /// That is not leniency, it is STR-151's semantics: a reboot is an edge
-    /// nonce, consumed by being *performed or superseded*, and a stop or a boot
-    /// supersedes it. `virDomainReboot` answers `VIR_ERR_OPERATION_INVALID` on
-    /// an inactive domain, so a reboot that lands in the window just after the
-    /// guest powered itself off would otherwise fail the lane and strand the
-    /// nonce — while the reconciler is about to boot the VM anyway, which is
-    /// the very thing the request wanted.
+    /// `virDomainReboot` continues the live instance and therefore preserves
+    /// the boot metadata it had when it started. That is wrong after a live disk
+    /// attachment changes the persistent order: the CONFIG definition is ready
+    /// for the next boot, but the live device fragments intentionally have no
+    /// `<boot>` elements. A bounded graceful shutdown followed by `domainCreate`
+    /// makes the reboot consume the repaired persistent definition. Both calls
+    /// already treat a domain that crossed the boundary concurrently as having
+    /// satisfied that half of the restart.
     func rebootVM(vmId: String) async throws {
-        try await perform("reboot", vmId: vmId) {
-            let dom = try await domain(vmId)
-            logger.info("Rebooting libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
-            do {
-                try await call("libvirt-reboot", vmId: vmId) { client, deadline in
-                    try await client.domainReboot(dom: dom, flags: 0, deadline: deadline)
-                }
-            } catch let error where LibvirtFailure.isOperationInvalid(error) {
-                guard try await satisfied(dom, vmId: vmId, by: { !LibvirtDomain.holdsResources(rawState: $0) })
-                else { throw error }
-                logger.info(
-                    "libvirt domain is already down; the reboot is superseded by the boot that follows",
-                    metadata: ["strato.vm.id": .string(vmId)])
-            }
-        }
+        logger.info(
+            "Restarting libvirt domain from its persistent definition",
+            metadata: ["strato.vm.id": .string(vmId)])
+        try await shutdownVM(vmId: vmId)
+        try await bootVM(vmId: vmId)
     }
 
     func pauseVM(vmId: String) async throws {
@@ -1466,65 +1482,90 @@ actor LibvirtService: HypervisorService {
     /// time. Asking the domain which names it has taken is the only answer that
     /// cannot collide.
     ///
-    /// Idempotent: a volume whose serial the domain already carries has nothing
-    /// to do. That matters because attaches are level-triggered and replayed —
-    /// without it a redelivered sync would give the guest the same disk twice
-    /// under two names.
+    /// Idempotent: a volume whose serial the domain already carries is not
+    /// attached twice, but its persistent boot metadata is still reconciled.
+    /// That second half repairs a retry after the device landed but the
+    /// definition rewrite failed.
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool
+        readonly: Bool, orderedBootVolumeIds: [String]
     ) async throws {
         try await perform("attach-disk", vmId: vmId) {
             let dom = try await domain(vmId)
             let disks = try await domainDisks(dom, vmId: vmId)
             if let existing = DomainDiskInventory.disk(forVolume: volumeId, in: disks) {
                 logger.info(
-                    "Volume is already attached to this domain; treating the attach as a no-op",
+                    "Volume is already attached to this domain; reconciling its persistent boot order",
                     metadata: [
                         "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
                         "target": .string(existing.target),
                     ])
-                return
-            }
+            } else {
+                let target = DomainDiskInventory.nextTargetDevice(after: disks)
+                let xml = DomainDeviceXML.hotplugDisk(
+                    attachment: attachment, target: target, readonly: readonly, volumeId: volumeId)
+                let flags = try await deviceFlags(dom, vmId: vmId)
 
-            let target = DomainDiskInventory.nextTargetDevice(after: disks)
-            let xml = DomainDeviceXML.hotplugDisk(
-                attachment: attachment, target: target, readonly: readonly, volumeId: volumeId)
-            let flags = try await deviceFlags(dom, vmId: vmId)
-
-            logger.info(
-                "Attaching disk to libvirt domain",
-                metadata: [
-                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
-                    "deviceName": .string(deviceName), "target": .string(target),
-                    "attachment": .string(String(describing: attachment)),
-                    "readonly": .stringConvertible(readonly),
-                ])
-            do {
-                try await call("libvirt-attach-disk", vmId: vmId) { client, deadline in
-                    try await client.domainAttachDeviceFlags(
-                        dom: dom, xml: xml, flags: flags, deadline: deadline)
+                logger.info(
+                    "Attaching disk to libvirt domain",
+                    metadata: [
+                        "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
+                        "deviceName": .string(deviceName), "target": .string(target),
+                        "attachment": .string(String(describing: attachment)),
+                        "readonly": .stringConvertible(readonly),
+                    ])
+                do {
+                    try await call("libvirt-attach-disk", vmId: vmId) { client, deadline in
+                        try await client.domainAttachDeviceFlags(
+                            dom: dom, xml: xml, flags: flags, deadline: deadline)
+                    }
+                } catch let error where LibvirtFailure.isPCISlotsExhausted(error) {
+                    // libvirt's own text is accurate and completely unactionable:
+                    // it names a full root complex without saying that the complex
+                    // cannot be grown under a running guest, so the natural response
+                    // — retry, or free something — is wasted. The remedy is a power
+                    // cycle, and it is one only because `redefineVM` tops the spare
+                    // ports back up before every boot (STR-187); before that the
+                    // only remedy was recreating the VM. Every VM defined before
+                    // STR-192 reserved no usable spares at all, so this is the
+                    // fleet's error until each of those has been stopped once.
+                    throw HypervisorServiceError.invalidConfiguration(
+                        "VM \(vmId) has no free PCIe root port to attach volume \(volumeId) into. A running "
+                            + "domain's ports cannot be added to, so this will not succeed on retry: stop and start "
+                            + "the VM, which redefines it with fresh spare ports, or attach the volume while it is "
+                            + "stopped.")
                 }
-            } catch let error where LibvirtFailure.isPCISlotsExhausted(error) {
-                // libvirt's own text is accurate and completely unactionable:
-                // it names a full root complex without saying that the complex
-                // cannot be grown under a running guest, so the natural response
-                // — retry, or free something — is wasted. The remedy is a power
-                // cycle, and it is one only because `redefineVM` tops the spare
-                // ports back up before every boot (STR-187); before that the
-                // only remedy was recreating the VM. Every VM defined before
-                // STR-192 reserved no usable spares at all, so this is the
-                // fleet's error until each of those has been stopped once.
-                throw HypervisorServiceError.invalidConfiguration(
-                    "VM \(vmId) has no free PCIe root port to attach volume \(volumeId) into. A running "
-                        + "domain's ports cannot be added to, so this will not succeed on retry: stop and start "
-                        + "the VM, which redefines it with fresh spare ports, or attach the volume while it is "
-                        + "stopped.")
+                logger.info(
+                    "Disk attached",
+                    metadata: [
+                        "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
+                        "target": .string(target),
+                    ])
+            }
+
+            // A live hot-plug cannot change what the guest already booted
+            // from, so its device fragment intentionally carries no `<boot>`.
+            // The CONFIG half above first makes the new disk durable; this
+            // single redefine then renumbers the complete inactive disk set
+            // atomically for the next boot. It also runs on idempotent retries,
+            // repairing a prior attach whose redefine failed after the device
+            // itself had already landed.
+            guard
+                let persistentXML = try DomainRedefinition.applyingBootOrder(
+                    toInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
+                    orderedVolumeIds: orderedBootVolumeIds)
+            else { return }
+            _ = try await call(
+                "libvirt-define-disk-boot-order", vmId: vmId,
+                seconds: StageBudget.hypervisorSpawnSeconds
+            ) { client, deadline in
+                try await client.domainDefineXML(xml: persistentXML, deadline: deadline)
             }
             logger.info(
-                "Disk attached",
+                "Updated the persistent libvirt disk boot order",
                 metadata: [
-                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId), "target": .string(target),
+                    "strato.vm.id": .string(vmId),
+                    "orderedVolumeIds": .string(orderedBootVolumeIds.joined(separator: ",")),
                 ])
         }
     }

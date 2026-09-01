@@ -13,7 +13,9 @@ import Testing
 ///    occupying one, by at least `spareHotplugPorts`;
 /// 2. a disk hot-plugs into that domain once it is running;
 /// 3. the firmware the agent actually resolves on this host, with the varstore
-///    it actually writes, is a document libvirt accepts — and starts.
+///    it actually writes, is a document libvirt accepts — and starts;
+/// 4. attached-disk boot order is accepted in the persistent definition of a
+///    stopped or running domain and survives the running domain's restart.
 ///
 /// The RELAX-NG check in `DomainXMLBuilderTests` cannot see either: the document
 /// that left every VM with zero free ports validated against the schema for as
@@ -656,7 +658,165 @@ struct DomainXMLLibvirtTests {
         }
     }
 
-    // MARK: - Property 4: a widened definition is one libvirt still accepts
+    // MARK: - Property 4: attached disk boot order is persistent
+
+    @Test(
+        "a stopped domain persists the complete dense disk boot order",
+        .enabled(if: libvirtIsReachable, "no libvirt daemon at STRATO_LIBVIRT_TEST_URI"))
+    func stoppedAttachPersistsBootOrder() throws {
+        let scenario = try #require(Self.defineableScenarios.first)
+        let name = "strato-test-stopped-boot-order"
+        var input = scenario.input
+        input.disks = [
+            ResolvedDisk(
+                attachment: .file(path: "/volumes/root.qcow2", format: .qcow2),
+                bootOrder: 0, volumeId: DomainBootOrderTests.root)
+        ]
+        let document = Self.defineable(try DomainXMLBuilder.build(input), name: name)
+        let attachments = [
+            (DomainBootOrderTests.order30, 30),
+            (DomainBootOrderTests.order10, 10),
+            (DomainBootOrderTests.order20, 20),
+        ]
+
+        try Self.withDefinedDomain(name: name, document: document) { _ in
+            var requested = [(DomainBootOrderTests.root, 0)]
+            for (volumeId, apiOrder) in attachments {
+                let before = try Self.run(["dumpxml", "--inactive", name]).output
+                let target = DomainDiskInventory.nextTargetDevice(
+                    after: try DomainDiskInventory.disks(inDomainXML: before))
+                let fragment = DomainDeviceXML.hotplugDisk(
+                    attachment: .file(path: "/volumes/\(apiOrder).qcow2", format: .qcow2),
+                    target: target, readonly: false, volumeId: volumeId)
+                #expect(try Self.attachConfig(fragment, to: name, called: "\(name)-\(apiOrder)"))
+
+                requested.append((volumeId, apiOrder))
+                let ordered = requested.sorted { $0.1 < $1.1 }.map(\.0)
+                try Self.redefineBootOrder(for: name, orderedVolumeIds: ordered)
+            }
+
+            let persistent = try Self.run(["dumpxml", "--inactive", name]).output
+            #expect(
+                try Self.bootOrdersByTarget(in: persistent)
+                    == ["vda": 1, "vdc": 4, "vdd": 2, "vde": 3])
+        }
+    }
+
+    @Test(
+        "a running domain hot-plugs safely and uses the persistent order after restart",
+        .enabled(if: startsGuests, "STRATO_LIBVIRT_TEST_START is not set"))
+    func runningAttachPersistsBootOrderAcrossRestart() throws {
+        let bootROM = try #require(Self.hostBootROM)
+        let architecture = try #require(Self.hostArchitecture)
+        let name = "strato-test-running-boot-order"
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let idsAndOrders = [
+            (DomainBootOrderTests.root, 0),
+            (DomainBootOrderTests.order30, 30),
+            (DomainBootOrderTests.order10, 10),
+            (DomainBootOrderTests.order20, 20),
+        ]
+        var paths: [String: String] = [:]
+        for (volumeId, apiOrder) in idsAndOrders {
+            let path = directory.appendingPathComponent("disk-\(apiOrder).raw")
+            FileManager.default.createFile(atPath: path.path, contents: nil)
+            try FileHandle(forWritingTo: path).truncate(atOffset: 1024 * 1024)
+            paths[volumeId] = path.path
+        }
+
+        let input = DomainXMLInput(
+            vmId: name, vmDirectory: directory.path,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
+                console: ConsoleSpec()),
+            disks: [
+                ResolvedDisk(
+                    attachment: .file(
+                        path: try #require(paths[DomainBootOrderTests.root]), format: .raw),
+                    bootOrder: 0, volumeId: DomainBootOrderTests.root)
+            ],
+            networks: [], architecture: architecture,
+            accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
+            firmware: .monolithic(path: bootROM))
+        let document = Self.defineable(try DomainXMLBuilder.build(input), name: name)
+
+        try Self.withDefinedDomain(name: name, document: document) { _ in
+            let started = try Self.run(["start", name])
+            #expect(started.status == 0, "the domain would not start: \(started.output)")
+
+            var requested = [(DomainBootOrderTests.root, 0)]
+            for (volumeId, apiOrder) in idsAndOrders.dropFirst() {
+                let live = try Self.run(["dumpxml", name]).output
+                let target = DomainDiskInventory.nextTargetDevice(
+                    after: try DomainDiskInventory.disks(inDomainXML: live))
+                let fragment = DomainDeviceXML.hotplugDisk(
+                    attachment: .file(path: try #require(paths[volumeId]), format: .raw),
+                    target: target, readonly: false, volumeId: volumeId)
+                #expect(
+                    try Self.attachLiveAndConfig(
+                        fragment, to: name, called: "\(name)-\(apiOrder)"))
+
+                requested.append((volumeId, apiOrder))
+                let ordered = requested.sorted { $0.1 < $1.1 }.map(\.0)
+                try Self.redefineBootOrder(for: name, orderedVolumeIds: ordered)
+            }
+
+            let inactive = try Self.run(["dumpxml", "--inactive", name]).output
+            let expected = ["vda": 1, "vdb": 4, "vdc": 2, "vdd": 3]
+            #expect(try Self.bootOrdersByTarget(in: inactive) == expected)
+            #expect(try DomainDiskInventory.disks(inDomainXML: inactive).count == 4)
+
+            let stopped = try Self.run(["destroy", name])
+            #expect(stopped.status == 0, "the domain would not stop: \(stopped.output)")
+            let restarted = try Self.run(["start", name])
+            #expect(restarted.status == 0, "the domain would not restart: \(restarted.output)")
+            let afterRestart = try Self.run(["dumpxml", name]).output
+            #expect(try Self.bootOrdersByTarget(in: afterRestart) == expected)
+            #expect(try DomainDiskInventory.disks(inDomainXML: afterRestart).count == 4)
+        }
+    }
+
+    private static func redefineBootOrder(for domain: String, orderedVolumeIds: [String]) throws {
+        let inactive = try run(["dumpxml", "--inactive", domain]).output
+        guard
+            let rewritten = try DomainRedefinition.applyingBootOrder(
+                toInactiveDomainXML: inactive, orderedVolumeIds: orderedVolumeIds)
+        else { return }
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("\(domain)-boot-order.xml")
+        try rewritten.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let redefined = try run(["define", file.path])
+        #expect(redefined.status == 0, "libvirt refused the boot-order definition:\n\(redefined.output)")
+    }
+
+    private static func attachLiveAndConfig(
+        _ fragment: String, to domain: String, called name: String
+    ) throws -> Bool {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(name).xml")
+        try fragment.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        return try run(["attach-device", domain, file.path, "--live", "--config"]).status == 0
+    }
+
+    private static func bootOrdersByTarget(in xml: String) throws -> [String: Int] {
+        let domain = try DomainXMLNode.parse(xml)
+        let disks = try #require(domain.child(named: "devices"))
+            .children.filter { $0.name == "disk" }
+        return Dictionary(
+            uniqueKeysWithValues: disks.compactMap { disk in
+                guard let target = disk.child(named: "target")?.attribute("dev"),
+                    let rawOrder = disk.child(named: "boot")?.attribute("order"),
+                    let order = Int(rawOrder)
+                else { return nil }
+                return (target, order)
+            })
+    }
+
+    // MARK: - Property 5: a widened definition is one libvirt still accepts
 
     /// The half of STR-187 that only a daemon can answer, and it is two
     /// questions rather than one.

@@ -401,6 +401,10 @@ actor Agent {
     /// rather than `VMSpec.diskBytes`, which is a scheduler reservation and can
     /// lag an independent managed boot-volume resize (STR-242).
     var desiredVolumeStates: [String: DesiredVolumeState] = [:]
+    /// The authoritative per-VM volume sequence from the latest VMSpec. Its
+    /// `bootOrder` integers are informational; attachment reconciliation uses
+    /// this sequence instead of sorting them again (STR-308).
+    var desiredVMVolumeSpecs: [String: [VolumeSpec]] = [:]
 
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real

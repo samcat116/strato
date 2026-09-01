@@ -70,6 +70,95 @@ import StratoShared
 /// this pass prepares any simultaneous upward ceiling change first.
 public enum DomainRedefinition {
 
+    /// Rewrites per-disk boot metadata in the persistent domain definition.
+    ///
+    /// `orderedVolumeIds` is the complete sequence of volumes whose API
+    /// attachment has an explicit boot order. Its integer values are
+    /// deliberately absent: the control plane has already sorted the sequence,
+    /// and libvirt requires unique positive integers even though the API accepts
+    /// zero and sparse values. Dense positional `1...N` orders are therefore
+    /// both faithful and valid, exactly as they are at domain creation.
+    ///
+    /// The whole definition is edited in one pass because inserting a volume
+    /// ahead of an existing one changes more than the new disk. Sending device
+    /// updates one at a time would temporarily duplicate orders and libvirt
+    /// rejects that document before the remaining disks can be renumbered.
+    ///
+    /// Returns nil when the persistent definition already carries the requested
+    /// order. Every requested identity must be present exactly once; silently
+    /// applying a partial order would let reconciliation report success for a
+    /// definition that cannot produce the requested next boot.
+    public static func applyingBootOrder(
+        toInactiveDomainXML xml: String, orderedVolumeIds: [String]
+    ) throws -> String? {
+        var domain = try DomainXMLNode.parse(xml)
+        guard domain.name == "domain" else {
+            throw DomainInventoryError.unparseable("no <domain> element")
+        }
+        guard let devices = domain.child(named: "devices") else {
+            throw DomainInventoryError.unparseable("the domain document declares no <devices>")
+        }
+        guard devices.text == nil else {
+            throw DomainInventoryError.unparseable(
+                "<devices> carries character data, so it is not an element this can edit")
+        }
+
+        let orderedSerials = orderedVolumeIds.map(QEMUDiskIdentity.deviceID(volumeId:))
+        guard Set(orderedSerials).count == orderedSerials.count else {
+            throw DomainInventoryError.unparseable(
+                "the requested disk boot order contains a repeated volume identity")
+        }
+        let orders = Dictionary(
+            uniqueKeysWithValues: orderedSerials.enumerated().map { ($0.element, $0.offset + 1) })
+
+        var found: Set<String> = []
+        var duplicate: String?
+        let original = domain
+        domain.editChild(named: "devices") { devices in
+            devices.editChildren(named: "disk") { disk in
+                let serial = disk.child(named: "serial")?.text
+                if let serial, orders[serial] != nil, !found.insert(serial).inserted {
+                    duplicate = serial
+                }
+
+                disk.removeChildren(named: "boot")
+                guard let serial, let order = orders[serial] else { return }
+                let insertion =
+                    disk.firstIndex(ofChildNamed: "serial").map { $0 + 1 }
+                    ?? disk.children.count
+                disk.insert(DomainXMLNode("boot", [("order", "\(order)")]), at: insertion)
+            }
+        }
+
+        if let duplicate {
+            throw DomainInventoryError.unparseable(
+                "the domain contains volume identity \(duplicate) more than once")
+        }
+        if let missing = orderedSerials.first(where: { !found.contains($0) }) {
+            throw DomainInventoryError.unparseable(
+                "the domain does not contain requested volume identity \(missing)")
+        }
+        return domain == original ? nil : domain.render()
+    }
+
+    /// Applies the ordered-volume projection carried by a VM spec.
+    ///
+    /// The control plane sends `volumes` in its total order, so the stored
+    /// integer remains a presence flag here just as it is in
+    /// `DomainXMLBuilder`. A spec with no explicit order is left alone: that
+    /// preserves legacy image-backed domains whose boot disk is not represented
+    /// by a managed volume.
+    public static func applyingBootOrder(
+        toInactiveDomainXML xml: String, volumes: [VolumeSpec]
+    ) throws -> String? {
+        let orderedVolumeIds = volumes.compactMap { volume in
+            volume.bootOrder == nil ? nil : volume.volumeId.uuidString
+        }
+        guard !orderedVolumeIds.isEmpty else { return nil }
+        return try applyingBootOrder(
+            toInactiveDomainXML: xml, orderedVolumeIds: orderedVolumeIds)
+    }
+
     /// Adds the two libvirt elements that make an existing x86 IMDS guest
     /// select NoCloud's network mode at its next boot.
     ///

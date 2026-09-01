@@ -179,7 +179,8 @@ struct DomainDiskInventoryTests {
 
                 """)
         // A disk plugged into a running guest cannot change what that guest
-        // booted from, and an order here would collide with the boot disk's.
+        // booted from, and an order here would collide before the persistent
+        // full-definition pass renumbers every ordered disk atomically.
         #expect(!xml.contains("<boot"))
         // libvirt picks a free root port; pinning one would collide with the
         // addresses it already assigned.

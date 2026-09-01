@@ -15,6 +15,43 @@ import SwiftFirecracker
 import Glibc
 #endif
 
+enum ManifestVolumeOrder {
+    /// Replaces one realized attachment while retaining the VMSpec's total
+    /// volume order. Desired volumes not recorded yet are skipped; retained
+    /// legacy entries follow in their existing relative order until detach
+    /// convergence removes them.
+    static func recording(
+        _ update: VolumeSpec, in recorded: [VolumeSpec], authoritative: [VolumeSpec]?
+    ) -> (volumes: [VolumeSpec], orderedBootVolumeIds: [String]) {
+        var remaining = Dictionary(
+            recorded.map { ($0.volumeId, $0) },
+            uniquingKeysWith: { first, _ in first })
+        remaining[update.volumeId] = update
+
+        var volumes: [VolumeSpec] = []
+        for desired in authoritative ?? [] {
+            if let realized = remaining.removeValue(forKey: desired.volumeId) {
+                volumes.append(realized)
+            }
+        }
+        for existing in recorded {
+            if let retained = remaining.removeValue(forKey: existing.volumeId) {
+                volumes.append(retained)
+            }
+        }
+        if let appended = remaining.removeValue(forKey: update.volumeId) {
+            volumes.append(appended)
+        }
+
+        let recordedIds = Set(volumes.map(\.volumeId))
+        let orderedBootVolumeIds: [String] = (authoritative ?? volumes).compactMap { volume in
+            guard volume.bootOrder != nil, recordedIds.contains(volume.volumeId) else { return nil }
+            return volume.volumeId.uuidString
+        }
+        return (volumes, orderedBootVolumeIds)
+    }
+}
+
 /// Owns volume and snapshot-artifact convergence for the reconciler.
 extension Agent {
     // MARK: - Volume convergence
@@ -554,7 +591,7 @@ extension Agent {
             attachment: disk,
             readonly: attachment.readonly,
             bootOrder: attachment.bootOrder)
-        await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
+        let orderedBootVolumeIds = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
 
         // A VM with no hypervisor-side record yet (not created on this host,
         // or an orphan not yet re-adopted) needs no device call at all: the
@@ -570,7 +607,8 @@ extension Agent {
         }
         try await service.attachDisk(
             vmId: vmId, volumeId: item.id, attachment: disk,
-            deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly)
+            deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly,
+            orderedBootVolumeIds: orderedBootVolumeIds)
     }
 
     func volumeReconcileDetach(_ item: ReconcileWorkItem) async throws {
@@ -600,27 +638,23 @@ extension Agent {
     }
 
     /// Writes an attachment into the VM's manifest entry, so it survives an
-    /// agent restart (which reloads the manifest). The hypervisor's own record
-    /// needs no parallel write: libvirt attaches with `affectLiveAndConfig`,
-    /// so the domain definition already carries it across a power cycle.
-    func recordVolumeAttachment(_ spec: VolumeSpec, onVM vmId: String, entry: VMManifestEntry) async {
-        var volumes = entry.spec.volumes.filter { $0.volumeId != spec.volumeId }
-        volumes.append(spec)
-        volumes.sort { lhs, rhs in
-            switch (lhs.bootOrder, rhs.bootOrder) {
-            case (let a?, let b?): return a < b
-            case (nil, _?): return false
-            case (_?, nil): return true
-            case (nil, nil): return lhs.deviceName < rhs.deviceName
-            }
-        }
-        let updated = entry.with(spec: entry.spec.withVolumes(volumes))
+    /// agent restart (which reloads the manifest), and returns the complete
+    /// authoritative VMSpec sequence of explicitly ordered volume ids. The
+    /// libvirt driver uses that sequence to rewrite dense persistent boot orders
+    /// after the device's `affectLiveAndConfig` attach has landed.
+    func recordVolumeAttachment(
+        _ spec: VolumeSpec, onVM vmId: String, entry: VMManifestEntry
+    ) async -> [String] {
+        let recording = ManifestVolumeOrder.recording(
+            spec, in: entry.spec.volumes, authoritative: desiredVMVolumeSpecs[vmId])
+        let updated = entry.with(spec: entry.spec.withVolumes(recording.volumes))
         if managedVMs[vmId] != nil {
             managedVMs[vmId] = updated
         } else {
             orphanedVMs[vmId] = updated
         }
         persistManifest()
+        return recording.orderedBootVolumeIds
     }
 
     func reconcileService(for vmId: String) throws -> any HypervisorService {
