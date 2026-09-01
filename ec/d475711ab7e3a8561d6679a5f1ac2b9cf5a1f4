@@ -19,6 +19,8 @@ control-plane/Tests/AppPlatformTests/RequestLoggingMiddlewareTests.swift
   s_077a86d6d40679::t_5eed61525bcc81 18
 control-plane/Package.swift
   s_077a86d6d40679::t_4cdac78787016e 181
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_077a86d6d40679::t_f4494985a64669 8-15
 ---
 {
   "schema_version": "authorship/3.0.0",
