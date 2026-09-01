@@ -85,11 +85,12 @@ enum DomainNetworkDetachConvergence {
 /// any restart.
 ///
 /// `redefineVM` is where that difference goes (STR-187). It runs on a stopped
-/// domain only and widens exactly those three ceilings. The other whole-document
-/// edit is narrower still: `attachDisk` rewrites only per-disk `<boot>` elements
-/// after the device change has reached CONFIG, because inserting a newly ordered
-/// disk may renumber every existing one. Both start from libvirt's inactive XML
-/// and leave every unrelated element as libvirt wrote it.
+/// domain only, widens exactly those three ceilings, and repairs persistent disk
+/// boot order for domains created by older agents. `attachDisk` performs the
+/// same narrow boot-order edit after a device change reaches CONFIG, because
+/// inserting a newly ordered disk may renumber every existing one. Both start
+/// from libvirt's inactive XML and leave every unrelated element as libvirt
+/// wrote it.
 ///
 /// ## Lifecycle events
 ///
@@ -704,12 +705,12 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// Rewrites a stopped domain's definition so it can satisfy `spec`
-    /// (STR-187) — see `DomainRedefinition` for what that means and, more to the
-    /// point, for what it deliberately leaves alone.
+    /// Rewrites a stopped domain's definition so it can satisfy `spec`: capacity
+    /// ceilings are widened (STR-187), and persistent disk boot order is repaired
+    /// for attachments that converged before STR-308.
     ///
-    /// This is the boot-time capacity rewrite, and the two conditions guarding
-    /// it are why that is safe. It runs **only on an
+    /// This is the boot-time persistent-definition rewrite, and the two
+    /// conditions guarding it are why that is safe. It runs **only on an
     /// inactive domain**, because the ports it counts are the ones libvirt's own
     /// address allocator assigned and a running domain's document describes a
     /// guest that is already holding them; and it defines **only a document that
@@ -729,20 +730,24 @@ actor LibvirtService: HypervisorService {
                 return
             }
 
+            let inactiveXML = try await inactiveDomainXML(dom, vmId: vmId)
             let widening = try DomainRedefinition.widening(
-                forInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
-                spec: spec, architecture: .current)
+                forInactiveDomainXML: inactiveXML, spec: spec, architecture: .current)
             for refusal in widening.refusals {
                 logger.warning(
                     "This VM's definition could not be widened to what its spec asks for",
                     metadata: ["strato.vm.id": .string(vmId), "detail": .string(refusal)])
             }
-            guard let xml = widening.xml else { return }
+            let bootOrderXML = try DomainRedefinition.applyingBootOrder(
+                toInactiveDomainXML: widening.xml ?? inactiveXML,
+                volumes: spec.volumes)
+            guard let xml = bootOrderXML ?? widening.xml else { return }
 
             logger.info(
-                "Widening the domain definition before boot",
+                "Updating the persistent domain definition before boot",
                 metadata: [
                     "strato.vm.id": .string(vmId),
+                    "diskBootOrderUpdated": .stringConvertible(bootOrderXML != nil),
                     "addedHotplugPorts": .stringConvertible(widening.addedHotplugPorts),
                     "memoryCeilingBytes": widening.memoryCeilingBytes.map {
                         .stringConvertible($0)

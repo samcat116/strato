@@ -385,6 +385,9 @@ extension Agent: ReconcileActuator {
         desiredVolumeStates = Dictionary(
             desiredVolumes.map { ($0.volumeId.uuidString, $0) },
             uniquingKeysWith: { first, _ in first })
+        desiredVMVolumeSpecs = Dictionary(
+            desiredVMs.map { ($0.vmId.uuidString, $0.spec.volumes) },
+            uniquingKeysWith: { first, _ in first })
         guard let storageBackend, let storageBackends else { return }
         var formats: [UUID: DiskFormat] = [:]
         for volume in desiredVolumes {
@@ -580,8 +583,8 @@ extension Agent: ReconcileActuator {
         }
     }
 
-    /// Starts a VM, first giving its backend the chance to widen whatever stored
-    /// configuration the boot is about to read (STR-187).
+    /// Starts a VM, first giving its backend the chance to update whatever
+    /// stored configuration the boot is about to read (STR-187, STR-308).
     ///
     /// This is where "a VM's hot-plug slots and memory headroom are fixed at
     /// create time" stops being true of the libvirt driver. A boot is the one
@@ -601,7 +604,7 @@ extension Agent: ReconcileActuator {
     /// was captured with; "stop and start it to widen" holds for its *next*
     /// boot, the one with no restore outstanding.
     ///
-    /// A widening that *fails* is logged rather than thrown — the backend
+    /// A stored-definition update that *fails* is logged rather than thrown — the backend
     /// contract says best effort, because a VM that comes up with the ceiling it
     /// already had is the status quo, while a VM that does not come up is a
     /// regression.
@@ -675,8 +678,8 @@ extension Agent: ReconcileActuator {
             } catch {
                 logger.warning(
                     """
-                    Could not widen this VM's stored configuration before booting it; it starts with the \
-                    hot-plug slots and size ceilings it already had
+                    Could not update this VM's stored configuration before booting it; it starts with the \
+                    hot-plug slots, size ceilings, and disk boot metadata it already had
                     """,
                     metadata: [
                         "strato.vm.id": .string(item.id), "error": .string(error.localizedDescription),

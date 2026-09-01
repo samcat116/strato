@@ -126,17 +126,16 @@ public protocol HypervisorService: Actor, Sendable {
     /// for exactly those backends. It exists
     /// for `LibvirtService`, where the domain document is written at create and
     /// the next boot reads *that* rather than the spec: a VM's hot-plug slots,
-    /// its memory headroom and its vCPU maximum would otherwise be fixed for its
-    /// whole life, and outgrowing any of them would leave "recreate the VM" as
-    /// the only remedy.
+    /// its memory headroom, its vCPU maximum, and its persistent disk boot order
+    /// would otherwise remain whatever an older definition recorded.
     ///
     /// Called before `bootVM` or a stopped-domain resize, and **never for a VM
     /// being created**, whose configuration was built from this spec moments
     /// earlier. Boot treats it as best effort, since a VM that comes up at the
-    /// ceiling it already had is strictly better than one that does not come up;
-    /// a stopped resize treats failure as incomplete convergence. What the
-    /// widening could not deliver surfaces where it is actionable — on the
-    /// attach or resize that wanted it.
+    /// ceiling or boot metadata it already had is strictly better than one that
+    /// does not come up; a stopped resize treats failure as incomplete
+    /// convergence. What the rewrite could not deliver surfaces where it is
+    /// actionable — on the attach or resize that wanted it.
     ///
     /// - Parameters:
     ///   - vmId: The VM identifier

@@ -141,6 +141,24 @@ public enum DomainRedefinition {
         return domain == original ? nil : domain.render()
     }
 
+    /// Applies the ordered-volume projection carried by a VM spec.
+    ///
+    /// The control plane sends `volumes` in its total order, so the stored
+    /// integer remains a presence flag here just as it is in
+    /// `DomainXMLBuilder`. A spec with no explicit order is left alone: that
+    /// preserves legacy image-backed domains whose boot disk is not represented
+    /// by a managed volume.
+    public static func applyingBootOrder(
+        toInactiveDomainXML xml: String, volumes: [VolumeSpec]
+    ) throws -> String? {
+        let orderedVolumeIds = volumes.compactMap { volume in
+            volume.bootOrder == nil ? nil : volume.volumeId.uuidString
+        }
+        guard !orderedVolumeIds.isEmpty else { return nil }
+        return try applyingBootOrder(
+            toInactiveDomainXML: xml, orderedVolumeIds: orderedVolumeIds)
+    }
+
     /// Adds the two libvirt elements that make an existing x86 IMDS guest
     /// select NoCloud's network mode at its next boot.
     ///

@@ -1,5 +1,8 @@
+import Foundation
+import StratoShared
 import Testing
 
+@testable import StratoAgent
 @testable import StratoAgentCore
 
 @Suite("libvirt persistent disk boot order")
@@ -75,6 +78,46 @@ struct DomainBootOrderTests {
                 toInactiveDomainXML: first, orderedVolumeIds: ordered) == nil)
     }
 
+    @Test("pre-boot redefinition repairs attachments that already converged")
+    func preBootRepairForExistingAttachments() throws {
+        let volumes = [
+            Self.volume(Self.root, device: 0, bootOrder: 0),
+            Self.volume(Self.order10, device: 2, bootOrder: 10),
+            Self.volume(Self.order20, device: 3, bootOrder: 20),
+            Self.volume(Self.order30, device: 1, bootOrder: 30),
+        ]
+        let rewritten = try #require(
+            try DomainRedefinition.applyingBootOrder(
+                toInactiveDomainXML: Self.inactiveDomain, volumes: volumes))
+
+        #expect(
+            try Self.bootOrdersByTarget(in: rewritten)
+                == ["vda": "1", "vdc": "4", "vdd": "2", "vde": "3"])
+    }
+
+    @Test("pre-boot redefinition leaves legacy image-backed boot metadata alone")
+    func preBootRepairSkipsSpecsWithoutExplicitOrder() throws {
+        #expect(
+            try DomainRedefinition.applyingBootOrder(
+                toInactiveDomainXML: Self.inactiveDomain,
+                volumes: [Self.volume(Self.root, device: 0, bootOrder: nil)]) == nil)
+    }
+
+    @Test("manifest realization preserves the authoritative VMSpec order")
+    func manifestPreservesVMSpecOrderForEqualValues() {
+        let first = Self.volume(Self.order30, device: 3, bootOrder: 10)
+        let second = Self.volume(Self.order10, device: 1, bootOrder: 10)
+        let recording = ManifestVolumeOrder.recording(
+            first,
+            in: [second],
+            authoritative: [first, second])
+
+        #expect(recording.volumes.map(\.volumeId) == [first.volumeId, second.volumeId])
+        #expect(
+            recording.orderedBootVolumeIds
+                == [first.volumeId.uuidString, second.volumeId.uuidString])
+    }
+
     @Test("volumes without an API boot order lose stale libvirt metadata")
     func removesStaleUnorderedMetadata() throws {
         let rewritten = try #require(
@@ -102,5 +145,14 @@ struct DomainBootOrderTests {
                 toInactiveDomainXML: Self.inactiveDomain,
                 orderedVolumeIds: [Self.root, Self.root.uppercased()])
         }
+    }
+
+    private static func volume(
+        _ id: String, device: Int, bootOrder: Int?
+    ) -> VolumeSpec {
+        VolumeSpec(
+            volumeId: UUID(uuidString: id)!,
+            deviceName: .disk(device),
+            bootOrder: bootOrder)
     }
 }
