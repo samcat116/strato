@@ -1,0 +1,21 @@
+control-plane/Tests/AppPlatformTests/IdempotencyTests.swift
+  s_3c8cb79c69ff83::t_b3034d400a6136 294-298,302,310,315
+  s_3c8cb79c69ff83::t_c165e759fb68c1 248
+  s_3c8cb79c69ff83::t_f7f9859b9a4a47 251-267,269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "724e14d552132a40917a86af8646c44f3c0a511e",
+  "prompts": {},
+  "sessions": {
+    "s_3c8cb79c69ff83": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eec77b7e-2d11-4a9b-8f6f-5437cc9446bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
