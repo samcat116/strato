@@ -40,10 +40,11 @@ package actor PostgresTestDatabases {
     package static let shared = PostgresTestDatabases()
 
     /// Small event-loop group shared by every test app in the suite.
-    /// Fluent's pool opens at most one connection per event loop, so this caps
-    /// each app at two connections and keeps the fully parallel suite well
-    /// under the server's default max_connections=100 — the constraint that
-    /// used to force CI's Postgres run to be --no-parallel.
+    /// The pool opens at most two connections per event loop by default, so
+    /// this caps each app at four connections (unless a test passes a larger
+    /// `maxConnectionsPerEventLoop` to `makeForTesting`) and keeps the fully
+    /// parallel suite well under the server's default max_connections=100 —
+    /// the constraint that used to force CI's Postgres run to be --no-parallel.
     package static let appEventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
     /// Connection parameters from the environment. `DATABASE_NAME` is only the
@@ -231,14 +232,24 @@ package actor PostgresTestDatabases {
 // MARK: - Test Extensions
 
 extension Application {
-    package static func makeForTesting(_ environment: Environment = .testing) async throws -> Application {
+    /// `maxConnectionsPerEventLoop` stays small by default to keep the fully
+    /// parallel suite under Postgres's max_connections. A test that holds a
+    /// transaction open while other tasks need connections of their own must
+    /// raise it: the transactions can all land on the same event loop of the
+    /// shared two-loop group, and each extra one then waits forever for a pool
+    /// slot the parked transaction is holding.
+    package static func makeForTesting(
+        _ environment: Environment = .testing,
+        maxConnectionsPerEventLoop: Int = 2
+    ) async throws -> Application {
         var env = environment
         env.arguments = ["vapor"]
 
         // Each test gets its own server-side clone of the migrated template
         // database.
         let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
-        return try await make(env, database: databaseName)
+        return try await make(
+            env, database: databaseName, maxConnectionsPerEventLoop: maxConnectionsPerEventLoop)
     }
 
     /// Like `makeForTesting`, but on an EMPTY database with no migrations
@@ -275,14 +286,15 @@ extension Application {
     private static func make(
         _ env: Environment,
         database databaseName: String,
-        owningDatabase: Bool = true
+        owningDatabase: Bool = true,
+        maxConnectionsPerEventLoop: Int = 2
     ) async throws -> Application {
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
         app.logger.logLevel = .debug
         app.databases.use(
             .postgres(
                 configuration: PostgresTestDatabases.configuration(database: databaseName),
-                maxConnectionsPerEventLoop: 2),
+                maxConnectionsPerEventLoop: maxConnectionsPerEventLoop),
             as: .psql
         )
         if owningDatabase {

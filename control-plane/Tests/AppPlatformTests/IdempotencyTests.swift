@@ -224,7 +224,14 @@ struct IdempotencyTests {
 
     @Test("an in-flight duplicate waits for the winner and never reaches the mutation")
     func inFlightDuplicateSerializes() async throws {
-        let app = try await Application.makeForTesting()
+        // The winner parks inside an open transaction while the duplicate and
+        // this test body's pg_stat_activity poll each need a connection of
+        // their own — three concurrent holders, which can all land on the same
+        // loop of the shared two-loop group. With the harness default pool the
+        // duplicate's `db.transaction` can starve behind the winner's parked
+        // connection and the whole suite hangs on the resulting three-way
+        // latch deadlock, so give every holder a slot even on one loop.
+        let app = try await Application.makeForTesting(maxConnectionsPerEventLoop: 4)
         do {
             try await configure(app)
             try await app.autoMigrate()
@@ -238,20 +245,28 @@ struct IdempotencyTests {
             let secondEnteredTransaction = Latch()
             let releaseFirst = Latch()
             let mutations = MutationCount()
+            let sql = try #require(app.db as? any SQLDatabase)
 
             let first = Task {
-                try await app.db.transaction { db in
-                    try await IdempotencyService.reserve(context, actor: actor, on: db)
-                    await mutations.increment()
+                do {
+                    try await app.db.transaction { db in
+                        try await IdempotencyService.reserve(context, actor: actor, on: db)
+                        await mutations.increment()
+                        await firstReserved.signal()
+                        await releaseFirst.wait()
+                        try await IdempotencyService.complete(
+                            context,
+                            actor: actor,
+                            resourceKind: .virtualMachine,
+                            resourceID: UUID(),
+                            accepted: .init(mutationID: UUID(), targetGeneration: 1),
+                            on: db)
+                    }
+                } catch {
+                    // A throw before the signal must read as a clean failure,
+                    // not leave the test body parked on `firstReserved.wait()`.
                     await firstReserved.signal()
-                    await releaseFirst.wait()
-                    try await IdempotencyService.complete(
-                        context,
-                        actor: actor,
-                        resourceKind: .virtualMachine,
-                        resourceID: UUID(),
-                        accepted: .init(mutationID: UUID(), targetGeneration: 1),
-                        on: db)
+                    throw error
                 }
             }
 
@@ -273,6 +288,32 @@ struct IdempotencyTests {
             }
 
             await secondEnteredTransaction.wait()
+            // Release the winner only once the duplicate's INSERT is visibly
+            // blocked on the winner's uncommitted reservation, so the test
+            // exercises PostgreSQL's in-flight wait every run rather than the
+            // easier committed-row conflict. Observation is best-effort: no
+            // error may escape between spawning `first` and signaling
+            // `releaseFirst`, or the winner stays parked in an open
+            // transaction and shutdown hangs on its leased connection — the
+            // very stall this test exists to prevent.
+            struct WaiterCount: Decodable { let count: Int }
+            let blockedDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+            while true {
+                let waiters = try? await sql.raw(
+                    """
+                    SELECT COUNT(*) AS count FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND wait_event_type = 'Lock'
+                      AND query ILIKE '%idempotency_keys%'
+                    """
+                ).first(decoding: WaiterCount.self)
+                if let waiters, waiters.count > 0 { break }
+                if ContinuousClock.now > blockedDeadline {
+                    Issue.record("The duplicate reserve never blocked on the winner's reservation")
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
             await releaseFirst.signal()
             try await first.value
             #expect(await second.value)
