@@ -15,8 +15,7 @@ struct AgentMessageTests {
             hypervisors: [
                 HypervisorSupport(
                     type: .qemu, available: true, accelerated: true,
-                    capabilities: .capabilities(for: .qemu), supportsVsock: true,
-                    supportsGuestExec: true)
+                    supportsVsock: true, supportsGuestExec: true)
             ]
         )
         let decoded = try throughEnvelope(message)
@@ -26,9 +25,9 @@ struct AgentMessageTests {
         #expect(decoded.agentId == "agent-1")
         #expect(decoded.hostname == "hv-01.example")
         #expect(decoded.version == "1.2.3")
-        #expect(decoded.effectiveHypervisors.map(\.type) == [.qemu])
-        #expect(decoded.effectiveHypervisors.first?.supportsVsock == true)
-        #expect(decoded.effectiveHypervisors.first?.supportsGuestExec == true)
+        #expect(decoded.hypervisors.map(\.type) == [.qemu])
+        #expect(decoded.hypervisors.first?.supportsVsock == true)
+        #expect(decoded.hypervisors.first?.supportsGuestExec == true)
         #expect(decoded.resources.totalCPU == Fixtures.resources.totalCPU)
         #expect(decoded.resources.availableCPU == Fixtures.resources.availableCPU)
         #expect(decoded.resources.totalMemory == Fixtures.resources.totalMemory)
@@ -61,7 +60,7 @@ struct AgentMessageTests {
         #expect(decoded.supportsGuestExec == nil)
     }
 
-    @Test("Sandbox capability is opt-in: absent unless the runtime advertises it")
+    @Test("Sandbox capability defaults to false unless the runtime advertises it")
     func agentRegisterSandboxCapability() throws {
         // Default: a build that merely links protocol v5 does not claim the
         // capability — placement eligibility requires the explicit flag, so
@@ -73,7 +72,7 @@ struct AgentMessageTests {
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
-        #expect(decodedImplicit.sandboxCapable == nil)
+        #expect(decodedImplicit.sandboxCapable == false)
 
         let capable = AgentRegisterMessage(
             agentId: "agent-2",
@@ -101,9 +100,7 @@ struct AgentMessageTests {
         )
         let decodedRuntimeOnly = try throughEnvelope(runtimeOnly)
         #expect(decodedRuntimeOnly.sandboxCapable == true)
-        // Absent, not false: an agent that predates the flag says nothing, and
-        // the control plane reads silence as "not capable".
-        #expect(decodedRuntimeOnly.sandboxNetworkingCapable == nil)
+        #expect(decodedRuntimeOnly.sandboxNetworkingCapable == false)
 
         let networked = AgentRegisterMessage(
             agentId: "agent-2",
@@ -116,11 +113,7 @@ struct AgentMessageTests {
         #expect(try throughEnvelope(networked).sandboxNetworkingCapable == true)
     }
 
-    /// The vTPM capability (issue #565) follows the `sandboxCapable` contract:
-    /// absent from an agent that predates it, and absence means "not capable"
-    /// rather than "unknown" — the scheduler must never place a Windows VM on
-    /// a host that never claimed it could give it a TPM.
-    @Test("TPM capability: absent for old builds, carried when advertised")
+    @Test("TPM capability defaults to false and is carried when advertised")
     func agentRegisterTPMCapable() throws {
         let implicit = AgentRegisterMessage(
             agentId: "agent-1",
@@ -128,7 +121,7 @@ struct AgentMessageTests {
             version: "1.2.3",
             resources: Fixtures.resources
         )
-        #expect(try throughEnvelope(implicit).tpmCapable == nil)
+        #expect(try throughEnvelope(implicit).tpmCapable == false)
 
         let capable = AgentRegisterMessage(
             agentId: "agent-2",
@@ -140,7 +133,7 @@ struct AgentMessageTests {
         #expect(try throughEnvelope(capable).tpmCapable == true)
     }
 
-    @Test("Metadata service capability is explicit and absent means incapable")
+    @Test("Metadata service capability defaults to false")
     func agentRegisterMetadataServiceCapable() throws {
         let implicit = AgentRegisterMessage(
             agentId: "agent-1",
@@ -148,7 +141,7 @@ struct AgentMessageTests {
             version: "1.2.3",
             resources: Fixtures.resources
         )
-        #expect(try throughEnvelope(implicit).metadataServiceCapable == nil)
+        #expect(try throughEnvelope(implicit).metadataServiceCapable == false)
 
         let capable = AgentRegisterMessage(
             agentId: "agent-2",
@@ -160,7 +153,7 @@ struct AgentMessageTests {
         #expect(try throughEnvelope(capable).metadataServiceCapable == true)
     }
 
-    @Test("Operating system reporting: absent for old builds, carried when reported")
+    @Test("Operating system reporting defaults to the build platform")
     func agentRegisterOperatingSystem() throws {
         let implicit = AgentRegisterMessage(
             agentId: "agent-1",
@@ -169,7 +162,7 @@ struct AgentMessageTests {
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
-        #expect(decodedImplicit.operatingSystem == nil)
+        #expect(decodedImplicit.operatingSystem == .current)
 
         let reporting = AgentRegisterMessage(
             agentId: "agent-2",

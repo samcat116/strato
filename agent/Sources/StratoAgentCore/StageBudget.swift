@@ -18,7 +18,6 @@ public enum StageBudgetError: Error, LocalizedError, Sendable {
 
 public enum StageBudget {
     /// Default budgets per stage of VM creation.
-    public static let imageMaterializationSeconds = 1200  // download + qcow2 conversion of multi-GB images
     public static let hypervisorSpawnSeconds = 60  // defining and starting a domain
     // A live hypervisor answers a status query in milliseconds; a bound here
     // keeps a dead or hung control channel from blocking the reconcile — and,

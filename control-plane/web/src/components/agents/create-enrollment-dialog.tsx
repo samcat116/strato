@@ -1,5 +1,9 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
+import { errorMessage } from "@/lib/errors";
+
 import { useEffect, useState } from "react";
 import { Loader2, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -88,7 +92,7 @@ export function CreateEnrollmentDialog({
       onCreated?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create enrollment"
+        errorMessage(error, "Failed to create enrollment")
       );
     } finally {
       setIsLoading(false);
@@ -195,7 +199,7 @@ export function CreateEnrollmentDialog({
                 time below.
               </p>
               <p className="text-sm text-muted-foreground mt-2">
-                Expires: {new Date(enrollment.expiresAt).toLocaleString()}
+                Expires: {formatDateTime(enrollment.expiresAt)}
               </p>
             </div>
           </div>

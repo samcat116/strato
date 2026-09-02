@@ -122,7 +122,7 @@ enum SnapshotArtifactMutation {
                     throw ResourceMutation.WorkError(
                         "Failed to delete snapshot record: \(error.localizedDescription)")
                 }
-                return outcome.isRemoved
+                _ = outcome.isRemoved
             }
 
         let previousArtifactAgentId = artifact.agentId

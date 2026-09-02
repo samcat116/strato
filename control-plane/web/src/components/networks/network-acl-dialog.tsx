@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { AlertTriangle, Loader2, Plus, Shield, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -137,7 +139,7 @@ function NetworkACLManager({
       toast.success(`Network ACL created for "${networkName}"`);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create network ACL"
+        errorMessage(error, "Failed to create network ACL")
       );
     }
   };
@@ -157,7 +159,7 @@ function NetworkACLManager({
       toast.success(`Network ACL deleted from "${networkName}"`);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete network ACL"
+        errorMessage(error, "Failed to delete network ACL")
       );
     }
   };
@@ -178,7 +180,7 @@ function NetworkACLManager({
       toast.success(`Rule #${rule.ruleNumber} deleted`);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete rule"
+        errorMessage(error, "Failed to delete rule")
       );
     } finally {
       setBusyRuleId(null);
@@ -240,7 +242,7 @@ function NetworkACLManager({
       }));
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to add rule"
+        errorMessage(error, "Failed to add rule")
       );
     }
   };

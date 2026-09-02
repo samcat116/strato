@@ -170,7 +170,8 @@ final class ReplicaMessageBridgeTests {
     /// on the strength of a neighbor's traffic.
     @Test("Another replica's probe neither counts nor delegates")
     func foreignProbeIgnored() async throws {
-        try await withBridge { bridge, delegate, _, _ in
+        try await withBridge { bridge, delegate, store, _ in
+            await store.setPublishDeliveryEnabled(false)
             await bridge.verifySubscriptions()
             await bridge.handleDoorbell(
                 CoordinationService.doorbellPayload(

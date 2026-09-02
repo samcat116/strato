@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { scimTokensApi } from "@/lib/api/scim-tokens";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type {
   CreateSCIMTokenRequest,
   UpdateSCIMTokenRequest,
@@ -58,8 +58,7 @@ export function scimTokenErrorMessage(
   error: unknown,
   fallback: string
 ): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need admin rights to manage SCIM tokens.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need admin rights to manage SCIM tokens.",
+  });
 }

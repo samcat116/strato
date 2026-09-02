@@ -779,14 +779,9 @@ struct FloatingIPController: RouteCollection {
         guard let floatingIpId = req.parameters.get("floatingIpId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid floating IP ID")
         }
-        guard let floatingIP = try await FloatingIP.find(floatingIpId, on: req.db) else {
-            throw Abort(.notFound, reason: "Floating IP not found")
-        }
-        let allowed = try await req.can(action, on: IAMNode(type: .floatingIP, id: floatingIpId))
-        guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this floating IP")
-        }
-        return floatingIP
+        return try await req.authorizedResource(
+            floatingIpId, as: FloatingIP.self, nodeType: .floatingIP, action: action,
+            notFoundReason: "Floating IP not found")
     }
 
     /// The floating IP's attached interface with addresses eager-loaded, nil

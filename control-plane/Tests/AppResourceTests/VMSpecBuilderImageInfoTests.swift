@@ -75,28 +75,4 @@ struct VMSpecBuilderImageInfoTests {
         }
     }
 
-    @Test("Volume image info rejects a Firecracker-only artifact set")
-    func volumeInfoRequiresDiskImage() throws {
-        let image = readyImage(architecture: .x86_64)
-        image.$artifacts.value = [
-            artifact(.kernel, checksum: "a"),
-            artifact(.rootfs, format: .raw, checksum: "b"),
-        ]
-
-        #expect(throws: Abort.self) {
-            try VMSpecBuilder.buildDiskImageInfo(from: image)
-        }
-    }
-
-    @Test("Volume image info accepts a usable disk artifact")
-    func volumeInfoAcceptsDiskImage() throws {
-        let image = readyImage(architecture: .x86_64)
-        image.$artifacts.value = [
-            artifact(.diskImage, format: .qcow2, checksum: "d")
-        ]
-
-        let info = try VMSpecBuilder.buildDiskImageInfo(from: image)
-
-        #expect(info.artifact(ofKind: .diskImage) != nil)
-    }
 }

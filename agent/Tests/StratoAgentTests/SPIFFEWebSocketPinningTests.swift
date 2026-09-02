@@ -221,8 +221,7 @@ struct SPIFFEWebSocketPinningTests {
         try? await group.shutdownGracefully()
     }
 
-    /// Server-side mTLS material, built by hand rather than via
-    /// SPIFFETLSConfig.makeServerConfiguration: that helper's
+    /// Server-side mTLS material, built directly because
     /// `.fullVerification` hostname-matches the *client* certificate, which an
     /// SVID (URI SAN only) can never satisfy. The real deployment's server
     /// side is Envoy with SPIFFE SAN matchers; here it's enough to require a

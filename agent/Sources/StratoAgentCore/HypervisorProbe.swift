@@ -39,7 +39,6 @@ public enum HypervisorProbe {
                 available: false,
                 accelerated: false,
                 unavailabilityReason: "Firecracker is only supported on Linux",
-                capabilities: .firecracker
             ))
         #endif
 
@@ -108,21 +107,20 @@ public enum HypervisorProbe {
             return HypervisorSupport(
                 type: .qemu, available: false, accelerated: false,
                 unavailabilityReason: "libvirt was not probed, so QEMU cannot be reported as usable",
-                capabilities: .qemu)
+            )
         }
         guard case .reachable = libvirt else {
             return HypervisorSupport(
                 type: .qemu, available: false, accelerated: false,
                 unavailabilityReason:
                     "libvirtd is not usable at \(LibvirtProbe.systemURI): \(libvirt.summary)",
-                capabilities: .qemu)
+            )
         }
         return HypervisorSupport(
             type: .qemu,
             available: true,
             accelerated: acceleration.available,
             unavailabilityReason: nil,
-            capabilities: .qemu
         )
         #else
         return HypervisorSupport(
@@ -130,7 +128,6 @@ public enum HypervisorProbe {
             available: false,
             accelerated: false,
             unavailabilityReason: "QEMU is driven through libvirtd, which is only supported on Linux",
-            capabilities: .qemu
         )
         #endif
     }
@@ -153,7 +150,6 @@ public enum HypervisorProbe {
             available: binaryUsable && acceleration.available,
             accelerated: binaryUsable && acceleration.available,
             unavailabilityReason: reason,
-            capabilities: .firecracker
         )
     }
 
@@ -205,7 +201,6 @@ public enum HypervisorProbe {
                 available: support.available,
                 accelerated: support.accelerated,
                 unavailabilityReason: support.unavailabilityReason,
-                capabilities: support.capabilities,
                 version: version
             )
         }

@@ -175,7 +175,6 @@ CREATE TABLE public.agents (
     hypervisors jsonb[] DEFAULT '{}'::jsonb[] NOT NULL,
     network_capability text,
     site_id uuid NOT NULL,
-    wire_protocol_version bigint,
     organization_id uuid,
     organizational_unit_id uuid,
     operating_system text,

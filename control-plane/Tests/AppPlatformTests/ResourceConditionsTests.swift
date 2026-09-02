@@ -61,8 +61,7 @@ final class ResourceConditionsTests {
             hostname: "test-host",
             hypervisors: [
                 HypervisorSupport(
-                    type: hypervisorType, available: true, accelerated: true,
-                    capabilities: .capabilities(for: hypervisorType))
+                    type: hypervisorType, available: true, accelerated: true)
             ],
             sandboxCapable: hypervisorType == .firecracker)
     }

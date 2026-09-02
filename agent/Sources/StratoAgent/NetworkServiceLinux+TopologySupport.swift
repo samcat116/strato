@@ -238,7 +238,7 @@ extension NetworkServiceLinux {
         let hop: String
         switch family {
         case .v4:
-            guard IPv4Address(nextHop) != nil else {
+            guard IPFamily.ipv4.matches(nextHop) else {
                 throw NetworkError.invalidConfiguration(
                     "OVN uplink gateway '\(nextHop)' is not a valid IPv4 address; cannot install default route")
             }

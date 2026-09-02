@@ -92,12 +92,12 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
         dnsZones: [DesiredDNSZone]?
     ) async {
-        guard authoritative, networks.allSatisfy({ $0.loadBalancers != nil }) else {
+        guard authoritative else {
             lastObservedLoadBalancers = nil
             return
         }
         let reason = "Native OVN load balancers are not supported with user-mode networking"
-        let desired = networks.flatMap { $0.loadBalancers ?? [] }
+        let desired = networks.flatMap(\.loadBalancers)
         if !desired.isEmpty {
             logger.error("\(reason)")
         }

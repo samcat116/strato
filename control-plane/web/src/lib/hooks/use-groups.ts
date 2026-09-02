@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { groupsApi } from "@/lib/api/groups";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type { CreateGroupRequest, UpdateGroupRequest } from "@/types/api";
 
 export function useGroups(orgId: string) {
@@ -105,8 +105,7 @@ export function useRemoveGroupMember(orgId: string, groupId: string) {
  * surfaced as a clear authorization message rather than a generic failure.
  */
 export function groupErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need admin rights to manage groups.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need admin rights to manage groups.",
+  });
 }

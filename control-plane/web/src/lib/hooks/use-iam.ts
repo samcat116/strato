@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { iamApi } from "@/lib/api/iam";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type {
   IAMPolicyCreateRequest,
   IAMPolicyUpdateRequest,
@@ -159,8 +159,8 @@ export function useValidatePolicy() {
  * clash) and 400 (Cedar shape/compile errors) already carry useful reasons.
  */
 export function iamErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need admin rights on this organization or project to manage roles and policies.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden:
+      "You need admin rights on this organization or project to manage roles and policies.",
+  });
 }

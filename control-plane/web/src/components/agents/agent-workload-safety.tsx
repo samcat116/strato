@@ -1,5 +1,9 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { AlertTriangle, Loader2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -69,7 +73,7 @@ export function AgentWorkloadSafetyCard({ agent }: AgentWorkloadSafetyCardProps)
           `and ${result.adoptedVolumes} volume(s) onto ${agent.name}`
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to adopt workloads");
+      toast.error(errorMessage(error, "Failed to adopt workloads"));
     } finally {
       setAdopting(null);
     }
@@ -102,7 +106,7 @@ export function AgentWorkloadSafetyCard({ agent }: AgentWorkloadSafetyCardProps)
                 : "Workload manifest: "}
               {agent.manifestStatusReason}
               {agent.manifestStatusAt
-                ? ` (reported ${new Date(agent.manifestStatusAt).toLocaleString()})`
+                ? ` (reported ${formatDateTime(agent.manifestStatusAt)})`
                 : ""}
             </p>
           </div>
@@ -114,7 +118,7 @@ export function AgentWorkloadSafetyCard({ agent }: AgentWorkloadSafetyCardProps)
             <p>
               Teardown refused: {agent.teardownRefusalReason}
               {agent.teardownRefusedAt
-                ? ` (last refused ${new Date(agent.teardownRefusedAt).toLocaleString()})`
+                ? ` (last refused ${formatDateTime(agent.teardownRefusedAt)})`
                 : ""}
             </p>
           </div>

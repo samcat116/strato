@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -174,7 +176,7 @@ function UserCard({ onNavigate }: { onNavigate?: () => void }) {
       onNavigate?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Organization switch failed"
+        errorMessage(error, "Organization switch failed")
       );
     }
   };
@@ -248,7 +250,7 @@ function UserCard({ onNavigate }: { onNavigate?: () => void }) {
           <DropdownMenuItem
             onClick={() => {
               void logout().catch((error) =>
-                toast.error(error instanceof Error ? error.message : "Sign out failed")
+                toast.error(errorMessage(error, "Sign out failed"))
               );
             }}
             className="cursor-pointer"

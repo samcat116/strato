@@ -1,5 +1,9 @@
 "use client";
 
+import { formatDate, formatDateTime } from "@/lib/format-time";
+
+import { errorMessage } from "@/lib/errors";
+
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
@@ -43,7 +47,7 @@ export function CLISessionTable({ sessions, isLoading }: CLISessionTableProps) {
       toast.success(`CLI session "${session.clientName}" revoked`);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to revoke CLI session"
+        errorMessage(error, "Failed to revoke CLI session")
       );
     } finally {
       setPendingId(null);
@@ -105,16 +109,16 @@ export function CLISessionTable({ sessions, isLoading }: CLISessionTableProps) {
             </TableCell>
             <TableCell className="text-muted-foreground text-sm">
               {session.createdAt
-                ? new Date(session.createdAt).toLocaleString()
+                ? formatDateTime(session.createdAt)
                 : "—"}
             </TableCell>
             <TableCell className="text-muted-foreground text-sm">
               {session.lastUsedAt
-                ? new Date(session.lastUsedAt).toLocaleString()
+                ? formatDateTime(session.lastUsedAt)
                 : "Never"}
             </TableCell>
             <TableCell className="text-muted-foreground text-sm">
-              {new Date(session.refreshTokenExpiresAt).toLocaleDateString()}
+              {formatDate(session.refreshTokenExpiresAt)}
             </TableCell>
             <TableCell className="text-right">
               <Button

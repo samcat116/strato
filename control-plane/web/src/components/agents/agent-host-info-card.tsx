@@ -3,6 +3,7 @@
 import { Server } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCapacity } from "@/lib/format-bytes";
+import { formatDateTime } from "@/lib/format-time";
 import type { Agent } from "@/types/api";
 
 // Host memory can be reported in host-info; fall back to the scheduler's total
@@ -26,7 +27,7 @@ function formatBoot(bootTime: string | null | undefined): string | undefined {
   if (!bootTime) return undefined;
   const boot = new Date(bootTime);
   const ms = Date.now() - boot.getTime();
-  if (Number.isNaN(ms) || ms < 0) return boot.toLocaleString();
+  if (Number.isNaN(ms) || ms < 0) return formatDateTime(boot);
 
   const days = Math.floor(ms / 86_400_000);
   const hours = Math.floor((ms % 86_400_000) / 3_600_000);
@@ -36,7 +37,7 @@ function formatBoot(bootTime: string | null | undefined): string | undefined {
   else if (hours > 0) uptime = `${hours}h ${mins}m`;
   else uptime = `${mins}m`;
 
-  return `up ${uptime} (since ${boot.toLocaleString()})`;
+  return `up ${uptime} (since ${formatDateTime(boot)})`;
 }
 
 export function AgentHostInfoCard({ agent }: { agent: Agent }) {

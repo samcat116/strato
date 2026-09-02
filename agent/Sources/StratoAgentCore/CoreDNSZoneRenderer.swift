@@ -311,7 +311,7 @@ public enum CoreDNSZoneRenderer {
                     "zone '\(zoneLabel)': CNAME at '\(record.name)' coexists with other data; skipped")
                 continue
             }
-            let ttl = record.ttl ?? defaultTTL
+            let ttl = record.ttl
             for value in record.values {
                 guard let rdata = validated(value, forType: type) else {
                     diagnostics.append(
@@ -364,11 +364,7 @@ public enum CoreDNSZoneRenderer {
         // seed is randomized per process, so the serial would change on every
         // agent restart and a `reload`-watching CoreDNS would re-read every zone
         // for nothing.
-        var hash: UInt64 = 1_469_598_103_934_665_603
-        for byte in seed.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 1_099_511_628_211
-        }
+        let hash = FNV1a.legacyStratoHash64(seed)
         // Non-zero: BIND-lineage tooling treats serial 0 as "unset".
         return UInt32(truncatingIfNeeded: hash) | 1
     }
@@ -386,7 +382,7 @@ public enum CoreDNSZoneRenderer {
     private static func serialSeed(_ records: [DesiredDNSRecord]) -> String {
         records
             .sorted { ($0.name, $0.type) < ($1.name, $1.type) }
-            .map { "\($0.name)|\($0.type)|\($0.ttl ?? defaultTTL)|\($0.values.joined(separator: ","))" }
+            .map { "\($0.name)|\($0.type)|\($0.ttl)|\($0.values.joined(separator: ","))" }
             .joined(separator: ";")
     }
 

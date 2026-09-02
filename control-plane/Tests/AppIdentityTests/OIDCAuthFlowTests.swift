@@ -457,6 +457,83 @@ final class OIDCAuthFlowTests {
         }
     }
 
+    @Test("Optional UserInfo enrichment failure does not reject a verified ID token")
+    func testOptionalUserInfoFailureDoesNotRejectLogin() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            provider.userinfoEndpoint = "https://idp.example.com/userinfo"
+            try await provider.save(on: app.db)
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            // The token already establishes a verified email and display name;
+            // only preferred_username is absent, so UserInfo is enrichment.
+            let idToken = try await signIDToken(nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+            idp.stub(
+                urlContaining: provider.userinfoEndpoint!, status: .forbidden,
+                json: #"{"error":"insufficient_scope"}"#)
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state,
+                sessionCookie: login.sessionCookie
+            ) { res in
+                #expect(res.status == .seeOther)
+                #expect(res.headers.first(name: .location) == "/")
+            }
+
+            #expect(idp.requests(urlContaining: provider.userinfoEndpoint!).count == 1)
+            #expect(try await userCount(on: app.db) == 1)
+        }
+    }
+
+    @Test("Required UserInfo failure rejects a token without verified email")
+    func testRequiredUserInfoFailureRejectsLogin() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            provider.userinfoEndpoint = "https://idp.example.com/userinfo"
+            try await provider.save(on: app.db)
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDToken(nonce: login.nonce, emailVerified: nil)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+            idp.stub(
+                urlContaining: provider.userinfoEndpoint!, status: .forbidden,
+                json: #"{"error":"insufficient_scope"}"#)
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state,
+                sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            #expect(try await userCount(on: app.db) == 0)
+        }
+    }
+
+    @Test("UserInfo subject mismatch rejects optional enrichment")
+    func testOptionalUserInfoSubjectMismatchRejectsLogin() async throws {
+        try await withFlowApp { app, org, provider, idp in
+            provider.userinfoEndpoint = "https://idp.example.com/userinfo"
+            try await provider.save(on: app.db)
+            let login = try await startLogin(app: app, org: org, provider: provider)
+
+            let idToken = try await signIDToken(nonce: login.nonce)
+            idp.stub(urlContaining: tokenEndpointPath, json: tokenResponseJSON(idToken: idToken))
+            idp.stub(urlContaining: jwksPath, json: jwksJSON())
+            idp.stub(
+                urlContaining: provider.userinfoEndpoint!,
+                json: #"{"sub":"another-subject","preferred_username":"attacker"}"#)
+
+            try await callback(
+                app: app, org: org, provider: provider, state: login.state,
+                sessionCookie: login.sessionCookie
+            ) { res in
+                self.expectLoginFailedRedirect(res)
+            }
+            #expect(try await userCount(on: app.db) == 0)
+        }
+    }
+
     // MARK: Callback CSRF / replay
 
     @Test("Callback with a state that does not match the session is rejected")

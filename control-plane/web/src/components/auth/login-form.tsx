@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -59,7 +61,7 @@ export function LoginForm() {
       await login(username || null);
       toast.success("Login successful");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Login failed");
+      toast.error(errorMessage(error, "Login failed"));
     } finally {
       setIsLoading(false);
     }
@@ -76,7 +78,7 @@ export function LoginForm() {
       await login(null); // Discoverable credentials - no username needed
       toast.success("Login successful");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Login failed");
+      toast.error(errorMessage(error, "Login failed"));
     } finally {
       setIsLoading(false);
     }
@@ -118,7 +120,7 @@ export function LoginForm() {
       }
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "SSO lookup failed"
+        errorMessage(error, "SSO lookup failed")
       );
     } finally {
       setSsoLoading(false);

@@ -73,13 +73,12 @@ struct SandboxProtocolTests {
         #expect(sandbox.registryCredential?.bearer == true)
     }
 
-    @Test("RegistryCredential without a bearer key decodes (pre-token control planes)")
-    func registryCredentialBearerBackCompat() throws {
+    @Test("RegistryCredential requires its authentication mode")
+    func registryCredentialRequiresBearer() throws {
         let legacy = #"{"registry":"ghcr.io","username":"pull-bot","password":"pw"}"#
-        let decoded = try JSONDecoder().decode(RegistryCredential.self, from: Data(legacy.utf8))
-        #expect(decoded.bearer == nil)
-        #expect(decoded.expiresAt == nil)
-        #expect(decoded.password == "pw")
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(RegistryCredential.self, from: Data(legacy.utf8))
+        }
     }
 
     @Test("Minimal SandboxSpec round-trips: overrides nil, no network, no credential")
@@ -116,11 +115,9 @@ struct SandboxProtocolTests {
                 memoryBytes: 1 << 30,
                 restoreFrom: restore),
             desiredStatus: .running,
-            generation: 1,
-            restoreFrom: restore)
+            generation: 1)
 
         let decoded = try roundTrip(state)
-        #expect(decoded.restoreFrom == restore)
         #expect(decoded.spec.restoreFrom == restore)
     }
 

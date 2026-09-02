@@ -39,9 +39,6 @@ struct RateLimitConfig: Sendable {
     /// deployment.
     var proxyTrust: ProxyTrustConfig
 
-    var trustForwardedFor: Bool { proxyTrust.trustForwardedFor }
-    var trustedProxyHops: Int { proxyTrust.trustedProxyHops }
-
     static func fromConfiguration(_ configuration: ControlPlaneConfiguration) -> RateLimitConfig {
         return RateLimitConfig(
             // On by default outside tests; the suite fires many requests from one
@@ -86,14 +83,10 @@ private enum RateLimitScope: String {
 struct RateLimitMiddleware: AsyncMiddleware {
     /// A coordination dependency that cannot answer promptly must not consume
     /// the caller's entire HTTP deadline before the limiter fails open.
-    static let backendDeadline: Duration = .seconds(2)
+    static let backendDeadline = RateLimitBackend.defaultDeadline
 
     let config: RateLimitConfig
-    /// Shared in-memory fallback, used when Valkey isn't configured.
-    let fallbackStore: InMemoryRateLimitStore
-    /// Long-lived so its Lua digest cache is shared across requests.
-    private let valkeyStore: (any RateLimitStore)?
-    private let backendDeadline: Duration
+    private let backend: RateLimitBackend
 
     init(
         config: RateLimitConfig,
@@ -102,9 +95,15 @@ struct RateLimitMiddleware: AsyncMiddleware {
         backendDeadline: Duration = RateLimitMiddleware.backendDeadline
     ) {
         self.config = config
-        self.fallbackStore = fallbackStore
-        self.valkeyStore = valkeyStore
-        self.backendDeadline = backendDeadline
+        self.backend = RateLimitBackend(
+            fallbackStore: fallbackStore,
+            valkeyStore: valkeyStore,
+            deadline: backendDeadline)
+    }
+
+    init(config: RateLimitConfig, backend: RateLimitBackend) {
+        self.config = config
+        self.backend = backend
     }
 
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
@@ -112,13 +111,12 @@ struct RateLimitMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        let store = store()
         let identity = identity(for: request)
         let policy = policy(for: scope)
 
         // 1. Exponential backoff: reject early if this identity is currently
         //    locked out from a run of failed auth attempts.
-        if scope == .auth, let retryAfter = await activeLockout(store, identity: identity) {
+        if scope == .auth, let retryAfter = await activeLockout(identity: identity) {
             request.logger.warning(
                 "rate_limit_locked_out",
                 metadata: [
@@ -130,11 +128,10 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
         // 2. Fixed-window counter for this scope.
         let key = "rl:\(scope.rawValue):\(identity)"
-        let count: RateLimitCount
+        let result: FixedWindowRateLimitResult
         do {
-            count = try await withBackendDeadline {
-                try await store.hit(key, window: policy.window)
-            }
+            let count = try await backend.hit(key, window: policy.window)
+            result = FixedWindowRateLimitResult(limit: policy.limit, count: count)
         } catch {
             // Fail open: a limiter backend error must not take down the API.
             request.logger.error(
@@ -145,8 +142,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        let remaining = max(0, policy.limit - count.count)
-        if count.count > policy.limit {
+        if result.exceeded {
             let route = request.secretSafeLogPath
             request.logger.warning(
                 "rate_limit_exceeded",
@@ -156,7 +152,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
                     "http.route": .string(route),
                     "path": .string(route),
                 ])
-            return limitedResponse(limit: policy.limit, resetAfter: count.ttl)
+            return result.limitedResponse()
         }
 
         // Auth failures are usually *thrown* (`Abort(.unauthorized)`, a WebAuthn
@@ -169,17 +165,17 @@ struct RateLimitMiddleware: AsyncMiddleware {
         } catch {
             if scope == .auth {
                 let status = (error as? any AbortError)?.status ?? .internalServerError
-                await recordAuthOutcome(status, store: store, identity: identity)
+                await recordAuthOutcome(status, identity: identity)
             }
             throw error
         }
 
         // 3. Track auth outcome so the exponential backoff can escalate/relax.
         if scope == .auth {
-            await recordAuthOutcome(response.status, store: store, identity: identity)
+            await recordAuthOutcome(response.status, identity: identity)
         }
 
-        applyHeaders(to: response, limit: policy.limit, remaining: remaining, resetAfter: count.ttl)
+        result.applyHeaders(to: response)
         return response
     }
 
@@ -187,14 +183,12 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
     /// Seconds remaining on an active lockout, or `nil` when the identity isn't
     /// locked out (or the backend errored — fail open rather than block auth).
-    private func activeLockout(_ store: RateLimitStore, identity: String) async -> Int? {
+    private func activeLockout(identity: String) async -> Int? {
         // `try?` flattens the backend's `Int?` result, so a missing key, a nil
         // value, a backend error, and a backend that misses its deadline all
         // collapse to nil here (fail open).
         guard
-            let lockUntil = try? await withBackendDeadline({
-                try await store.readInt(lockKey(identity))
-            })
+            let lockUntil = try? await backend.readInt(lockKey(identity))
         else { return nil }
         let now = Int(Date().timeIntervalSince1970)
         guard lockUntil > now else { return nil }
@@ -204,21 +198,13 @@ struct RateLimitMiddleware: AsyncMiddleware {
     /// On a failed authentication, increment the failure counter and, past the
     /// threshold, (re)arm an exponentially growing lockout. On success, clear the
     /// failure state so a legitimate user isn't penalised for earlier typos.
-    private func recordAuthOutcome(_ status: HTTPResponseStatus, store: RateLimitStore, identity: String) async {
+    private func recordAuthOutcome(_ status: HTTPResponseStatus, identity: String) async {
         switch status.code {
         case 200..<300:
-            try? await withBackendDeadline {
-                try await store.reset(failureKey(identity))
-            }
-            try? await withBackendDeadline {
-                try await store.reset(lockKey(identity))
-            }
+            try? await backend.reset(failureKey(identity))
+            try? await backend.reset(lockKey(identity))
         case 401, 403:
-            guard
-                let failures = try? await withBackendDeadline({
-                    try await store.hit(failureKey(identity), window: config.failureWindow)
-                })
-            else {
+            guard let failures = try? await backend.hit(failureKey(identity), window: config.failureWindow) else {
                 return
             }
             let over = failures.count - config.failureThreshold
@@ -226,9 +212,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
             // 2s, 4s, 8s, ... capped at failureMaxDelay.
             let delay = min(config.failureMaxDelay, config.failureBaseDelay << min(over - 1, 30))
             let lockUntil = Int(Date().timeIntervalSince1970) + delay
-            try? await withBackendDeadline {
-                try await store.writeInt(lockKey(identity), value: lockUntil, ttl: delay)
-            }
+            try? await backend.writeInt(lockKey(identity), value: lockUntil, ttl: delay)
         default:
             break
         }
@@ -314,48 +298,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
             ?? "unknown"
     }
 
-    // MARK: - Store selection
-
-    private func store() -> RateLimitStore { valkeyStore ?? fallbackStore }
-
-    /// Bound one backend operation independently of valkey-swift's longer
-    /// command timeout. The client honors task cancellation, so the losing
-    /// command releases its wait when the deadline wins.
-    private func withBackendDeadline<Value: Sendable>(
-        _ operation: @escaping @Sendable () async throws -> Value
-    ) async throws -> Value {
-        let deadline = backendDeadline
-        return try await withThrowingTaskGroup(of: Value.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(for: deadline)
-                throw RateLimitError.backendTimeout(deadline)
-            }
-            defer { group.cancelAll() }
-            guard let value = try await group.next() else {
-                preconditionFailure("rate-limit backend deadline group had no tasks")
-            }
-            return value
-        }
-    }
-
     // MARK: - Responses / headers
-
-    private func applyHeaders(to response: Response, limit: Int, remaining: Int, resetAfter: Int) {
-        response.headers.replaceOrAdd(name: "X-RateLimit-Limit", value: String(limit))
-        response.headers.replaceOrAdd(name: "X-RateLimit-Remaining", value: String(remaining))
-        response.headers.replaceOrAdd(name: "X-RateLimit-Reset", value: String(resetAfter))
-    }
-
-    private func limitedResponse(limit: Int, resetAfter: Int) -> Response {
-        let response = errorResponse(
-            status: .tooManyRequests,
-            reason: "Rate limit exceeded. Try again in \(resetAfter)s."
-        )
-        applyHeaders(to: response, limit: limit, remaining: 0, resetAfter: resetAfter)
-        response.headers.replaceOrAdd(name: "Retry-After", value: String(resetAfter))
-        return response
-    }
 
     private func lockoutResponse(retryAfter: Int) -> Response {
         let response = errorResponse(

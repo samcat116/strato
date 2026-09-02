@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
@@ -60,7 +62,7 @@ export function NetworkTable({
       onRefresh?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete network"
+        errorMessage(error, "Failed to delete network")
       );
     } finally {
       setBusyId(null);

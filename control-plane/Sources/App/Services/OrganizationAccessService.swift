@@ -143,14 +143,8 @@ struct OrganizationListFilter: Sendable {
     /// The projects in this organization's hierarchy — the bridge for resources that
     /// reach their org through a project (VMs, sandboxes) rather than owning a scope.
     func projectIDs(on db: any Database) async throws -> [UUID] {
-        var projects = try await Project.query(on: db)
-            .filter(\.$organization.$id == organizationID)
-            .all()
-        if !organizationalUnitIDs.isEmpty {
-            projects += try await Project.query(on: db)
-                .filter(\.$organizationalUnit.$id ~~ organizationalUnitIDs)
-                .all()
-        }
+        let projects = try await Project.all(
+            inOrganization: organizationID, folders: organizationalUnitIDs, on: db)
         return projects.compactMap { $0.id }
     }
 }

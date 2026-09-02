@@ -138,10 +138,10 @@ public struct RegistryCredential: Codable, Sendable {
     /// registry requests. Nil/false means Basic credentials (the agent runs
     /// the registry's own challenge flow with them). Optional so payloads
     /// from control planes that predate token minting still decode.
-    public let bearer: Bool?
+    public let bearer: Bool
 
     public init(
-        registry: String, username: String, password: String, expiresAt: Date? = nil, bearer: Bool? = nil
+        registry: String, username: String, password: String, expiresAt: Date? = nil, bearer: Bool = false
     ) {
         self.registry = registry
         self.username = username

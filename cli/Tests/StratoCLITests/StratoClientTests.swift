@@ -30,8 +30,9 @@ struct StratoClientTests {
         try store.store(
             StoredCredentials(accessToken: "st_old", refreshToken: "rt_old", expiresAt: expiresAt),
             for: "test")
-        return StratoClient.authenticated(
-            serverURL: baseURL, contextName: "test", credentialStore: store, transport: transport)
+        return StratoClient.authenticatedSession(
+            serverURL: baseURL, contextName: "test", credentialStore: store, transport: transport
+        ).client
     }
 
     @Test("Mutation middleware generates one key and preserves an explicit caller key")
@@ -195,10 +196,11 @@ struct StratoClientTests {
     @Test("Missing credentials fail fast with a login hint")
     func testNotLoggedIn() async throws {
         try await withTemporaryDirectoryAsync { directory in
-            let client = StratoClient.authenticated(
+            let client = StratoClient.authenticatedSession(
                 serverURL: baseURL, contextName: "nope",
                 credentialStore: CredentialStore(directory: directory),
-                transport: MockTransport(responses: []))
+                transport: MockTransport(responses: [])
+            ).client
 
             let error = await #expect(throws: (any Error).self) {
                 try await client.getOperation(path: .init(operationID: Self.operationID))

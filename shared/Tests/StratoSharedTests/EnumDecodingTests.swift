@@ -25,14 +25,6 @@ struct EnumDecodingTests {
         }
     }
 
-    @Test func consoleModeRejectsUnknown() throws {
-        // Graphics is a separate axis (issue #566), not a console mode: `Vnc`
-        // still has no business decoding here.
-        #expect(throws: DecodingError.self) {
-            try decodeJSON([ConsoleMode].self, from: #"["Vnc"]"#)
-        }
-    }
-
     @Test func graphicsModeRejectsUnknown() throws {
         // Strict, like DesiredVMStatus: a mode this build cannot realize must
         // not degrade to "no display" on a VM the API says has one.
@@ -50,12 +42,16 @@ struct EnumDecodingTests {
         }
     }
 
-    @Test("telemetry enums tolerate unknown values from a newer protocol version")
-    func telemetryEnumsTolerateUnknownValues() throws {
-        // These are purely informational fields on VMLogMessage; an unrecognized
-        // value must decode to .unknown rather than fail the whole log message.
-        #expect(try decodeJSON([VMLogLevel].self, from: #"["trace"]"#) == [.unknown])
-        #expect(try decodeJSON([VMLogSource].self, from: #"["kernel"]"#) == [.unknown])
-        #expect(try decodeJSON([VMEventType].self, from: #"["migration"]"#) == [.unknown])
+    @Test("telemetry enums reject unknown values")
+    func telemetryEnumsRejectUnknownValues() throws {
+        #expect(throws: DecodingError.self) {
+            try decodeJSON([VMLogLevel].self, from: #"["trace"]"#)
+        }
+        #expect(throws: DecodingError.self) {
+            try decodeJSON([VMLogSource].self, from: #"["kernel"]"#)
+        }
+        #expect(throws: DecodingError.self) {
+            try decodeJSON([VMEventType].self, from: #"["migration"]"#)
+        }
     }
 }

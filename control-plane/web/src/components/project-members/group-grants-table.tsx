@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate } from "@/lib/format-time";
+
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
@@ -117,7 +119,7 @@ export function GroupGrantsTable({
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {grant.grantedAt
-                  ? new Date(grant.grantedAt).toLocaleDateString()
+                  ? formatDate(grant.grantedAt)
                   : "—"}
               </TableCell>
               {canManage && (

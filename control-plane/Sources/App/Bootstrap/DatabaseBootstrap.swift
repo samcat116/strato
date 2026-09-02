@@ -183,5 +183,9 @@ extension Application {
         // gained that case before the database check constraint did, so repair
         // both preserved databases and the current-schema baseline.
         migrations.add(AddRunResourceEventMutation())
+
+        // The exact-match registration handshake makes a persisted wire version
+        // redundant. Fresh baselines omit it; preserved databases drop it here.
+        migrations.add(DropAgentWireProtocolVersion())
     }
 }

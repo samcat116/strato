@@ -290,7 +290,7 @@ public struct QuarantinedManifestEntry: Sendable {
     /// Why this entry could not be used, for the log and the operator.
     public let reason: String
     /// The entry as read, for verbatim re-persistence.
-    public let raw: CodableValue
+    public let raw: JSONValue
 
     init(
         kind: WorkloadKind?,
@@ -302,7 +302,7 @@ public struct QuarantinedManifestEntry: Sendable {
         jailUID: UInt32?,
         jailerUsed: Bool? = nil,
         reason: String,
-        raw: CodableValue
+        raw: JSONValue
     ) {
         self.kind = kind
         self.hypervisorTypeRawValue = hypervisorTypeRawValue
@@ -365,7 +365,7 @@ public struct QuarantinedManifestEntry: Sendable {
             legacy["volumeId"] = .string(managed.volumeId.uuidString)
             if let attachment = managed.attachment,
                 let data = try? JSONEncoder().encode(attachment),
-                let value = try? JSONDecoder().decode(CodableValue.self, from: data)
+                let value = try? JSONDecoder().decode(JSONValue.self, from: data)
             {
                 legacy["attachment"] = value
             } else {
@@ -379,7 +379,7 @@ public struct QuarantinedManifestEntry: Sendable {
 
         spec["volumes"] = .array(volumes)
         entry["spec"] = .object(spec)
-        guard let data = try? JSONEncoder().encode(CodableValue.object(entry)) else { return nil }
+        guard let data = try? JSONEncoder().encode(JSONValue.object(entry)) else { return nil }
         return try? JSONDecoder().decode(VMManifestEntry.self, from: data)
     }
 }
@@ -620,7 +620,7 @@ private struct PartiallyDecodedManifest: Decodable {
     private static func quarantine(
         _ container: KeyedDecodingContainer<DynamicCodingKey>, _ key: DynamicCodingKey
     ) -> QuarantinedManifestEntry {
-        let raw = (try? container.decode(CodableValue.self, forKey: key)) ?? .null
+        let raw = (try? container.decode(JSONValue.self, forKey: key)) ?? .null
         let salvaged = try? container.decode(SalvagedEntry.self, forKey: key)
         let reservation = salvaged?.spec ?? salvaged?.sandboxSpec
         let hypervisorType = salvaged?.hypervisorType
@@ -701,7 +701,7 @@ private struct SalvagedEntry: Decodable {
 /// ones re-emitted byte-for-byte as they were read.
 private struct MergedManifest: Encodable {
     let entries: [String: VMManifestEntry]
-    let quarantined: [String: CodableValue]
+    let quarantined: [String: JSONValue]
 
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: DynamicCodingKey.self)

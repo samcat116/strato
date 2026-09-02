@@ -180,7 +180,7 @@ public actor OCIRegistryClient {
 
     /// Downloads a blob to `destinationPath`, verifying its SHA-256 against
     /// the descriptor's digest before the file appears at the destination
-    /// (staged as `.partial`, published by rename).
+    /// (staged under a unique sibling name, then durably published by rename).
     public func fetchBlob(
         _ descriptor: OCIDescriptor,
         from ref: OCIImageReference,
@@ -195,7 +195,7 @@ public actor OCIRegistryClient {
             throw OCIError.invalidReference("\(ref.repository)@\(descriptor.digest)")
         }
 
-        let stagingPath = destinationPath + ".partial"
+        let stagingPath = destinationPath + ".partial." + UUID().uuidString.lowercased()
         defer { try? FileManager.default.removeItem(atPath: stagingPath) }
 
         let request = OCIHTTPRequest(url: url)
@@ -235,8 +235,7 @@ public actor OCIRegistryClient {
             throw OCIError.digestMismatch(expected: descriptor.digest, actual: actual)
         }
 
-        try? FileManager.default.removeItem(atPath: destinationPath)
-        try FileManager.default.moveItem(atPath: stagingPath, toPath: destinationPath)
+        try DurableFileWriter().publish(stagingPath: stagingPath, to: destinationPath)
     }
 
     // MARK: - Authorization

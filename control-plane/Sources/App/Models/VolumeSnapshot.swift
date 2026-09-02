@@ -163,48 +163,6 @@ final class VolumeSnapshot: Model, @unchecked Sendable {
 
 extension VolumeSnapshot: Content {}
 
-// MARK: - Public DTO
-
-extension VolumeSnapshot {
-    struct Public: Content {
-        let id: UUID?
-        let name: String
-        let description: String
-        let volumeId: UUID?
-        let projectId: UUID?
-        let size: Int64
-        let sizeGB: Double
-        let status: SnapshotStatus
-        let errorMessage: String?
-        let storagePath: String?
-        let agentId: String?
-        let expiresAt: Date?
-        let conditions: ResourceConditions
-        let createdById: UUID?
-        let createdAt: Date?
-    }
-
-    func asPublic() -> Public {
-        return Public(
-            id: self.id,
-            name: self.name,
-            description: self.description,
-            volumeId: self.$volume.id,
-            projectId: self.$project.id,
-            size: self.size,
-            sizeGB: Double(size) / 1024.0 / 1024.0 / 1024.0,
-            status: self.status,
-            errorMessage: self.errorMessage,
-            storagePath: self.storagePath,
-            agentId: self.agentId,
-            expiresAt: self.expiresAt,
-            conditions: self.conditions,
-            createdById: self.$createdBy.id,
-            createdAt: self.createdAt
-        )
-    }
-}
-
 // MARK: - Computed Properties
 
 extension VolumeSnapshot {
@@ -273,18 +231,12 @@ extension VolumeSnapshot: SnapshotArtifactResource {
     }
 
     func adoptReconciliationState(from committed: VolumeSnapshot) {
+        adoptConvergenceBookkeeping(from: committed)
         status = committed.status
         desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        errorMessage = committed.errorMessage
-        failedGeneration = committed.failedGeneration
-        convergenceDeadline = committed.convergenceDeadline
         agentId = committed.agentId
         storagePath = committed.storagePath
         observedSizeBytes = committed.observedSizeBytes
-        finalizers = committed.finalizers
         expiresAt = committed.expiresAt
     }
 

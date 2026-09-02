@@ -532,8 +532,7 @@ extension VM {
     /// unachieved intent does not linger and replay on a later sync. A stuck
     /// *delete* is exempt from that realignment — see
     /// `revertDesiredToObserved` — so a timed-out delete cannot resurrect the
-    /// VM. Shared by `ResourceOperationCoordinator.recordVerdict` (the residual
-    /// snapshot/reboot operations) and the stuck-convergence sweep;
+    /// VM. Shared by reported-failure handling and the stuck-convergence sweep;
     /// `telemetryReason` keeps a reported failure (`operation_failed`) distinct
     /// from a swept timeout (`stuck_convergence`) in the error metric. Returns
     /// whether desired state changed and needs a new generation; a status-only

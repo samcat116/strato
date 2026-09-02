@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useEffect, useRef, type ReactNode } from "react";
 import { Clock, Download, Info, Pause, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -58,14 +60,6 @@ export function LogViewerShell<Entry extends LogEntry>({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [logs, autoRefresh]);
-
-  const formatTimestamp = (timestamp: string) => {
-    try {
-      return new Date(timestamp).toLocaleString();
-    } catch {
-      return timestamp;
-    }
-  };
 
   const downloadLogs = () => {
     if (!logs || logs.length === 0) return;
@@ -190,7 +184,7 @@ export function LogViewerShell<Entry extends LogEntry>({
                     className="hover:bg-accent/60 border-b border-border"
                   >
                     <td className="px-3 py-2 text-muted-foreground whitespace-nowrap align-top">
-                      {formatTimestamp(log.timestamp)}
+                      {formatDateTime(log.timestamp)}
                     </td>
                     {renderRow(log, index)}
                   </tr>

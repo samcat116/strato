@@ -54,7 +54,8 @@ struct NetworkACLProtocolTests {
         let legacy = """
             {"networkId":"\(UUID().uuidString)","name":"private","subnet":"10.0.0.0/24",
              "gateway":"10.0.0.1","routerKey":"project-test","externalAccess":false,
-             "generation":1}
+             "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false,
+             "floatingIPs":[],"loadBalancers":[],"generation":1}
             """
         let absent = try WireProtocol.makeDecoder().decode(
             DesiredNetworkState.self, from: Data(legacy.utf8))

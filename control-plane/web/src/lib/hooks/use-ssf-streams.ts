@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ssfStreamsApi } from "@/lib/api/ssf-streams";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type {
   CreateSSFStreamRequest,
   UpdateSSFStreamRequest,
@@ -79,8 +79,7 @@ export function usePollSSFStream(orgId: string) {
 }
 
 export function ssfStreamErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need admin rights to manage SSF streams.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need admin rights to manage SSF streams.",
+  });
 }

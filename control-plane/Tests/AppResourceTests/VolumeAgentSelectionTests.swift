@@ -10,8 +10,7 @@ struct VolumeAgentSelectionTests {
         HypervisorSupport(
             type: type,
             available: available,
-            accelerated: true,
-            capabilities: .capabilities(for: type)
+            accelerated: true
         )
     }
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import {
   Activity,
@@ -284,7 +286,7 @@ export function SSFStreamsSection({ orgId, canManage }: SSFStreamsSectionProps) 
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm">
                     {stream.lastEventAt
-                      ? new Date(stream.lastEventAt).toLocaleString()
+                      ? formatDateTime(stream.lastEventAt)
                       : "—"}
                   </TableCell>
                   {canManage && (

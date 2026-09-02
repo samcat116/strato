@@ -166,17 +166,9 @@ public struct DesiredSandboxState: Codable, Sendable {
     /// registry, minted fresh at sync assembly (see `RegistryCredential`).
     /// Nil for public images — zero-configuration public pulls must work.
     public let registryCredential: RegistryCredential?
-    /// Duplicated at the desired-entry level as an explicit create-strategy
-    /// discriminator (issue #427). `spec.restoreFrom` carries the same value so
-    /// runtimes that operate only on the spec still have the artifact locator.
-    public let restoreFrom: SandboxSnapshotRef?
     /// The snapshot this sandbox should have been restored **into itself** from,
     /// as a nonce (ADR 0001 stage 9, STR-151).
     ///
-    /// Not to be confused with `restoreFrom` above, which they are easy to read
-    /// as one thing and are not: `restoreFrom` is a *create strategy* for a
-    /// sandbox that does not exist yet (a fork gets a new identity from someone
-    /// else's checkpoint), and is consulted only while the sandbox is absent.
     /// This is an edge applied to a sandbox that already exists — same id, same
     /// addresses, rewound — and is consulted only while it is present.
     public let restore: DesiredRestore?
@@ -187,7 +179,6 @@ public struct DesiredSandboxState: Codable, Sendable {
         desiredStatus: DesiredSandboxStatus,
         generation: Int64,
         registryCredential: RegistryCredential? = nil,
-        restoreFrom: SandboxSnapshotRef? = nil,
         restore: DesiredRestore? = nil
     ) {
         self.sandboxId = sandboxId
@@ -195,7 +186,6 @@ public struct DesiredSandboxState: Codable, Sendable {
         self.desiredStatus = desiredStatus
         self.generation = generation
         self.registryCredential = registryCredential
-        self.restoreFrom = restoreFrom
         self.restore = restore
     }
 }
@@ -223,7 +213,7 @@ public enum DesiredVolumeStatus: String, Codable, CaseIterable, Sendable {
 }
 
 /// How a volume that does not yet exist on this host gets its initial bytes: a
-/// create *strategy*, not an operation — the `DesiredSandboxState.restoreFrom`
+/// create *strategy*, not an operation — the `SandboxSpec.restoreFrom`
 /// pattern (issue #427) applied to what used to be `volume_clone`.
 ///
 /// Consulted only when the volume is absent from the host. A volume that
@@ -719,11 +709,8 @@ public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
     /// Security-group peer: matches the addresses of the referenced group's
     /// member ports via its auto-generated address set.
     public let remoteGroupId: UUID?
-    /// Whether the ACL should log the packets it matches (wire v24). Nil — an
-    /// older control plane — means "off": logging is observability, so the
-    /// safe reading of silence is the quiet one, and enforcement is identical
-    /// either way. The synthesized `Codable` decodes a missing key to nil.
-    public let log: Bool?
+    /// Whether the ACL should log the packets it matches.
+    public let log: Bool
 
     public init(
         id: UUID,
@@ -734,7 +721,7 @@ public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
         portRangeMax: Int? = nil,
         remoteCIDR: String? = nil,
         remoteGroupId: UUID? = nil,
-        log: Bool? = nil
+        log: Bool = false
     ) {
         self.id = id
         self.direction = direction
@@ -995,8 +982,7 @@ public struct DesiredNetworkState: Codable, Sendable {
     public let gateway: String?
     /// The network's IPv6 subnet in CIDR form (a /64, e.g.
     /// `fd12:3456:789a::/64`), when the network is dual-stack. Nil on
-    /// v4-only networks and from control planes that predate IPv6 support —
-    /// optional, so old payloads decode and old agents ignore it.
+    /// v4-only networks.
     public let subnet6: String?
     /// The IPv6 gateway (router-port address) inside `subnet6`, when
     /// dual-stack. The agent adds it to the router port and announces it via
@@ -1014,12 +1000,10 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// Carried here — not only on per-NIC specs — because DHCP edits don't
     /// bump VM generations, so converged VMs never re-realize their NICs; the
     /// level-triggered network reconcile is what converges the DHCP_Options
-    /// rows (including deleting them when DHCP is turned off). Nil from
-    /// control planes that predate the field: the agent then leaves DHCP rows
-    /// alone, preserving the old NIC-driven behavior.
-    public let dhcpEnabled: Bool?
+    /// rows (including deleting them when DHCP is turned off).
+    public let dhcpEnabled: Bool
     /// The network's DNS resolvers; may be mixed-family (the agent splits per
-    /// DHCP family). Nil ≙ pre-field control plane, like `dhcpEnabled`.
+    /// DHCP family).
     ///
     /// **What this list is depends on `resolverEnabled`** (wire v37, STR-40).
     /// With the resolver off it is what the guest is told over DHCP, which is
@@ -1029,7 +1013,7 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// did not change shape or validation, only its consumer — and the two
     /// readings agree on the values that matter, because a resolver list was
     /// already a list of recursive resolvers.
-    public let dnsServers: [String]?
+    public let dnsServers: [String]
     /// DNS search domain advertised over DHCP.
     public let domainName: String?
     /// DHCPv4 lease time in seconds; agents default it when nil.
@@ -1046,14 +1030,9 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// reconcile is the only path that reaches a live network whose setting
     /// changed.
     ///
-    /// Nil ≙ a control plane that predates the field: the agent neither creates
-    /// nor *deletes* the port. The deletion half is load-bearing in a way it is
-    /// not for `dhcpEnabled`, because network teardown is `observed − desired`:
-    /// a nil that merely planned no port would read as "remove it", so a
-    /// rollback would sweep every live metadata port. `false` is an opinion and
-    /// *is* honored — that is what makes turning the feature off work. See
-    /// `NetworkReconciler.serviceLocalPortProtection(for:)`.
-    public let metadataEnabled: Bool?
+    /// `false` is authoritative and removes the managed metadata port; that is
+    /// what makes turning the feature off converge.
+    public let metadataEnabled: Bool
     /// Whether this network's guests get a resolver at the addresses in
     /// `resolverAddresses` (STR-40, wire v37): the host-wide CoreDNS each agent
     /// runs in its *host* namespace, which serves the network's zones in full —
@@ -1066,12 +1045,10 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// 0008). It is still a second flag on one carrier rather than a second
     /// carrier, because both are properties of the same network row.
     ///
-    /// Everything said about `metadataEnabled`'s absence applies here word for
-    /// word — nil neither creates nor deletes, `false` is an opinion and is
-    /// honored, and the deletion half is what keeps a rollback from sweeping
-    /// live ports. What differs is that this flag also decides what the DHCP
-    /// `dns_server` option contains, so a network flipping it changes what
-    /// guests are told at their next lease.
+    /// Nil means this sender has no resolver opinion and leaves managed rows in
+    /// place; `false` is authoritative and removes them. This flag also decides
+    /// what the DHCP `dns_server` option contains, so a network flipping it
+    /// changes what guests are told at their next lease.
     ///
     /// The control plane withholds `true` unless *every* agent in the site
     /// reports `AgentRegisterMessage.resolverCapable`.
@@ -1096,14 +1073,12 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// level-triggered, so same-generation networks still converge DHCP.
     public let generation: Int64
     /// Floating IPs attached to this network's NICs, realized as
-    /// `dnat_and_snat` rules on the network's router (issue #344). Nil from
-    /// control planes that predate the field — optional, so old payloads
-    /// decode and old agents ignore it. Only meaningful on `externalAccess`
-    /// networks (the NAT needs the router's uplink).
-    public let floatingIPs: [DesiredFloatingIP]?
-    /// Native OVN load balancers whose VIP belongs to this network. Nil means
-    /// a pre-v43 control plane has no opinion; an empty array is authoritative.
-    public let loadBalancers: [DesiredLoadBalancer]?
+    /// `dnat_and_snat` rules on the network's router (issue #344). Only
+    /// meaningful on `externalAccess` networks (the NAT needs the router's uplink).
+    public let floatingIPs: [DesiredFloatingIP]
+    /// Native OVN load balancers whose VIP belongs to this network. An empty
+    /// array is authoritative.
+    public let loadBalancers: [DesiredLoadBalancer]
     /// The network-level ACL attached to this switch (STR-33). The schema
     /// permits at most one entry, while the collection shape preserves the
     /// desired-state distinction between no opinion (`nil`) and authoritative
@@ -1119,16 +1094,16 @@ public struct DesiredNetworkState: Codable, Sendable {
         gateway6: String? = nil,
         routerKey: String,
         externalAccess: Bool,
-        dhcpEnabled: Bool? = nil,
-        dnsServers: [String]? = nil,
+        dhcpEnabled: Bool = false,
+        dnsServers: [String] = [],
         domainName: String? = nil,
         leaseTime: Int? = nil,
-        metadataEnabled: Bool? = nil,
+        metadataEnabled: Bool = false,
         resolverEnabled: Bool? = nil,
         resolverAddresses: [String]? = nil,
         generation: Int64,
-        floatingIPs: [DesiredFloatingIP]? = nil,
-        loadBalancers: [DesiredLoadBalancer]? = nil,
+        floatingIPs: [DesiredFloatingIP] = [],
+        loadBalancers: [DesiredLoadBalancer] = [],
         networkACLs: [DesiredNetworkACL]? = nil
     ) {
         self.networkId = networkId
@@ -1186,11 +1161,10 @@ public struct DesiredDNSRecord: Codable, Sendable, Equatable {
     /// the control plane enforces a single TTL across an RRset (RFC 2181 §5.2)
     /// rather than storing it per value.
     ///
-    /// Optional so a pre-v37 control plane's payload still decodes; a receiver
-    /// that gets nil renders the record at its zone's default TTL.
-    public let ttl: Int?
+    /// Defaults to the conventional zone TTL for convenient construction.
+    public let ttl: Int
 
-    public init(name: String, type: String, values: [String], ttl: Int? = nil) {
+    public init(name: String, type: String, values: [String], ttl: Int = 300) {
         self.name = name
         self.type = type
         self.values = values

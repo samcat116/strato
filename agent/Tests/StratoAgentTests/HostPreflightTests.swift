@@ -308,7 +308,6 @@ struct HostPreflightTests {
         #expect(withOVN.check(.ovsDatabaseSocket)?.passed == false)
         #expect(withOVN.check(.ipTool)?.passed == false)
         #expect(withOVN.check(.ovsVsctlTool)?.passed == false)
-        #expect(!withOVN.ovnReady)
         // OVN problems never gate storage readiness.
         #expect(withOVN.storageReady)
     }
@@ -348,7 +347,6 @@ struct HostPreflightTests {
         #expect(check.detail?.contains("missing-cert.pem") == true)
         // The file that exists is not reported as missing.
         #expect(check.detail?.contains("cacert.pem") == false)
-        #expect(!report.ovnReady)
     }
 
     @Test("NB TLS file check passes when every configured file exists, and is skipped when none are configured")
@@ -396,8 +394,6 @@ struct HostPreflightTests {
         #expect(!check.passed)
         #expect(check.severity == .advisory)
         #expect(check.detail?.contains("ovn-host") == true)
-        // The diagnostic tool being absent must not demote OVN readiness.
-        #expect(report.ovnReady)
     }
 
     // MARK: - Advisory checks
@@ -458,7 +454,7 @@ struct HostPreflightTests {
         #expect(!report.tpmAvailable)
         #expect(report.storageReady)
 
-        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true)
         #expect(report.gate([qemu]) == [qemu])
     }
 
@@ -527,7 +523,7 @@ struct HostPreflightTests {
         #expect(check.severity == .advisory)
         #expect(report.storageReady)
 
-        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true)
         #expect(report.gate([qemu]) == [qemu])
     }
 
@@ -559,10 +555,10 @@ struct HostPreflightTests {
         #expect(!report.storageReady)
 
         let probes = [
-            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu),
+            HypervisorSupport(type: .qemu, available: true, accelerated: true),
             HypervisorSupport(
                 type: .firecracker, available: false, accelerated: false,
-                unavailabilityReason: "KVM unavailable", capabilities: .firecracker),
+                unavailabilityReason: "KVM unavailable"),
         ]
         let gated = report.gate(probes)
 
@@ -585,8 +581,8 @@ struct HostPreflightTests {
         #expect(report.storageReady)
 
         let probes = [
-            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu),
-            HypervisorSupport(type: .firecracker, available: true, accelerated: true, capabilities: .firecracker),
+            HypervisorSupport(type: .qemu, available: true, accelerated: true),
+            HypervisorSupport(type: .firecracker, available: true, accelerated: true),
         ]
         let gated = report.gate(probes)
 
@@ -609,8 +605,7 @@ struct HostPreflightTests {
         #expect(check.detail?.contains("Linux kernel 5.3 or newer") == true)
 
         let firecracker = HypervisorSupport(
-            type: .firecracker, available: true, accelerated: true,
-            capabilities: .firecracker)
+            type: .firecracker, available: true, accelerated: true)
         let gated = try #require(report.gate([firecracker]).first)
         #expect(!gated.available)
         #expect(gated.unavailabilityReason == check.detail)
@@ -750,9 +745,9 @@ struct HostPreflightTests {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
-        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true)
         let firecracker = HypervisorSupport(
-            type: .firecracker, available: true, accelerated: true, capabilities: .firecracker)
+            type: .firecracker, available: true, accelerated: true)
 
         var inputs = passingInputs(root: root)
         inputs.libvirt = .reachable(LibvirtProbe.Version(major: 10, minor: 0, patch: 0))

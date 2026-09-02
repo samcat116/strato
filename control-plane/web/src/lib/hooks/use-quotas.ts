@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { quotasApi } from "@/lib/api/quotas";
 import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type { CreateQuotaRequest, UpdateQuotaRequest } from "@/types/api";
 
 // A quota can be created at one of three scopes; the mutation resolves the
@@ -73,12 +74,11 @@ export function useDeleteQuota() {
 
 export function quotaErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
-    if (error.status === 403) {
-      return "You need admin rights to manage resource quotas.";
-    }
     if (error.status === 409) {
       return error.message || "Quota still has active reservations.";
     }
   }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need admin rights to manage resource quotas.",
+  });
 }

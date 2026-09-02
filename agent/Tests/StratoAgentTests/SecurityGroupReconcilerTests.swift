@@ -47,7 +47,7 @@ struct SecurityGroupReconcilerTests {
         portRangeMax: Int? = nil,
         remoteCIDR: String? = nil,
         remoteGroupId: UUID? = nil,
-        log: Bool? = nil,
+        log: Bool = false,
         id: UUID = UUID()
     ) -> DesiredSecurityGroupRule {
         DesiredSecurityGroupRule(
@@ -165,14 +165,12 @@ struct SecurityGroupReconcilerTests {
         #expect(acl.name!.count <= 63)
     }
 
-    @Test("An unlogged rule — explicit false or a pre-v24 nil — sets no log columns")
+    @Test("An unlogged rule sets no log columns")
     func unloggedRule() {
-        for value: Bool? in [nil, false] {
-            let acl = SecurityGroupACLBuilder.acl(for: rule(log: value), portGroup: pg)!
-            #expect(!acl.log)
-            #expect(acl.severity == nil)
-            #expect(acl.name == nil)
-        }
+        let acl = SecurityGroupACLBuilder.acl(for: rule(log: false), portGroup: pg)!
+        #expect(!acl.log)
+        #expect(acl.severity == nil)
+        #expect(acl.name == nil)
     }
 
     @Test("Plan preserves a rule's log columns while stamping the group id")

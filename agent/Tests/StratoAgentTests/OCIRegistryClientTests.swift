@@ -335,7 +335,7 @@ struct OCIRegistryClientTests {
 
         let written = FileManager.default.contents(atPath: destination)
         #expect(written == content)
-        #expect(!FileManager.default.fileExists(atPath: destination + ".partial"))
+        #expect(stagingSiblings(of: destination).isEmpty)
     }
 
     @Test("a blob that hashes wrong never reaches its destination")
@@ -358,7 +358,14 @@ struct OCIRegistryClientTests {
             return
         }
         #expect(!FileManager.default.fileExists(atPath: destination))
-        #expect(!FileManager.default.fileExists(atPath: destination + ".partial"))
+        #expect(stagingSiblings(of: destination).isEmpty)
+    }
+
+    private func stagingSiblings(of destination: String) -> [String] {
+        let directory = (destination as NSString).deletingLastPathComponent
+        let prefix = (destination as NSString).lastPathComponent + ".partial."
+        return ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? [])
+            .filter { $0.hasPrefix(prefix) }
     }
 
     @Test("blob redirects are followed without forwarding credentials")

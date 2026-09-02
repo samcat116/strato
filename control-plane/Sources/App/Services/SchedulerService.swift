@@ -246,8 +246,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case vsockUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
-    case invalidStrategy(String)
-    case agentServiceUnavailable
 
     var description: String {
         switch self {
@@ -299,10 +297,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         case .insufficientResources(let required, let available):
             return
                 "No agent has sufficient resources. Required: CPU=\(required.cpu), Memory=\(required.memory), Disk=\(required.disk). Available agents: \(available.count)"
-        case .invalidStrategy(let strategy):
-            return "Invalid scheduling strategy: \(strategy)"
-        case .agentServiceUnavailable:
-            return "Agent service is not available"
         }
     }
 }

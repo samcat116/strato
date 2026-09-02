@@ -30,6 +30,109 @@ protocol RateLimitStore: Sendable {
     func reset(_ key: String) async throws
 }
 
+/// Selects the shared or process-local rate-limit adapter and bounds every
+/// backend operation. Both HTTP rate-limit entry points use this module so a
+/// slow coordination backend has one fail-open deadline contract.
+struct RateLimitBackend: Sendable {
+    static let defaultDeadline: Duration = .seconds(2)
+
+    private let fallbackStore: any RateLimitStore
+    private let valkeyStore: (any RateLimitStore)?
+    private let deadline: Duration
+
+    init(
+        fallbackStore: any RateLimitStore,
+        valkeyStore: (any RateLimitStore)? = nil,
+        deadline: Duration = Self.defaultDeadline
+    ) {
+        self.fallbackStore = fallbackStore
+        self.valkeyStore = valkeyStore
+        self.deadline = deadline
+    }
+
+    func hit(_ key: String, window: Int, useValkey: Bool = true) async throws -> RateLimitCount {
+        try await call(useValkey: useValkey) { store in
+            try await store.hit(key, window: window)
+        }
+    }
+
+    func readInt(_ key: String, useValkey: Bool = true) async throws -> Int? {
+        try await call(useValkey: useValkey) { store in
+            try await store.readInt(key)
+        }
+    }
+
+    func writeInt(_ key: String, value: Int, ttl: Int, useValkey: Bool = true) async throws {
+        try await call(useValkey: useValkey) { store in
+            try await store.writeInt(key, value: value, ttl: ttl)
+        }
+    }
+
+    func reset(_ key: String, useValkey: Bool = true) async throws {
+        try await call(useValkey: useValkey) { store in
+            try await store.reset(key)
+        }
+    }
+
+    private func call<Value: Sendable>(
+        useValkey: Bool,
+        _ operation: @escaping @Sendable (any RateLimitStore) async throws -> Value
+    ) async throws -> Value {
+        let store = useValkey ? (valkeyStore ?? fallbackStore) : fallbackStore
+        return try await withThrowingTaskGroup(of: Value.self) { group in
+            group.addTask { try await operation(store) }
+            group.addTask {
+                try await Task.sleep(for: deadline)
+                throw RateLimitError.backendTimeout(deadline)
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else {
+                preconditionFailure("rate-limit backend deadline group had no tasks")
+            }
+            return value
+        }
+    }
+}
+
+/// The shared fixed-window response contract for ordinary API requests and
+/// authenticated-agent guest-identity minting.
+struct FixedWindowRateLimitResult: Sendable {
+    let limit: Int
+    let remaining: Int
+    let resetAfter: Int
+    let exceeded: Bool
+
+    init(limit: Int, count: RateLimitCount) {
+        self.limit = limit
+        self.remaining = max(0, limit - count.count)
+        self.resetAfter = count.ttl
+        self.exceeded = count.count > limit
+    }
+
+    func applyHeaders(to response: Response) {
+        response.headers.replaceOrAdd(name: "X-RateLimit-Limit", value: String(limit))
+        response.headers.replaceOrAdd(name: "X-RateLimit-Remaining", value: String(remaining))
+        response.headers.replaceOrAdd(name: "X-RateLimit-Reset", value: String(resetAfter))
+    }
+
+    func limitedResponse() -> Response {
+        let response = Response(status: .tooManyRequests)
+        response.headers.contentType = .json
+        struct ErrorBody: Content { let error: Bool; let reason: String }
+        do {
+            try response.content.encode(
+                ErrorBody(
+                    error: true,
+                    reason: "Rate limit exceeded. Try again in \(resetAfter)s."))
+        } catch {
+            response.body = .init(string: #"{"error":true,"reason":"Rate limit exceeded."}"#)
+        }
+        applyHeaders(to: response)
+        response.headers.replaceOrAdd(name: "Retry-After", value: String(resetAfter))
+        return response
+    }
+}
+
 // MARK: - Valkey backend
 
 /// Valkey-backed store. Counters live in Valkey so that a rate limit is

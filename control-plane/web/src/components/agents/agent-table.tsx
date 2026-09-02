@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import Link from "next/link";
 
 import {
@@ -116,7 +118,7 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
             </TableCell>
             <TableCell className="text-muted-foreground text-sm">
               {agent.lastHeartbeat
-                ? new Date(agent.lastHeartbeat).toLocaleString()
+                ? formatDateTime(agent.lastHeartbeat)
                 : "Never"}
             </TableCell>
             <TableCell className="text-right">

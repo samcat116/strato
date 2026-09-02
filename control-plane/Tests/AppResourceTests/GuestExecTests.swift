@@ -74,7 +74,6 @@ final class GuestExecTests {
                     type: .qemu,
                     available: true,
                     accelerated: true,
-                    capabilities: .capabilities(for: .qemu),
                     supportsVsock: true,
                     supportsGuestExec: supportsVMGuestExec)
             ],
@@ -734,18 +733,10 @@ final class GuestExecTests {
                 #expect(error == .alreadyAttached(session.sessionId))
             }
 
-            // The kind-aware resource index tracks the attached session and empties
-            // on removal.
-            let forResource = manager.getSessions(
-                resourceKind: session.resourceKind, resourceId: session.resourceId)
-            #expect(forResource.count == 1)
             await manager.endSession(
                 sessionId: session.sessionId,
                 outcome: .terminated,
                 reason: "test cleanup")
-            let afterRemoval = manager.getSessions(
-                resourceKind: session.resourceKind, resourceId: session.resourceId)
-            #expect(afterRemoval.isEmpty)
             #expect(manager.getSession(sessionId: session.sessionId) == nil)
         }
     }
@@ -1195,9 +1186,6 @@ final class GuestExecTests {
                 forAgent: agentKey("exec-agent"), reason: "agent disconnected")
 
             #expect(manager.getSession(sessionId: attached.sessionId) == nil)
-            let attachedIndex = manager.getSessions(
-                resourceKind: attached.resourceKind, resourceId: attached.resourceId)
-            #expect(attachedIndex.isEmpty)
             let pendingSurvives = manager.hasPendingSession(sessionId: pending.sessionId)
             #expect(pendingSurvives == false)
 

@@ -55,27 +55,22 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let hostname: String
     public let version: String
     public let resources: AgentResources
-    /// Host CPU architecture. Optional so messages from agents that predate
-    /// this field decode fine; absent means unknown, and the scheduler treats
-    /// unknown-architecture agents as ineligible for any VM that pins an
-    /// architecture.
-    public let architecture: CPUArchitecture?
+    /// Host CPU architecture.
+    public let architecture: CPUArchitecture
     /// Every hypervisor on this host with probed availability and capabilities.
-    public let hypervisors: [HypervisorSupport]?
-    /// Networking capability of this host. Optional for the same reason.
+    public let hypervisors: [HypervisorSupport]
+    /// Networking capability of this host. Nil means networking is disabled or
+    /// its host probe could not establish a usable mode.
     public let networkCapability: NetworkCapability?
     /// Exact wire/schema version the agent speaks. Registration is the sole
     /// protocol-version handshake; peers must equal `WireProtocol.currentVersion`.
     public let protocolVersion: Int
     /// Whether this agent runs sandbox workloads (OCI-image Firecracker
     /// microVMs, issue #410): it reconciles `DesiredStateMessage.sandboxes`
-    /// and reports them back in `ObservedStateReport.sandboxes`. Speaking
-    /// protocol v5 is deliberately NOT sufficient — a v5 build understands the
-    /// fields on the wire, but the sandbox runtime lands separately (issue
-    /// #421), so the scheduler keys placement on this explicit signal, not on
-    /// the version. Optional so registrations from older agents decode fine;
-    /// absent means not capable.
-    public let sandboxCapable: Bool?
+    /// and reports them back in `ObservedStateReport.sandboxes`. The scheduler
+    /// keys placement on this explicit signal because the
+    /// separately installed runtime, not the wire version, determines support.
+    public let sandboxCapable: Bool
     /// Whether this agent can realize a **sandbox NIC** (STR-103), as opposed
     /// to merely running sandboxes.
     ///
@@ -93,28 +88,23 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// The control plane uses it twice: the scheduler refuses to place a
     /// sandbox that has a NIC on a host without it, and desired-state assembly
     /// withholds `SandboxSpec.network` from such a host — so an agent that
-    /// cannot realize a NIC is never handed one. Optional so registrations from
-    /// older agents decode fine; absent means not capable.
-    public let sandboxNetworkingCapable: Bool?
+    /// cannot realize a NIC is never handed one.
+    public let sandboxNetworkingCapable: Bool
     /// Whether this host can give a guest an emulated TPM 2.0 — it has a
     /// usable `swtpm` binary (issue #565). Like `sandboxCapable`, speaking the
     /// wire version is deliberately not sufficient: the protocol carries
     /// `MachineProfile.tpm`, but only a host with swtpm installed can realize
     /// it, and a VM whose vTPM is silently dropped fails Windows setup with no
-    /// explanation. Optional so registrations from older agents decode fine;
-    /// absent means not capable.
-    public let tpmCapable: Bool?
+    /// explanation.
+    public let tpmCapable: Bool
     /// Host operating system, reported so the control plane can resolve the
     /// right release artifact for an agent self-update (assets are published
-    /// per OS/arch pair). Optional so registrations from agents that predate
-    /// this field decode fine; absent means unknown, and the update endpoint
-    /// refuses to guess.
-    public let operatingSystem: OperatingSystem?
+    /// per OS/arch pair).
+    public let operatingSystem: OperatingSystem
     /// Descriptive hardware/platform/OS details for operators (CPU model,
     /// kernel version, distribution, physical core count, boot time, ...).
-    /// Purely informational and entirely best-effort — optional so
-    /// registrations from agents that predate host-info reporting decode fine,
-    /// and any individual field the agent couldn't probe is absent.
+    /// Purely informational and entirely best-effort; any individual field the
+    /// agent could not probe is absent.
     public let hostInfo: HostInfo?
     /// Whether this host can actually run the per-network DNS resolver
     /// (STR-40): it is in OVN network mode and has a usable CoreDNS binary.
@@ -129,16 +119,13 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// enabling a network's resolver, because the DHCP option is authored once
     /// per network by the topology authority while the listener is per
     /// chassis: one incapable host would otherwise give a network DNS that
-    /// works until a VM lands somewhere else. Optional so registrations from
-    /// older agents decode fine; absent means not capable, which is the safe
-    /// default in both directions of skew.
-    public let resolverCapable: Bool?
+    /// works until a VM lands somewhere else.
+    public let resolverCapable: Bool
     /// Whether this host initialized the guest-facing instance metadata
     /// service. This is independent of overlay networking: an OVN host may
     /// disable the service in its agent configuration or lack a host tool the
-    /// listener supervisor needs. Optional so absence is fail-closed when a
-    /// registration predates the capability.
-    public let metadataServiceCapable: Bool?
+    /// listener supervisor needs.
+    public let metadataServiceCapable: Bool
     /// Periodic, feature-scoped software dependency health. This is also sent
     /// at registration so a newly connected agent is not placement-eligible in
     /// the window before its first heartbeat.
@@ -151,17 +138,17 @@ public struct AgentRegisterMessage: WebSocketMessage {
         hostname: String,
         version: String,
         resources: AgentResources,
-        architecture: CPUArchitecture? = nil,
-        hypervisors: [HypervisorSupport]? = nil,
+        architecture: CPUArchitecture = .x86_64,
+        hypervisors: [HypervisorSupport] = [],
         networkCapability: NetworkCapability? = nil,
         protocolVersion: Int = WireProtocol.currentVersion,
-        sandboxCapable: Bool? = nil,
-        sandboxNetworkingCapable: Bool? = nil,
-        tpmCapable: Bool? = nil,
-        operatingSystem: OperatingSystem? = nil,
+        sandboxCapable: Bool = false,
+        sandboxNetworkingCapable: Bool = false,
+        tpmCapable: Bool = false,
+        operatingSystem: OperatingSystem = .current,
         hostInfo: HostInfo? = nil,
-        resolverCapable: Bool? = nil,
-        metadataServiceCapable: Bool? = nil,
+        resolverCapable: Bool = false,
+        metadataServiceCapable: Bool = false,
         dependencyObservations: [NodeDependencyObservation] = []
     ) {
         self.requestId = requestId
@@ -184,11 +171,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.dependencyObservations = dependencyObservations
     }
 
-    /// The hypervisor list to act on. An agent advertising no backend stays
-    /// unschedulable — absence of a probed report is not capability.
-    public var effectiveHypervisors: [HypervisorSupport] {
-        hypervisors ?? []
-    }
 }
 
 public struct AgentHeartbeatMessage: WebSocketMessage {
@@ -414,32 +396,6 @@ public struct ErrorMessage: WebSocketMessage {
     }
 }
 
-// MARK: - Any Codable Value for Dynamic Data
-
-public struct AnyCodableValue: Codable, Sendable {
-    public let value: CodableValue
-
-    public init<T: Codable>(_ value: T) throws {
-        let data = try WireProtocol.makeEncoder().encode(value)
-        self.value = try WireProtocol.makeDecoder().decode(CodableValue.self, from: data)
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        self.value = try container.decode(CodableValue.self)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(value)
-    }
-
-    public func decode<T: Codable>(as type: T.Type) throws -> T {
-        let data = try WireProtocol.makeEncoder().encode(value)
-        return try WireProtocol.makeDecoder().decode(type, from: data)
-    }
-}
-
 /// A version-tolerant JSON tree for data whose complete schema is not owned by
 /// Strato. Unknown object fields and array elements remain available without
 /// falling back to unchecked `Any` values.
@@ -517,11 +473,12 @@ public enum JSONValue: Codable, Sendable, Equatable {
     public subscript(key: String) -> JSONValue? {
         objectValue?[key]
     }
-}
 
-/// The original wire-protocol name remains source-compatible. New generic
-/// JSON parsing should use `JSONValue` to make its purpose explicit.
-public typealias CodableValue = JSONValue
+    public func decode<T: Decodable>(as type: T.Type) throws -> T {
+        let data = try WireProtocol.makeEncoder().encode(self)
+        return try WireProtocol.makeDecoder().decode(type, from: data)
+    }
+}
 
 // MARK: - Console Operation Messages
 
@@ -543,18 +500,15 @@ public struct ConsoleConnectMessage: WebSocketMessage {
     public let timestamp: Date
     public let vmId: String
     public let sessionId: String
-    /// Which console to attach. Nil from control planes that predate the
-    /// graphics console; read it through `effectiveStream`. Optional so the
-    /// synthesized encoder omits the key for a serial connect, leaving the
-    /// frame a pre-#566 agent sees byte-identical to today's.
-    public let stream: ConsoleStream?
+    /// Which console to attach.
+    public let stream: ConsoleStream
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         vmId: String,
         sessionId: String,
-        stream: ConsoleStream? = nil
+        stream: ConsoleStream = .serial
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -562,10 +516,6 @@ public struct ConsoleConnectMessage: WebSocketMessage {
         self.sessionId = sessionId
         self.stream = stream
     }
-
-    /// The console to attach, defaulting to the text console — which is the
-    /// only one that existed when the field was absent.
-    public var effectiveStream: ConsoleStream { stream ?? .serial }
 }
 
 public struct ConsoleDisconnectMessage: WebSocketMessage {
@@ -703,30 +653,13 @@ public enum VMLogLevel: String, Codable, CaseIterable, Sendable {
     case info = "info"
     case warning = "warning"
     case error = "error"
-    /// Fallback for a level emitted by a peer on a newer protocol version.
     case unknown = "unknown"
-
-    /// Tolerant decoding: an unrecognized level decodes to `.unknown` rather
-    /// than throwing, so a purely informational field can't fail the decode of
-    /// an entire log message across protocol versions.
-    public init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = VMLogLevel(rawValue: raw) ?? .unknown
-    }
 }
 
 /// Source of the log message
 public enum VMLogSource: String, Codable, CaseIterable, Sendable {
     case agent = "agent"
-    case controlPlane = "control_plane"
-    /// Fallback for a source emitted by a peer on a newer protocol version.
     case unknown = "unknown"
-
-    /// Tolerant decoding: see `VMLogLevel.init(from:)`.
-    public init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = VMLogSource(rawValue: raw) ?? .unknown
-    }
 }
 
 /// Type of VM event
@@ -735,14 +668,7 @@ public enum VMEventType: String, Codable, CaseIterable, Sendable {
     case operation = "operation"
     case error = "error"
     case info = "info"
-    /// Fallback for an event type emitted by a peer on a newer protocol version.
     case unknown = "unknown"
-
-    /// Tolerant decoding: see `VMLogLevel.init(from:)`.
-    public init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = VMEventType(rawValue: raw) ?? .unknown
-    }
 }
 
 /// VM log message sent from agent to control plane

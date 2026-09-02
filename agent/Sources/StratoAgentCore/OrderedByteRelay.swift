@@ -53,10 +53,11 @@ public final class OrderedByteRelay: Sendable {
         continuation.finish()
     }
 
-    /// Stops the pump without draining. For teardown where the peer is already
-    /// gone and the remaining bytes have nowhere to go.
+    /// Stops the pump without draining. Use this when the peer is already gone
+    /// and queued bytes no longer have a destination.
     public func cancel() {
         continuation.finish()
         pump.cancel()
     }
+
 }

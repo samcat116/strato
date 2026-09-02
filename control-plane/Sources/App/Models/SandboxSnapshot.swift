@@ -300,14 +300,9 @@ extension SandboxSnapshot: SnapshotArtifactResource {
     }
 
     func adoptReconciliationState(from committed: SandboxSnapshot) {
+        adoptConvergenceBookkeeping(from: committed)
         status = committed.status
         desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        errorMessage = committed.errorMessage
-        failedGeneration = committed.failedGeneration
-        convergenceDeadline = committed.convergenceDeadline
         agentId = committed.agentId
         size = committed.size
         storagePath = committed.storagePath
@@ -321,7 +316,6 @@ extension SandboxSnapshot: SnapshotArtifactResource {
         exportDesired = committed.exportDesired
         exportedAt = committed.exportedAt
         exportedArtifacts = committed.exportedArtifacts
-        finalizers = committed.finalizers
         expiresAt = committed.expiresAt
     }
 

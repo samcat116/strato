@@ -1,3 +1,4 @@
+import { errorMessage } from "@/lib/errors";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -16,7 +17,7 @@ export function QueryErrorNotice({
 }: QueryErrorNoticeProps) {
   if (!error) return null;
 
-  const detail = error instanceof Error ? error.message : "Request failed";
+  const detail = errorMessage(error, "Request failed");
 
   return (
     <div

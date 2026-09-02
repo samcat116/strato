@@ -198,8 +198,11 @@ final class HierarchyIntegrationTests {
             // - Verify developer has access through group membership
             // - Verify non-member doesn't have access
 
-            #expect(try await developer.belongsToGroup(developerGroup.id!, on: app.db))
-            #expect(try await !nonMember.belongsToGroup(developerGroup.id!, on: app.db))
+            let memberships = try await UserGroup.query(on: app.db)
+                .filter(\.$group.$id == developerGroup.requireID())
+                .all()
+            #expect(memberships.map(\.$user.id) == [try developer.requireID()])
+            #expect(!memberships.map(\.$user.id).contains(try nonMember.requireID()))
         }
     }
 

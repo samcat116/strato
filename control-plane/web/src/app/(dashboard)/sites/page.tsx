@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useMemo, useState, type FormEvent } from "react";
@@ -128,7 +130,7 @@ export default function SitesPage() {
       toast.success("Site created");
     },
     onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Failed to create site"),
+      toast.error(errorMessage(error, "Failed to create site")),
   });
 
   const updateSite = useMutation({
@@ -140,7 +142,7 @@ export default function SitesPage() {
       toast.success("Site updated");
     },
     onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Failed to update site"),
+      toast.error(errorMessage(error, "Failed to update site")),
   });
 
   const deleteSite = useMutation({
@@ -150,7 +152,7 @@ export default function SitesPage() {
       toast.success("Site deleted");
     },
     onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Failed to delete site"),
+      toast.error(errorMessage(error, "Failed to delete site")),
   });
 
   const handleDelete = async (site: Site) => {

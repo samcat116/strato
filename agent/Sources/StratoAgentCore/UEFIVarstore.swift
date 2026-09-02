@@ -60,13 +60,6 @@ public enum UEFIVarstoreError: Error, LocalizedError, ClassifiableError, Sendabl
 /// variables back to the distro's defaults, so an existing file is always left
 /// alone — its *format* is checked (see `verifyIsQcow2`), never its contents.
 public struct UEFIVarstore: Sendable {
-    /// What `materialize` did, so a replayed create can be told from a first one
-    /// in the log (and in tests) without inspecting the filesystem again.
-    public enum Outcome: Equatable, Sendable {
-        case created
-        case reused
-    }
-
     private let logger: Logger
     private let qemuImgPath: String
     private let runSubprocess: SubprocessRunner
@@ -83,21 +76,22 @@ public struct UEFIVarstore: Sendable {
 
     /// Writes a qcow2 varstore at `path`, seeded from the firmware's VARS
     /// `template`, unless one is already there.
-    @discardableResult
-    public func materialize(at path: String, from template: String) async throws -> Outcome {
+    public func materialize(at path: String, from template: String) async throws {
         if FileManager.default.fileExists(atPath: path) {
             try await verifyIsQcow2(at: path)
             logger.debug("UEFI varstore already present", metadata: ["path": .string(path)])
-            return .reused
+            return
         }
 
         try FileManager.default.createDirectory(
             atPath: (path as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true, attributes: nil)
 
-        // Discard any partial output left by a previous crashed conversion.
-        let stagingPath = path + ".partial"
-        try? FileManager.default.removeItem(atPath: stagingPath)
+        // A unique sibling keeps concurrent materializations from clobbering
+        // each other's qemu-img output. The completed file is atomically
+        // published over any equivalent winner below.
+        try? FileManager.default.removeItem(atPath: path + ".partial")
+        let stagingPath = path + ".partial." + UUID().uuidString.lowercased()
 
         do {
             // No `-f`: the source format is whatever the host's EDK2 build
@@ -126,7 +120,7 @@ public struct UEFIVarstore: Sendable {
 
             // Atomic publish, so the path only ever holds a complete varstore —
             // which is what makes the `fileExists` check above safe to trust.
-            try FileManager.default.moveItem(atPath: stagingPath, toPath: path)
+            try DurableFileWriter().publish(stagingPath: stagingPath, to: path)
         } catch {
             try? FileManager.default.removeItem(atPath: stagingPath)
             throw error
@@ -135,7 +129,6 @@ public struct UEFIVarstore: Sendable {
         logger.info(
             "UEFI varstore materialized",
             metadata: ["path": .string(path), "template": .string(template)])
-        return .created
     }
 
     /// Checks that a varstore already on disk is the format the document

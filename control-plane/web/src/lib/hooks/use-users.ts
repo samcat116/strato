@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { usersApi } from "@/lib/api/users";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type { AdminCreateUserRequest, UpdateUserRequest } from "@/types/api";
 
 // The endpoint filters per row on `user:read`, so a non-admin gets a
@@ -50,8 +50,7 @@ export function useDeleteUser() {
 }
 
 export function userErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need system administrator rights to manage users.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need system administrator rights to manage users.",
+  });
 }

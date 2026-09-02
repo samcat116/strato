@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import type { StorageDevice } from "@/types/api";
 import { usePermissions } from "@/lib/hooks/use-permissions";
@@ -187,7 +189,7 @@ export function StorageDeviceInventory({
                               {storageDeviceStatus(device)}
                             </Badge>
                           </TableCell>
-                          <TableCell>{device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : "Never"}</TableCell>
+                          <TableCell>{device.lastSeenAt ? formatDateTime(device.lastSeenAt) : "Never"}</TableCell>
                           <TableCell>
                             <div className="flex min-w-48 flex-col items-end gap-1 text-right">
                               <Switch

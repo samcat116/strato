@@ -359,19 +359,6 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
         resolverAddresses = try c.decodeIfPresent([String].self, forKey: .resolverAddresses) ?? []
     }
 
-    /// `ipAddress` with its prefix, e.g. `10.0.0.5/24` — the form cloud-init's
-    /// network-config v2 wants. Nil unless both halves are present, since a
-    /// half-known address is worse than none.
-    public var ipv4CIDR: String? {
-        guard let ipAddress, let prefixLength else { return nil }
-        return "\(ipAddress)/\(prefixLength)"
-    }
-
-    /// `ipv6Address` with its prefix, e.g. `fd12:3456:789a::5/64`.
-    public var ipv6CIDR: String? {
-        guard let ipv6Address, let ipv6PrefixLength else { return nil }
-        return "\(ipv6Address)/\(ipv6PrefixLength)"
-    }
 }
 
 // MARK: - Identity Policy

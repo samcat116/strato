@@ -14,14 +14,11 @@ struct ConsoleMessageTests {
         #expect(decoded.sessionId == "sess-1")
     }
 
-    /// A connect with no `stream` is a serial connect — the only kind that
-    /// existed before the graphics console — and must encode without the key at
-    /// all, so a pre-v23 agent sees the frame it already handles.
-    @Test func consoleConnectWithoutStreamIsSerialAndOmitsTheKey() throws {
+    @Test func consoleConnectDefaultsToSerial() throws {
         let message = ConsoleConnectMessage(vmId: "vm-1", sessionId: "sess-1")
-        #expect(message.effectiveStream == .serial)
+        #expect(message.stream == .serial)
         let json = String(decoding: try encodeJSON(message), as: UTF8.self)
-        #expect(!json.contains("stream"))
+        #expect(json.contains("\"stream\":\"Serial\""))
     }
 
     @Test func consoleConnectCarriesTheVNCStream() throws {
@@ -31,16 +28,6 @@ struct ConsoleMessageTests {
                 stream: .vnc)
         )
         #expect(decoded.stream == .vnc)
-        #expect(decoded.effectiveStream == .vnc)
-    }
-
-    /// The legacy shape — a connect frame from a control plane that predates
-    /// the field — still decodes, and reads as serial.
-    @Test func legacyConsoleConnectDecodesAsSerial() throws {
-        let json = #"{"requestId":"r","timestamp":0,"vmId":"vm-1","sessionId":"sess-1"}"#
-        let decoded = try decodeJSON(ConsoleConnectMessage.self, from: json)
-        #expect(decoded.stream == nil)
-        #expect(decoded.effectiveStream == .serial)
     }
 
     @Test func consoleDisconnectRoundTrip() throws {

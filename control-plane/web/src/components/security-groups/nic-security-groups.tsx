@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { Shield } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -120,9 +122,7 @@ export function NicSecurityGroupMenu({
           toast.success(`Attached "${group.name}" to ${nic.deviceName}`),
         onError: (error) =>
           toast.error(
-            error instanceof Error
-              ? error.message
-              : "Failed to attach security group",
+            errorMessage(error, "Failed to attach security group"),
           ),
       },
     );
@@ -136,9 +136,7 @@ export function NicSecurityGroupMenu({
           toast.success(`Detached "${group.name}" from ${nic.deviceName}`),
         onError: (error) =>
           toast.error(
-            error instanceof Error
-              ? error.message
-              : "Failed to detach security group",
+            errorMessage(error, "Failed to detach security group"),
           ),
       },
     );

@@ -136,9 +136,9 @@ public struct SnapshotRecordStore: Sendable {
 
         // Decoded to raw JSON per entry first, so an artifact carrying a field
         // (or a `kind`) this build does not understand drops alone.
-        let raw: [String: AnyCodableValue]
+        let raw: [String: JSONValue]
         do {
-            raw = try JSONDecoder().decode([String: AnyCodableValue].self, from: data)
+            raw = try JSONDecoder().decode([String: JSONValue].self, from: data)
         } catch {
             return unreadable("is not a readable snapshot record object: \(error)")
         }

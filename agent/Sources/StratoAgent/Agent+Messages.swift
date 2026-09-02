@@ -114,116 +114,8 @@ extension Agent {
                 // `metadataNetworks` is declared out here because the
                 // guest-facing listeners below are driven from the same list,
                 // after the reconciler has run.
-                let metadataNetworks: [UUID]
+                let derivations = DesiredStateDerivations(message: message)
                 do {
-                    // This host's own workload ports' desired security-group
-                    // membership, derived from each NIC's stable slot (with
-                    // compact array position only for legacy specs). Converged
-                    // on every agent; port groups + ACLs themselves are
-                    // authored only by the topology authority from
-                    // `message.securityGroups`.
-                    var portMemberships = VMPortMembershipPlanner.memberships(for: message.vms)
-                    // The sandbox arm (STR-102). Three things here are exact
-                    // rather than approximate, and each fails silently if it
-                    // drifts — `reconcileMembership` says nothing about a port
-                    // name `observeMembership` didn't return:
-                    //
-                    // - `nicIndex: 0` because a sandbox has exactly one NIC:
-                    //   `sandboxReconcileCreate` builds its attachment list as
-                    //   `spec.network.map { [$0] } ?? []`.
-                    // - `uuidString` (uppercase) because that is the string the
-                    //   reconciler's work item carried into `createVMNetwork`
-                    //   as `vmId`, and therefore what the LSP is named after.
-                    // - `sandboxPortName`, not `vmPortName`: `sbx-` and `vm-`
-                    //   are deliberately separate namespaces (see OVNNaming).
-                    //
-                    // Membership convergence never removes a port it wasn't
-                    // given, so an empty sandbox list is inert here — unlike
-                    // `metadataNetworks` below, where an empty list is an
-                    // instruction.
-                    //
-                    // No `metadataDenied` either: the kill switch is per VM
-                    // because the document is, and a sandbox has none — the
-                    // listener serves `InstanceMetadata`, which only
-                    // `DesiredVMState` carries. A sandbox's port is left out of
-                    // the deny group because there is nothing on the other end
-                    // of the address for it to be denied.
-                    portMemberships += message.sandboxes.compactMap { sandbox in
-                        sandbox.spec.network.map { spec in
-                            DesiredPortMembership(
-                                portName: OVNNaming.sandboxPortName(
-                                    sandboxId: sandbox.sandboxId.uuidString, nicIndex: 0),
-                                securityGroupIds: spec.securityGroupIds)
-                        }
-                    }
-                    // The networks this host must materialize the metadata
-                    // address on (STR-49), derived from our own workload specs
-                    // rather than `message.networks`: a sited agent that is not
-                    // its site's network controller receives an empty topology
-                    // list by design, yet its guests need the service just the
-                    // same. Same derivation as `portMemberships` above, and the
-                    // same "this host owns it without topology authority"
-                    // reason.
-                    var ids = Set(
-                        message.vms.flatMap { $0.spec.networks }
-                            .filter { $0.metadataEnabled == true }.map(\.networkId))
-                    ids.formUnion(
-                        message.sandboxes.compactMap { $0.spec.network }
-                            .filter { $0.metadataEnabled == true }.map(\.networkId))
-                    metadataNetworks = ids.sorted { $0.uuidString < $1.uuidString }
-                    // The resolver's twin of the list above (STR-40), derived
-                    // the same way from the same specs. Kept separate rather
-                    // than merged here because the two gates are different
-                    // versions and the receiving service is what folds them
-                    // into one per-network service set — a network wanting only
-                    // one of the two still gets exactly one namespace.
-                    // Carries the network's upstream forwarders and search
-                    // domain alongside the id, because the resolver itself needs
-                    // them and `message.networks` is empty on a non-authority
-                    // agent. Two NICs on one network describe the same resolver,
-                    // so the first wins — they are two copies of one row's
-                    // columns, not two opinions.
-                    //
-                    // **Field presence decides here, and that is the
-                    // difference from `metadataNetworks` above.** The sender
-                    // always emits `metadataEnabled`, so its per-NIC nil never
-                    // arises; `resolverEnabled` genuinely can be nil on every
-                    // spec of a sync — the control plane withholds it for a
-                    // host it cannot describe, precisely so as not to disable a
-                    // live service. Reading that silence as a non-nil *empty*
-                    // list would be an instruction `ResolverSupervisionPolicy`
-                    // obeys: every CoreDNS stopped and every resolver address
-                    // dropped, restored on the next sync. A DNS outage per
-                    // occurrence, on the one path built to stay quiet.
-                    //
-                    // One exception has to stay an opinion. A host running *no
-                    // workloads* has no specs to carry the field, and that is a
-                    // statement rather than a silence: it serves nothing, so it
-                    // should serve no resolvers either. Without that arm the
-                    // last VM leaving a host would leak its resolvers forever.
-                    let resolverNetworks: [ResolverNetworkConfig]?
-                    let specs =
-                        message.vms.flatMap { $0.spec.networks }
-                        + message.sandboxes.compactMap { $0.spec.network }
-                    if !specs.isEmpty, specs.allSatisfy({ $0.resolverEnabled == nil }) {
-                        resolverNetworks = nil
-                    } else {
-                        var byNetwork: [UUID: ResolverNetworkConfig] = [:]
-                        for spec in specs
-                        where spec.resolverEnabled == true
-                            && !(spec.resolverAddresses ?? []).isEmpty
-                        {
-                            guard byNetwork[spec.networkId] == nil else { continue }
-                            byNetwork[spec.networkId] = ResolverNetworkConfig(
-                                networkId: spec.networkId,
-                                addresses: spec.resolverAddresses ?? [],
-                                upstreams: spec.dnsServers,
-                                searchDomain: spec.domainName)
-                        }
-                        resolverNetworks = byNetwork.values.sorted {
-                            $0.networkId.uuidString < $1.networkId.uuidString
-                        }
-                    }
                     // DNS zones (STR-39): nil means this agent is not the
                     // topology authority — leave every managed `DNS` row
                     // alone. Only an explicit list is an instruction.
@@ -231,9 +123,9 @@ extension Agent {
                     await networkService?.reconcileNetworks(
                         message.networks, authoritative: message.networksAuthoritative,
                         securityGroups: message.securityGroups,
-                        portMemberships: portMemberships,
-                        metadataNetworks: metadataNetworks,
-                        resolverNetworks: resolverNetworks,
+                        portMemberships: derivations.portMemberships,
+                        metadataNetworks: derivations.metadataNetworkIDs,
+                        resolverNetworks: derivations.resolverNetworks,
                         dnsZones: dnsZones)
                 }
                 // One belt survives the version gates' retirement inside
@@ -253,7 +145,7 @@ extension Agent {
                 // the snapshot is built from. Driven off the same
                 // `metadataNetworks` list, so there is no second derivation to
                 // drift.
-                await reconcileMetadataServers(networks: metadataNetworks)
+                await reconcileMetadataServers(networks: derivations.metadataNetworkIDs)
                 // Firecracker has no listener reading `MetadataStore`: MMDS is
                 // a snapshot held by each VMM. Refresh managed microVMs from
                 // the generation-guarded store after `apply`, including
@@ -961,7 +853,7 @@ extension Agent {
     }
 
     func handleConsoleConnect(_ message: ConsoleConnectMessage) async {
-        let stream = message.effectiveStream
+        let stream = message.stream
         logger.info(
             "Console connect request received",
             metadata: [

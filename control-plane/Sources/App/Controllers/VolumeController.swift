@@ -431,7 +431,7 @@ struct VolumeController: RouteCollection {
                     for agentID in racedAgentIDs {
                         await app.agentService.syncDesiredState(agentId: agentID)
                     }
-                    return false
+                    return
                 }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
@@ -449,7 +449,7 @@ struct VolumeController: RouteCollection {
                             "finalizers": .string(remaining.joined(separator: ",")),
                         ])
                 }
-                return outcome.isRemoved
+                _ = outcome.isRemoved
             }
 
         let accepted = try await req.resourceMutation.accept(

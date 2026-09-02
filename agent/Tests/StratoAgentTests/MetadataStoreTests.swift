@@ -109,12 +109,12 @@ struct MetadataStoreTests {
         let store = MetadataStore()
         let vmId = UUID()
         #expect(await store.metadata(for: vmId) == nil)
-        #expect(await store.appliedGeneration(for: vmId) == nil)
+        #expect(await store.exportRecords()[vmId]?.generation == nil)
 
         await store.apply(Self.metadata(vmId, hostname: "web-1"), generation: 3, for: vmId)
 
         #expect(await store.metadata(for: vmId)?.hostname == "web-1")
-        #expect(await store.appliedGeneration(for: vmId) == 3)
+        #expect(await store.exportRecords()[vmId]?.generation == 3)
         #expect(await store.snapshot().keys.sorted(by: { $0.uuidString < $1.uuidString }) == [vmId])
     }
 
@@ -130,7 +130,7 @@ struct MetadataStoreTests {
         // which two disagreed instead of swallowing the write.
         #expect(outcome == .stale(recorded: 7))
         #expect(await store.metadata(for: vmId)?.hostname == "new")
-        #expect(await store.appliedGeneration(for: vmId) == 7)
+        #expect(await store.exportRecords()[vmId]?.generation == 7)
     }
 
     @Test("An equal generation still applies, so a level-triggered metadata edit reaches the guest")
@@ -168,7 +168,7 @@ struct MetadataStoreTests {
             #expect(await store.metadata(for: vmId) == nil)
             // The record survives so the guard has something to compare
             // against; only the payload is gone.
-            #expect(await store.appliedGeneration(for: vmId) == 6)
+            #expect(await store.exportRecords()[vmId]?.generation == 6)
             #expect(await store.snapshot().isEmpty)
         }
     }
@@ -222,7 +222,7 @@ struct MetadataStoreTests {
         // The high-water mark stands, and the teardown is remembered, so
         // neither an older replay nor the very sync that last listed the VM can
         // resurrect it.
-        #expect(await store.appliedGeneration(for: vmId) == 9)
+        #expect(await store.exportRecords()[vmId]?.generation == 9)
         #expect(
             await store.apply(Self.metadata(vmId, hostname: "web-1"), generation: 9, for: vmId) == .stale(recorded: 9))
         #expect(await store.metadata(for: vmId) == nil)
@@ -323,7 +323,7 @@ struct MetadataStoreTests {
             ]))
 
         #expect(await store.metadata(for: vmId) == nil)
-        #expect(await store.appliedGeneration(for: vmId) == 2)
+        #expect(await store.exportRecords()[vmId]?.generation == 2)
     }
 
     @Test("A replay of the sync that preceded an absent entry cannot serve the VM again")
@@ -405,7 +405,7 @@ struct MetadataStoreTests {
         _ = await actuator.waitForReports(1)
 
         #expect(await store.metadata(for: vmId) == nil)
-        #expect(await store.appliedGeneration(for: vmId) == 2)
+        #expect(await store.exportRecords()[vmId]?.generation == 2)
     }
 
     @Test("A teardown the blast-radius guard refused keeps serving its metadata")

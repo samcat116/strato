@@ -141,20 +141,15 @@ public enum LoadBalancerReconciler {
         let switchNames: Set<String>
     }
 
-    /// Reconcile every LB carried by an authoritative network list. If any
-    /// network has a nil collection, the sender is pre-v43 and has no opinion:
-    /// leave all owner-tagged rows alone rather than interpreting silence as
-    /// deletion.
+    /// Reconcile every LB carried by an authoritative network list.
     public static func reconcile(
         networks: [DesiredNetworkState],
         actuator: any LoadBalancerActuator,
         logger: Logger
     ) async -> [ObservedLoadBalancerState]? {
-        guard networks.allSatisfy({ $0.loadBalancers != nil }) else { return nil }
-
         var placements: [UUID: Placement] = [:]
         for network in networks {
-            for desired in network.loadBalancers ?? [] {
+            for desired in network.loadBalancers {
                 var switches = Set(
                     desired.backends.compactMap(\.networkId).map {
                         OVNNaming.switchName(networkId: $0)

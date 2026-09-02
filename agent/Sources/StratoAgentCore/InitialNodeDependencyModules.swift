@@ -45,9 +45,6 @@ public struct NodeDependencyFunctionalHealth: Sendable, Equatable {
 public struct SPIRENodeDependencyModule: NodeDependencyModule {
     public let id = NodeDependencyID.spire
     public let role = NodeDependencyRole.identity
-    public let dependencies: [NodeDependencyID] = []
-    public let desiredState = NodeDependencyDesiredState.required
-    public let ownership = NodeDependencyOwnership.observeOnly
     public let affectedCapabilities = [NodeCapability.workloadIdentity]
 
     private let systemd: any SystemdControlling
@@ -185,9 +182,6 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
 public struct LibvirtNodeDependencyModule: NodeDependencyModule {
     public let id = NodeDependencyID.libvirt
     public let role = NodeDependencyRole.compute
-    public let dependencies: [NodeDependencyID] = []
-    public let desiredState = NodeDependencyDesiredState.required
-    public let ownership = NodeDependencyOwnership.observeOnly
     public let affectedCapabilities = [NodeCapability.qemuPlacement]
 
     private let systemd: any SystemdControlling
@@ -279,9 +273,6 @@ public struct LibvirtNodeDependencyModule: NodeDependencyModule {
 public struct OVNOVSNodeDependencyModule: NodeDependencyModule {
     public let id = NodeDependencyID.ovnOvs
     public let role = NodeDependencyRole.networking
-    public let dependencies: [NodeDependencyID] = []
-    public let desiredState = NodeDependencyDesiredState.required
-    public let ownership = NodeDependencyOwnership.observeOnly
     public let affectedCapabilities: [NodeCapability] = [
         .overlayNetworking, .sandboxNetworking, .networkResolver,
     ]
@@ -355,9 +346,6 @@ public struct OVNOVSNodeDependencyModule: NodeDependencyModule {
 public struct SimulatedNodeDependencyModule: NodeDependencyModule {
     public let id: NodeDependencyID
     public let role: NodeDependencyRole
-    public let dependencies: [NodeDependencyID] = []
-    public let desiredState = NodeDependencyDesiredState.required
-    public let ownership = NodeDependencyOwnership.observeOnly
     public let affectedCapabilities: [NodeCapability]
 
     public init(id: NodeDependencyID, role: NodeDependencyRole, affectedCapabilities: [NodeCapability]) {
@@ -390,9 +378,6 @@ public struct CephClientNodeDependencyModule: NodeDependencyModule {
 
     public let id = NodeDependencyID.cephClient
     public let role = NodeDependencyRole.storage
-    public let dependencies: [NodeDependencyID] = []
-    public let desiredState = NodeDependencyDesiredState.required
-    public let ownership = NodeDependencyOwnership.observeOnly
     public let affectedCapabilities = [NodeCapability.cephVolumes]
 
     private let version: @Sendable () async -> String?

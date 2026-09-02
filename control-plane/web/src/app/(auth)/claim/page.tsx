@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -104,7 +106,7 @@ function ClaimCard() {
       }, 1200);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to set up passkey"
+        errorMessage(error, "Failed to set up passkey")
       );
       setPhase("ready");
     }

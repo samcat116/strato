@@ -76,11 +76,7 @@ public func chassisServiceInterfaceName(networkId: String) -> String {
 /// are still found); later NICs mix the index in.
 private func interfaceName(prefix: String, workloadId: String, nicIndex: Int) -> String {
     let input = nicIndex == 0 ? workloadId : "\(workloadId)#\(nicIndex)"
-    var hash: UInt64 = 0xcbf2_9ce4_8422_2325  // FNV-1a 64-bit offset basis
-    for byte in input.utf8 {
-        hash ^= UInt64(byte)
-        hash = hash &* 0x0000_0100_0000_01b3  // FNV-1a 64-bit prime
-    }
+    let hash = FNV1a.hash64(input)
     let hex = String(format: "%012x", hash & 0xffff_ffff_ffff)
     return prefix + hex
 }

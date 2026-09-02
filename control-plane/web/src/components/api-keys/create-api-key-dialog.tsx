@@ -1,5 +1,9 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { Loader2, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -123,7 +127,7 @@ export function CreateAPIKeyDialog({
       setCreatedKey(key);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create API key"
+        errorMessage(error, "Failed to create API key")
       );
     }
   };
@@ -196,7 +200,7 @@ export function CreateAPIKeyDialog({
               </p>
               {createdKey.expiresAt && (
                 <p className="text-sm text-muted-foreground mt-2">
-                  Expires: {new Date(createdKey.expiresAt).toLocaleString()}
+                  Expires: {formatDateTime(createdKey.expiresAt)}
                 </p>
               )}
             </div>

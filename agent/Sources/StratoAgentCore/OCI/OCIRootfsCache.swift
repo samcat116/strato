@@ -187,13 +187,19 @@ public actor OCIRootfsCache {
     public func cleanup(now: Date = Date()) {
         let cutoff = now.addingTimeInterval(-ttl)
 
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: imagesPath)) ?? []
+        let stagingDirectories = names.filter { $0.hasSuffix(".partial") }
+            .map { imagesPath + "/" + $0 }
+        DiskCacheLRU.removeStaleStaging(
+            candidates: stagingDirectories,
+            olderThan: Self.stalePartialAge,
+            now: now,
+            logger: logger)
+
         var imageDirectories: [String] = []
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: imagesPath)) ?? [] {
+        for name in names {
             let path = imagesPath + "/" + name
             if name.hasSuffix(".partial") {
-                if isOlder(path: path, than: now.addingTimeInterval(-Self.stalePartialAge)) {
-                    try? FileManager.default.removeItem(atPath: path)
-                }
                 continue
             }
             if isOlder(path: path, than: cutoff) {

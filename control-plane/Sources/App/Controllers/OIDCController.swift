@@ -49,7 +49,7 @@ struct OIDCController: RouteCollection {
             .all()
 
         // Claim mappings are authorization configuration; only admins see them.
-        let isAdmin = await isOrganizationAdmin(req: req, organizationID: organizationID)
+        let isAdmin = try await isOrganizationAdmin(req: req, organizationID: organizationID)
         return providers.map { OIDCProviderResponse(from: $0, includeClaimMappings: isAdmin) }
     }
 
@@ -136,7 +136,7 @@ struct OIDCController: RouteCollection {
         }
 
         // Claim mappings are authorization configuration; only admins see them.
-        let isAdmin = await isOrganizationAdmin(req: req, organizationID: organizationID)
+        let isAdmin = try await isOrganizationAdmin(req: req, organizationID: organizationID)
         return OIDCProviderResponse(from: provider, includeClaimMappings: isAdmin)
     }
 
@@ -634,20 +634,14 @@ struct OIDCController: RouteCollection {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
-        guard try await req.can("org:update", on: IAMNode(type: .organization, id: organizationID)) else {
-            throw Abort(.forbidden, reason: "Admin access required")
-        }
+        try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
     }
 
-    /// Non-throwing variant of `verifyOrganizationAdminAccess` for read paths
-    /// that stay member-accessible but redact admin-only detail.
-    private func isOrganizationAdmin(req: Request, organizationID: UUID) async -> Bool {
-        do {
-            try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
-            return true
-        } catch {
-            return false
-        }
+    /// Read paths remain member-accessible and redact admin-only detail when
+    /// the authorization decision is false. Evaluator/database failures still
+    /// propagate instead of being misreported as a non-admin decision.
+    private func isOrganizationAdmin(req: Request, organizationID: UUID) async throws -> Bool {
+        try await req.can("org:update", on: IAMNode(type: .organization, id: organizationID))
     }
 
     private func validateProviderConfiguration(
@@ -864,15 +858,38 @@ struct OIDCController: RouteCollection {
         // `oidc_<subject>` user. Only its claims for the same subject are
         // trusted (OIDC 5.3.2).
         var userInfo: OIDCUserInfoResponse?
-        let idTokenIncomplete =
-            claims.emailVerified != true || claims.email == nil || claims.name == nil
-            || claims.preferredUsername == nil
-        if idTokenIncomplete, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
-            if let info = try? await fetchUserInfo(
-                endpoint: endpoint, accessToken: tokenResponse.accessToken, provider: provider, on: req),
-                info.sub == claims.sub
-            {
-                userInfo = info
+        let userInfoRequiredForVerifiedEmail = claims.email == nil || claims.emailVerified != true
+        let shouldFetchUserInfo =
+            userInfoRequiredForVerifiedEmail || claims.name == nil || claims.preferredUsername == nil
+        if shouldFetchUserInfo, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
+            var fetchedInfo: OIDCUserInfoResponse?
+            do {
+                fetchedInfo = try await fetchUserInfo(
+                    endpoint: endpoint, accessToken: tokenResponse.accessToken, provider: provider, on: req)
+            } catch {
+                req.logger.warning(
+                    "oidc_userinfo_fetch_failed",
+                    metadata: [
+                        "providerId": .string(provider.id?.uuidString ?? "unknown"),
+                        "requiredForVerifiedEmail": .stringConvertible(userInfoRequiredForVerifiedEmail),
+                        "error": .string(String(reflecting: error)),
+                    ])
+                if userInfoRequiredForVerifiedEmail {
+                    throw error
+                }
+            }
+            if let fetchedInfo {
+                guard fetchedInfo.sub == claims.sub else {
+                    req.logger.warning(
+                        "oidc_userinfo_subject_mismatch",
+                        metadata: [
+                            "providerId": .string(provider.id?.uuidString ?? "unknown")
+                        ])
+                    throw Abort(
+                        .badGateway,
+                        reason: "OIDC UserInfo subject did not match the ID token")
+                }
+                userInfo = fetchedInfo
             }
         }
         let resolvedEmail = OIDCValidation.resolveEmailVerification(

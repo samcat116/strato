@@ -473,7 +473,7 @@ struct SandboxController: RouteCollection {
             agentOnline
             ? .stateSync
             : .directResolution { @Sendable db in
-                try await Self.performDirectDeletion(sandbox: sandbox, on: db, app: app)
+                _ = try await Self.performDirectDeletion(sandbox: sandbox, on: db, app: app)
             }
 
         let accepted = try await req.resourceMutation.accept(

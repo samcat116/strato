@@ -50,24 +50,6 @@ final class Organization: Model, @unchecked Sendable {
 
 extension Organization: Content {}
 
-extension Organization {
-    struct Public: Content {
-        let id: UUID?
-        let name: String
-        let description: String
-        let createdAt: Date?
-    }
-
-    func asPublic() -> Public {
-        return Public(
-            id: self.id,
-            name: self.name,
-            description: self.description,
-            createdAt: self.createdAt
-        )
-    }
-}
-
 // MARK: - User-Organization Relationship (Many-to-Many)
 
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
@@ -197,13 +179,27 @@ extension Project {
     static func all(inOrganization organizationID: UUID, folders folderIDs: [UUID], on db: Database) async throws
         -> [Project]
     {
-        try await Project.query(on: db)
+        try await all(inOrganizations: [organizationID], folders: folderIDs, on: db)
+    }
+
+    /// Every project rooted in any of `organizationIDs`, including projects
+    /// nested in `folderIDs`, in the name order promised by the list APIs.
+    static func all(inOrganizations organizationIDs: [UUID], folders folderIDs: [UUID], on db: Database) async throws
+        -> [Project]
+    {
+        let projects = try await Project.query(on: db)
             .group(.or) { anyProject in
-                anyProject.filter(\.$organization.$id == organizationID)
+                if !organizationIDs.isEmpty {
+                    anyProject.filter(\.$organization.$id ~~ organizationIDs)
+                }
                 if !folderIDs.isEmpty {
                     anyProject.filter(\.$organizationalUnit.$id ~~ folderIDs)
                 }
             }
             .all()
+        return projects.sorted {
+            if $0.name != $1.name { return $0.name < $1.name }
+            return ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
+        }
     }
 }

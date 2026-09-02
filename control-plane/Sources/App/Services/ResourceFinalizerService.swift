@@ -9,11 +9,7 @@ import Vapor
 /// Divergence between the workload kinds lives in `reap` — what each one has
 /// to tear down alongside its row — rather than in the finalizer bookkeeping,
 /// which is identical for both.
-protocol FinalizableResource: Model, AgentPlacedResource where IDValue == UUID {
-    /// Cleanup tokens still outstanding for a terminating resource; empty for
-    /// a live one. Persisted as a Postgres `text[]`.
-    var finalizers: [String] { get set }
-
+protocol FinalizableResource: ConvergingResource {
     /// Whether a `DELETE` has been accepted — desired state is `.absent`. Only
     /// a terminating resource reaps, so a stray `clear` on a live one is a
     /// no-op rather than a deletion.
@@ -30,8 +26,6 @@ protocol FinalizableResource: Model, AgentPlacedResource where IDValue == UUID {
     /// twice; the row is what records that the teardown finished.
     static func reap(_ resource: Self, on db: any Database, app: Application) async throws -> Bool
 
-    /// Which table the resource's `resource_events` rows point into.
-    static var operationResourceKind: OperationResourceKind { get }
 }
 
 /// The finalizer bookkeeping shared by every terminating resource: stamping

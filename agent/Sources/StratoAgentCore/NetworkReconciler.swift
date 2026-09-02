@@ -430,59 +430,7 @@ public struct ObservedNetworkTopology: Equatable, Sendable {
     public var dnatRules: Set<DNATRuleKey>
     /// `type=localport` metadata ports (STR-49). A separate set from
     /// `switchRouterPortNames` because the actuator filters that one on
-    /// `portType == "router"` — which is also why an agent old enough not to
-    /// know this field leaves localports alone instead of sweeping them.
-    public var serviceLocalPortNames: Set<String>
-
-    public init(
-        routerNames: Set<String> = [],
-        routerPortNames: Set<String> = [],
-        switchRouterPortNames: Set<String> = [],
-        externalSwitchNames: Set<String> = [],
-        snatRules: Set<SNATRuleKey> = [],
-        dnatRules: Set<DNATRuleKey> = [],
-        serviceLocalPortNames: Set<String> = []
-    ) {
-        self.routerNames = routerNames
-        self.routerPortNames = routerPortNames
-        self.switchRouterPortNames = switchRouterPortNames
-        self.externalSwitchNames = externalSwitchNames
-        self.snatRules = snatRules
-        self.dnatRules = dnatRules
-        self.serviceLocalPortNames = serviceLocalPortNames
-    }
-}
-
-/// One teardown side effect: an owned OVN object present on the host that the
-/// desired plan no longer wants. Ordered by the reconciler so dependents go
-/// before the objects they reference.
-public enum NetworkTeardownAction: Equatable, Sendable {
-    case dnat(router: String, externalIP: String)
-    case snat(router: String, logicalIP: String)
-    /// Nothing references a metadata localport, so its position in the order is
-    /// free; it sits with the other switch-port removals.
-    case serviceLocalPort(name: String)
-    case switchRouterPort(name: String)
-    case routerPort(name: String)
-    case externalSwitch(name: String)
-    case router(name: String)
-}
-
-/// OVN object identities that teardown must never touch, regardless of the plan.
-/// Built only from the networks a sync *skipped as stale* (present in the sync
-/// but at a generation older than one already applied), so those networks —
-/// absent from the applied plan yet still live — are left exactly as-is. It is
-/// deliberately NOT built from current networks: a current network's dropped
-/// objects (e.g. SNAT after `externalAccess` is turned off) must still be torn
-/// down. SNAT is protected precisely by (router, subnet), not by router, so a
-/// stale network can't shield a current sibling's SNAT on a shared router.
-public struct ProtectedTopology: Equatable, Sendable {
-    public var routerNames: Set<String>
-    public var routerPortNames: Set<String>
-    public var switchRouterPortNames: Set<String>
-    public var externalSwitchNames: Set<String>
-    public var snatRules: Set<SNATRuleKey>
-    public var dnatRules: Set<DNATRuleKey>
+    /// `portType == "router"`.
     public var serviceLocalPortNames: Set<String>
 
     public init(
@@ -509,11 +457,8 @@ public struct ProtectedTopology: Equatable, Sendable {
             && serviceLocalPortNames.isEmpty
     }
 
-    /// Merge another protection set in. Protection is a union by construction —
-    /// it is built from several independent reasons an object must survive
-    /// teardown (a stale generation, an opinion-less sync) and any one of them
-    /// is sufficient.
-    public mutating func formUnion(_ other: ProtectedTopology) {
+    /// Merge another topology's identities into this one.
+    public mutating func formUnion(_ other: ObservedNetworkTopology) {
         routerNames.formUnion(other.routerNames)
         routerPortNames.formUnion(other.routerPortNames)
         switchRouterPortNames.formUnion(other.switchRouterPortNames)
@@ -523,6 +468,31 @@ public struct ProtectedTopology: Equatable, Sendable {
         serviceLocalPortNames.formUnion(other.serviceLocalPortNames)
     }
 }
+
+/// One teardown side effect: an owned OVN object present on the host that the
+/// desired plan no longer wants. Ordered by the reconciler so dependents go
+/// before the objects they reference.
+public enum NetworkTeardownAction: Equatable, Sendable {
+    case dnat(router: String, externalIP: String)
+    case snat(router: String, logicalIP: String)
+    /// Nothing references a metadata localport, so its position in the order is
+    /// free; it sits with the other switch-port removals.
+    case serviceLocalPort(name: String)
+    case switchRouterPort(name: String)
+    case routerPort(name: String)
+    case externalSwitch(name: String)
+    case router(name: String)
+}
+
+/// OVN object identities that teardown must never touch, regardless of the plan.
+/// Built only from the networks a sync *skipped as stale* (present in the sync
+/// but at a generation older than one already applied), so those networks —
+/// absent from the applied plan yet still live — are left exactly as-is. It is
+/// deliberately NOT built from current networks: a current network's dropped
+/// objects (e.g. SNAT after `externalAccess` is turned off) must still be torn
+/// down. SNAT is protected precisely by (router, subnet), not by router, so a
+/// stale network can't shield a current sibling's SNAT on a shared router.
+public typealias ProtectedTopology = ObservedNetworkTopology
 
 // MARK: - Reconciler
 
@@ -547,12 +517,8 @@ public enum NetworkReconciler {
 
         let switches = sorted.map { network -> DesiredSwitch in
             let switchName = OVNNaming.switchName(networkId: network.networkId)
-            // `== true`, not `?? false`: nil and false plan the same thing here
-            // (no port). They differ only in whether an *existing* port is torn
-            // down, which `serviceLocalPortProtection(for:)` decides — see its
-            // comment.
             let serviceLocalPort =
-                network.metadataEnabled == true
+                network.metadataEnabled
                 ? DesiredServiceLocalPort(
                     name: OVNNaming.serviceLocalPortName(networkId: network.networkId),
                     switchName: switchName,
@@ -643,7 +609,7 @@ public enum NetworkReconciler {
                     // VM's chassis. Gated on `externalAccess` — an isolated
                     // (`-internal`) router must never grow an uplink, and the
                     // control plane rejects attaching to no-egress networks.
-                    for fip in network.floatingIPs ?? [] {
+                    for fip in network.floatingIPs {
                         let logicalPort: String?
                         if let vmID = fip.vmId, let nicIndex = fip.nicIndex {
                             logicalPort = OVNNaming.vmPortName(
@@ -708,7 +674,7 @@ public enum NetworkReconciler {
             }
             // A stale network's floating IPs keep their live NAT rules, on the
             // same over-protection-is-safe terms as SNAT.
-            for fip in network.floatingIPs ?? [] {
+            for fip in network.floatingIPs {
                 protected.dnatRules.insert(DNATRuleKey(router: routerName, externalIP: fip.externalIP))
             }
             // A stale network keeps *both* its localports, unconditionally
@@ -724,9 +690,9 @@ public enum NetworkReconciler {
         return protected
     }
 
-    /// The localports of networks the sync expresses no *opinion* about —
-    /// `metadataEnabled == nil` or `resolverEnabled == nil`, i.e. a control
-    /// plane older than the field that authors them — protected from teardown.
+    /// Resolver localports whose networks express no resolver opinion are
+    /// protected from teardown. Resolver capability remains optional because
+    /// it is deliberately withheld when the site cannot provide the service.
     ///
     /// Deliberately the one thing protected from a *current* network, against
     /// the rule `protectedTopology(forStale:)` documents. It has to be: teardown
@@ -739,19 +705,6 @@ public enum NetworkReconciler {
     /// Pass the networks the sync applied (the same list handed to `plan`).
     public static func serviceLocalPortProtection(for networks: [DesiredNetworkState]) -> ProtectedTopology {
         var protected = ProtectedTopology()
-        // Each port is protected by *its own* service's silence, because since
-        // ADR 0008 they are separate rows with separate lifetimes. Reading one
-        // field for both would be a real regression in either direction: a
-        // control plane rolled back below v37 sends no `resolverEnabled` while
-        // still sending `metadataEnabled`, so keying both off the resolver's
-        // silence would protect every metadata port on the host — turning
-        // metadata off would silently stop working against exactly the older
-        // control plane this guard exists for — while keying both off
-        // metadata's would delete every live resolver port on that rollback.
-        for network in networks where network.metadataEnabled == nil {
-            protected.serviceLocalPortNames.insert(
-                OVNNaming.serviceLocalPortName(networkId: network.networkId))
-        }
         for network in networks where network.resolverEnabled == nil {
             protected.serviceLocalPortNames.insert(
                 OVNNaming.resolverPortName(networkId: network.networkId))

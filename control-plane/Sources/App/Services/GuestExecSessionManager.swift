@@ -21,8 +21,8 @@ import Vapor
 /// and documented in `docs/architecture/multi-replica.md`).
 ///
 /// This is NOT an actor to avoid event loop conflicts with NIO WebSockets.
-/// Safety: `app` is immutable and every access to pending, attached, browser,
-/// and resource-index state is inside `lock`. Returned session values are
+/// Safety: `app` is immutable and every access to pending, attached, and browser
+/// state is inside `lock`. Returned session values are
 /// immutable snapshots rather than references to that state.
 final class GuestExecSessionManager: @unchecked Sendable {
     /// How long a pending session may sit unattached before it expires.
@@ -39,19 +39,6 @@ final class GuestExecSessionManager: @unchecked Sendable {
 
     /// Maps sessionId -> browser WebSocket.
     private var frontendConnections: [String: WebSocket] = [:]
-
-    /// Maps a kind-aware resource key to its attached session ids.
-    private var resourceSessions: [ResourceKey: Set<String>] = [:]
-
-    private struct ResourceKey: Hashable {
-        let kind: GuestResourceKind
-        let id: String
-
-        init(kind: GuestResourceKind, id: String) {
-            self.kind = kind
-            self.id = UUID(uuidString: id)?.uuidString ?? id
-        }
-    }
 
     /// A minted-but-not-yet-attached exec session: everything needed to build
     /// the `GuestExecStartMessage` once the browser attaches.
@@ -213,9 +200,6 @@ final class GuestExecSessionManager: @unchecked Sendable {
             if let websocket {
                 frontendConnections[sessionId] = websocket
             }
-            resourceSessions[
-                ResourceKey(kind: pending.resourceKind, id: pending.resourceId), default: []
-            ].insert(sessionId)
             return pending
         }
 
@@ -257,15 +241,6 @@ final class GuestExecSessionManager: @unchecked Sendable {
     func getSession(sessionId: String) -> AttachedExecSession? {
         lock.withLock {
             sessions[sessionId]
-        }
-    }
-
-    /// All attached sessions for one guest resource.
-    func getSessions(resourceKind: GuestResourceKind, resourceId: String) -> [AttachedExecSession] {
-        lock.withLock {
-            let resourceKey = ResourceKey(kind: resourceKind, id: resourceId)
-            guard let sessionIds = resourceSessions[resourceKey] else { return [] }
-            return sessionIds.compactMap { sessions[$0] }
         }
     }
 
@@ -625,11 +600,6 @@ final class GuestExecSessionManager: @unchecked Sendable {
             endedAt = observedAt
         }
         let websocket = frontendConnections.removeValue(forKey: sessionId)
-        let resourceKey = ResourceKey(kind: session.resourceKind, id: session.resourceId)
-        resourceSessions[resourceKey]?.remove(sessionId)
-        if resourceSessions[resourceKey]?.isEmpty == true {
-            resourceSessions.removeValue(forKey: resourceKey)
-        }
         app.logger.info(
             "Guest exec session removed",
             metadata: [

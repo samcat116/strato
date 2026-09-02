@@ -292,6 +292,8 @@ where IDValue == UUID {
     /// Writable only so the shared SQL generation writer can copy the value
     /// returned by PostgreSQL back onto the model before its guarded save.
     var generation: Int64 { get set }
+    var observedGeneration: Int64 { get set }
+    var finalizers: [String] { get set }
 
     var name: String { get }
     var projectID: UUID { get }
@@ -334,6 +336,16 @@ where IDValue == UUID {
 }
 
 extension ConvergingResource {
+    func adoptConvergenceBookkeeping(from committed: Self) {
+        generation = committed.generation
+        observedGeneration = committed.observedGeneration
+        convergencePhase = committed.convergencePhase
+        lastError = committed.lastError
+        failedGeneration = committed.failedGeneration
+        convergenceDeadline = committed.convergenceDeadline
+        finalizers = committed.finalizers
+    }
+
     @discardableResult
     func advanceDesiredStateGeneration(
         expectedGeneration: Int64? = nil, on db: any Database
@@ -413,22 +425,16 @@ extension VM: ConvergingResource {
     }
 
     func adoptReconciliationState(from committed: VM) {
+        adoptConvergenceBookkeeping(from: committed)
         status = committed.status
         statusChangedAt = committed.statusChangedAt
         desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        lastError = committed.lastError
-        failedGeneration = committed.failedGeneration
         lastErrorAt = committed.lastErrorAt
         desiredStateAssemblyError = committed.desiredStateAssemblyError
         desiredStateAssemblyErrorGeneration = committed.desiredStateAssemblyErrorGeneration
         desiredStateAssemblyErrorAt = committed.desiredStateAssemblyErrorAt
         divergenceDetectedAt = committed.divergenceDetectedAt
-        convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
-        finalizers = committed.finalizers
         // The edge nonces (STR-151) are refreshed for `generation`'s reason,
         // and losing one is worse: a stale snapshot written back over a racing
         // reboot would not merely drop a generation bump, it would drop the
@@ -451,19 +457,13 @@ extension Sandbox: ConvergingResource {
     }
 
     func adoptReconciliationState(from committed: Sandbox) {
+        adoptConvergenceBookkeeping(from: committed)
         status = committed.status
         statusChangedAt = committed.statusChangedAt
         desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        lastError = committed.lastError
-        failedGeneration = committed.failedGeneration
         lastErrorAt = committed.lastErrorAt
         divergenceDetectedAt = committed.divergenceDetectedAt
-        convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
-        finalizers = committed.finalizers
         restoreGeneration = committed.restoreGeneration
         restoreSnapshotID = committed.restoreSnapshotID
     }
@@ -495,16 +495,10 @@ extension Volume: ConvergingResource {
     }
 
     func adoptReconciliationState(from committed: Volume) {
+        adoptConvergenceBookkeeping(from: committed)
         status = committed.status
         desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        errorMessage = committed.errorMessage
-        failedGeneration = committed.failedGeneration
-        convergenceDeadline = committed.convergenceDeadline
         observedSizeBytes = committed.observedSizeBytes
-        finalizers = committed.finalizers
         // Canonical RBD attachment and Ceph execution ownership are written
         // by observed-state application and reachability failover. Every API
         // mutation saves the whole Fluent model after taking this lock, so it

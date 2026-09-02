@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import {
   MoreHorizontal,
@@ -74,7 +76,7 @@ export function ImageActions({
       onActionComplete?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete image"
+        errorMessage(error, "Failed to delete image")
       );
     }
   };

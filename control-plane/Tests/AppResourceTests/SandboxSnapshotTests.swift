@@ -67,14 +67,7 @@ final class SandboxSnapshotTests {
                     type: .firecracker,
                     available: true,
                     accelerated: true,
-                    capabilities: HypervisorCapabilities(
-                        type: .firecracker,
-                        supportsPause: true,
-                        supportsLiveMigration: false,
-                        supportsSnapshots: supportsSnapshots,
-                        requiresDirectKernelBoot: true,
-                        maxVCPUs: 32,
-                        maxMemory: 32 * 1024 * 1024 * 1024))
+                    supportsSnapshots: supportsSnapshots)
             ],
             sandboxCapable: true)
 
@@ -631,7 +624,8 @@ final class SandboxSnapshotTests {
             errored.size = 7 * 1024 * 1024 * 1024
             try await errored.save(on: app.db)
 
-            let storage = try await quota.sandboxSnapshotStorageInScope(on: app.db)
+            let scope = try await QuotaUsageAggregator.scope(of: quota, on: app.db)
+            let storage = try await QuotaUsageAggregator.snapshotStorageBytes(in: scope, on: app.db)
             #expect(storage == 5 * 1024 * 1024 * 1024)
         }
     }
@@ -658,7 +652,7 @@ final class SandboxSnapshotTests {
             hypervisors: [
                 HypervisorSupport(
                     type: .firecracker, available: true, accelerated: true,
-                    capabilities: .firecracker, version: firecrackerVersion)
+                    version: firecrackerVersion)
             ],
             protocolVersion: protocolVersion,
             sandboxCapable: true,
@@ -1094,7 +1088,8 @@ final class SandboxSnapshotTests {
             try await quota.save(on: app.db)
 
             let exportedBytes = (snapshot.exportedArtifacts ?? []).reduce(Int64(0)) { $0 + $1.sizeBytes }
-            let inScope = try await quota.sandboxSnapshotStorageInScope(on: app.db)
+            let scope = try await QuotaUsageAggregator.scope(of: quota, on: app.db)
+            let inScope = try await QuotaUsageAggregator.snapshotStorageBytes(in: scope, on: app.db)
             #expect(inScope == (snapshot.size ?? 0) + exportedBytes)
             #expect(exportedBytes > 0)
         }

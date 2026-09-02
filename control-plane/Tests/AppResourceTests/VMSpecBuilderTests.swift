@@ -42,7 +42,6 @@ private extension VMSpecBuilder {
         diskAttachmentsByVolumeID: [UUID: DiskAttachment] = [:],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true
     ) -> VMSpec {
         let boot = testBootVolume(for: vm)
@@ -53,7 +52,7 @@ private extension VMSpecBuilder {
             from: vm, image: image, volumes: [boot] + volumes,
             networkInterfaces: networkInterfaces, diskAttachmentsByVolumeID: attachments,
             networks: networks, securityGroupsByInterface: securityGroupsByInterface,
-            sendsMetadataPort: sendsMetadataPort, siteResolverCapable: siteResolverCapable)
+            siteResolverCapable: siteResolverCapable)
     }
 }
 

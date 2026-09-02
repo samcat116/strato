@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowLeft, RotateCw, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
-import { friendlyErrorMessage } from "@/lib/errors";
+import { errorMessage } from "@/lib/errors";
 
 interface DetailQueryErrorProps {
   resourceName: string;
@@ -37,7 +37,7 @@ export function DetailQueryError({
         <p className="mt-2 text-sm text-muted-foreground">
           {notFound
             ? `This ${resourceName.toLowerCase()} may have been deleted, or you may no longer have access to it.`
-            : friendlyErrorMessage(
+            : errorMessage(
                 error,
                 `The ${resourceName.toLowerCase()} could not be loaded. Try again.`
               )}

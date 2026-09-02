@@ -474,7 +474,7 @@ final class VolumeConvergenceTests {
 
             let accepted = try await app.resourceMutation.accept(
                 .delete, on: deleteCopy, actor: .user(try user.requireID()),
-                dispatch: .directResolution { _ in false }, on: app.db, app: app
+                dispatch: .directResolution { _ in }, on: app.db, app: app
             ) { db in
                 try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
                 deleteCopy.setDesiredStatus(.absent)

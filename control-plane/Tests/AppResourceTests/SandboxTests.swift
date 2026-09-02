@@ -83,7 +83,7 @@ final class SandboxTests {
             hypervisors: [
                 HypervisorSupport(
                     type: .firecracker, available: true, accelerated: true,
-                    capabilities: .firecracker, version: firecrackerVersion)
+                    version: firecrackerVersion)
             ],
             // A sandbox NIC is OVN-only, so an agent that can realize one is by
             // construction an overlay host — the two travel together here so a
@@ -278,7 +278,6 @@ final class SandboxTests {
                 hypervisors: [
                     HypervisorSupport(
                         type: .firecracker, available: true, accelerated: true,
-                        capabilities: .firecracker,
                         version: FirecrackerSnapshotFeatures.networkOverridesMinimumVersion)
                 ],
                 networkCapability: .overlay,
@@ -479,7 +478,6 @@ final class SandboxTests {
             let forkState = try #require(desired.sandboxes.first { $0.sandboxId == forkID })
             let expectedRef = SandboxSnapshotRef(
                 snapshotId: snapshot.id!, sourceSandboxId: source.id!)
-            #expect(forkState.restoreFrom == expectedRef)
             #expect(forkState.spec.restoreFrom == expectedRef)
             #expect(forkState.registryCredential == nil)
 

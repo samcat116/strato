@@ -68,8 +68,6 @@ enum SchemaMigrator {
     /// unapplied and proceeds — but it must not wait forever behind a wedged
     /// migration with the readiness gate shut and no explanation.
     static let lockTimeoutKey = "STRATO_MIGRATION_LOCK_TIMEOUT_SECONDS"
-    static let lockPollKey = "STRATO_MIGRATION_LOCK_POLL_SECONDS"
-
     /// Kept one minute inside the Helm chart's five-minute startup-probe
     /// budget, so the named timeout reaches the logs before kubelet restarts the
     /// process. Keep this coupled to `startupProbe` in the chart values.

@@ -188,7 +188,7 @@ extension NetworkServiceLinux {
     /// link-local matches this derivation.)
     static func portSecurityEntry(mac: String, ips: [String]) -> String {
         var entries = [mac] + ips
-        let hasIPv6 = ips.contains { IPv6Address($0) != nil }
+        let hasIPv6 = ips.contains(where: IPFamily.ipv6.matches)
         if hasIPv6, let linkLocal = IPv6Address.linkLocalEUI64(fromMAC: mac) {
             entries.append(linkLocal.description)
         }

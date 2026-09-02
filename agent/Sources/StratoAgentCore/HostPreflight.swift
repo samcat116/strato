@@ -348,14 +348,6 @@ public enum HostPreflight {
             return nil
         }
 
-        /// Whether the OVN-specific host dependencies (database sockets and
-        /// CLI tools) all passed. Only meaningful when the preflight ran in
-        /// OVN mode.
-        public var ovnReady: Bool {
-            !failed(.ovnDatabaseSocket) && !failed(.ovnDatabaseTLSFiles) && !failed(.ovsDatabaseSocket)
-                && !failed(.ipTool) && !failed(.ovsVsctlTool)
-        }
-
         /// Applies host-level gates on top of the per-hypervisor probes: a
         /// hypervisor whose own binary probe passed is still unusable when
         /// the host cannot store disks (or, for Firecracker, when its socket
@@ -390,8 +382,7 @@ public enum HostPreflight {
                     type: hypervisor.type,
                     available: false,
                     accelerated: hypervisor.accelerated,
-                    unavailabilityReason: unavailabilityReason,
-                    capabilities: hypervisor.capabilities
+                    unavailabilityReason: unavailabilityReason
                 )
             }
         }

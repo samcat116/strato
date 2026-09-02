@@ -16,9 +16,8 @@ import FoundationXML
 ///   update can retain the identity libvirt assigned to the existing device;
 /// - whether there is a memory device at all.
 ///
-/// The process driver kept the equivalent in `vmSpawnSizing`, a dictionary keyed by
-/// VM id that is lost whenever the agent restarts. Here the domain document is
-/// the record, so this is a query — which is also why a VM defined by an older
+/// The domain document is the durable record, so this is a query — which is
+/// also why a VM defined by an older
 /// spec resizes correctly against the headroom it really has instead of the
 /// headroom its newest spec asks for.
 ///

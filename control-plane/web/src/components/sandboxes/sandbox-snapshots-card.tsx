@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Camera, CloudUpload, GitFork, Loader2 } from "lucide-react";
@@ -204,7 +206,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
                         ? formatMemory(snapshot.size)
                         : "Size pending"}
                       {snapshot.createdAt
-                        ? ` · ${new Date(snapshot.createdAt).toLocaleString()}`
+                        ? ` · ${formatDateTime(snapshot.createdAt)}`
                         : ""}
                       {snapshot.cpuTemplate
                         ? ` · ${snapshot.cpuTemplate} template`

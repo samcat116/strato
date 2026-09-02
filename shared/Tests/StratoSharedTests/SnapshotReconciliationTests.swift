@@ -22,7 +22,7 @@ struct SnapshotReconciliationTests {
             parentId: Fixtures.uuidB,
             desiredStatus: .present,
             generation: 7,
-            capture: .sandbox(.stop),
+            capture: DesiredSnapshotCapture(sandboxMode: .stop),
             export: DesiredSnapshotExport(uploads: [
                 SandboxSnapshotArtifactUploadTarget(kind: .memory, uploadURL: "/api/…/memory")
             ]))

@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import { Camera, History, Loader2, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -170,7 +172,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
                         ? formatMemory(snapshot.size)
                         : "Size pending"}
                       {snapshot.createdAt
-                        ? ` · ${new Date(snapshot.createdAt).toLocaleString()}`
+                        ? ` · ${formatDateTime(snapshot.createdAt)}`
                         : ""}
                       {snapshot.qemuVersion
                         ? ` · QEMU ${snapshot.qemuVersion}`

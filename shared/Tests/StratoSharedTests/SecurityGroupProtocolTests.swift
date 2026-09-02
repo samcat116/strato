@@ -82,27 +82,26 @@ struct SecurityGroupProtocolTests {
         // drop group.
         let unmanaged = """
             {"network":"default","networkId":"\(UUID().uuidString)",
-             "dhcpEnabled":false,"dnsServers":[]}
+             "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false}
             """
         let unmanagedDecoded = try WireProtocol.makeDecoder().decode(
             NetworkSpec.self, from: Data(unmanaged.utf8))
         #expect(unmanagedDecoded.securityGroupIds == nil)
     }
 
-    @Test("A rule's log flag round-trips, and its absence decodes to nil")
+    @Test("A rule's log flag round-trips and is required")
     func ruleLogFlag() throws {
         let logged = DesiredSecurityGroupRule(
             id: UUID(), direction: "ingress", ethertype: "ipv4", log: true)
         let data = try WireProtocol.makeEncoder().encode(logged)
         #expect(try WireProtocol.makeDecoder().decode(DesiredSecurityGroupRule.self, from: data).log == true)
 
-        // A rule from a pre-v24 control plane has no key at all. Nil is "off",
-        // not a third state: the ACL still enforces, it just isn't logged.
-        let legacy = """
+        let missingLog = """
             {"id":"\(UUID().uuidString)","direction":"ingress","ethertype":"ipv4"}
             """
-        let decoded = try WireProtocol.makeDecoder().decode(
-            DesiredSecurityGroupRule.self, from: Data(legacy.utf8))
-        #expect(decoded.log == nil)
+        #expect(throws: DecodingError.self) {
+            try WireProtocol.makeDecoder().decode(
+                DesiredSecurityGroupRule.self, from: Data(missingLog.utf8))
+        }
     }
 }

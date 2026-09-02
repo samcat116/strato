@@ -632,15 +632,9 @@ struct SecurityGroupController: RouteCollection {
         guard let groupId = req.parameters.get("groupId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid security group ID")
         }
-        guard let group = try await SecurityGroup.find(groupId, on: req.db) else {
-            throw Abort(.notFound, reason: "Security group not found")
-        }
-        let allowed = try await req.can(
-            action, on: IAMNode(type: .securityGroup, id: groupId))
-        guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this security group")
-        }
-        return group
+        return try await req.authorizedResource(
+            groupId, as: SecurityGroup.self, nodeType: .securityGroup, action: action,
+            notFoundReason: "Security group not found")
     }
 
     /// A just-created group with its (empty) rules relation marked loaded, so

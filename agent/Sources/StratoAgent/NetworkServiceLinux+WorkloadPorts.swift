@@ -88,10 +88,10 @@ extension NetworkServiceLinux {
             // taken from the spec so the port upgrades in place.
             let (existingMAC, existingIPs) = Self.parsePortAddress(existingPort.addresses)
             if !existingMAC.isEmpty { macAddress = existingMAC }
-            if let existingV4 = existingIPs.first(where: { IPv4Address($0) != nil }) {
+            if let existingV4 = existingIPs.first(where: IPFamily.ipv4.matches) {
                 ipAddress = existingV4
             }
-            if let existingV6 = existingIPs.first(where: { IPv6Address($0) != nil }) {
+            if let existingV6 = existingIPs.first(where: IPFamily.ipv6.matches) {
                 ip6Address = existingV6
             }
             let desiredIPs = [ipAddress, ip6Address].compactMap { $0 }

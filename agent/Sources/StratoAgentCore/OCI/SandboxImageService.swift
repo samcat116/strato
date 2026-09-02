@@ -64,7 +64,7 @@ public actor SandboxImageService {
     private let decompressor: LayerDecompressor
     private let workRoot: String
 
-    private var inFlight: [String: Task<MaterializedRootfs, any Error>] = [:]
+    private let materializations = SingleFlight<MaterializedRootfs>()
 
     /// Default cache root (platform-specific, same convention as
     /// `ImageCacheService.defaultCachePath`).
@@ -118,26 +118,25 @@ public actor SandboxImageService {
         guard let parsed = OCIImageReference.parse(image) else {
             throw OCIError.invalidReference(image)
         }
-        var ref = parsed
+        let ref: OCIImageReference
         if let imageDigest {
             guard OCIImageReference.isValidDigest(imageDigest) else {
                 throw OCIError.invalidReference("\(image)@\(imageDigest)")
             }
             ref = OCIImageReference(
-                registry: ref.registry, repository: ref.repository, tag: ref.tag, digest: imageDigest)
+                registry: parsed.registry,
+                repository: parsed.repository,
+                tag: parsed.tag,
+                digest: imageDigest)
+        } else {
+            ref = parsed
         }
 
         let key = "\(ref.registry)/\(ref.repository)@\(ref.digest ?? "tag=" + ref.tag)|\(architecture.rawValue)"
-        if let existing = inFlight[key] {
-            return try await existing.value
-        }
-        let task = Task {
+        return try await materializations.run(key: key) { [self] in
             try await self.performMaterialization(
                 ref: ref, credential: credential, architecture: architecture)
         }
-        inFlight[key] = task
-        defer { inFlight[key] = nil }
-        return try await task.value
     }
 
     // MARK: - Pipeline

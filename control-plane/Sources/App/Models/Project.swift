@@ -70,34 +70,6 @@ final class Project: Model, @unchecked Sendable {
 
 extension Project: Content {}
 
-extension Project {
-    struct Public: Content {
-        let id: UUID?
-        let name: String
-        let description: String
-        let organizationId: UUID?
-        let organizationalUnitId: UUID?
-        let path: String
-        let defaultEnvironment: String
-        let environments: [String]
-        let createdAt: Date?
-    }
-
-    func asPublic() -> Public {
-        return Public(
-            id: self.id,
-            name: self.name,
-            description: self.description,
-            organizationId: self.$organization.id,
-            organizationalUnitId: self.$organizationalUnit.id,
-            path: self.path,
-            defaultEnvironment: self.defaultEnvironment,
-            environments: self.environments,
-            createdAt: self.createdAt
-        )
-    }
-}
-
 // MARK: - Helper Methods
 
 extension Project {
@@ -245,21 +217,6 @@ extension Project {
 
 // MARK: - DTOs
 
-struct CreateProjectRequest: Content {
-    let name: String
-    let description: String
-    let organizationalUnitId: UUID?
-    let defaultEnvironment: String?
-    let environments: [String]?
-}
-
-struct UpdateProjectRequest: Content {
-    let name: String?
-    let description: String?
-    let defaultEnvironment: String?
-    let environments: [String]?
-}
-
 struct ProjectResponse: Content {
     let id: UUID?
     let name: String
@@ -288,10 +245,6 @@ struct ProjectResponse: Content {
     }
 }
 
-struct ProjectEnvironmentRequest: Content {
-    let environment: String
-}
-
 struct ProjectStatsResponse: Content {
     let totalVMs: Int
     let vmsByEnvironment: [String: Int]
@@ -299,8 +252,3 @@ struct ProjectStatsResponse: Content {
 }
 
 // MARK: - Additional DTOs
-
-struct TransferProjectRequest: Content {
-    let organizationId: UUID?
-    let organizationalUnitId: UUID?
-}

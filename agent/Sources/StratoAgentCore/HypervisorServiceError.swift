@@ -11,17 +11,11 @@ public enum HypervisorServiceError: Error, LocalizedError, Sendable {
     /// The specified VM was not found
     case vmNotFound(String)
 
-    /// The VM is not running
-    case vmNotRunning(String)
-
     /// Invalid configuration provided
     case invalidConfiguration(String)
 
     /// Disk operation failed
     case diskError(String)
-
-    /// Network operation failed
-    case networkError(String)
 
     /// The hypervisor binary is not installed
     case hypervisorNotInstalled(String)
@@ -41,14 +35,10 @@ public enum HypervisorServiceError: Error, LocalizedError, Sendable {
         switch self {
         case .vmNotFound(let vmId):
             return "VM not found: \(vmId)"
-        case .vmNotRunning(let vmId):
-            return "VM is not running: \(vmId)"
         case .invalidConfiguration(let message):
             return "Invalid configuration: \(message)"
         case .diskError(let message):
             return "Disk error: \(message)"
-        case .networkError(let message):
-            return "Network error: \(message)"
         case .hypervisorNotInstalled(let path):
             return "Hypervisor not installed at: \(path)"
         case .timeout(let operation):

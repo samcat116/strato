@@ -366,6 +366,7 @@ actor InMemoryCoordinationStore: CoordinationStore {
     private var reservations: [String: [String: Reservation]] = [:]
     private var subscribers: [String: [@Sendable (String) -> Void]] = [:]
     private var failNextValueWriteKeys: Set<String> = []
+    private var publishDeliveryEnabled = true
 
     func setKey(_ key: String, ttlSeconds: Int) {
         keys[key] = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
@@ -474,6 +475,7 @@ actor InMemoryCoordinationStore: CoordinationStore {
     }
 
     func publish(channel: String, message: String) {
+        guard publishDeliveryEnabled else { return }
         // Deliver off the actor, mirroring Valkey's asynchronous fan-out, so a
         // handler that re-enters this store never deadlocks the publisher.
         for handler in subscribers[channel] ?? [] {
@@ -488,6 +490,12 @@ actor InMemoryCoordinationStore: CoordinationStore {
     /// Test-only observability for the process-local subscription contract.
     func subscriberCount(channel: String) -> Int {
         subscribers[channel]?.count ?? 0
+    }
+
+    /// Test seam for a broker that accepts a publish while dropping its
+    /// fire-and-forget payload.
+    func setPublishDeliveryEnabled(_ enabled: Bool) {
+        publishDeliveryEnabled = enabled
     }
 
     /// Prune and return the unexpired reservations for an agent.

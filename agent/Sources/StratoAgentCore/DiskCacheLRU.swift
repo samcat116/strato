@@ -18,6 +18,16 @@ import Logging
 /// it rather than silently exceeding the limit.
 public enum DiskCacheLRU {
 
+    public struct StagingCleanupFailure: Sendable, Equatable {
+        public let path: String
+        public let reason: String
+
+        public init(path: String, reason: String) {
+            self.path = path
+            self.reason = reason
+        }
+    }
+
     /// One cache entry: a directory, its recursive size, and when it was
     /// last used (directory mtime).
     public struct Entry: Sendable, Equatable {
@@ -177,5 +187,63 @@ public enum DiskCacheLRU {
     public static func touch(entryDirectory: String, now: Date = Date()) {
         try? FileManager.default.setAttributes(
             [.modificationDate: now], ofItemAtPath: entryDirectory)
+    }
+
+    /// Removes abandoned staging files or directories after their liveness
+    /// window. Callers own discovery because each cache has a different
+    /// staging-name shape; age checks, race handling, and failure reporting
+    /// stay identical here.
+    @discardableResult
+    public static func removeStaleStaging(
+        candidates: [String],
+        olderThan: TimeInterval,
+        now: Date = Date(),
+        fileManager: FileManager = .default,
+        logger: Logger? = nil
+    ) -> [StagingCleanupFailure] {
+        var failures: [StagingCleanupFailure] = []
+        for path in candidates {
+            if olderThan > 0 {
+                let modified =
+                    (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+                guard let modified, now.timeIntervalSince(modified) > olderThan else { continue }
+            }
+            do {
+                try fileManager.removeItem(atPath: path)
+            } catch {
+                guard !isFileNotFound(error) else { continue }
+                let failure = StagingCleanupFailure(path: path, reason: error.localizedDescription)
+                failures.append(failure)
+                logger?.warning(
+                    "Failed to remove abandoned cache staging item",
+                    metadata: [
+                        "path": .string(path),
+                        "error": .string(failure.reason),
+                    ])
+            }
+        }
+        return failures
+    }
+
+    static func isFileNotFound(_ error: any Error) -> Bool {
+        var current: any Error = error
+        while true {
+            let candidate = current as NSError
+            if candidate.domain == NSCocoaErrorDomain,
+                candidate.code == NSFileNoSuchFileError
+                    || candidate.code == NSFileReadNoSuchFileError
+            {
+                return true
+            }
+            if candidate.domain == NSPOSIXErrorDomain,
+                candidate.code == POSIXErrorCode.ENOENT.rawValue
+            {
+                return true
+            }
+            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
+                return false
+            }
+            current = underlying
+        }
     }
 }

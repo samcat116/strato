@@ -78,8 +78,8 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
         let device = resolverHostInterfaceName(networkId: networkId.uuidString)
         let logicalPort = OVNNaming.resolverPortName(networkId: networkId)
         let mac = OVNNaming.resolverPortMAC(networkId: networkId)
-        let v4 = addresses.first { IPv4Address($0) != nil }
-        let v6 = addresses.first { IPv6Address($0) != nil }
+        let v4 = addresses.first(where: IPFamily.ipv4.matches)
+        let v6 = addresses.first(where: IPFamily.ipv6.matches)
 
         let ip = { (args: [String], tolerated: [String]) in
             NetnsCommand(ipBinaryPath, args, tolerated: tolerated)
@@ -269,12 +269,12 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
         }
         let gone = ["No such file or directory", "No such process", "Cannot find device"]
         var commands: [NetnsCommand] = []
-        if let v4 = addresses.first(where: { IPv4Address($0) != nil }),
+        if let v4 = addresses.first(where: IPFamily.ipv4.matches),
             let table = routingTable(networkId: networkId, address: v4)
         {
             commands.append(ip(["rule", "del", "from", v4, "table", String(table)], gone))
             commands.append(ip(["route", "flush", "table", String(table)], gone))
-            if let v6 = addresses.first(where: { IPv6Address($0) != nil }) {
+            if let v6 = addresses.first(where: IPFamily.ipv6.matches) {
                 commands.append(ip(["-6", "rule", "del", "from", v6, "table", String(table)], gone))
                 commands.append(ip(["-6", "route", "flush", "table", String(table)], gone))
             }

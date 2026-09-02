@@ -393,7 +393,7 @@ final class DesiredStateReconciliationTests {
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let net = try #require(message.networks.first { $0.name == "fip-net" })
-            let fips = try #require(net.floatingIPs)
+            let fips = net.floatingIPs
             #expect(fips.count == 1)
             #expect(fips[0].externalIP == "203.0.113.10")
             #expect(fips[0].logicalIP == "10.30.0.5")
@@ -405,7 +405,7 @@ final class DesiredStateReconciliationTests {
                 app: app, vm: vm, named: "recon-idle-fip-agent",
                 protocolVersion: WireProtocol.currentVersion, placeVM: false)
             let other = try await app.desiredStateAssembler.assemble(agentId: otherAgentID)
-            #expect(!other.networks.contains { ($0.floatingIPs ?? []).isEmpty == false })
+            #expect(!other.networks.contains { !$0.floatingIPs.isEmpty })
         }
     }
 

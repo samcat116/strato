@@ -502,6 +502,7 @@ struct CoreDNSZoneRendererTests {
     func serialTracksContent() {
         #expect(CoreDNSZoneRenderer.serial(from: "abc") == CoreDNSZoneRenderer.serial(from: "abc"))
         #expect(CoreDNSZoneRenderer.serial(from: "abc") != CoreDNSZoneRenderer.serial(from: "abd"))
+        #expect(CoreDNSZoneRenderer.serial(from: "example.com") == 3_438_183_725)
         // Non-zero: BIND-lineage tooling reads serial 0 as "unset".
         #expect(CoreDNSZoneRenderer.serial(from: "") != 0)
     }

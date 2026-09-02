@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import Link from "next/link";
 import {
@@ -184,12 +186,12 @@ export function ImageDetailPage({
           <CardContent>
             <div className="text-sm font-medium text-foreground">
               {image.createdAt
-                ? new Date(image.createdAt).toLocaleDateString()
+                ? formatDate(image.createdAt)
                 : "-"}
             </div>
             <p className="text-sm text-muted-foreground">
               {image.createdAt
-                ? new Date(image.createdAt).toLocaleTimeString()
+                ? formatTime(image.createdAt)
                 : ""}
             </p>
           </CardContent>
@@ -236,7 +238,7 @@ export function ImageDetailPage({
               <p className="text-muted-foreground">Last Updated</p>
               <p className="text-foreground">
                 {image.updatedAt
-                  ? new Date(image.updatedAt).toLocaleString()
+                  ? formatDateTime(image.updatedAt)
                   : "-"}
               </p>
             </div>

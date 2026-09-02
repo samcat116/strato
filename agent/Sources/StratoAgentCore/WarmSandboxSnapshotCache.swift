@@ -138,10 +138,7 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// One abandoned staging path housekeeping could not inspect or remove.
     /// Staging debris consumes disk but cannot identify or authorize a live
     /// workload, so callers report these failures without gating creation.
-    public struct StagingCleanupFailure: Sendable, Equatable {
-        public let path: String
-        public let reason: String
-    }
+    public typealias StagingCleanupFailure = DiskCacheLRU.StagingCleanupFailure
 
     public static let memoryFile = "memory.snap"
     public static let vmstateFile = "vmstate.snap"
@@ -277,51 +274,14 @@ public struct WarmSandboxSnapshotCache: Sendable {
         do {
             names = try fileManager.contentsOfDirectory(atPath: rootPath)
         } catch {
-            guard !Self.isFileNotFound(error) else { return [] }
+            guard !DiskCacheLRU.isFileNotFound(error) else { return [] }
             return [StagingCleanupFailure(path: rootPath, reason: error.localizedDescription)]
         }
-        var failures: [StagingCleanupFailure] = []
-        for name in names where name.hasPrefix(".staging-") {
-            let path = rootPath + "/" + name
-            if olderThan > 0 {
-                let modified =
-                    (try? fileManager.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-                guard let modified, now.timeIntervalSince(modified) > olderThan else { continue }
-            }
-            do {
-                try fileManager.removeItem(atPath: path)
-            } catch {
-                guard !Self.isFileNotFound(error) else {
-                    // A concurrent housekeeping pass won the race.
-                    continue
-                }
-                failures.append(
-                    StagingCleanupFailure(path: path, reason: error.localizedDescription))
-            }
-        }
-        return failures
-    }
-
-    private static func isFileNotFound(_ error: any Error) -> Bool {
-        var current: any Error = error
-        while true {
-            let candidate = current as NSError
-            if candidate.domain == NSCocoaErrorDomain,
-                candidate.code == NSFileNoSuchFileError
-                    || candidate.code == NSFileReadNoSuchFileError
-            {
-                return true
-            }
-            if candidate.domain == NSPOSIXErrorDomain,
-                candidate.code == POSIXErrorCode.ENOENT.rawValue
-            {
-                return true
-            }
-            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
-                return false
-            }
-            current = underlying
-        }
+        return DiskCacheLRU.removeStaleStaging(
+            candidates: names.filter { $0.hasPrefix(".staging-") }.map { rootPath + "/" + $0 },
+            olderThan: olderThan,
+            now: now,
+            fileManager: fileManager)
     }
 
     /// Evict least-recently-used entries until the cache fits `budgetBytes`,

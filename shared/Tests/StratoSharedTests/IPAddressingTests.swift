@@ -49,9 +49,6 @@ import Testing
         #expect(IPv6Address("fe80::1")?.isLinkLocal == true)
         #expect(IPv6Address("febf::1")?.isLinkLocal == true)
         #expect(IPv6Address("fec0::1")?.isLinkLocal == false)
-        #expect(IPv6Address("fd12:3456:789a::1")?.isUniqueLocal == true)
-        #expect(IPv6Address("fc00::1")?.isUniqueLocal == true)
-        #expect(IPv6Address("2001:db8::1")?.isUniqueLocal == false)
         #expect(IPv6Address("2001:db8::1")?.isMulticast == false)
     }
 
@@ -81,10 +78,9 @@ import Testing
         let cidr = IPv6Address.makeULASubnet64(randomGlobalID: { 0xffff_ff12_3456_789a })
         #expect(cidr.description == "fd12:3456:789a::/64")
         #expect(cidr.prefix == 64)
-        #expect(cidr.base.isUniqueLocal)
+        #expect((cidr.base.hi >> 56) == 0xfd)
 
         let random = IPv6Address.makeULASubnet64()
-        #expect(random.base.isUniqueLocal)
         #expect((random.base.hi >> 56) == 0xfd)
         #expect(random.base.hi & 0xffff == 0, "subnet ID must be zero")
         #expect(random.base.lo == 0)
@@ -97,7 +93,7 @@ import Testing
         for globalID: UInt64 in [0x00_0e_c2_00_00, 0x00_0e_c2_ff_ff, 0x00_0e_c2_12_34] {
             let cidr = IPv6Address.makeULASubnet64(randomGlobalID: { globalID })
             #expect(!reserved.overlaps(cidr), "\(cidr) must not overlap \(reserved)")
-            #expect(cidr.base.isUniqueLocal)
+            #expect((cidr.base.hi >> 56) == 0xfd)
             #expect(cidr.prefix == 64)
         }
         #expect(

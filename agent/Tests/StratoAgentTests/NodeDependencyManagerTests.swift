@@ -76,13 +76,18 @@ struct NodeDependencyManagerTests {
         }
     }
 
-    @Test("A failed prerequisite blocks its dependant inspection")
+    @Test("A categorically failed prerequisite blocks its dependant inspection")
     func blocksDependants() async throws {
         let downstream = CallCounter()
+        let prerequisiteFailure = NodeDependencyInspection(
+            supervisorState: .failed,
+            compatibility: .compatible,
+            functionalState: .unhealthy,
+            reason: .init(code: .functionalProbeFailed, message: "probe failed"))
         let manager = try NodeDependencyManager(
             modules: [
-                module(.spire, inspection: failed),
-                ClosureNodeDependencyModule(
+                module(.spire, inspection: prerequisiteFailure),
+                TestNodeDependencyModule(
                     id: .libvirt, role: .compute, dependencies: [.spire],
                     desiredState: .required, ownership: .observeOnly,
                     affectedCapabilities: [.qemuPlacement]
@@ -90,9 +95,7 @@ struct NodeDependencyManagerTests {
                     await downstream.increment()
                     return self.healthy
                 },
-            ],
-            policy: .init(functionalFailureThreshold: 1),
-            logger: Logger(label: "test"))
+            ], logger: Logger(label: "test"))
 
         let observations = await manager.refresh()
         #expect(await downstream.value == 0)
@@ -104,12 +107,11 @@ struct NodeDependencyManagerTests {
         let sequence = InspectionSequence([healthy, failed, failed, healthy, healthy])
         let manager = try NodeDependencyManager(
             modules: [
-                ClosureNodeDependencyModule(
+                TestNodeDependencyModule(
                     id: .libvirt, role: .compute, desiredState: .required,
                     ownership: .observeOnly, affectedCapabilities: [.qemuPlacement]
                 ) { await sequence.next() }
             ],
-            policy: .init(functionalFailureThreshold: 2, recoverySuccessThreshold: 2),
             logger: Logger(label: "test"))
 
         #expect(await manager.refresh().first?.functionalState == .healthy)
@@ -133,12 +135,11 @@ struct NodeDependencyManagerTests {
         let sequence = InspectionSequence([healthy, intentionalDegradation, intentionalDegradation])
         let manager = try NodeDependencyManager(
             modules: [
-                ClosureNodeDependencyModule(
+                TestNodeDependencyModule(
                     id: .spire, role: .identity, desiredState: .required,
                     ownership: .observeOnly, affectedCapabilities: [.workloadIdentity]
                 ) { await sequence.next() }
             ],
-            policy: .init(functionalFailureThreshold: 2),
             logger: Logger(label: "test"))
 
         let healthyObservation = try #require(await manager.refresh().first)
@@ -153,96 +154,6 @@ struct NodeDependencyManagerTests {
         #expect(secondDegraded.reason == intentionalDegradation.reason)
         #expect(secondDegraded.lastHealthyAt == healthyObservation.lastHealthyAt)
         #expect(secondDegraded.permitsDependentWork)
-    }
-
-    @Test("A module inspection cannot hold the manager past its time budget")
-    func inspectionTimeout() async throws {
-        let manager = try NodeDependencyManager(
-            modules: [
-                ClosureNodeDependencyModule(
-                    id: .libvirt, role: .compute, desiredState: .required,
-                    ownership: .observeOnly, affectedCapabilities: [.qemuPlacement]
-                ) {
-                    try? await Task.sleep(for: .seconds(60))
-                    return self.healthy
-                }
-            ],
-            policy: .init(functionalFailureThreshold: 1, inspectionTimeoutSeconds: 1),
-            logger: Logger(label: "test"))
-
-        let observation = await manager.refresh().first
-        #expect(observation?.functionalState == .unhealthy)
-        #expect(observation?.reason?.code == .commandTimedOut)
-    }
-
-    @Test("Observe-only ownership never receives remediation authority")
-    func observeOnlyCannotRemediate() async throws {
-        let reconciles = CallCounter()
-        let module = ClosureNodeDependencyModule(
-            id: .libvirt, role: .compute, desiredState: .required,
-            ownership: .observeOnly, affectedCapabilities: [.qemuPlacement],
-            inspect: { self.failed },
-            ensureRunning: { _ in
-                await reconciles.increment()
-                return .remediated(restarted: true)
-            })
-        let manager = try NodeDependencyManager(
-            modules: [module], policy: .init(functionalFailureThreshold: 1),
-            logger: Logger(label: "test"))
-
-        await manager.refresh(allowRemediation: true)
-        #expect(await reconciles.value == 0)
-    }
-
-    @Test("Authorized restarts stop at the restart budget")
-    func restartBudget() async throws {
-        let reconciles = CallCounter()
-        let module = ClosureNodeDependencyModule(
-            id: .libvirt, role: .compute, desiredState: .required,
-            ownership: .ensureRunning, affectedCapabilities: [.qemuPlacement],
-            inspect: { self.failed },
-            ensureRunning: { _ in
-                await reconciles.increment()
-                return .remediated(restarted: true)
-            })
-        let manager = try NodeDependencyManager(
-            modules: [module],
-            policy: .init(
-                functionalFailureThreshold: 1, remediationCooldown: 0,
-                remediationBackoffBase: 0, restartBudget: 1,
-                restartBudgetWindow: 3600),
-            logger: Logger(label: "test"))
-
-        await manager.refresh(allowRemediation: true)
-        let second = await manager.refresh(allowRemediation: true).first
-        #expect(await reconciles.value == 1)
-        #expect(second?.restartCount == 1)
-        #expect((await manager.observations().first)?.reason?.code == .remediationBudgetExhausted)
-    }
-
-    @Test("Reconcile ownership uses the configuration path, not ensure-running")
-    func reconcileOwnershipUsesConfigurationPath() async throws {
-        let ensureCalls = CallCounter()
-        let reconcileCalls = CallCounter()
-        let module = ClosureNodeDependencyModule(
-            id: .libvirt, role: .compute, desiredState: .required,
-            ownership: .reconcile, affectedCapabilities: [.qemuPlacement],
-            inspect: { self.failed },
-            ensureRunning: { _ in
-                await ensureCalls.increment()
-                return .remediated(restarted: true)
-            },
-            reconcile: { _ in
-                await reconcileCalls.increment()
-                return .remediated(restarted: false)
-            })
-        let manager = try NodeDependencyManager(
-            modules: [module], policy: .init(functionalFailureThreshold: 1),
-            logger: Logger(label: "test"))
-
-        await manager.refresh(allowRemediation: true)
-        #expect(await ensureCalls.value == 0)
-        #expect(await reconcileCalls.value == 1)
     }
 
     @Test("Receipt freshness, not the agent check clock, gates new work")
@@ -350,7 +261,7 @@ struct NodeDependencyManagerTests {
         dependencies: [NodeDependencyID] = [],
         inspection: NodeDependencyInspection
     ) -> any NodeDependencyModule {
-        ClosureNodeDependencyModule(
+        TestNodeDependencyModule(
             id: id, role: id == .spire ? .identity : .compute,
             dependencies: dependencies, desiredState: .required,
             ownership: .observeOnly, affectedCapabilities: []
@@ -732,7 +643,6 @@ struct DependencyProbeDescriptorStressTests {
             functional: { await commandHealth(executor) })
         let manager = try NodeDependencyManager(
             modules: [libvirt, networking],
-            policy: .init(functionalFailureThreshold: 1),
             logger: Logger(label: "test.dependency-probe-descriptor-stress"))
 
         for iteration in 0..<refreshIterations {
@@ -801,6 +711,36 @@ private actor InspectionSequence {
     func next() -> NodeDependencyInspection { values.removeFirst() }
 }
 
+private struct TestNodeDependencyModule: NodeDependencyModule {
+    let id: NodeDependencyID
+    let role: NodeDependencyRole
+    let dependencies: [NodeDependencyID]
+    let desiredState: NodeDependencyDesiredState
+    let ownership: NodeDependencyOwnership
+    let affectedCapabilities: [NodeCapability]
+    let inspection: @Sendable () async -> NodeDependencyInspection
+
+    init(
+        id: NodeDependencyID,
+        role: NodeDependencyRole,
+        dependencies: [NodeDependencyID] = [],
+        desiredState: NodeDependencyDesiredState = .required,
+        ownership: NodeDependencyOwnership = .observeOnly,
+        affectedCapabilities: [NodeCapability],
+        inspection: @escaping @Sendable () async -> NodeDependencyInspection
+    ) {
+        self.id = id
+        self.role = role
+        self.dependencies = dependencies
+        self.desiredState = desiredState
+        self.ownership = ownership
+        self.affectedCapabilities = affectedCapabilities
+        self.inspection = inspection
+    }
+
+    func inspect() async -> NodeDependencyInspection { await inspection() }
+}
+
 private struct SystemctlOutputExecutor: NodeDependencyCommandExecuting {
     let outputs: [String: String]
 
@@ -838,9 +778,6 @@ private struct FakeSystemd: SystemdControlling {
         return .missing(units.first ?? "unknown")
     }
 
-    func enable(unit: String) async throws {}
-    func start(unit: String) async throws {}
-    func restart(unit: String) async throws {}
 }
 
 extension SystemdUnitObservation {

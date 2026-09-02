@@ -148,6 +148,12 @@ struct DHCPOptionsTests {
         #expect(firstOctet & 0x02 == 0x02)
         #expect(firstOctet & 0x01 == 0x00)
     }
+
+    @Test("server MAC preserves the deployed subnet identity derivation")
+    func serverMACCompatibility() {
+        #expect(OVNDHCPOptionsBuilder.serverMAC(for: "10.0.0.0/24") == "4e:1f:e1:0d:e0:ee")
+        #expect(OVNDHCPOptionsBuilder.serverMAC(for: "fd12:3456:789a::/64") == "a2:23:71:ae:a5:14")
+    }
 }
 
 /// Which `DHCP_Options` row belongs to which network (issue #765). This is the

@@ -127,16 +127,6 @@ extension User {
             .first()
     }
 
-    /// Check if user belongs to a specific group
-    func belongsToGroup(_ groupID: UUID, on db: Database) async throws -> Bool {
-        let membership = try await UserGroup.query(on: db)
-            .filter(\.$user.$id, .equal, self.id!)
-            .filter(\.$group.$id, .equal, groupID)
-            .first()
-
-        return membership != nil
-    }
-
     /// Account provenance (see UserSource). Unknown/legacy values fall back to
     /// `.local` so callers never have to handle a nil case.
     var source: UserSource {

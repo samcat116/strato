@@ -1,5 +1,9 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
+import { errorMessage } from "@/lib/errors";
+
 import { Loader2, RefreshCw, AlertTriangle, PauseCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,7 +39,7 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
           : `${agent.name} withdrawn from auto-update`
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update agent");
+      toast.error(errorMessage(error, "Failed to update agent"));
     }
   };
 
@@ -44,7 +48,7 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
       await cancelUpdate.mutateAsync({ id: agent.id });
       toast.success(`Update assignment for ${agent.name} cancelled`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to cancel the update");
+      toast.error(errorMessage(error, "Failed to cancel the update"));
     }
   };
 
@@ -95,7 +99,7 @@ export function AgentAutoUpdateCard({ agent }: AgentAutoUpdateCardProps) {
                 Updating to <span className="font-medium">{agent.updateDesiredVersion}</span>
                 {agent.updateAssignmentSource === "manual" ? " (requested manually)" : ""}
                 {agent.updateAttemptedAt
-                  ? ` (assigned ${new Date(agent.updateAttemptedAt).toLocaleString()})`
+                  ? ` (assigned ${formatDateTime(agent.updateAttemptedAt)})`
                   : " (waiting on the agent)"}
               </p>
             </div>

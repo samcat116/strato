@@ -111,9 +111,8 @@ actor AgentService {
 
 // MARK: - ReplicaBridgeDelegate
 
-/// The delegate is `deliverDoorbell` alone, declared with the desired-state
-/// sync code above. Its other half, `runLocalExchange`, went with the
-/// cross-replica RPC bridge (STR-152).
+/// The delegate is `deliverDoorbell`, declared with the desired-state sync code
+/// above.
 extension AgentService: ReplicaBridgeDelegate {}
 
 // MARK: - Application Extension

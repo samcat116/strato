@@ -9,16 +9,14 @@ struct SandboxRuntimeProbeTests {
     private let firecrackerAvailable = HypervisorSupport(
         type: .firecracker,
         available: true,
-        accelerated: true,
-        capabilities: .firecracker
+        accelerated: true
     )
 
     private let firecrackerUnavailable = HypervisorSupport(
         type: .firecracker,
         available: false,
         accelerated: false,
-        unavailabilityReason: "/dev/kvm not present",
-        capabilities: .firecracker
+        unavailabilityReason: "/dev/kvm not present"
     )
 
     /// A path that exists on every host running these tests.
@@ -27,9 +25,8 @@ struct SandboxRuntimeProbeTests {
 
     @Test("the runtime (issue #421) has landed: the build gate no longer forces the capability off")
     func buildGateOpenWithRuntime() throws {
-        // No runtimeBuilt override: the build's own constant now permits the
-        // capability, so with every host prerequisite satisfied the probe
-        // reports capable. The reconciler drives desired sandboxes on this build.
+        // With every host prerequisite satisfied the probe reports capable.
+        // The reconciler drives desired sandboxes on every current build.
         let dir = try makeGuestImage(capabilities: [])
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let report = SandboxRuntimeProbe.probe(
@@ -39,23 +36,12 @@ struct SandboxRuntimeProbeTests {
         #expect(report.unavailabilityReason == nil)
     }
 
-    @Test("an explicit unbuilt runtime still forces the capability off")
-    func explicitUnbuiltRuntimeGatesOff() {
-        // Injecting runtimeBuilt: false proves the build gate still dominates
-        // every host prerequisite when a build genuinely lacks the runtime.
-        let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: presentPath, runtimeBuilt: false)
-
-        #expect(!report.capable)
-        #expect(report.unavailabilityReason?.contains("does not include the sandbox runtime") == true)
-    }
-
     @Test("capable when Firecracker is usable and the guest image is present")
     func capableWithAllPrerequisites() throws {
         let dir = try makeGuestImage(capabilities: [])
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: dir, runtimeBuilt: true)
+            firecracker: firecrackerAvailable, guestImagePath: dir)
 
         #expect(report.capable)
         #expect(report.unavailabilityReason == nil)
@@ -66,7 +52,7 @@ struct SandboxRuntimeProbeTests {
         let dir = try makeGuestImage(capabilities: [])
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: dir, runtimeBuilt: true)
+            firecracker: firecrackerAvailable, guestImagePath: dir)
 
         #expect(report.capable)
     }
@@ -74,7 +60,7 @@ struct SandboxRuntimeProbeTests {
     @Test("not capable when Firecracker is unavailable, carrying its reason")
     func notCapableWithoutFirecracker() {
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerUnavailable, guestImagePath: presentPath, runtimeBuilt: true)
+            firecracker: firecrackerUnavailable, guestImagePath: presentPath)
 
         #expect(!report.capable)
         #expect(report.unavailabilityReason == "/dev/kvm not present")
@@ -82,7 +68,7 @@ struct SandboxRuntimeProbeTests {
 
     @Test("not capable when Firecracker was never probed")
     func notCapableWithoutProbe() {
-        let report = SandboxRuntimeProbe.probe(firecracker: nil, guestImagePath: presentPath, runtimeBuilt: true)
+        let report = SandboxRuntimeProbe.probe(firecracker: nil, guestImagePath: presentPath)
 
         #expect(!report.capable)
         #expect(report.unavailabilityReason?.contains("not probed") == true)
@@ -90,8 +76,8 @@ struct SandboxRuntimeProbeTests {
 
     @Test("a non-Firecracker report is rejected rather than misread")
     func rejectsWrongHypervisorReport() {
-        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-        let report = SandboxRuntimeProbe.probe(firecracker: qemu, guestImagePath: presentPath, runtimeBuilt: true)
+        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true)
+        let report = SandboxRuntimeProbe.probe(firecracker: qemu, guestImagePath: presentPath)
 
         #expect(!report.capable)
     }
@@ -99,19 +85,19 @@ struct SandboxRuntimeProbeTests {
     @Test("not capable when the guest image path is unconfigured or empty")
     func notCapableWithoutConfiguredPath() {
         let unconfigured = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: nil, runtimeBuilt: true)
+            firecracker: firecrackerAvailable, guestImagePath: nil)
         #expect(!unconfigured.capable)
         #expect(unconfigured.unavailabilityReason?.contains("sandbox_guest_image_path") == true)
 
         let empty = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: "", runtimeBuilt: true)
+            firecracker: firecrackerAvailable, guestImagePath: "")
         #expect(!empty.capable)
     }
 
     @Test("not capable when nothing exists at the guest image path")
     func notCapableWithoutGuestImage() {
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: missingPath, runtimeBuilt: true)
+            firecracker: firecrackerAvailable, guestImagePath: missingPath)
 
         #expect(!report.capable)
         #expect(report.unavailabilityReason?.contains(missingPath) == true)
@@ -161,7 +147,7 @@ struct SandboxRuntimeProbeTests {
         networkCapability: NetworkCapability? = .overlay
     ) -> SandboxRuntimeProbe.Report {
         SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: guestImagePath, runtimeBuilt: true,
+            firecracker: firecrackerAvailable, guestImagePath: guestImagePath,
             jailsNewSandboxes: jailsNewSandboxes, networkCapability: networkCapability)
     }
 
@@ -231,7 +217,7 @@ struct SandboxRuntimeProbeTests {
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerUnavailable, guestImagePath: dir, runtimeBuilt: true,
+            firecracker: firecrackerUnavailable, guestImagePath: dir,
             jailsNewSandboxes: true, networkCapability: .overlay)
         #expect(!report.capable)
         #expect(!report.networkingCapable)

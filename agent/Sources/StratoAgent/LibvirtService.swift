@@ -30,7 +30,7 @@ enum DomainNetworkDetachConvergence {
 ///
 /// ## Why this is so much smaller than the driver it replaced
 ///
-/// A process driver's `activeVMs`, `vmSpecs`, `vmConfigs`, spawn sizing,
+/// The removed driver's `activeVMs`, `vmSpecs`, `vmConfigs`, spawn sizing,
 /// awaiting-first-start flags, console socket maps, pending sets and respawn
 /// path are all bookkeeping for an *ephemeral process*: the agent spawned it,
 /// so only the agent knows what it spawned, and anything it forgets is
@@ -58,7 +58,7 @@ enum DomainNetworkDetachConvergence {
 ///   qcow2 for checkpoints, so `createVM` writes it before defining the domain
 ///   (STR-188).
 ///
-/// The two caches below (`lastKnownVMIds`, `lastKnownReservationInventory`) are the only
+/// The reservation cache below is the only
 /// retained state, they hold *the last answer libvirtd gave* rather than a model
 /// of it, and neither is keyed by VM id. Treat any new dictionary keyed by VM id
 /// as a smell worth justifying in review.
@@ -165,15 +165,11 @@ actor LibvirtService: HypervisorService {
     /// and zero reservations advertise capacity the host does not have and
     /// invite the scheduler to over-place it. The reservation caller's manifest
     /// fallback previously covered only a query that *timed out*, so a libvirtd
-    /// error has to remain explicit too. `listVMs()` preserves the same
-    /// unknown-versus-empty distinction at the driver boundary even though the
-    /// current heartbeat no longer carries that inventory. What neither cache
-    /// can cover — the sweep that has never once succeeded — is why both methods
-    /// return optionals (STR-196). The never-answered and staleness decisions
+    /// error has to remain explicit too. What the cache cannot cover — the
+    /// sweep that has never once succeeded — is why the method returns an
+    /// optional (STR-196). The never-answered and staleness decisions
     /// belong to `LastKnownInventory`, in a package tests can import, because
     /// this target has none.
-    private var lastKnownVMIds = LastKnownInventory<[String]>(
-        staleThreshold: LibvirtService.staleInventoryThreshold)
     private var lastKnownReservationInventory = LastKnownInventory<HypervisorReservationInventory>(
         staleThreshold: LibvirtService.staleInventoryThreshold)
 
@@ -1140,33 +1136,6 @@ actor LibvirtService: HypervisorService {
         return endpoint.isEmpty ? nil : endpoint
     }
 
-    // MARK: - Host inventory
-
-    /// Every Strato domain libvirtd knows about, running or not — or nil if the
-    /// daemon could not be read and this driver has never had an answer to
-    /// serve.
-    ///
-    /// Includes stopped domains deliberately: a defined-but-off VM holds its
-    /// disks and its placement, and omitting it from an inventory says it is
-    /// gone. For exactly that reason the failure path never manufactures `[]`,
-    /// which says the same thing about every domain at once.
-    func listVMs() async -> [String]? {
-        do {
-            let ids = try await call(
-                "libvirt-list", vmId: Self.hostScope, seconds: StageBudget.statusQuerySeconds
-            ) {
-                client, deadline in
-                try await client.connectListAllDomains(
-                    needResults: 1, flags: LibvirtDomain.listAllDomains, deadline: deadline
-                ).domains.map(\.name)
-            }.filter(LibvirtDomain.isStratoDomainName)
-            lastKnownVMIds.record(ids)
-            return ids
-        } catch {
-            return stale(lastKnownVMIds, "the VM list", error)
-        }
-    }
-
     /// vCPUs and memory committed to the domains on this host — or nil if the
     /// daemon could not be read and this driver has never had an answer to
     /// serve.
@@ -1233,11 +1202,6 @@ actor LibvirtService: HypervisorService {
         } catch {
             return stale(lastKnownReservationInventory, "host reservation inventory", error)
         }
-    }
-
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
-        guard let inventory = await reservationInventory() else { return nil }
-        return (inventory.reservation.cpus, inventory.reservation.memoryBytes)
     }
 
     /// Serves a cached inventory answer after a live query failed, escalating

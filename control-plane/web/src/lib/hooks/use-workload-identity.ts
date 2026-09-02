@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { workloadIdentityApi } from "@/lib/api/workload-identity";
 import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 
 // System-admin only; gate callers on user.isSystemAdmin so the query doesn't
 // fire (and 403) for regular users. Polls periodically to keep SVID rotation
@@ -24,5 +25,5 @@ export function workloadIdentityErrorMessage(error: unknown, fallback: string): 
   if (isWorkloadIdentityForbidden(error)) {
     return "You need system administrator rights to view workload identity.";
   }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback);
 }

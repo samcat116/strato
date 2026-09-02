@@ -111,14 +111,14 @@ struct NetworkOrchestrator: Sendable {
             securityGroupIds: spec.securityGroupIds,
             metadataDenied: metadataDenied,
             mtu: spec.mtu,
-            metadataEnabled: spec.metadataEnabled == true,
+            metadataEnabled: spec.metadataEnabled,
             resolverAddresses: spec.resolverEnabled == true ? (spec.resolverAddresses ?? []) : []
         )
         let info = try await networkService.createVMNetwork(
             vmId: vmId, nicIndex: slot, config: config, placement: placement)
         let dhcpRealized = spec.dhcpEnabled && info.attachment.isTap
-        let metadataRealized = spec.metadataEnabled == true && info.attachment.isTap
-        if spec.metadataEnabled == true && !metadataRealized {
+        let metadataRealized = spec.metadataEnabled && info.attachment.isTap
+        if spec.metadataEnabled && !metadataRealized {
             logger.debug(
                 "NIC degraded to user-mode; withholding the guest's route to the metadata service",
                 metadata: [

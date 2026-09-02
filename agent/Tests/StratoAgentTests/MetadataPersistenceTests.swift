@@ -215,7 +215,7 @@ struct MetadataPersistenceTests {
         ])
 
         #expect(await store.metadata(for: vmId)?.hostname == "current")
-        #expect(await store.appliedGeneration(for: vmId) == 10)
+        #expect(await store.exportRecords()[vmId]?.generation == 10)
     }
 
     @Test("A store round-trips through the durable copy with its guards intact")
@@ -285,7 +285,7 @@ struct MetadataPersistenceTests {
         ])
         await store.confirmRestored(namedBy: [])
 
-        #expect(await store.appliedGeneration(for: ghost) == 4)
+        #expect(await store.exportRecords()[ghost]?.generation == 4)
         #expect(await store.apply(Self.metadata(ghost), generation: 4, for: ghost) == .stale(recorded: 4))
         #expect(await store.metadata(for: ghost) == nil)
 
@@ -334,6 +334,6 @@ struct MetadataPersistenceTests {
             gone: PersistedMetadataRecord(generation: 3, metadata: nil, withdrawn: true)
         ])
         #expect(await store.confirmRestored(namedBy: []).isEmpty)
-        #expect(await store.appliedGeneration(for: gone) == 3)
+        #expect(await store.exportRecords()[gone]?.generation == 3)
     }
 }

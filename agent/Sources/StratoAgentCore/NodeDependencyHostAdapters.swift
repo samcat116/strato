@@ -104,14 +104,6 @@ public struct SystemdUnitObservation: Sendable, Equatable {
 public protocol SystemdControlling: Sendable {
     func inspect(unit: String) async -> SystemdUnitObservation
     func discoverFirst(units: [String]) async -> SystemdUnitObservation
-    func enable(unit: String) async throws
-    func start(unit: String) async throws
-    func restart(unit: String) async throws
-}
-
-public struct SystemdOperationError: Error, Sendable, CustomStringConvertible {
-    public let detail: String
-    public var description: String { detail }
 }
 
 public struct SystemdHostAdapter: SystemdControlling {
@@ -170,19 +162,6 @@ public struct SystemdHostAdapter: SystemdControlling {
         return SystemdUnitObservation(
             name: units.first ?? "unknown", loadState: "not-found", activeState: "inactive",
             subState: "dead", unitFileState: "unknown")
-    }
-
-    public func enable(unit: String) async throws { try await run(["enable", unit]) }
-    public func start(unit: String) async throws { try await run(["start", unit]) }
-    public func restart(unit: String) async throws { try await run(["restart", unit]) }
-
-    private func run(_ arguments: [String]) async throws {
-        let result = try await executor.execute(
-            try BoundedHostCommand(executable: executable, arguments: arguments, timeout: .seconds(30)))
-        guard result.terminationStatus == 0 else {
-            throw SystemdOperationError(
-                detail: result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
     }
 
     public static func parse(unit: String, output: String) -> SystemdUnitObservation? {

@@ -17,11 +17,6 @@ actor LokiService {
         self.httpClient = app.http.client.shared
     }
 
-    /// Whether a Loki endpoint is configured. Pushes are no-ops and queries throw when this is false.
-    var isEnabled: Bool {
-        lokiEndpoint != nil
-    }
-
     // MARK: - Push Logs to Loki
 
     /// Push a VM log message to Loki. No-ops when Loki is not configured.
@@ -229,7 +224,6 @@ enum LokiError: Error, LocalizedError {
     case invalidURL
     case notConfigured
     case queryFailed(String)
-    case connectionFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -239,8 +233,6 @@ enum LokiError: Error, LocalizedError {
             return "Loki is not configured (LOKI_ENDPOINT unset)"
         case .queryFailed(let reason):
             return "Loki query failed: \(reason)"
-        case .connectionFailed(let reason):
-            return "Failed to connect to Loki: \(reason)"
         }
     }
 }

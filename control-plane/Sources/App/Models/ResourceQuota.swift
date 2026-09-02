@@ -176,11 +176,6 @@ extension ResourceQuota {
         try await QuotaUsageAggregator.measure(quota: self, on: db).asQuotaUsage
     }
 
-    /// Total sandbox-snapshot storage within this quota's scope (issue #426).
-    func sandboxSnapshotStorageInScope(on db: Database) async throws -> Int64 {
-        let scope = try await QuotaUsageAggregator.scope(of: self, on: db)
-        return try await QuotaUsageAggregator.snapshotStorageBytes(in: scope, on: db)
-    }
 }
 
 // MARK: - Computed Properties

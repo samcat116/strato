@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import { Loader2, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -129,7 +131,7 @@ export function CreateSCIMTokenDialog({
               </p>
               {createdToken.expiresAt && (
                 <p className="text-sm text-muted-foreground mt-2">
-                  Expires: {new Date(createdToken.expiresAt).toLocaleString()}
+                  Expires: {formatDateTime(createdToken.expiresAt)}
                 </p>
               )}
             </div>

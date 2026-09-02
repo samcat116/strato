@@ -400,11 +400,45 @@ extension Agent {
 // MARK: - Agent Extensions for Registration
 
 extension Agent {
-    /// Create an agent from registration message
+    /// Applies every mutable field carried by an agent registration. Existing
+    /// and newly enrolled agents share this path so capability and resource
+    /// additions cannot drift between create and reconnect.
+    func apply(
+        registration: AgentRegisterMessage,
+        dependencyObservations: [NodeDependencyObservation],
+        receivedAt: Date
+    ) {
+        hostname = registration.hostname
+        version = registration.version
+        architecture = registration.architecture.rawValue
+        operatingSystem = registration.operatingSystem.rawValue
+        hypervisors = registration.hypervisors
+        networkCapability = registration.networkCapability?.rawValue
+        if let hostInfo = registration.hostInfo { self.hostInfo = hostInfo }
+        sandboxCapable = registration.sandboxCapable
+        sandboxNetworkingCapable = registration.sandboxNetworkingCapable
+        tpmCapable = registration.tpmCapable
+        resolverCapable = registration.resolverCapable
+        metadataServiceCapable = registration.metadataServiceCapable
+        self.dependencyObservations = dependencyObservations
+        dependencyObservationsReceivedAt = receivedAt
+        totalCPU = registration.resources.totalCPU
+        totalMemory = registration.resources.totalMemory
+        totalDisk = registration.resources.totalDisk
+        availableCPU = registration.resources.availableCPU
+        availableMemory = registration.resources.availableMemory
+        availableDisk = registration.resources.availableDisk
+        lastHeartbeat = receivedAt
+        status = .online
+    }
+
+    /// Create an agent from a registration message.
     static func from(
         registration: AgentRegisterMessage,
         name: String,
         siteID: UUID,
+        dependencyObservations: [NodeDependencyObservation] = [],
+        receivedAt: Date = Date(),
         trustDomain: String = PlatformTrustDomain.current
     ) -> Agent {
         let agent = Agent(
@@ -413,21 +447,14 @@ extension Agent {
             hostname: registration.hostname,
             version: registration.version,
             siteID: siteID,
-            status: .connecting,
+            status: .online,
             resources: registration.resources,
-            architecture: registration.architecture,
-            hypervisors: registration.effectiveHypervisors,
-            networkCapability: registration.networkCapability,
-            sandboxCapable: registration.sandboxCapable ?? false,
-            sandboxNetworkingCapable: registration.sandboxNetworkingCapable ?? false,
-            tpmCapable: registration.tpmCapable ?? false,
-            resolverCapable: registration.resolverCapable ?? false,
-            metadataServiceCapable: registration.metadataServiceCapable ?? false,
-            dependencyObservations: registration.dependencyObservations,
-            lastHeartbeat: Date()
+            lastHeartbeat: receivedAt
         )
-        agent.operatingSystem = registration.operatingSystem?.rawValue
-        agent.hostInfo = registration.hostInfo
+        agent.apply(
+            registration: registration,
+            dependencyObservations: dependencyObservations,
+            receivedAt: receivedAt)
         return agent
     }
 
@@ -535,7 +562,7 @@ extension Agent {
         }
 
         return hypervisors.contains {
-            $0.type == backend && $0.available && $0.capabilities.supportsSnapshots
+            $0.type == backend && $0.available && $0.supportsSnapshots
                 && (backend != .qemu || dependencyAllows(.qemuPlacement))
         }
     }

@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -89,9 +91,7 @@ function EditSecurityGroupForm({
       onUpdated?.();
     } catch (error) {
       toast.error(
-        error instanceof Error
-          ? error.message
-          : "Failed to update security group"
+        errorMessage(error, "Failed to update security group")
       );
     } finally {
       setIsLoading(false);

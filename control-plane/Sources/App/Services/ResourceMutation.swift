@@ -27,13 +27,9 @@ extension AgentService: AgentDispatch {
 /// Accepts one asynchronous lifecycle mutation on a VM or sandbox and hands it
 /// to the reconciliation loop (ADR 0001 stage 4, STR-147).
 ///
-/// This is what `ResourceOperationCoordinator` was, minus the side-table. The
-/// coordinator's job was to insert a `pending` row, dispatch, and later record
-/// a verdict on it; every one of those steps was bookkeeping *about* a fact the
-/// resource already carries — `observedGeneration >= generation`. So the row is
-/// gone (and, with STR-152, so is the coordinator) and what remains is the part
-/// that was never redundant: apply the desired-state change, stamp how long
-/// convergence may take, append the attribution record, and reach the agent.
+/// Applies the desired-state change, stamps how long convergence may take,
+/// appends the attribution record, and reaches the agent. Completion is the
+/// resource's own `observedGeneration >= generation` fact, not side-table state.
 ///
 /// The client gets `202 { resource, targetGeneration, mutationId }` and polls
 /// the resource's `conditions`, not an operation.
@@ -77,11 +73,9 @@ struct ResourceMutation {
         /// agent's observed report.
         case placement(@Sendable (any Database) async throws -> Void)
         /// Resolve locally with no agent teardown (the offline/unplaced
-        /// delete): run the removal work. Returning `false` means another
-        /// finalizer still owes cleanup, so the deletion is under way rather
-        /// than done and nothing is recorded — `sweepOrphanedTerminatingResources`
-        /// is the backstop.
-        case directResolution(@Sendable (any Database) async throws -> Bool)
+        /// delete): run the removal work. The resource's finalizers remain the
+        /// source of truth when cleanup is still outstanding.
+        case directResolution(@Sendable (any Database) async throws -> Void)
     }
 
     /// What the `202` needs: the generation the client waits for, and the id of
@@ -311,23 +305,10 @@ struct ResourceMutation {
                 }
             }
 
-        case .placement(let work):
+        case .placement(let work), .directResolution(let work):
             app.backgroundTasks.spawn {
-                // Bail if shutdown's drain already cancelled us — placement work
-                // dereferences `app.db` immediately (see `Application.liveDB`).
-                guard let db = app.liveDB else { return }
-                do {
-                    try await work(db)
-                } catch {
-                    await degrade(
-                        R.self, id: resourceID, mutation: kind,
-                        expectedGeneration: targetGeneration,
-                        reason: error.localizedDescription, app: app)
-                }
-            }
-
-        case .directResolution(let work):
-            app.backgroundTasks.spawn {
+                // Bail if shutdown's drain already cancelled us — background
+                // work dereferences `app.db` immediately.
                 guard let db = app.liveDB else { return }
                 do {
                     _ = try await work(db)
@@ -345,9 +326,8 @@ struct ResourceMutation {
     /// its `conditions`, plus the resolution of whatever in-flight state the
     /// failed mutation left behind.
     ///
-    /// Every effect is drain-safe — it bails before touching a torn-down
-    /// `app.db`, the crash gap `ResourceOperationCoordinator.recordVerdict`
-    /// documents.
+    /// Every effect is drain-safe: it bails before touching a torn-down
+    /// `app.db`.
     private func degrade<R: ConvergingResource>(
         _ type: R.Type,
         id: UUID,

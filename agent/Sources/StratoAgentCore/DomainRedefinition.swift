@@ -12,11 +12,8 @@ import StratoShared
 /// document — libvirt allocates a root port per PCI device present at define
 /// time, so the spares have to be declared up front, and the region and the vCPU
 /// maximum are whatever the spec asked for at create — so a VM that outgrew any
-/// of them could only be *recreated*. The process driver had none of those
-/// limits, because it re-spawned from the current spec on every boot, and a
-/// restart was enough to widen all three; under libvirt a restart changed
-/// nothing. That was a real capability difference between two drivers the
-/// control plane cannot tell apart.
+/// of them could only be *recreated*. A libvirt restart does not rebuild the
+/// definition, so it cannot widen these limits on its own.
 ///
 /// So this is what a boot or stopped-domain resize does before acting: it makes
 /// the definition able to satisfy the current spec. "Recreate the VM" becomes
@@ -209,17 +206,7 @@ public enum DomainRedefinition {
         var changed = false
         if !hasSerialHint {
             domain.insert(
-                DomainXMLNode(
-                    "sysinfo", [("type", "smbios")],
-                    children: [
-                        DomainXMLNode(
-                            "system",
-                            children: [
-                                DomainXMLNode(
-                                    "entry", [("name", "serial")],
-                                    text: serial)
-                            ])
-                    ]),
+                DomainXMLBuilder.metadataSMBIOSSysinfoNode(),
                 at: osIndex)
             changed = true
         }
@@ -227,7 +214,7 @@ public enum DomainRedefinition {
         if existingSMBIOS == nil {
             domain.editChild(named: "os") { os in
                 let insertion = os.firstIndex(ofChildNamed: "type").map { $0 + 1 } ?? 0
-                os.insert(DomainXMLNode("smbios", [("mode", "sysinfo")]), at: insertion)
+                os.insert(DomainXMLBuilder.smbiosModeNode(), at: insertion)
             }
             changed = true
         }
@@ -257,8 +244,6 @@ public enum DomainRedefinition {
         /// available PCI slots" on some unrelated attach.
         public let refusals: [String]
 
-        /// Whether anything is worth defining.
-        public var isEmpty: Bool { xml == nil }
     }
 
     /// The widened document for `inactiveDomainXML`, or a `Widening` with no
@@ -388,7 +373,9 @@ public enum DomainRedefinition {
         }
         domain.editChild(named: "cpu") { cpu in
             cpu.editChild(named: "numa") { numa in
-                numa.editChildren(named: "cell") { $0.setAttribute("cpus", "0-\(wanted - 1)") }
+                numa.editChildren(named: "cell") {
+                    $0.setAttribute("cpus", DomainXMLBuilder.cpuRange(maxCPUs: wanted))
+                }
             }
         }
         return wanted
@@ -434,9 +421,7 @@ public enum DomainRedefinition {
         var added = 0
         domain.editChild(named: "devices") { devices in
             while added < wanted - free, next <= DomainXMLBuilder.rootPortIndexCeiling {
-                devices.append(
-                    DomainXMLNode(
-                        "controller", [("type", "pci"), ("index", "\(next)"), ("model", "pcie-root-port")]))
+                devices.append(DomainXMLBuilder.pcieRootPortNode(index: next))
                 next += 1
                 added += 1
             }
@@ -615,9 +600,7 @@ public enum DomainRedefinition {
                 $0.setAttribute("unit", "KiB"); $0.setText(ceiling)
             })
         if !hadMaxMemory, let memoryIndex = domain.firstIndex(ofChildNamed: "memory") {
-            domain.insert(
-                DomainXMLNode("maxMemory", [("slots", "1"), ("unit", "KiB")], text: ceiling),
-                at: memoryIndex)
+            domain.insert(DomainXMLBuilder.maxMemoryNode(kibibytes: ceiling), at: memoryIndex)
         }
 
         rewriteMemorySizes(&domain, total: ceiling, boot: boot)
@@ -665,8 +648,7 @@ public enum DomainRedefinition {
                 $0.setAttribute("unit", "KiB"); $0.setText(boot)
             })
         if !hadCurrent, let memoryIndex = domain.firstIndex(ofChildNamed: "memory") {
-            domain.insert(
-                DomainXMLNode("currentMemory", [("unit", "KiB")], text: boot), at: memoryIndex + 1)
+            domain.insert(DomainXMLBuilder.currentMemoryNode(kibibytes: boot), at: memoryIndex + 1)
         }
     }
 
@@ -691,12 +673,7 @@ public enum DomainRedefinition {
         }
 
         let cpus = maxCPUs.flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 1
-        let cell = DomainXMLNode(
-            "cell",
-            [
-                ("id", "0"), ("cpus", cpus > 1 ? "0-\(cpus - 1)" : "0"),
-                ("memory", bootMemory), ("unit", "KiB"),
-            ])
+        let cell = DomainXMLBuilder.numaCellNode(maxCPUs: cpus, memoryKibibytes: bootMemory)
         if cpu.editChild(named: "numa", { $0.append(cell) }) == false {
             cpu.append(DomainXMLNode("numa", children: [cell]))
         }

@@ -19,48 +19,13 @@ struct LogsController: RouteCollection {
     /// Query logs for a specific VM from Loki
     @Sendable
     func getVMLogs(req: Request) async throws -> [LogEntry] {
-        _ = try req.auth.require(User.self)
-
-        guard let vmIdString = req.parameters.get("vmID"),
-            let vmId = UUID(uuidString: vmIdString)
-        else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
-
-        // Verify the VM exists and enforce the per-VM read permission through
-        // the evaluator (defense in depth alongside AuthorizationMiddleware).
-        _ = try await req.authorizedVM(vmId, action: "vm:read")
-
-        // Check if Loki is enabled
-        guard req.application.lokiEnabled else {
-            req.logger.warning("Loki not configured, returning empty logs")
-            return []
-        }
-
-        // Parse query parameters
-        let limit = try req.intQuery("limit", default: 100, in: 1...1000)
-        let directionStr = req.query[String.self, at: "direction"] ?? "backward"
-        let direction = QueryDirection(rawValue: directionStr) ?? .backward
-
-        // Time range parameters (Unix timestamps)
-        let startTimestamp = req.query[Double.self, at: "start"]
-        let endTimestamp = req.query[Double.self, at: "end"]
-
-        let start = startTimestamp.map { Date(timeIntervalSince1970: $0) }
-        let end = endTimestamp.map { Date(timeIntervalSince1970: $0) }
-
-        do {
-            return try await req.lokiService.queryVMLogs(
-                vmId: vmIdString,
-                start: start,
-                end: end,
-                limit: limit,
-                direction: direction
-            )
-        } catch {
-            req.logger.error("Failed to query Loki: \(error)")
-            throw Abort(.serviceUnavailable, reason: "Failed to query logs: \(error.localizedDescription)")
-        }
+        try await queryLogs(
+            req: req, parameter: "vmID", invalidReason: "Invalid VM ID",
+            authorize: { _ = try await req.authorizedVM($0, action: "vm:read") },
+            query: { id, start, end, limit, direction in
+                try await req.lokiService.queryVMLogs(
+                    vmId: id, start: start, end: end, limit: limit, direction: direction)
+            })
     }
 
     /// GET /api/sandboxes/:sandboxID/logs
@@ -68,18 +33,30 @@ struct LogsController: RouteCollection {
     /// mirroring the VM logs endpoint.
     @Sendable
     func getSandboxLogs(req: Request) async throws -> [LogEntry] {
+        try await queryLogs(
+            req: req, parameter: "sandboxID", invalidReason: "Invalid sandbox ID",
+            authorize: { _ = try await req.authorizedSandbox($0, action: "sandbox:read") },
+            query: { id, start, end, limit, direction in
+                try await req.lokiService.querySandboxLogs(
+                    sandboxId: id, start: start, end: end, limit: limit, direction: direction)
+            })
+    }
+
+    private func queryLogs(
+        req: Request,
+        parameter: String,
+        invalidReason: String,
+        authorize: @Sendable (UUID) async throws -> Void,
+        query: @Sendable (String, Date?, Date?, Int, QueryDirection) async throws -> [LogEntry]
+    ) async throws -> [LogEntry] {
         _ = try req.auth.require(User.self)
 
-        guard let sandboxIdString = req.parameters.get("sandboxID"),
-            let sandboxId = UUID(uuidString: sandboxIdString)
+        guard let idString = req.parameters.get(parameter),
+            let id = UUID(uuidString: idString)
         else {
-            throw Abort(.badRequest, reason: "Invalid sandbox ID")
+            throw Abort(.badRequest, reason: invalidReason)
         }
-
-        // Verify the sandbox exists and enforce the per-sandbox read
-        // permission through the evaluator (defense in depth alongside
-        // AuthorizationMiddleware).
-        _ = try await req.authorizedSandbox(sandboxId, action: "sandbox:read")
+        try await authorize(id)
 
         // Check if Loki is enabled
         guard req.application.lokiEnabled else {
@@ -87,26 +64,14 @@ struct LogsController: RouteCollection {
             return []
         }
 
-        // Parse query parameters
         let limit = try req.intQuery("limit", default: 100, in: 1...1000)
         let directionStr = req.query[String.self, at: "direction"] ?? "backward"
         let direction = QueryDirection(rawValue: directionStr) ?? .backward
-
-        // Time range parameters (Unix timestamps)
-        let startTimestamp = req.query[Double.self, at: "start"]
-        let endTimestamp = req.query[Double.self, at: "end"]
-
-        let start = startTimestamp.map { Date(timeIntervalSince1970: $0) }
-        let end = endTimestamp.map { Date(timeIntervalSince1970: $0) }
+        let start = req.query[Double.self, at: "start"].map(Date.init(timeIntervalSince1970:))
+        let end = req.query[Double.self, at: "end"].map(Date.init(timeIntervalSince1970:))
 
         do {
-            return try await req.lokiService.querySandboxLogs(
-                sandboxId: sandboxIdString,
-                start: start,
-                end: end,
-                limit: limit,
-                direction: direction
-            )
+            return try await query(idString, start, end, limit, direction)
         } catch {
             req.logger.error("Failed to query Loki: \(error)")
             throw Abort(.serviceUnavailable, reason: "Failed to query logs: \(error.localizedDescription)")

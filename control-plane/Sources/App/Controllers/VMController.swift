@@ -496,27 +496,7 @@ struct VMController: RouteCollection {
 
     func show(req: Request) async throws -> VMDetailResponse {
         let vm = try await fetchVMWithAction(req: req, action: "vm:read")
-        try await vm.$networkInterfaces.load(on: req.db)
-        for interface in vm.networkInterfaces {
-            try await interface.$addresses.load(on: req.db)
-            try await interface.$observedAddresses.load(on: req.db)
-            // The response reports the NIC's network by name as well as id.
-            try await interface.$logicalNetwork.load(on: req.db)
-            // …and which security groups filter it (STR-34).
-            try await interface.$securityGroupMemberships.load(on: req.db)
-        }
-
-        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
-        let enforcement = try await SecurityGroupService.enforcement(
-            for: vm,
-            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-            on: req.db)
-        return VMDetailResponse(
-            from: vm,
-            securityGroupsEnforced: enforcement,
-            spiffeId: identity?.spiffeID,
-            instanceIdentityPrincipalId: identity?.principalID,
-            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+        return try await Self.detail(for: vm, on: req)
     }
 
     /// The one project role held by this VM's instance identity. This follows
@@ -1391,7 +1371,7 @@ struct VMController: RouteCollection {
                             "finalizers": .string(remaining.joined(separator: ",")),
                         ])
                 }
-                return outcome.isRemoved
+                _ = outcome.isRemoved
             }
 
         let accepted = try await req.resourceMutation.accept(
@@ -1500,23 +1480,7 @@ struct VMController: RouteCollection {
         // replica-independent (issue #261). Returned as the DTO, not the
         // model: the raw `VM` encoding would expose fields that must stay
         // server-side (cloud-init user_data can carry secrets).
-        try await vm.$networkInterfaces.load(on: req.db)
-        for interface in vm.networkInterfaces {
-            try await interface.$addresses.load(on: req.db)
-            try await interface.$observedAddresses.load(on: req.db)
-            try await interface.$securityGroupMemberships.load(on: req.db)
-        }
-        let identity = try await GuestIdentity.registration(forVM: vm.requireID(), on: req.db)
-        let enforcement = try await SecurityGroupService.enforcement(
-            for: vm,
-            offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
-            on: req.db)
-        return VMDetailResponse(
-            from: vm,
-            securityGroupsEnforced: enforcement,
-            spiffeId: identity?.spiffeID,
-            instanceIdentityPrincipalId: identity?.principalID,
-            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+        return try await Self.detail(for: vm, on: req)
     }
 
     func start(req: Request) async throws -> Response {
@@ -1618,23 +1582,11 @@ struct VMController: RouteCollection {
         return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
-    /// Refuse an edge-nonce mutation whose agent could not converge it
-    /// (STR-151).
-    ///
-    /// With `vm_reboot` and `vm_restore` gone there is no fallback, and a
-    /// pre-v34 agent fails *silently*: it decodes the sync, ignores the field it
-    /// has no case for, plans no work, and reports the bumped generation as
-    /// converged — so the API would tell the user their VM restarted when it
-    /// never did. `409` up front is the `supportsSnapshotSync` posture applied
-    /// to a verb, and it names the remedy.
-    ///
-    /// `capability` is the second of the two signals issue #415 established, for
-    /// the callers that need it: the version proves the agent *reads* the nonce,
-    /// the capability proves a backend that can realize it is usable on that
-    /// host. A restore needs both — admitting one against a QEMU-less host
+    /// Refuse an edge-nonce mutation that has no placed agent, or whose placed
+    /// agent lacks the snapshot backend needed to converge it (STR-151).
+    /// A restore needs the explicit capability — admitting one against a QEMU-less host
     /// surfaces as a `degraded` condition half an hour later instead of a `409`
-    /// naming the remedy — while a restart needs no snapshot backend and passes
-    /// nil.
+    /// naming the remedy — while a restart needs no snapshot backend.
     ///
     /// Deliberately *not* checked: `status == .online`. The old
     /// `requireCapableAgent` preflight refused an offline agent because its RPC

@@ -165,13 +165,6 @@ public actor MetadataStore {
         records[vmId]?.metadata
     }
 
-    /// The generation `vmId`'s metadata was last written at, nil if this host
-    /// has never been told about the VM. Distinguishes "no record" from "a
-    /// record that withdrew the metadata", which `metadata(for:)` cannot.
-    public func appliedGeneration(for vmId: UUID) -> Int64? {
-        records[vmId]?.generation
-    }
-
     /// Everything currently servable, for a listener that indexes it by
     /// something other than VM id (the IMDS resolves its caller by source
     /// address). Withdrawn entries are omitted — their records exist only for
