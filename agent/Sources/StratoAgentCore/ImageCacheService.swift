@@ -158,11 +158,22 @@ public actor ImageCacheService {
         var paths: [String] = []
         while let relative = enumerator.nextObject() as? String {
             let name = (relative as NSString).lastPathComponent
-            if name.contains(".partial.") {
+            if Self.isStagingFilename(name) {
                 paths.append(cachePath + "/" + relative)
             }
         }
         return paths
+    }
+
+    /// Download staging siblings end in `.partial.<UUID>`. Matching the full
+    /// suffix keeps completed, control-plane-approved names such as
+    /// `ubuntu.partial.qcow2` out of abandoned-download cleanup.
+    private static func isStagingFilename(_ name: String) -> Bool {
+        guard let marker = name.range(of: ".partial.", options: .backwards),
+            marker.lowerBound != name.startIndex
+        else { return false }
+        let suffix = String(name[marker.upperBound...])
+        return suffix.count == 36 && UUID(uuidString: suffix) != nil
     }
 
     /// Removes project-level directories left empty by eviction so the cache

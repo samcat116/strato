@@ -235,6 +235,51 @@ struct ImageCacheServiceTests {
         #expect(fetches == 1)
     }
 
+    @Test("A completed artifact whose filename contains the staging marker survives cleanup")
+    func completedArtifactContainingPartialSurvivesCleanup() async throws {
+        let cachePath = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: cachePath) }
+
+        let recorder = FetchRecorder()
+        await recorder.release()
+        let service = ImageCacheService(
+            logger: Logger(label: "test"),
+            cachePath: cachePath,
+            controlPlaneURL: "https://control-plane.example",
+            fetch: recordingFetcher(recorder: recorder)
+        )
+
+        let completedArtifact = ArtifactInfo(
+            kind: .diskImage,
+            filename: "ubuntu.partial.qcow2",
+            checksum: Self.imageChecksum,
+            size: Int64(Self.imageBytes.count),
+            downloadURL: "https://control-plane.example/images/ubuntu.partial.qcow2")
+        let completedImage = makeImageInfo(artifacts: [completedArtifact])
+        let completedPath = await service.buildArtifactCachePath(
+            imageInfo: completedImage, artifact: completedArtifact)
+        try FileManager.default.createDirectory(
+            atPath: (completedPath as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true)
+        try Self.imageBytes.write(to: URL(fileURLWithPath: completedPath))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -100_000)],
+            ofItemAtPath: completedPath)
+        let abandonedStagingPath = completedPath + ".partial." + UUID().uuidString
+        try Data("abandoned download".utf8)
+            .write(to: URL(fileURLWithPath: abandonedStagingPath))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -100_000)],
+            ofItemAtPath: abandonedStagingPath)
+
+        // Any unrelated miss performs abandoned-staging cleanup before it downloads.
+        _ = try await service.getArtifactPath(imageInfo: makeImageInfo(), kind: .diskImage)
+
+        #expect(FileManager.default.fileExists(atPath: completedPath))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: completedPath)) == Self.imageBytes)
+        #expect(!FileManager.default.fileExists(atPath: abandonedStagingPath))
+    }
+
     // MARK: - Publish
 
     /// Note: this covers publish *idempotency* — a re-download over an occupied destination
