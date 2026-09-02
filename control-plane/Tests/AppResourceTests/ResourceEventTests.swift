@@ -234,6 +234,7 @@ final class ResourceEventTests {
     func eventOutlivesResource() async throws {
         try await withEventTestApp { app, user, org, project, vm, token in
             let vmID = try vm.requireID()
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
 
             // Unplaced VM: the delete resolves directly, removing the row
             // rather than waiting for an agent to confirm absence.

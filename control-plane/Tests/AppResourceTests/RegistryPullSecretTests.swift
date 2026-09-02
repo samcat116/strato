@@ -267,6 +267,8 @@ final class RegistryPullSecretTests {
     ) async throws {
         let app = try await Application.makeForTesting()
         do {
+            app.controlPlaneConfiguration = try await ControlPlaneConfiguration.load(
+                environmentVariables: [:], for: app.environment)
             let fake = FakeRegistryHTTPClient(on: app.eventLoopGroup.next())
             app.clients.use { _ in fake }
             let client = DistributionRegistryClient(app: app)

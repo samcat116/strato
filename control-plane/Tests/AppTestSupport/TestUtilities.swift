@@ -40,8 +40,8 @@ package actor PostgresTestDatabases {
     package static let shared = PostgresTestDatabases()
 
     /// Small event-loop group shared by every test app in the suite.
-    /// Fluent's pool opens at most one connection per event loop, so this caps
-    /// each app at two connections (unless a test passes a larger
+    /// The pool opens at most two connections per event loop by default, so
+    /// this caps each app at four connections (unless a test passes a larger
     /// `maxConnectionsPerEventLoop` to `makeForTesting`) and keeps the fully
     /// parallel suite well under the server's default max_connections=100 —
     /// the constraint that used to force CI's Postgres run to be --no-parallel.
@@ -157,7 +157,11 @@ package actor PostgresTestDatabases {
         env.arguments = ["vapor"]
         let app = try await Application.make(env, .shared(Self.appEventLoopGroup))
         app.logger.logLevel = .error
-        app.databases.use(.postgres(configuration: Self.configuration(database: templateName)), as: .psql)
+        app.databases.use(
+            .postgres(
+                configuration: Self.configuration(database: templateName),
+                maxConnectionsPerEventLoop: 2),
+            as: .psql)
         do {
             try await configure(app)
             try await app.asyncShutdown()
@@ -228,15 +232,15 @@ package actor PostgresTestDatabases {
 // MARK: - Test Extensions
 
 extension Application {
-    /// `maxConnectionsPerEventLoop` defaults to Fluent's 1, which keeps the
-    /// fully parallel suite under Postgres's max_connections. A test that holds
-    /// a transaction open while another task opens a second one must raise it:
-    /// both transactions can land on the same event loop of the shared
-    /// two-loop group, and the second then waits forever for the pool slot the
-    /// first is holding.
+    /// `maxConnectionsPerEventLoop` stays small by default to keep the fully
+    /// parallel suite under Postgres's max_connections. A test that holds a
+    /// transaction open while other tasks need connections of their own must
+    /// raise it: the transactions can all land on the same event loop of the
+    /// shared two-loop group, and each extra one then waits forever for a pool
+    /// slot the parked transaction is holding.
     package static func makeForTesting(
         _ environment: Environment = .testing,
-        maxConnectionsPerEventLoop: Int = 1
+        maxConnectionsPerEventLoop: Int = 2
     ) async throws -> Application {
         var env = environment
         env.arguments = ["vapor"]
@@ -283,7 +287,7 @@ extension Application {
         _ env: Environment,
         database databaseName: String,
         owningDatabase: Bool = true,
-        maxConnectionsPerEventLoop: Int = 1
+        maxConnectionsPerEventLoop: Int = 2
     ) async throws -> Application {
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
         app.logger.logLevel = .debug
@@ -420,7 +424,7 @@ package struct TestDataBuilder {
         hostInfo: HostInfo? = nil,
         resolverCapable: Bool? = nil,
         metadataServiceCapable: Bool? = nil,
-        dependencyObservations: [NodeDependencyObservation] = [],
+        dependencyObservations: [NodeDependencyObservation]? = nil,
         trustDomain: String = "strato.local",
         siteID requestedSiteID: UUID? = nil,
         organizationScope requestedScope: OrganizationScope? = nil
@@ -428,6 +432,13 @@ package struct TestDataBuilder {
         let (scope, siteID) = try await agentPlacement(
             siteID: requestedSiteID, organizationScope: requestedScope)
 
+        let effectiveDependencyObservations =
+            dependencyObservations
+            ?? Self.healthyDependencyObservations(
+                hypervisors: hypervisors,
+                networkCapability: networkCapability,
+                sandboxNetworkingCapable: sandboxNetworkingCapable,
+                resolverCapable: resolverCapable)
         let message = AgentRegisterMessage(
             agentId: name,
             hostname: hostname ?? "host-\(name)",
@@ -444,13 +455,64 @@ package struct TestDataBuilder {
             hostInfo: hostInfo,
             resolverCapable: resolverCapable,
             metadataServiceCapable: metadataServiceCapable,
-            dependencyObservations: dependencyObservations)
+            dependencyObservations: effectiveDependencyObservations)
         let id = try await app.agentService.registerAgent(
             message,
             identity: AgentIdentity(trustDomain: trustDomain, name: name),
             siteID: siteID,
             organizationScope: scope)
         return id.uuidString
+    }
+
+    /// The registration fixture defaults to a usable QEMU/OVN node, so its
+    /// dependency snapshot must substantiate the capabilities it advertises.
+    /// Passing an explicit empty array still models a legacy or unhealthy
+    /// registration whose dependency health is unknown.
+    private static func healthyDependencyObservations(
+        hypervisors: [HypervisorSupport]?,
+        networkCapability: NetworkCapability?,
+        sandboxNetworkingCapable: Bool?,
+        resolverCapable: Bool?
+    ) -> [NodeDependencyObservation] {
+        let checkedAt = Date()
+        var observations: [NodeDependencyObservation] = []
+
+        if hypervisors?.contains(where: { $0.type == .qemu && $0.available }) == true {
+            observations.append(
+                NodeDependencyObservation(
+                    id: .libvirt,
+                    role: .compute,
+                    desiredState: .required,
+                    ownership: .observeOnly,
+                    supervisorState: .active,
+                    compatibility: .compatible,
+                    functionalState: .healthy,
+                    checkedAt: checkedAt,
+                    lastHealthyAt: checkedAt,
+                    affectedCapabilities: [.qemuPlacement]))
+        }
+
+        if networkCapability == .overlay
+            || sandboxNetworkingCapable == true
+            || resolverCapable == true
+        {
+            observations.append(
+                NodeDependencyObservation(
+                    id: .ovnOvs,
+                    role: .networking,
+                    desiredState: .required,
+                    ownership: .observeOnly,
+                    supervisorState: .active,
+                    compatibility: .compatible,
+                    functionalState: .healthy,
+                    checkedAt: checkedAt,
+                    lastHealthyAt: checkedAt,
+                    affectedCapabilities: [
+                        .overlayNetworking, .sandboxNetworking, .networkResolver,
+                    ]))
+        }
+
+        return observations
     }
 
     package func createAgent(

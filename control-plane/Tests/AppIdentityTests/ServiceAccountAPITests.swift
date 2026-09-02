@@ -413,17 +413,22 @@ final class ServiceAccountAPITests {
             // Grant it a custom project role by canonical id (org admin holds
             // iam:setPolicy). This is the same bindable-role vocabulary the
             // VM instance-identity UI consumes.
-            let roleID = UUID()
-            let role = IAMRoleDefinition(
-                id: roleID,
-                name: "workload-reader",
-                ownerType: .project,
-                ownerID: projectID,
-                cedarText: RoleDescriptor.canonicalPermitText(
-                    id: roleID, actions: ["project:read"]),
-                actions: ["project:read"],
-                managed: false)
-            try await role.save(on: app.db)
+            var roleID: UUID!
+            try await app.test(.POST, "/api/iam/roles") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: env.adminToken)
+                try req.content.encode(
+                    RoleController.CreateRoleRequest(
+                        name: "workload-reader",
+                        description: nil,
+                        ownerType: .project,
+                        ownerId: projectID,
+                        actions: ["project:read"],
+                        cedarText: nil,
+                        id: nil))
+            } afterResponse: { res in
+                #expect(res.status == .created)
+                roleID = try res.content.decode(RoleController.RoleDTO.self).id
+            }
             try await app.test(
                 .PUT, "/api/projects/\(projectID)/workload-grants/\(registrationID!)"
             ) { req in

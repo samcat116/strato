@@ -225,11 +225,12 @@ struct IdempotencyTests {
     @Test("an in-flight duplicate waits for the winner and never reaches the mutation")
     func inFlightDuplicateSerializes() async throws {
         // The winner parks inside an open transaction while the duplicate and
-        // this test body each need a connection of their own. With Fluent's
-        // default single connection per event loop, the duplicate's
-        // `db.transaction` can starve behind the winner's parked connection
-        // whenever both land on the same loop of the shared two-loop group,
-        // and the whole suite hangs on the resulting three-way latch deadlock.
+        // this test body's pg_stat_activity poll each need a connection of
+        // their own — three concurrent holders, which can all land on the same
+        // loop of the shared two-loop group. With the harness default pool the
+        // duplicate's `db.transaction` can starve behind the winner's parked
+        // connection and the whole suite hangs on the resulting three-way
+        // latch deadlock, so give every holder a slot even on one loop.
         let app = try await Application.makeForTesting(maxConnectionsPerEventLoop: 4)
         do {
             try await configure(app)

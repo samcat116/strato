@@ -270,10 +270,20 @@ final class SandboxTests {
     @Test("createSandbox refuses to place a networked sandbox on a fleet that cannot realize a NIC")
     func createSandboxRefusesNetworkedSandboxOnIncapableFleet() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
-            // Runs sandboxes, cannot network them — e.g. an unjailed host, or
-            // one whose installed guest image predates STR-101.
-            _ = try await registerAgent(
-                app: app, named: "no-sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: nil)
+            // Overlay is healthy, but the stronger sandbox-NIC capability is
+            // absent because the jailer/guest-image requirements are not met.
+            _ = try await TestDataBuilder(db: app.db).registerAgent(
+                on: app,
+                named: "no-sandbox-net",
+                hypervisors: [
+                    HypervisorSupport(
+                        type: .firecracker, available: true, accelerated: true,
+                        capabilities: .firecracker,
+                        version: FirecrackerSnapshotFeatures.networkOverridesMinimumVersion)
+                ],
+                networkCapability: .overlay,
+                sandboxCapable: true,
+                sandboxNetworkingCapable: false)
 
             let network = try await self.projectNetwork(project: project, on: app.db)
             try await SandboxNetworkInterface(

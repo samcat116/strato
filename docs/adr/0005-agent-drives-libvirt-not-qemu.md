@@ -99,9 +99,10 @@ and a resize the guest cannot take online is written to `CONFIG` alone rather
 than deferred to a boot that would not pick it up. Most live mutations use
 `AFFECT_LIVE|AFFECT_CONFIG`; network detach applies `AFFECT_LIVE` and
 `AFFECT_CONFIG` as independently verified steps because libvirt does not make
-the combined operation atomic (STR-304). The one other writer is `redefineVM`
-(STR-187), which widens a stopped domain's ceilings before it starts and touches
-nothing else.
+the combined operation atomic (STR-304). Whole-document edits remain narrow:
+`redefineVM` (STR-187) widens a stopped domain's ceilings before it starts,
+while disk attachment rewrites only persistent `<boot>` elements when a newly
+inserted volume changes the complete order.
 
 `DomainXMLBuilder` is therefore an owned artifact, tested against eight golden
 documents that are validated three ways: against the RELAX-NG schema of libvirt

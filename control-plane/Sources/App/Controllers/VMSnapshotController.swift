@@ -187,6 +187,7 @@ extension VMController {
         req.logger.info(
             "VM checkpoint deletion requested",
             metadata: ["snapshot_id": .string(snapshotID.uuidString)])
+        if let response = accepted.cachedResponse() { return response }
         return try AcceptedMutation(VMSnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 

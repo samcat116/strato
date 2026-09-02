@@ -184,7 +184,7 @@ final class ResourceQuotaTests {
                     ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
-                #expect(res.body.string.contains("networks are project-wide"))
+                #expect(res.body.string.contains("resources are project-wide"))
             }
 
             let quota = ResourceQuota(
@@ -213,7 +213,7 @@ final class ResourceQuotaTests {
                         isEnabled: nil))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
-                #expect(res.body.string.contains("networks are project-wide"))
+                #expect(res.body.string.contains("resources are project-wide"))
             }
         }
     }

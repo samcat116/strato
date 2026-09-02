@@ -221,6 +221,7 @@ extension SandboxController {
         req.logger.info(
             "Sandbox snapshot deletion requested",
             metadata: ["snapshot_id": .string(snapshotID.uuidString)])
+        if let response = accepted.cachedResponse() { return response }
         return try AcceptedMutation(SandboxSnapshotResponse(from: snapshot), accepted)
             .acceptedResponse()
     }

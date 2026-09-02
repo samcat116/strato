@@ -1661,9 +1661,13 @@ final class ImageControllerTests {
                 imageId = try res.content.decode(ImageResponse.self).id
             }
 
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == imageId!)
+                    .filter(\.$kind == .diskImage)
+                    .first())
             let stored = try String(
-                contentsOfFile: "\(tempStoragePath)/\(project.id!)/\(imageId!)/disk.img",
-                encoding: .utf8)
+                contentsOfFile: "\(tempStoragePath)/\(artifact.storagePath)", encoding: .utf8)
             #expect(stored == content)
         }
     }
