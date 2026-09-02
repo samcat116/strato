@@ -148,7 +148,7 @@ public enum OVNDHCPOptionsBuilder {
     /// A stable locally-administered unicast MAC derived from the subnet, so the
     /// DHCP server identity doesn't churn between reconciliations (FNV-1a).
     public static func serverMAC(for subnet: String) -> String {
-        let hash = FNV1a.hash64(subnet)
+        let hash = FNV1a.legacyStratoHash64(subnet)
         var octets = (0..<6).map { UInt8((hash >> (UInt64($0) * 8)) & 0xff) }
         octets[0] = (octets[0] & 0xFC) | 0x02  // locally administered, unicast
         return octets.map { String(format: "%02x", $0) }.joined(separator: ":")

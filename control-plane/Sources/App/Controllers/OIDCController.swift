@@ -858,34 +858,39 @@ struct OIDCController: RouteCollection {
         // `oidc_<subject>` user. Only its claims for the same subject are
         // trusted (OIDC 5.3.2).
         var userInfo: OIDCUserInfoResponse?
-        let idTokenIncomplete =
-            claims.emailVerified != true || claims.email == nil || claims.name == nil
-            || claims.preferredUsername == nil
-        if idTokenIncomplete, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
-            let info: OIDCUserInfoResponse
+        let userInfoRequiredForVerifiedEmail = claims.email == nil || claims.emailVerified != true
+        let shouldFetchUserInfo =
+            userInfoRequiredForVerifiedEmail || claims.name == nil || claims.preferredUsername == nil
+        if shouldFetchUserInfo, let endpoint = provider.userinfoEndpoint, !endpoint.isEmpty {
+            var fetchedInfo: OIDCUserInfoResponse?
             do {
-                info = try await fetchUserInfo(
+                fetchedInfo = try await fetchUserInfo(
                     endpoint: endpoint, accessToken: tokenResponse.accessToken, provider: provider, on: req)
             } catch {
                 req.logger.warning(
                     "oidc_userinfo_fetch_failed",
                     metadata: [
                         "providerId": .string(provider.id?.uuidString ?? "unknown"),
+                        "requiredForVerifiedEmail": .stringConvertible(userInfoRequiredForVerifiedEmail),
                         "error": .string(String(reflecting: error)),
                     ])
-                throw error
+                if userInfoRequiredForVerifiedEmail {
+                    throw error
+                }
             }
-            guard info.sub == claims.sub else {
-                req.logger.warning(
-                    "oidc_userinfo_subject_mismatch",
-                    metadata: [
-                        "providerId": .string(provider.id?.uuidString ?? "unknown")
-                    ])
-                throw Abort(
-                    .badGateway,
-                    reason: "OIDC UserInfo subject did not match the ID token")
+            if let fetchedInfo {
+                guard fetchedInfo.sub == claims.sub else {
+                    req.logger.warning(
+                        "oidc_userinfo_subject_mismatch",
+                        metadata: [
+                            "providerId": .string(provider.id?.uuidString ?? "unknown")
+                        ])
+                    throw Abort(
+                        .badGateway,
+                        reason: "OIDC UserInfo subject did not match the ID token")
+                }
+                userInfo = fetchedInfo
             }
-            userInfo = info
         }
         let resolvedEmail = OIDCValidation.resolveEmailVerification(
             idTokenEmail: claims.email,

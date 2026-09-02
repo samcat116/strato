@@ -364,7 +364,7 @@ public enum CoreDNSZoneRenderer {
         // seed is randomized per process, so the serial would change on every
         // agent restart and a `reload`-watching CoreDNS would re-read every zone
         // for nothing.
-        let hash = FNV1a.hash64(seed)
+        let hash = FNV1a.legacyStratoHash64(seed)
         // Non-zero: BIND-lineage tooling treats serial 0 as "unset".
         return UInt32(truncatingIfNeeded: hash) | 1
     }
