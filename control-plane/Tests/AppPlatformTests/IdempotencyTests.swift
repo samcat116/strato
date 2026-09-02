@@ -245,20 +245,28 @@ struct IdempotencyTests {
             let secondEnteredTransaction = Latch()
             let releaseFirst = Latch()
             let mutations = MutationCount()
+            let sql = try #require(app.db as? any SQLDatabase)
 
             let first = Task {
-                try await app.db.transaction { db in
-                    try await IdempotencyService.reserve(context, actor: actor, on: db)
-                    await mutations.increment()
+                do {
+                    try await app.db.transaction { db in
+                        try await IdempotencyService.reserve(context, actor: actor, on: db)
+                        await mutations.increment()
+                        await firstReserved.signal()
+                        await releaseFirst.wait()
+                        try await IdempotencyService.complete(
+                            context,
+                            actor: actor,
+                            resourceKind: .virtualMachine,
+                            resourceID: UUID(),
+                            accepted: .init(mutationID: UUID(), targetGeneration: 1),
+                            on: db)
+                    }
+                } catch {
+                    // A throw before the signal must read as a clean failure,
+                    // not leave the test body parked on `firstReserved.wait()`.
                     await firstReserved.signal()
-                    await releaseFirst.wait()
-                    try await IdempotencyService.complete(
-                        context,
-                        actor: actor,
-                        resourceKind: .virtualMachine,
-                        resourceID: UUID(),
-                        accepted: .init(mutationID: UUID(), targetGeneration: 1),
-                        on: db)
+                    throw error
                 }
             }
 
@@ -283,12 +291,15 @@ struct IdempotencyTests {
             // Release the winner only once the duplicate's INSERT is visibly
             // blocked on the winner's uncommitted reservation, so the test
             // exercises PostgreSQL's in-flight wait every run rather than the
-            // easier committed-row conflict.
-            let sql = try #require(app.db as? any SQLDatabase)
+            // easier committed-row conflict. Observation is best-effort: no
+            // error may escape between spawning `first` and signaling
+            // `releaseFirst`, or the winner stays parked in an open
+            // transaction and shutdown hangs on its leased connection — the
+            // very stall this test exists to prevent.
             struct WaiterCount: Decodable { let count: Int }
             let blockedDeadline = ContinuousClock.now.advanced(by: .seconds(10))
             while true {
-                let waiters = try await sql.raw(
+                let waiters = try? await sql.raw(
                     """
                     SELECT COUNT(*) AS count FROM pg_stat_activity
                     WHERE datname = current_database()
@@ -296,12 +307,12 @@ struct IdempotencyTests {
                       AND query ILIKE '%idempotency_keys%'
                     """
                 ).first(decoding: WaiterCount.self)
-                if (waiters?.count ?? 0) > 0 { break }
+                if let waiters, waiters.count > 0 { break }
                 if ContinuousClock.now > blockedDeadline {
                     Issue.record("The duplicate reserve never blocked on the winner's reservation")
                     break
                 }
-                try await Task.sleep(for: .milliseconds(10))
+                try? await Task.sleep(for: .milliseconds(10))
             }
             await releaseFirst.signal()
             try await first.value
