@@ -155,7 +155,7 @@ extension Agent {
             guard !shutdownRequested, let dependencyManager else { return }
             // Delivery 1 is observation-only. Even a future module accidentally
             // registered as repair-capable receives no lifecycle authority here.
-            await dependencyManager.refresh(allowRemediation: false)
+            await dependencyManager.refresh()
         }
     }
 }

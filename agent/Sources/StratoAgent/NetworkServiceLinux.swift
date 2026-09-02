@@ -134,13 +134,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         externalIDs?[managedKey] == managedValue
     }
 
-    /// OVN logical switch port name for one NIC of a VM. Delegates to
-    /// `OVNNaming` so the control-plane-driven floating IP path derives the
-    /// same name for a NIC's port (issue #344).
-    static func portName(vmId: String, nicIndex: Int) -> String {
-        OVNNaming.vmPortName(vmId: vmId, nicIndex: nicIndex)
-    }
-
     /// OVN logical switch port name for one NIC of any workload. Sandbox NICs
     /// take the disjoint `sbx-` namespace so the two kinds of port are
     /// distinguishable in OVN and OVS (issue STR-100).

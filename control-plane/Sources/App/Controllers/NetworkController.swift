@@ -258,8 +258,8 @@ struct NetworkController: RouteCollection {
     /// GET /api/networks/:networkId
     @Sendable
     func getNetwork(req: Request) async throws -> NetworkResponse {
-        let user = try req.auth.require(User.self)
-        let network = try await fetchNetworkWithAction(req: req, user: user, action: "network:read")
+        _ = try req.auth.require(User.self)
+        let network = try await fetchNetworkWithAction(req: req, action: "network:read")
         let count = try await attachedInterfaceCount(for: network, on: req.db)
         return NetworkResponse(
             from: network, attachedInterfaceCount: count,
@@ -274,8 +274,8 @@ struct NetworkController: RouteCollection {
     /// PUT /api/networks/:networkId
     @Sendable
     func updateNetwork(req: Request) async throws -> NetworkResponse {
-        let user = try req.auth.require(User.self)
-        var network = try await fetchNetworkWithAction(req: req, user: user, action: "network:update")
+        _ = try req.auth.require(User.self)
+        var network = try await fetchNetworkWithAction(req: req, action: "network:update")
         let request = try req.content.decodeValidated(UpdateNetworkRequest.self)
 
         var interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
@@ -640,8 +640,8 @@ struct NetworkController: RouteCollection {
     /// DELETE /api/networks/:networkId
     @Sendable
     func deleteNetwork(req: Request) async throws -> HTTPStatus {
-        let user = try req.auth.require(User.self)
-        let network = try await fetchNetworkWithAction(req: req, user: user, action: "network:delete")
+        _ = try req.auth.require(User.self)
+        let network = try await fetchNetworkWithAction(req: req, action: "network:delete")
 
         let interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
         let loadBalancerCount = try await LoadBalancer.query(on: req.db)
@@ -763,7 +763,7 @@ struct NetworkController: RouteCollection {
             )
         }
 
-        let mask: UInt32 = ~UInt32(0) << (32 - prefix)
+        let mask = IPv4CIDR(base: IPv4Address(raw: base), prefix: prefix).mask
         let networkAddress = base & mask
 
         let resolvedGateway: String
@@ -1003,7 +1003,7 @@ struct NetworkController: RouteCollection {
     /// Fetch a network and check a canonical action. Access derives entirely from the
     /// owning project: every network has one (issue #765), so the evaluator
     /// resolves the network's parent scope and the bindings there decide.
-    private func fetchNetworkWithAction(req: Request, user: User, action: String) async throws
+    private func fetchNetworkWithAction(req: Request, action: String) async throws
         -> LogicalNetwork
     {
         guard let networkIdString = req.parameters.get("networkId"),
@@ -1012,17 +1012,9 @@ struct NetworkController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid network ID")
         }
 
-        guard let network = try await LogicalNetwork.find(networkId, on: req.db) else {
-            throw Abort(.notFound, reason: "Network not found")
-        }
-
-        let hasPermission = try await req.can(action, on: IAMNode(type: .network, id: networkId))
-
-        guard hasPermission else {
-            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this network")
-        }
-
-        return network
+        return try await req.authorizedResource(
+            networkId, as: LogicalNetwork.self, nodeType: .network, action: action,
+            notFoundReason: "Network not found")
     }
 
 }

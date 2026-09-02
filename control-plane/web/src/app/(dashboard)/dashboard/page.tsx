@@ -18,7 +18,7 @@ import {
   createdWithinLastDay,
   reservedPercent,
 } from "@/components/overview";
-import { friendlyErrorMessage } from "@/lib/errors";
+import { errorMessage } from "@/lib/errors";
 import { formatCapacity } from "@/lib/format-bytes";
 import { isAgentsForbidden, useAgents, useInvalidateVMs, usePermissions, useVMs } from "@/lib/hooks";
 import { useOrganization, useProjectContext } from "@/providers";
@@ -245,7 +245,7 @@ export default function OverviewPage() {
               Fleet health unavailable
             </div>
             <div className="mt-0.5 truncate text-[12.5px] text-muted-foreground">
-              {friendlyErrorMessage(agentsError, "Couldn't load agents.")}
+              {errorMessage(agentsError, "Couldn't load agents.")}
             </div>
           </div>
           <Button

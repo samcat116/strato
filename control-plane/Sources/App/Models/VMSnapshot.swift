@@ -222,19 +222,13 @@ extension VMSnapshot: SnapshotArtifactResource {
     }
 
     func adoptReconciliationState(from committed: VMSnapshot) {
+        adoptConvergenceBookkeeping(from: committed)
         status = committed.status
         desiredStatus = committed.desiredStatus
-        generation = committed.generation
-        observedGeneration = committed.observedGeneration
-        convergencePhase = committed.convergencePhase
-        errorMessage = committed.errorMessage
-        failedGeneration = committed.failedGeneration
-        convergenceDeadline = committed.convergenceDeadline
         agentId = committed.agentId
         size = committed.size
         qemuVersion = committed.qemuVersion
         architecture = committed.architecture
-        finalizers = committed.finalizers
         expiresAt = committed.expiresAt
     }
 

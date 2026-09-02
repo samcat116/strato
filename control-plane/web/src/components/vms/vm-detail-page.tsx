@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
+
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
@@ -269,10 +271,10 @@ export function VMDetailPage({ id }: { id: string }) {
               </CardHeader>
               <CardContent>
                 <div className="text-sm font-medium text-foreground">
-                  {new Date(vm.createdAt).toLocaleDateString()}
+                  {formatDate(vm.createdAt)}
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {new Date(vm.createdAt).toLocaleTimeString()}
+                  {formatTime(vm.createdAt)}
                 </p>
               </CardContent>
             </Card>
@@ -340,7 +342,7 @@ export function VMDetailPage({ id }: { id: string }) {
                 <div>
                   <p className="text-muted-foreground">Last Updated</p>
                   <p className="text-foreground">
-                    {new Date(vm.updatedAt).toLocaleString()}
+                    {formatDateTime(vm.updatedAt)}
                   </p>
                 </div>
               </div>

@@ -1,5 +1,9 @@
 "use client";
 
+import { formatDate, formatDateTime } from "@/lib/format-time";
+
+import { errorMessage } from "@/lib/errors";
+
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
@@ -48,7 +52,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
       toast.success(`API key "${key.name}" revoked`);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to revoke API key"
+        errorMessage(error, "Failed to revoke API key")
       );
     } finally {
       setPendingId(null);
@@ -123,17 +127,17 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {key.createdAt
-                  ? new Date(key.createdAt).toLocaleDateString()
+                  ? formatDate(key.createdAt)
                   : "—"}
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {key.expiresAt
-                  ? new Date(key.expiresAt).toLocaleDateString()
+                  ? formatDate(key.expiresAt)
                   : "Never"}
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {key.lastUsedAt
-                  ? new Date(key.lastUsedAt).toLocaleString()
+                  ? formatDateTime(key.lastUsedAt)
                   : "Never"}
               </TableCell>
               <TableCell className="text-right">

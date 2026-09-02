@@ -194,11 +194,9 @@ struct AgentDependencyHealthTests {
                 totalDisk: 100_000, availableDisk: 100_000),
             hypervisors: [
                 HypervisorSupport(
-                    type: .qemu, available: true, accelerated: true,
-                    capabilities: .capabilities(for: .qemu)),
+                    type: .qemu, available: true, accelerated: true),
                 HypervisorSupport(
-                    type: .firecracker, available: true, accelerated: true,
-                    capabilities: .capabilities(for: .firecracker)),
+                    type: .firecracker, available: true, accelerated: true),
             ],
             networkCapability: .overlay,
             sandboxCapable: true,

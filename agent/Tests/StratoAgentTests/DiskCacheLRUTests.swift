@@ -145,4 +145,27 @@ struct DiskCacheLRUTests {
         #expect(FileManager.default.fileExists(atPath: touched))
         #expect(!FileManager.default.fileExists(atPath: other))
     }
+
+    @Test("staging cleanup removes only abandoned candidates")
+    func staleStagingCleanup() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let staleFile = root + "/image.raw.partial.stale"
+        let liveFile = root + "/image.raw.partial.live"
+        let unrelated = root + "/image.raw"
+        for path in [staleFile, liveFile, unrelated] {
+            FileManager.default.createFile(atPath: path, contents: Data(repeating: 0, count: 1))
+        }
+        let now = Date()
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-7200)], ofItemAtPath: staleFile)
+
+        let failures = DiskCacheLRU.removeStaleStaging(
+            candidates: [staleFile, liveFile], olderThan: 3600, now: now)
+
+        #expect(failures.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: staleFile))
+        #expect(FileManager.default.fileExists(atPath: liveFile))
+        #expect(FileManager.default.fileExists(atPath: unrelated))
+    }
 }

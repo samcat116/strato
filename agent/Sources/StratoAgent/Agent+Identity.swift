@@ -219,7 +219,7 @@ extension Agent {
                     available: support.available,
                     accelerated: support.accelerated,
                     unavailabilityReason: support.unavailabilityReason,
-                    capabilities: support.capabilities,
+                    supportsSnapshots: support.supportsSnapshots,
                     supportsVsock: preflight.vhostVsockAvailable,
                     supportsGuestExec: preflight.vhostVsockAvailable,
                     version: support.version
@@ -312,7 +312,7 @@ extension Agent {
         // the same host state in this registration message.
         let dependencyObservations: [NodeDependencyObservation]
         if let dependencyManager {
-            dependencyObservations = await dependencyManager.refresh(allowRemediation: false)
+            dependencyObservations = await dependencyManager.refresh()
         } else {
             dependencyObservations = []
         }
@@ -585,7 +585,6 @@ extension Agent {
                 type: type,
                 available: true,
                 accelerated: true,
-                capabilities: HypervisorCapabilities.capabilities(for: type),
                 supportsVsock: type == .qemu ? true : nil
             )
         }

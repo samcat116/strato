@@ -37,21 +37,10 @@ public enum VMStatus: String, Codable, CaseIterable, Sendable {
     }
 }
 
-public enum ConsoleMode: String, Codable, CaseIterable, Sendable {
-    case off = "Off"
-    case pty = "Pty"
-    case tty = "Tty"
-    case file = "File"
-    case socket = "Socket"
-    case null = "Null"
-}
-
 /// Whether the guest gets a framebuffer, and over which protocol (issue #566).
 ///
-/// Deliberately a separate axis from `ConsoleMode` rather than a case on it: a
-/// graphics console does not replace the serial/virtio-console pair, it joins
-/// them, and `ConsoleMode` decodes strictly (see `EnumDecodingTests`) so a new
-/// case there would be a breaking change for no gain.
+/// A graphics console does not replace the serial/virtio-console pair; it joins
+/// them as a separate axis.
 ///
 /// Decoding is strict for the same reason `DesiredVMStatus` is: a value this
 /// build does not recognize must not silently degrade to "no display" on a VM

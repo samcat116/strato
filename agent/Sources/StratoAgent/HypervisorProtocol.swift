@@ -217,19 +217,6 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Returns: The current VM status
     func getVMStatus(vmId: String) async throws -> VMStatus
 
-    /// Every VM id this service manages, or nil if it cannot say (STR-196).
-    ///
-    /// The empty list is an *answer*, not a shrug: it claims this backend
-    /// manages nothing, and absence from an inventory of what exists on a host
-    /// reads downstream as gone. A backend that could not reach its hypervisor
-    /// is in no position to make that claim and must return nil. Callers must
-    /// preserve that unknown or provide an authoritative fallback, never
-    /// silently coerce it to empty.
-    ///
-    /// Backends holding their VM set in memory always know, and always answer.
-    /// - Returns: VM identifiers, or nil if this backend cannot say
-    func listVMs() async -> [String]?
-
     /// Returns the console access points for a VM, or nil if none exist yet
     /// (e.g. the VM is not running).
     /// - Parameter vmId: The VM identifier
@@ -271,21 +258,6 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
     ///   resize a running VM at all
     func resizeVM(vmId: String, spec: VMSpec) async throws
-
-    /// Sum of vCPUs and memory (in bytes) committed to VMs this service
-    /// manages, or nil if it cannot say (STR-196).
-    ///
-    /// Used to compute available-resource figures for the scheduler, which is
-    /// why `(0, 0)` is reserved for a backend that really is idle rather than
-    /// spent on one that failed to find out: under-reporting reservations
-    /// advertises capacity this host does not have. STR-190 is what that costs
-    /// — a libvirt decoder that never once worked reported the same figure an
-    /// idle host does, and the node advertised its whole machine as free while
-    /// running VMs. Nil is how a backend says it cannot say, and the agent
-    /// answers it by substituting the sizing from its durable manifest.
-    ///
-    /// Backends holding their VM set in memory always know, and always answer.
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)?
 
     /// The same committed reservation together with the exact workload IDs
     /// that produced it, when the backend can provide them atomically. Agent
@@ -426,15 +398,6 @@ public extension HypervisorService {
     func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws {
         throw HypervisorServiceError.notSupported(
             "\(hypervisorType.displayName) does not support VM network hot-unplug")
-    }
-
-    /// In-memory backends expose only an aggregate. Their orphan entries are
-    /// outside that aggregate, so unknown membership deliberately makes the
-    /// agent retain every orphan's manifest reservation.
-    func reservationInventory() async -> HypervisorReservationInventory? {
-        guard let reserved = await reservedResources() else { return nil }
-        return HypervisorReservationInventory(
-            reservation: HostReservation(cpus: reserved.vcpus, memoryBytes: reserved.memoryBytes))
     }
 
     /// Backends must opt in to running resize. The default refuses rather than

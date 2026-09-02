@@ -401,7 +401,7 @@ package struct TestDataBuilder {
             availableDisk: 1 << 40),
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = [
-            HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+            HypervisorSupport(type: .qemu, available: true, accelerated: true)
         ],
         networkCapability: NetworkCapability? = .overlay,
         protocolVersion: Int = WireProtocol.currentVersion,
@@ -432,17 +432,17 @@ package struct TestDataBuilder {
             hostname: hostname ?? "host-\(name)",
             version: version,
             resources: resources,
-            architecture: architecture,
-            hypervisors: hypervisors,
+            architecture: architecture ?? .x86_64,
+            hypervisors: hypervisors ?? [],
             networkCapability: networkCapability,
             protocolVersion: protocolVersion,
-            sandboxCapable: sandboxCapable,
-            sandboxNetworkingCapable: sandboxNetworkingCapable,
-            tpmCapable: tpmCapable,
-            operatingSystem: operatingSystem,
+            sandboxCapable: sandboxCapable ?? false,
+            sandboxNetworkingCapable: sandboxNetworkingCapable ?? false,
+            tpmCapable: tpmCapable ?? false,
+            operatingSystem: operatingSystem ?? .current,
             hostInfo: hostInfo,
-            resolverCapable: resolverCapable,
-            metadataServiceCapable: metadataServiceCapable,
+            resolverCapable: resolverCapable ?? false,
+            metadataServiceCapable: metadataServiceCapable ?? false,
             dependencyObservations: effectiveDependencyObservations)
         let id = try await app.agentService.registerAgent(
             message,

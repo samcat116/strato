@@ -199,15 +199,6 @@ actor ConsoleSocketManager {
         }
     }
 
-    /// Disconnect all sessions for a VM (used when VM is deleted)
-    func disconnectAllForVM(vmId: String) async {
-        guard let sessionIds = vmSessions[vmId] else { return }
-
-        for sessionId in sessionIds {
-            await disconnect(sessionId: sessionId)
-        }
-    }
-
     /// Disconnect only the sessions attached to one of a VM's consoles.
     ///
     /// Stale-session cleanup has to be scoped this way: a VM's text and
@@ -236,16 +227,6 @@ actor ConsoleSocketManager {
         for sessionId in Array(connections.keys) {
             await disconnect(sessionId: sessionId)
         }
-    }
-
-    /// Check if a session exists
-    func hasSession(sessionId: String) -> Bool {
-        return connections[sessionId] != nil
-    }
-
-    /// Get all active sessions for a VM
-    func getSessionsForVM(vmId: String) -> Set<String> {
-        return vmSessions[vmId] ?? []
     }
 
     // MARK: - Private Methods

@@ -1,3 +1,4 @@
+import { errorMessage } from "@/lib/errors";
 import type { Project } from "@/lib/api/projects";
 import type { Organization, SessionResponse, User } from "@/types/api";
 
@@ -158,7 +159,7 @@ export async function loadFrontendBootstrap(
       source: "server",
       user: null,
       sessionError:
-        error instanceof Error ? error.message : "Unable to verify your session",
+        errorMessage(error, "Unable to verify your session"),
       organizations: [],
       projects: [],
       projectOrganizationId: null,

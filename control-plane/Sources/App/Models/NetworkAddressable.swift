@@ -55,7 +55,6 @@ extension NetworkAddressable {
     /// wire compatibility (`NetworkSpec.netmask` predates prefix lengths).
     var ipv4Netmask: String? {
         guard let prefix = ipv4Address?.prefixLength, (0...32).contains(prefix) else { return nil }
-        let mask: UInt32 = prefix == 0 ? 0 : ~UInt32(0) << (32 - prefix)
-        return IPv4Address(raw: mask).description
+        return IPv4CIDR(base: IPv4Address(raw: 0), prefix: prefix).netmask.description
     }
 }

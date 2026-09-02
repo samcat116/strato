@@ -793,7 +793,7 @@ actor AgentMaintenanceLoop {
         let strategy: ResourceMutation.Dispatch =
             onlineAgentID == nil
             ? .directResolution { @Sendable [app = self.app] db in
-                try await SandboxController.performDirectDeletion(sandbox: sandbox, on: db, app: app)
+                _ = try await SandboxController.performDirectDeletion(sandbox: sandbox, on: db, app: app)
             }
             : .stateSync
 

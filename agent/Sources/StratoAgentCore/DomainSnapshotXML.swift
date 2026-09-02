@@ -8,11 +8,9 @@ import FoundationXML
 /// The `<domainsnapshot>` document a VM checkpoint is taken with, and the two
 /// readings taken off the result (STR-134, issue #564).
 ///
-/// libvirt's system checkpoint is what the process driver assembled by hand out of
-/// `snapshot-save` plus a block-node selection: guest RAM, device state and the
-/// disks captured at one instant, all inside the VM's own qcow2 files.
-/// The block-node selection has no counterpart here — libvirt chooses the disks —
-/// so what is left to own is the document and the two facts
+/// A libvirt system checkpoint captures guest RAM, device state, and disks at
+/// one instant inside the VM's own qcow2 files. Libvirt chooses the disks, so
+/// this type owns the document and the two facts
 /// `VMCheckpointReport` carries.
 ///
 /// **Two host preconditions**, both established before this file is reachable

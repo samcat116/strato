@@ -23,14 +23,6 @@ import StratoShared
 /// otherwise invisible state.
 public enum SandboxRuntimeProbe {
 
-    /// Whether this agent build actually contains the sandbox runtime driver
-    /// (`SandboxRuntimeService`, issue #421). Now that the runtime ships
-    /// (`FirecrackerSandboxRuntime`, registered by the Agent on Linux), the
-    /// hard build gate is open; the remaining host prerequisites below — a
-    /// usable Firecracker and the guest base image on disk — decide whether a
-    /// given host actually advertises the capability.
-    public static let runtimeBuilt = true
-
     /// Result of probing the sandbox runtime's host prerequisites.
     public struct Report: Equatable, Sendable {
         /// Whether this host can run sandbox workloads right now.
@@ -89,9 +81,6 @@ public enum SandboxRuntimeProbe {
     ///     (`sandbox_guest_image_path`). The current manifest schema is part of
     ///     the base capability: an old installed guest must be replaced before
     ///     this agent accepts sandbox placements.
-    ///   - runtimeBuilt: Whether the running build includes the sandbox
-    ///     runtime driver. Defaults to this build's `runtimeBuilt` constant;
-    ///     injectable so tests can exercise the host-prerequisite checks.
     ///   - jailerBlockedReason: Non-nil when `sandbox_jailer_mode = "required"`
     ///     could not be satisfied at agent start (issue #425). Running
     ///     untrusted workloads unjailed on a host whose operator demanded the
@@ -108,15 +97,11 @@ public enum SandboxRuntimeProbe {
     public static func probe(
         firecracker: HypervisorSupport?,
         guestImagePath: String?,
-        runtimeBuilt: Bool = SandboxRuntimeProbe.runtimeBuilt,
         jailerBlockedReason: String? = nil,
         jailsNewSandboxes: Bool = false,
         networkCapability: NetworkCapability? = nil,
         fileManager: FileManager = .default
     ) -> Report {
-        guard runtimeBuilt else {
-            return .unavailable("this agent build does not include the sandbox runtime (issue #421)")
-        }
         if let jailerBlockedReason {
             return .unavailable(
                 "sandbox_jailer_mode is 'required' but the jailer is unusable: \(jailerBlockedReason)")

@@ -158,20 +158,16 @@ struct VMSpecBuilder {
     /// missing entries emit nil (unmanaged), which is also the default so
     /// callers that predate security groups — and tests — need not fetch it.
     ///
-    /// `sendsMetadataPort` gates `metadataEnabled` on the receiving agent's protocol
-    /// version, exactly as `securityGroupsByInterface` is gated by its caller.
     static func networkSpecs(
         from interfaces: [VMNetworkInterface],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true,
         logger: Logger? = nil
     ) -> [NetworkSpec] {
         networkSpecs(
             fromResolved: resolvedInterfaces(from: interfaces, networks: networks, logger: logger),
             securityGroupsByInterface: securityGroupsByInterface,
-            sendsMetadataPort: sendsMetadataPort,
             siteResolverCapable: siteResolverCapable)
     }
 
@@ -182,7 +178,6 @@ struct VMSpecBuilder {
     static func networkSpecs(
         fromResolved resolved: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true
     ) -> [NetworkSpec] {
         resolved.map { interface, network in
@@ -190,7 +185,6 @@ struct VMSpecBuilder {
                 interface: interface,
                 network: network,
                 securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
-                sendsMetadataPort: sendsMetadataPort,
                 siteResolverCapable: siteResolverCapable)
         }
     }
@@ -210,7 +204,6 @@ struct VMSpecBuilder {
         diskAttachmentsByVolumeID: [UUID: DiskAttachment] = [:],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true,
         logger: Logger? = nil
     ) throws -> VMSpec {
@@ -220,18 +213,16 @@ struct VMSpecBuilder {
             resolvedInterfaces: resolvedInterfaces(
                 from: networkInterfaces, networks: networks, logger: logger),
             securityGroupsByInterface: securityGroupsByInterface,
-            sendsMetadataPort: sendsMetadataPort,
             siteResolverCapable: siteResolverCapable)
     }
 
     /// The same, for a caller holding an already-resolved NIC list (see
-    /// `networkSpecs(fromResolved:securityGroupsByInterface:sendsMetadataPort:)`).
+    /// `networkSpecs(fromResolved:securityGroupsByInterface:)`).
     static func buildVMSpec(
         from vm: VM, image: Image?, volumes: [Volume],
         diskAttachmentsByVolumeID: [UUID: DiskAttachment] = [:],
         resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true
     ) throws -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
@@ -281,7 +272,6 @@ struct VMSpecBuilder {
             networks: networkSpecs(
                 fromResolved: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadataPort: sendsMetadataPort,
                 siteResolverCapable: siteResolverCapable),
             // nil, not an explicit `.headless`, so the key is omitted
             // entirely and stays out of the sync digest for headless VMs
@@ -400,15 +390,4 @@ struct VMSpecBuilder {
         )
     }
 
-    /// Builds the stricter image descriptor used to materialize a managed
-    /// volume. Firecracker's kernel/rootfs pair can boot a VM directly but
-    /// cannot seed the disk-image-only volume creation path.
-    static func buildDiskImageInfo(from image: Image) throws -> ImageInfo {
-        guard image.usableDiskArtifact != nil else {
-            throw Abort(
-                .badRequest,
-                reason: "Image does not have a usable disk-image artifact")
-        }
-        return try buildImageInfo(from: image)
-    }
 }

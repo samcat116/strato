@@ -64,32 +64,6 @@ final class OrganizationalUnit: Model, @unchecked Sendable {
 
 extension OrganizationalUnit: Content {}
 
-extension OrganizationalUnit {
-    struct Public: Content {
-        let id: UUID?
-        let name: String
-        let description: String
-        let organizationId: UUID
-        let parentOuId: UUID?
-        let path: String
-        let depth: Int
-        let createdAt: Date?
-    }
-
-    func asPublic() -> Public {
-        return Public(
-            id: self.id,
-            name: self.name,
-            description: self.description,
-            organizationId: self.$organization.id,
-            parentOuId: self.$parentOU.id,
-            path: self.path,
-            depth: self.depth,
-            createdAt: self.createdAt
-        )
-    }
-}
-
 // MARK: - Helper Methods
 
 extension OrganizationalUnit {

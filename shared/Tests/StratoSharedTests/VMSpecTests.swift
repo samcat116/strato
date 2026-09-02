@@ -319,7 +319,7 @@ struct VMSpecTests {
             {"network":"default","networkId":"\(UUID().uuidString)",
              "macAddress":"52:54:00:00:00:01",
              "ipAddress":"10.0.0.5","netmask":"255.255.255.0","gateway":"10.0.0.1",
-             "dhcpEnabled":false,"dnsServers":[]}
+             "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false}
             """
         let decoded = try decodeJSON(NetworkSpec.self, from: json)
         #expect(decoded.ipv6Address == nil)
@@ -327,7 +327,7 @@ struct VMSpecTests {
         #expect(decoded.gateway6 == nil)
         #expect(decoded.ipAddress == "10.0.0.5")
         #expect(!decoded.dhcpEnabled)
-        #expect(decoded.metadataEnabled == nil)
+        #expect(!decoded.metadataEnabled)
         #expect(decoded.interfaceId == nil)
         #expect(decoded.deviceName == nil)
         #expect(decoded.orderIndex == nil)
@@ -444,14 +444,14 @@ struct VMSpecTests {
             try decodeJSON(
                 NetworkSpec.self,
                 from: """
-                    {"network":"default","networkId":"\(id)","dnsServers":[]}
+                    {"network":"default","networkId":"\(id)","dnsServers":[],"metadataEnabled":false}
                     """)
         }
         #expect(throws: DecodingError.self) {
             try decodeJSON(
                 NetworkSpec.self,
                 from: """
-                    {"network":"default","networkId":"\(id)","dhcpEnabled":false}
+                    {"network":"default","networkId":"\(id)","dhcpEnabled":false,"metadataEnabled":false}
                     """)
         }
     }

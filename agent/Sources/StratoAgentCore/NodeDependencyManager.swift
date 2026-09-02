@@ -28,11 +28,6 @@ public struct NodeDependencyInspection: Sendable, Equatable {
         self.reason = reason
     }
 
-    public static let disabled = NodeDependencyInspection(
-        supervisorState: .notApplicable,
-        compatibility: .compatible,
-        functionalState: .healthy)
-
     var isHealthy: Bool {
         compatibility == .compatible && functionalState == .healthy
     }
@@ -47,12 +42,6 @@ public struct NodeDependencyInspection: Sendable, Equatable {
     }
 }
 
-public enum NodeDependencyRemediationResult: Sendable, Equatable {
-    case noAction
-    case remediated(restarted: Bool)
-    case failed(String)
-}
-
 /// A statically registered dependency module. Implementations may use typed
 /// host adapters, but configuration never supplies executable paths or code.
 public protocol NodeDependencyModule: Sendable {
@@ -64,68 +53,12 @@ public protocol NodeDependencyModule: Sendable {
     var affectedCapabilities: [NodeCapability] { get }
 
     func inspect() async -> NodeDependencyInspection
-    func ensureRunning(_ observation: NodeDependencyObservation) async -> NodeDependencyRemediationResult
-    func reconcile(_ observation: NodeDependencyObservation) async -> NodeDependencyRemediationResult
 }
 
 extension NodeDependencyModule {
     public var dependencies: [NodeDependencyID] { [] }
-    public func ensureRunning(_ observation: NodeDependencyObservation) async -> NodeDependencyRemediationResult {
-        .noAction
-    }
-    public func reconcile(_ observation: NodeDependencyObservation) async -> NodeDependencyRemediationResult {
-        .noAction
-    }
-}
-
-/// A concrete module useful when the service-specific API already exists as an
-/// actor or closure (SPIRE and OVN are both in that shape).
-public struct ClosureNodeDependencyModule: NodeDependencyModule {
-    public let id: NodeDependencyID
-    public let role: NodeDependencyRole
-    public let dependencies: [NodeDependencyID]
-    public let desiredState: NodeDependencyDesiredState
-    public let ownership: NodeDependencyOwnership
-    public let affectedCapabilities: [NodeCapability]
-    private let inspection: @Sendable () async -> NodeDependencyInspection
-    private let ensureRunningOperation: @Sendable (NodeDependencyObservation) async -> NodeDependencyRemediationResult
-    private let reconciliation: @Sendable (NodeDependencyObservation) async -> NodeDependencyRemediationResult
-
-    public init(
-        id: NodeDependencyID,
-        role: NodeDependencyRole,
-        dependencies: [NodeDependencyID] = [],
-        desiredState: NodeDependencyDesiredState,
-        ownership: NodeDependencyOwnership,
-        affectedCapabilities: [NodeCapability],
-        inspect: @escaping @Sendable () async -> NodeDependencyInspection,
-        ensureRunning: @escaping @Sendable (NodeDependencyObservation) async -> NodeDependencyRemediationResult = {
-            _ in .noAction
-        },
-        reconcile: @escaping @Sendable (NodeDependencyObservation) async -> NodeDependencyRemediationResult = { _ in
-            .noAction
-        }
-    ) {
-        self.id = id
-        self.role = role
-        self.dependencies = dependencies
-        self.desiredState = desiredState
-        self.ownership = ownership
-        self.affectedCapabilities = affectedCapabilities
-        self.inspection = inspect
-        self.ensureRunningOperation = ensureRunning
-        self.reconciliation = reconcile
-    }
-
-    public func inspect() async -> NodeDependencyInspection { await inspection() }
-    public func ensureRunning(
-        _ observation: NodeDependencyObservation
-    ) async -> NodeDependencyRemediationResult {
-        await ensureRunningOperation(observation)
-    }
-    public func reconcile(_ observation: NodeDependencyObservation) async -> NodeDependencyRemediationResult {
-        await reconciliation(observation)
-    }
+    public var desiredState: NodeDependencyDesiredState { .required }
+    public var ownership: NodeDependencyOwnership { .observeOnly }
 }
 
 public enum NodeDependencyGraphError: Error, Equatable, CustomStringConvertible {
@@ -145,37 +78,6 @@ public enum NodeDependencyGraphError: Error, Equatable, CustomStringConvertible 
     }
 }
 
-public struct NodeDependencyManagerPolicy: Sendable, Equatable {
-    public var functionalFailureThreshold: Int
-    public var recoverySuccessThreshold: Int
-    public var inspectionTimeoutSeconds: Int
-    public var remediationTimeoutSeconds: Int
-    public var remediationCooldown: TimeInterval
-    public var remediationBackoffBase: TimeInterval
-    public var restartBudget: Int
-    public var restartBudgetWindow: TimeInterval
-
-    public init(
-        functionalFailureThreshold: Int = 2,
-        recoverySuccessThreshold: Int = 2,
-        inspectionTimeoutSeconds: Int = 10,
-        remediationTimeoutSeconds: Int = 30,
-        remediationCooldown: TimeInterval = 60,
-        remediationBackoffBase: TimeInterval = 15,
-        restartBudget: Int = 3,
-        restartBudgetWindow: TimeInterval = 3600
-    ) {
-        self.functionalFailureThreshold = max(1, functionalFailureThreshold)
-        self.recoverySuccessThreshold = max(1, recoverySuccessThreshold)
-        self.inspectionTimeoutSeconds = max(1, inspectionTimeoutSeconds)
-        self.remediationTimeoutSeconds = max(1, remediationTimeoutSeconds)
-        self.remediationCooldown = max(0, remediationCooldown)
-        self.remediationBackoffBase = max(0, remediationBackoffBase)
-        self.restartBudget = max(0, restartBudget)
-        self.restartBudgetWindow = max(1, restartBudgetWindow)
-    }
-}
-
 /// Continuously inspects a validated dependency DAG and owns the policy state
 /// around those inspections. It delegates all host effects to modules and will
 /// never call reconciliation for externally owned (`observeOnly`) software.
@@ -183,30 +85,26 @@ public actor NodeDependencyManager {
     private struct ModuleState {
         var observation: NodeDependencyObservation?
         var recoverySuccesses = 0
-        var remediationFailures = 0
-        var nextRemediationAt: Date?
-        var restartTimestamps: [Date] = []
-        var remediationCount = 0
-        var restartCount = 0
     }
+
+    private static let functionalFailureThreshold = 2
+    private static let recoverySuccessThreshold = 2
+    private static let inspectionTimeoutSeconds = 10
 
     private let modules: [NodeDependencyID: any NodeDependencyModule]
     private let layers: [[NodeDependencyID]]
-    private let policy: NodeDependencyManagerPolicy
     private let now: @Sendable () -> Date
     private let logger: Logger
     private var states: [NodeDependencyID: ModuleState] = [:]
 
     public init(
         modules: [any NodeDependencyModule],
-        policy: NodeDependencyManagerPolicy = .init(),
         now: @escaping @Sendable () -> Date = Date.init,
         logger: Logger
     ) throws {
         let graph = try Self.validate(modules)
         self.modules = graph.modules
         self.layers = graph.layers
-        self.policy = policy
         self.now = now
         self.logger = logger
     }
@@ -214,11 +112,11 @@ public actor NodeDependencyManager {
     /// Inspect all modules. Independent modules in each graph layer run
     /// concurrently; dependants wait for the layer they require.
     @discardableResult
-    public func refresh(allowRemediation: Bool = false) async -> [NodeDependencyObservation] {
+    public func refresh() async -> [NodeDependencyObservation] {
         var refreshed: [NodeDependencyID: NodeDependencyObservation] = [:]
 
         for layer in layers {
-            let inspectionTimeoutSeconds = policy.inspectionTimeoutSeconds
+            let inspectionTimeoutSeconds = Self.inspectionTimeoutSeconds
             let results = await withTaskGroup(
                 of: (NodeDependencyID, NodeDependencyInspection).self,
                 returning: [(NodeDependencyID, NodeDependencyInspection)].self
@@ -280,7 +178,6 @@ public actor NodeDependencyManager {
                 state.observation = observation
                 states[id] = state
 
-                if allowRemediation { await remediateIfAllowed(module: module, observation: observation) }
             }
         }
 
@@ -313,9 +210,9 @@ public actor NodeDependencyManager {
             if previous?.functionalState == .unhealthy || previous?.functionalState == .starting {
                 state.recoverySuccesses += 1
                 functionalState =
-                    state.recoverySuccesses >= policy.recoverySuccessThreshold ? .healthy : .starting
+                    state.recoverySuccesses >= Self.recoverySuccessThreshold ? .healthy : .starting
             } else {
-                state.recoverySuccesses = policy.recoverySuccessThreshold
+                state.recoverySuccesses = Self.recoverySuccessThreshold
                 functionalState = .healthy
             }
         } else {
@@ -327,7 +224,7 @@ public actor NodeDependencyManager {
                 || inspection.supervisorState == .missing
                 || inspection.supervisorState == .inactive
                 || inspection.supervisorState == .failed
-            if !categorical, consecutiveFailures < policy.functionalFailureThreshold {
+            if !categorical, consecutiveFailures < Self.functionalFailureThreshold {
                 functionalState = .degraded
             } else {
                 functionalState = .unhealthy
@@ -349,117 +246,9 @@ public actor NodeDependencyManager {
             lastHealthyAt: lastHealthyAt,
             reason: inspection.reason,
             consecutiveFailures: consecutiveFailures,
-            remediationCount: state.remediationCount,
-            restartCount: state.restartCount,
+            remediationCount: 0,
+            restartCount: 0,
             affectedCapabilities: module.affectedCapabilities)
-    }
-
-    private func remediateIfAllowed(
-        module: any NodeDependencyModule,
-        observation: NodeDependencyObservation
-    ) async {
-        guard module.ownership != .observeOnly,
-            module.desiredState == .required,
-            observation.functionalState == .unhealthy,
-            observation.compatibility != .incompatible
-        else { return }
-
-        var state = states[module.id] ?? ModuleState()
-        let current = now()
-        if let next = state.nextRemediationAt, next > current { return }
-        state.restartTimestamps.removeAll {
-            current.timeIntervalSince($0) > policy.restartBudgetWindow
-        }
-        guard state.restartTimestamps.count < policy.restartBudget else {
-            state.observation = replacingReason(
-                observation,
-                NodeDependencyFailureReason(
-                    code: .remediationBudgetExhausted,
-                    message: "restart budget exhausted; waiting for the budget window to reset"))
-            states[module.id] = state
-            return
-        }
-
-        let remediation: NodeDependencyRemediationResult
-        do {
-            remediation = try await StageBudget.run(
-                seconds: policy.remediationTimeoutSeconds,
-                stage: "reconcile node dependency \(module.id.rawValue)"
-            ) {
-                switch module.ownership {
-                case .observeOnly:
-                    return .noAction
-                case .ensureRunning:
-                    return await module.ensureRunning(observation)
-                case .reconcile:
-                    return await module.reconcile(observation)
-                }
-            }
-        } catch {
-            remediation = .failed("dependency remediation exceeded its time budget")
-        }
-
-        switch remediation {
-        case .noAction:
-            return
-        case .remediated(let restarted):
-            state.remediationCount += 1
-            if restarted {
-                state.restartCount += 1
-                state.restartTimestamps.append(current)
-            }
-            state.remediationFailures = 0
-            state.nextRemediationAt = current.addingTimeInterval(policy.remediationCooldown)
-        case .failed(let detail):
-            state.remediationCount += 1
-            state.remediationFailures += 1
-            let exponent = min(state.remediationFailures - 1, 8)
-            let delay = policy.remediationBackoffBase * pow(2, Double(exponent))
-            state.nextRemediationAt = current.addingTimeInterval(max(policy.remediationCooldown, delay))
-            state.observation = replacingReason(
-                observation,
-                NodeDependencyFailureReason(code: .remediationFailed, message: detail))
-        }
-        if let currentObservation = state.observation {
-            state.observation = replacingCounters(
-                currentObservation,
-                remediationCount: state.remediationCount,
-                restartCount: state.restartCount)
-        }
-        states[module.id] = state
-    }
-
-    private func replacingReason(
-        _ observation: NodeDependencyObservation,
-        _ reason: NodeDependencyFailureReason
-    ) -> NodeDependencyObservation {
-        NodeDependencyObservation(
-            id: observation.id, role: observation.role,
-            desiredState: observation.desiredState, ownership: observation.ownership,
-            supervisorState: observation.supervisorState,
-            installedVersion: observation.installedVersion, daemonVersion: observation.daemonVersion,
-            compatibility: observation.compatibility, functionalState: observation.functionalState,
-            checkedAt: observation.checkedAt, lastHealthyAt: observation.lastHealthyAt,
-            reason: reason, consecutiveFailures: observation.consecutiveFailures,
-            remediationCount: observation.remediationCount, restartCount: observation.restartCount,
-            affectedCapabilities: observation.affectedCapabilities)
-    }
-
-    private func replacingCounters(
-        _ observation: NodeDependencyObservation,
-        remediationCount: Int,
-        restartCount: Int
-    ) -> NodeDependencyObservation {
-        NodeDependencyObservation(
-            id: observation.id, role: observation.role,
-            desiredState: observation.desiredState, ownership: observation.ownership,
-            supervisorState: observation.supervisorState,
-            installedVersion: observation.installedVersion, daemonVersion: observation.daemonVersion,
-            compatibility: observation.compatibility, functionalState: observation.functionalState,
-            checkedAt: observation.checkedAt, lastHealthyAt: observation.lastHealthyAt,
-            reason: observation.reason, consecutiveFailures: observation.consecutiveFailures,
-            remediationCount: remediationCount, restartCount: restartCount,
-            affectedCapabilities: observation.affectedCapabilities)
     }
 
     private func snapshot() -> [NodeDependencyObservation] {

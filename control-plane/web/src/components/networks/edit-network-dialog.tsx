@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -107,7 +109,7 @@ function EditNetworkForm({
       onUpdated?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to update network"
+        errorMessage(error, "Failed to update network")
       );
     } finally {
       setIsLoading(false);

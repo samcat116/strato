@@ -117,9 +117,6 @@ public struct DesiredSnapshotCapture: Codable, Sendable, Equatable {
         self.attachedVMId = attachedVMId
     }
 
-    public static func sandbox(_ mode: SandboxSnapshotMode) -> DesiredSnapshotCapture {
-        DesiredSnapshotCapture(sandboxMode: mode)
-    }
 }
 
 /// "This artifact should also exist in the control plane's object store."

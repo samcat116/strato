@@ -71,14 +71,7 @@ final class VMSnapshotTests {
                     type: .qemu,
                     available: true,
                     accelerated: true,
-                    capabilities: HypervisorCapabilities(
-                        type: .qemu,
-                        supportsPause: true,
-                        supportsLiveMigration: true,
-                        supportsSnapshots: supportsSnapshots,
-                        requiresDirectKernelBoot: false,
-                        maxVCPUs: 1024,
-                        maxMemory: 16 * 1024 * 1024 * 1024 * 1024))
+                    supportsSnapshots: supportsSnapshots)
             ])
 
         vm.hypervisorId = agentID

@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api/client";
-import { friendlyErrorMessage } from "@/lib/errors";
+import { errorMessage } from "@/lib/errors";
 import {
   acceptedMutation,
   acceptedSnapshotMutation,
@@ -90,7 +90,7 @@ function newIdempotencyKey(): string {
  * request itself only says the mutation was recorded; the terminal toast
  * always comes from the watcher.
  *
- * Errors go through `friendlyErrorMessage`, so known backend strings surface
+ * Errors go through `errorMessage`, so known backend strings surface
  * as actionable text instead of raw internals.
  */
 export function useAcceptedMutation() {
@@ -143,7 +143,7 @@ export function useAcceptedMutation() {
         if (error instanceof ApiError && error.status < 500) {
           ambiguousAttempt.current = null;
         }
-        const message = friendlyErrorMessage(error, options.errorMessage);
+        const message = errorMessage(error, options.errorMessage);
         if (!options.onError?.(message)) {
           toast.error(message);
         }

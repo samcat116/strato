@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { projectMembersApi } from "@/lib/api/project-members";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type { ProjectRole } from "@/types/api";
 
 export function useProjectMembers(projectId: string) {
@@ -123,8 +123,7 @@ export function projectMemberErrorMessage(
   error: unknown,
   fallback: string
 ): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need the project admin role to manage members.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need the project admin role to manage members.",
+  });
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useMemo, useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -170,7 +172,7 @@ export function SnapshotTable({
                 </TableCell>
                 <TableCell className="text-foreground/80">
                   {snapshot.createdAt
-                    ? new Date(snapshot.createdAt).toLocaleString()
+                    ? formatDateTime(snapshot.createdAt)
                     : "—"}
                 </TableCell>
                 <TableCell className="text-right">

@@ -1,4 +1,6 @@
 "use client";
+
+import { errorMessage } from "@/lib/errors";
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
@@ -75,7 +77,7 @@ export function ProjectsTable({
       toast.success(`Deleted "${project.name}"`);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete project"
+        errorMessage(error, "Failed to delete project")
       );
     } finally {
       setPendingId(null);

@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, Loader2, CheckCircle2 } from "lucide-react";
@@ -67,7 +69,7 @@ export default function OnboardingPage() {
       }, 1500);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create organization"
+        errorMessage(error, "Failed to create organization")
       );
     } finally {
       setIsLoading(false);

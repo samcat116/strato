@@ -53,157 +53,28 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
     /// the deadline, and now the deadline is a column, so a mutation's runway
     /// survives without a row to hang it on.
     func completionBudgetSeconds(for kind: VMOperationKind) -> TimeInterval {
-        switch self {
-        case .virtualMachine:
-            switch kind {
-            case .create:
-                // Image-based creates can download multi-gigabyte base images.
-                return 600
-            case .boot:
-                return 180
-            case .delete:
-                // Deletion runs two agent phases inside this one budget: a
-                // best-effort guest shutdown bounded by the shutdown budget,
-                // then the delete itself bounded by the remainder (see
-                // runVMDeletion).
-                return 300
-            case .shutdown, .reboot, .pause, .resume:
-                return 120
-            case .resize:
-                // Hot-add is a couple of QMP commands; the budget covers a
-                // sync round trip and the agent's next observed report, not
-                // the guest's own onlining (which nothing waits for).
-                return 120
-            case .snapshot, .restore:
-                // Full-VM checkpoint / restore (issue #564): QEMU writes or
-                // reads the whole guest RAM through a background job, so the
-                // cost scales with the memory grant at disk speed.
-                return 1800
-            case .snapshotDelete:
-                // Dropping a qcow2 internal snapshot rewrites metadata, not
-                // data.
-                return 120
-            case .snapshotExport:
-                // Unreachable for VMs: a checkpoint lives inside the VM's own
-                // disks, and moving one off-node is out of scope for v1
-                // (issue #564). The budget function stays total.
-                return 300
-            case .attach, .detach, .throttle, .run:
-                // Volume-only kinds (STR-148, STR-19); unreachable for VMs.
-                // Total function, unreachable arm.
-                return 120
-            }
-        case .sandbox:
-            switch kind {
-            case .create, .boot:
-                // Both may pull a multi-gigabyte OCI image on a cold agent
-                // cache before the microVM can boot.
-                return 600
-            case .delete:
-                return 300
-            case .shutdown, .reboot, .pause, .resume, .resize:
-                // Pause/resume/resize are unreachable for sandboxes (no
-                // endpoint issues them) but the budget function stays total.
-                return 120
-            case .snapshot:
-                // Checkpoint copies the guest memory file plus a full rootfs
-                // on filesystems without reflink support (issue #426).
-                return 600
-            case .restore:
-                // A local restore is the same class of copy, but a cross-agent
-                // one stages the whole archive from object storage first
-                // (issue #428) — the budget has to cover the slower shape,
-                // since it is keyed by kind and both share `.restore`.
-                return 3600
-            case .snapshotExport:
-                // Export streams the whole archive (guest memory + rootfs)
-                // through the control plane into object storage (issue #428),
-                // so it is bounded by the network, not local disk.
-                return 3600
-            case .snapshotDelete:
-                return 120
-            case .attach, .detach, .throttle, .run:
-                // Unreachable for sandboxes (no endpoint issues them); the
-                // budget function stays total.
-                return 120
-            }
-        case .volume:
-            switch kind {
-            case .create:
-                // Covers the two slow create strategies: materializing a
-                // multi-gigabyte image, and `qemu-img convert`-ing a full
-                // clone of another volume.
-                return 900
-            case .delete:
-                return 300
-            case .resize:
-                // `qemu-img resize` grows metadata, not data; the budget
-                // covers a sync round trip and the agent's next report.
-                return 180
-            case .attach, .detach:
-                // A QMP hot-plug, or — for a powered-off guest — just the
-                // agent recording the attachment.
-                return 120
-            case .throttle:
-                // Setting a ceiling moves no bytes at all (STR-19): the budget
-                // covers a sync round trip and the agent's next report, like
-                // the resize arm above.
-                return 180
-            case .boot, .shutdown, .reboot, .pause, .resume, .run,
-                .snapshot, .snapshotDelete, .restore, .snapshotExport:
-                // A volume has no run state, and its snapshot artifacts are
-                // their own resource kinds since STR-150. Total function,
-                // unreachable arms.
-                return 120
-            }
+        switch (self, kind) {
+        case (.virtualMachine, .create): return 600
+        case (.virtualMachine, .boot): return 180
+        case (.virtualMachine, .delete): return 300
+        case (.virtualMachine, .snapshot), (.virtualMachine, .restore): return 1800
+        case (.virtualMachine, .snapshotExport): return 300
 
-        // Snapshot artifacts (STR-150). `create` is the capture and the only
-        // budget that differs meaningfully between the families; everything
-        // else is metadata work or unreachable.
-        case .volumeSnapshot:
-            switch kind {
-            case .create:
-                // A qcow2 overlay is a metadata write, but it is taken against
-                // a volume that may be many gigabytes and on a busy host.
-                return 300
-            case .delete:
-                return 120
-            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle, .run:
-                return 120
-            }
+        case (.sandbox, .create), (.sandbox, .boot): return 600
+        case (.sandbox, .delete): return 300
+        case (.sandbox, .snapshot): return 600
+        case (.sandbox, .restore), (.sandbox, .snapshotExport): return 3600
 
-        case .vmCheckpoint:
-            switch kind {
-            case .create:
-                // QEMU writes the whole guest RAM through a background job, so
-                // the cost scales with the memory grant at disk speed.
-                return 1800
-            case .delete:
-                // Dropping an internal snapshot rewrites metadata, not data.
-                return 120
-            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle, .run:
-                return 120
-            }
+        case (.volume, .create): return 900
+        case (.volume, .delete): return 300
+        case (.volume, .resize), (.volume, .throttle): return 180
 
-        case .sandboxSnapshot:
-            switch kind {
-            case .create:
-                // The guest memory file plus, without reflink support, a full
-                // rootfs copy.
-                return 600
-            case .snapshotExport:
-                // The whole archive streams through the control plane into
-                // object storage, so this is bounded by the network rather than
-                // by local disk.
-                return 3600
-            case .delete:
-                return 120
-            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .attach, .detach, .throttle, .run:
-                return 120
-            }
+        case (.volumeSnapshot, .create): return 300
+        case (.vmCheckpoint, .create): return 1800
+        case (.sandboxSnapshot, .create): return 600
+        case (.sandboxSnapshot, .snapshotExport): return 3600
+
+        default: return 120
         }
     }
 }

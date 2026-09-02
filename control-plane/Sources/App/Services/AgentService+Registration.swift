@@ -100,27 +100,10 @@ extension AgentService {
                         "version": .string(message.version),
                     ])
             }
-            agent.hostname = message.hostname
-            agent.version = message.version
-            agent.architecture = message.architecture?.rawValue
-            agent.operatingSystem = message.operatingSystem?.rawValue ?? agent.operatingSystem
-            agent.hypervisors = message.effectiveHypervisors
-            agent.networkCapability = message.networkCapability?.rawValue
-            agent.hostInfo = message.hostInfo ?? agent.hostInfo
-            agent.sandboxCapable = message.sandboxCapable ?? false
-            // Re-read on every registration, like every other capability: a
-            // guest-image rollback or a jailer that stopped resolving must be
-            // able to take the flag back down, and the agent re-probes all
-            // three inputs each time it reconnects.
-            agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
-            agent.tpmCapable = message.tpmCapable ?? false
-            agent.resolverCapable = message.resolverCapable ?? false
-            agent.metadataServiceCapable = message.metadataServiceCapable ?? false
-            agent.dependencyObservations = dependencyObservations
-            agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
-            _ = agent.updateAvailableResources(message.resources)
-            agent.lastHeartbeat = Date()
-            agent.status = .online
+            agent.apply(
+                registration: message,
+                dependencyObservations: dependencyObservations,
+                receivedAt: dependencyObservationsReceivedAt)
         } else {
             // A brand-new agent takes its scope and site placement from the
             // enrollment an operator created for this name: agents authenticate
@@ -162,10 +145,12 @@ extension AgentService {
             }
             // Create new agent
             agent = Agent.from(
-                registration: message, name: agentName, siteID: siteID, trustDomain: trustDomain)
-            agent.dependencyObservations = dependencyObservations
-            agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
-            agent.status = .online
+                registration: message,
+                name: agentName,
+                siteID: siteID,
+                dependencyObservations: dependencyObservations,
+                receivedAt: dependencyObservationsReceivedAt,
+                trustDomain: trustDomain)
             newAgentEnrollment = enrollment
         }
 

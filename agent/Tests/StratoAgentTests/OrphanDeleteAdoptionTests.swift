@@ -28,10 +28,8 @@ struct OrphanDeleteAdoptionTests {
             .notSupported("Firecracker does not support re-adopting orphaned VMs"),
             .hypervisorNotInstalled("/usr/bin/firecracker"),
             .vmNotFound("abc"),
-            .vmNotRunning("abc"),
             .invalidConfiguration("no desired entry"),
             .diskError("qemu-img failed"),
-            .networkError("tap missing"),
         ])
     func otherHypervisorFailuresAreIndeterminate(error: HypervisorServiceError) {
         #expect(OrphanDeleteAdoption.classify(adoptionFailure: error) == .indeterminate)

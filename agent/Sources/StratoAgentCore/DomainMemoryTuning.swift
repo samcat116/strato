@@ -36,8 +36,7 @@ public enum DomainMemoryTuning {
         }
 
         guard let desired else { return nil }
-        let memtune = DomainXMLNode(
-            "memtune", children: [DomainXMLNode("hard_limit", [("unit", "KiB")], text: desired)])
+        let memtune = DomainXMLBuilder.memoryHardLimitNode(kibibytes: desired)
         if let vcpuIndex = domain.firstIndex(ofChildNamed: "vcpu") {
             domain.insert(memtune, at: vcpuIndex)
         } else {

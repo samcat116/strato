@@ -141,7 +141,7 @@ final class CephStorageTests {
     private func registerCephAgent(
         _ fixture: Fixture, name: String,
         hypervisorType: HypervisorType = .qemu,
-        architecture: CPUArchitecture? = nil,
+        architecture: CPUArchitecture = .current,
         cephCapable: Bool = true,
         availableDisk: Int64 = 1 << 40
     ) async throws -> String {
@@ -157,8 +157,7 @@ final class CephStorageTests {
             architecture: architecture,
             hypervisors: [
                 HypervisorSupport(
-                    type: hypervisorType, available: true, accelerated: true,
-                    capabilities: HypervisorCapabilities.capabilities(for: hypervisorType))
+                    type: hypervisorType, available: true, accelerated: true)
             ],
             networkCapability: hypervisorType == .firecracker ? .overlay : .userMode,
             protocolVersion: WireProtocol.currentVersion,

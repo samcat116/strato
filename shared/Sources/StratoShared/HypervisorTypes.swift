@@ -11,10 +11,9 @@ import Foundation
 /// driver on macOS) would be a new case here with its own `HypervisorService`
 /// conformance, not a variation of `.qemu`.
 ///
-/// Adding a case means: the data tables in this file (`displayName`,
-/// `HypervisorCapabilities.capabilities(for:)` — all compiler-enforced), a
-/// probe report in `HypervisorProbe.probeAll`, and one driver registration in
-/// `Agent.start()`.
+/// Adding a case means: `displayName`, the default snapshot capability on
+/// `HypervisorSupport`, a probe report in `HypervisorProbe.probeAll`, and one
+/// driver registration in `Agent.start()`.
 public enum HypervisorType: String, Codable, CaseIterable, Sendable {
     /// QEMU with KVM (Linux) or HVF (macOS) acceleration
     case qemu = "qemu"
@@ -60,8 +59,8 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
     /// Why the hypervisor is unavailable, when `available` is false
     public let unavailabilityReason: String?
 
-    /// Feature capabilities of this hypervisor
-    public let capabilities: HypervisorCapabilities
+    /// Whether this backend can create and restore snapshots.
+    public let supportsSnapshots: Bool
 
     /// Whether this host can attach a virtio-vsock device for this
     /// hypervisor. Optional/additive so persisted registrations from before
@@ -86,7 +85,7 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         available: Bool,
         accelerated: Bool,
         unavailabilityReason: String? = nil,
-        capabilities: HypervisorCapabilities,
+        supportsSnapshots: Bool? = nil,
         supportsVsock: Bool? = nil,
         supportsGuestExec: Bool? = nil,
         version: String? = nil
@@ -95,83 +94,36 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         self.available = available
         self.accelerated = accelerated
         self.unavailabilityReason = unavailabilityReason
-        self.capabilities = capabilities
+        self.supportsSnapshots = supportsSnapshots ?? type.supportsSnapshots
         self.supportsVsock = supportsVsock
         self.supportsGuestExec = supportsGuestExec
         self.version = version
     }
-}
-
-/// Capabilities of a hypervisor
-public struct HypervisorCapabilities: Codable, Equatable, Sendable {
-    /// The hypervisor type
-    public let type: HypervisorType
-
-    /// Whether the hypervisor supports pause/resume
-    public let supportsPause: Bool
-
-    /// Whether the hypervisor supports live migration
-    public let supportsLiveMigration: Bool
-
-    /// Whether the hypervisor supports snapshots
-    public let supportsSnapshots: Bool
-
-    /// Whether the hypervisor requires direct kernel boot (kernel + rootfs)
-    public let requiresDirectKernelBoot: Bool
-
-    /// Maximum vCPUs supported
-    public let maxVCPUs: Int
-
-    /// Maximum memory in bytes supported
-    public let maxMemory: Int64
-
-    public init(
-        type: HypervisorType,
-        supportsPause: Bool,
-        supportsLiveMigration: Bool,
-        supportsSnapshots: Bool,
-        requiresDirectKernelBoot: Bool,
-        maxVCPUs: Int,
-        maxMemory: Int64
-    ) {
-        self.type = type
-        self.supportsPause = supportsPause
-        self.supportsLiveMigration = supportsLiveMigration
-        self.supportsSnapshots = supportsSnapshots
-        self.requiresDirectKernelBoot = requiresDirectKernelBoot
-        self.maxVCPUs = maxVCPUs
-        self.maxMemory = maxMemory
+    private enum CodingKeys: String, CodingKey {
+        case type, available, accelerated, unavailabilityReason, supportsSnapshots
+        case supportsVsock, supportsGuestExec, version
     }
 
-    /// Capabilities for QEMU
-    public static let qemu = HypervisorCapabilities(
-        type: .qemu,
-        supportsPause: true,
-        supportsLiveMigration: true,
-        supportsSnapshots: true,
-        requiresDirectKernelBoot: false,
-        maxVCPUs: 1024,
-        maxMemory: 16 * 1024 * 1024 * 1024 * 1024  // 16 TB
-    )
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(HypervisorType.self, forKey: .type)
+        available = try container.decode(Bool.self, forKey: .available)
+        accelerated = try container.decode(Bool.self, forKey: .accelerated)
+        unavailabilityReason = try container.decodeIfPresent(String.self, forKey: .unavailabilityReason)
+        supportsSnapshots =
+            try container.decodeIfPresent(Bool.self, forKey: .supportsSnapshots)
+            ?? type.supportsSnapshots
+        supportsVsock = try container.decodeIfPresent(Bool.self, forKey: .supportsVsock)
+        supportsGuestExec = try container.decodeIfPresent(Bool.self, forKey: .supportsGuestExec)
+        version = try container.decodeIfPresent(String.self, forKey: .version)
+    }
+}
 
-    /// Capabilities for Firecracker
-    public static let firecracker = HypervisorCapabilities(
-        type: .firecracker,
-        supportsPause: true,
-        supportsLiveMigration: false,
-        supportsSnapshots: true,  // Via snapshotting
-        requiresDirectKernelBoot: true,
-        maxVCPUs: 32,
-        maxMemory: 32 * 1024 * 1024 * 1024  // 32 GB
-    )
-
-    /// Get capabilities for a hypervisor type
-    public static func capabilities(for type: HypervisorType) -> HypervisorCapabilities {
-        switch type {
-        case .qemu:
-            return .qemu
-        case .firecracker:
-            return .firecracker
+extension HypervisorType {
+    fileprivate var supportsSnapshots: Bool {
+        switch self {
+        case .qemu, .firecracker:
+            return true
         }
     }
 }

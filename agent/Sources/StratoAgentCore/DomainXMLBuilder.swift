@@ -146,7 +146,6 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// Translates a `VMSpec` and its host-resolved disks and NICs into a libvirt
 /// domain XML document.
 ///
-/// This is the libvirt counterpart of the process driver's argv assembly.
 /// It lives in the core library for the reason `QEMUGraphicsDevice` and
 /// `QEMUGraphicsDevice` give: the driver that will call it links a hypervisor
 /// SDK and therefore has no unit tests, and a device the hypervisor rejects
@@ -306,25 +305,17 @@ public enum DomainXMLBuilder {
         // initial size of zero and reject the domain with a message that names
         // neither the cause nor the device that caused it.
         if hotplugBytes > 0 {
-            domain.append(
-                DomainXMLNode(
-                    "maxMemory", [("slots", "1"), ("unit", "KiB")], text: kib(totalMemoryBytes)))
+            domain.append(maxMemoryNode(kibibytes: kib(totalMemoryBytes)))
         }
         domain.append(DomainXMLNode("memory", [("unit", "KiB")], text: kib(totalMemoryBytes)))
-        domain.append(
-            DomainXMLNode("currentMemory", [("unit", "KiB")], text: kib(spec.memoryBytes)))
+        domain.append(currentMemoryNode(kibibytes: kib(spec.memoryBytes)))
 
         if let hardLimit = input.memoryHardLimitBytes {
             domain.append(
-                DomainXMLNode(
-                    "memtune",
-                    children: [
-                        DomainXMLNode(
-                            "hard_limit", [("unit", "KiB")],
-                            text: String(
-                                QEMUMemoryCeiling.kibibytes(
-                                    guestMemoryBytes: hardLimit, overheadBytes: 0)))
-                    ]))
+                memoryHardLimitNode(
+                    kibibytes: String(
+                        QEMUMemoryCeiling.kibibytes(
+                            guestMemoryBytes: hardLimit, overheadBytes: 0))))
         }
 
         domain.append(
@@ -340,18 +331,7 @@ public enum DomainXMLBuilder {
         // deprecated `nocloud-net` spelling, which cloud-init 26 reports as a
         // recoverable error and therefore leaves the VM degraded.
         if spec.metadataSource == .imds && input.architecture == .x86_64 {
-            domain.append(
-                DomainXMLNode(
-                    "sysinfo", [("type", "smbios")],
-                    children: [
-                        DomainXMLNode(
-                            "system",
-                            children: [
-                                DomainXMLNode(
-                                    "entry", [("name", "serial")],
-                                    text: "ds=nocloud;dsmode=net")
-                            ])
-                    ]))
+            domain.append(metadataSMBIOSSysinfoNode())
         }
 
         domain.append(osNode(input, machine: machine))
@@ -403,7 +383,7 @@ public enum DomainXMLBuilder {
                 text: "hvm"))
 
         if input.spec.metadataSource == .imds && input.architecture == .x86_64 {
-            os.append(DomainXMLNode("smbios", [("mode", "sysinfo")]))
+            os.append(smbiosModeNode())
         }
 
         if let kernelBoot {
@@ -550,18 +530,10 @@ public enum DomainXMLBuilder {
         // QEMU accepts `maxmem=` plus virtio-mem without one. The cell holds
         // the *boot* memory — the hot-pluggable region is the device's — and
         // its cpu range must cover every vCPU the domain can grow to.
-        let cpuRange = maxCpus > 1 ? "0-\(maxCpus - 1)" : "0"
         cpu.append(
             DomainXMLNode(
                 "numa",
-                children: [
-                    DomainXMLNode(
-                        "cell",
-                        [
-                            ("id", "0"), ("cpus", cpuRange),
-                            ("memory", kib(input.spec.memoryBytes)), ("unit", "KiB"),
-                        ])
-                ]))
+                children: [numaCellNode(maxCPUs: maxCpus, memoryKibibytes: kib(input.spec.memoryBytes))]))
         return cpu
     }
 
@@ -605,7 +577,7 @@ public enum DomainXMLBuilder {
         // from 0 — so without this the first spare port below claims index 0
         // and the whole document is rejected. libvirt's implicit-controller
         // pass would add this, but it runs after the validation that rejects.
-        devices.append(DomainXMLNode("controller", [("type", "pci"), ("index", "0"), ("model", "pcie-root")]))
+        devices.append(pcieRootControllerNode())
 
         // Empty PCIe root ports for later hot-plug. See the type's note: these
         // cannot be added to a domain after it is defined, and without them
@@ -615,9 +587,7 @@ public enum DomainXMLBuilder {
             // from the range it was going to allocate for the devices above and
             // then puts those devices in them, leaving nothing free; numbered
             // past that range, they are ports nothing has claimed.
-            devices.append(
-                DomainXMLNode(
-                    "controller", [("type", "pci"), ("index", "\(index)"), ("model", "pcie-root-port")]))
+            devices.append(pcieRootPortNode(index: index))
         }
 
         // libvirt would add both controllers implicitly; declaring them pins
@@ -1047,5 +1017,59 @@ public enum DomainXMLBuilder {
     /// domain that already exists and has to spell their values identically.
     static func kib(_ bytes: Int64) -> String {
         "\((bytes + 1023) / 1024)"
+    }
+
+    static func cpuRange(maxCPUs: Int) -> String {
+        maxCPUs > 1 ? "0-\(maxCPUs - 1)" : "0"
+    }
+
+    static func maxMemoryNode(kibibytes: String) -> DomainXMLNode {
+        DomainXMLNode("maxMemory", [("slots", "1"), ("unit", "KiB")], text: kibibytes)
+    }
+
+    static func currentMemoryNode(kibibytes: String) -> DomainXMLNode {
+        DomainXMLNode("currentMemory", [("unit", "KiB")], text: kibibytes)
+    }
+
+    static func numaCellNode(maxCPUs: Int, memoryKibibytes: String) -> DomainXMLNode {
+        DomainXMLNode(
+            "cell",
+            [
+                ("id", "0"), ("cpus", cpuRange(maxCPUs: maxCPUs)),
+                ("memory", memoryKibibytes), ("unit", "KiB"),
+            ])
+    }
+
+    static func pcieRootControllerNode() -> DomainXMLNode {
+        DomainXMLNode("controller", [("type", "pci"), ("index", "0"), ("model", "pcie-root")])
+    }
+
+    static func pcieRootPortNode(index: Int) -> DomainXMLNode {
+        DomainXMLNode(
+            "controller", [("type", "pci"), ("index", "\(index)"), ("model", "pcie-root-port")])
+    }
+
+    static func metadataSMBIOSSysinfoNode() -> DomainXMLNode {
+        DomainXMLNode(
+            "sysinfo", [("type", "smbios")],
+            children: [
+                DomainXMLNode(
+                    "system",
+                    children: [
+                        DomainXMLNode(
+                            "entry", [("name", "serial")],
+                            text: "ds=nocloud;dsmode=net")
+                    ])
+            ])
+    }
+
+    static func smbiosModeNode() -> DomainXMLNode {
+        DomainXMLNode("smbios", [("mode", "sysinfo")])
+    }
+
+    static func memoryHardLimitNode(kibibytes: String) -> DomainXMLNode {
+        DomainXMLNode(
+            "memtune",
+            children: [DomainXMLNode("hard_limit", [("unit", "KiB")], text: kibibytes)])
     }
 }

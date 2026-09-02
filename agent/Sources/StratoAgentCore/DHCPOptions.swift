@@ -34,12 +34,12 @@ public enum OVNDHCPOptionsBuilder {
         ]
         // The network's *own* resolver address, not a constant: every network
         // has a distinct pair so they can all be served from the host namespace.
-        let resolverV4 = resolverAddresses.filter { IPv4Address($0) != nil }
+        let resolverV4 = resolverAddresses.filter(IPFamily.ipv4.matches)
         let cleanedDNS =
             resolverV4.isEmpty
             ? dnsServers
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { IPv4Address($0) != nil }
+                .filter(IPFamily.ipv4.matches)
             : resolverV4
         if !cleanedDNS.isEmpty {
             options["dns_server"] = "{\(cleanedDNS.joined(separator: ", "))}"
@@ -112,12 +112,12 @@ public enum OVNDHCPOptionsBuilder {
         var options: [String: String] = [
             "server_id": serverMAC(for: subnet6)
         ]
-        let resolverV6 = resolverAddresses.filter { IPv6Address($0) != nil }
+        let resolverV6 = resolverAddresses.filter(IPFamily.ipv6.matches)
         let v6DNS =
             resolverV6.isEmpty
             ? dnsServers
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { IPv6Address($0) != nil }
+                .filter(IPFamily.ipv6.matches)
             : resolverV6
         if !v6DNS.isEmpty {
             options["dns_server"] = "{\(v6DNS.joined(separator: ", "))}"
@@ -148,11 +148,7 @@ public enum OVNDHCPOptionsBuilder {
     /// A stable locally-administered unicast MAC derived from the subnet, so the
     /// DHCP server identity doesn't churn between reconciliations (FNV-1a).
     public static func serverMAC(for subnet: String) -> String {
-        var hash: UInt64 = 1_469_598_103_934_665_603  // FNV-1a offset basis
-        for byte in subnet.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 1_099_511_628_211
-        }
+        let hash = FNV1a.hash64(subnet)
         var octets = (0..<6).map { UInt8((hash >> (UInt64($0) * 8)) & 0xff) }
         octets[0] = (octets[0] & 0xFC) | 0x02  // locally administered, unicast
         return octets.map { String(format: "%02x", $0) }.joined(separator: ":")

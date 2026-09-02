@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate } from "@/lib/format-time";
+
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
@@ -182,7 +184,7 @@ export function MembersTable({
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {member.joinedAt
-                  ? new Date(member.joinedAt).toLocaleDateString()
+                  ? formatDate(member.joinedAt)
                   : "—"}
               </TableCell>
               {canManage && (

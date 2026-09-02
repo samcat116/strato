@@ -22,6 +22,94 @@ struct ObservedStateApplier {
         let id: UUID
     }
 
+    private enum ConvergenceSettlement {
+        case unchanged
+        case succeeded
+        case failed(ResourceConvergence.WriteOutcome)
+    }
+
+    /// Persists progress or records the terminal convergence verdict shared by
+    /// every finalizable resource family. Callers retain only family-specific
+    /// status transitions around this bookkeeping.
+    private func settleConvergence<R: FinalizableResource>(
+        _ resource: R,
+        wasConverged: Bool,
+        changed: Bool,
+        reportedError: String?,
+        reportedFailedGeneration: Int64?,
+        previousFailureGeneration: Int64?,
+        defaultMutation: VMOperationKind,
+        prepareFailure: (R) -> Void = { _ in },
+        on db: any Database
+    ) async throws -> ConvergenceSettlement {
+        let settles =
+            !resource.isTerminating
+            && ((!wasConverged && resource.isConverged)
+                || (reportedError != nil && reportedFailedGeneration == resource.generation))
+        guard settles else {
+            if changed { try await resource.save(on: db) }
+            return .unchanged
+        }
+
+        if !wasConverged, resource.isConverged {
+            _ = try await ResourceConvergence.recordSuccess(resource, on: db)
+            return .succeeded
+        }
+
+        guard let reportedError, reportedFailedGeneration == resource.generation else {
+            return .unchanged
+        }
+        let mutation =
+            try await ResourceEvent.latest(
+                .requested,
+                resourceKind: R.operationResourceKind,
+                resourceID: try resource.requireID(),
+                on: db
+            )?.mutation ?? defaultMutation
+        prepareFailure(resource)
+        let outcome = try await ResourceConvergence.recordFailure(
+            resource,
+            mutation: mutation,
+            reason: reportedError,
+            telemetryReason: "convergence_failed",
+            context: .observedReport(
+                previousFailureGeneration: previousFailureGeneration,
+                hadActiveDeadline: resource.convergenceDeadline != nil),
+            on: db)
+        if outcome == .alreadyRecorded, changed {
+            try await resource.save(on: db)
+        }
+        return .failed(outcome)
+    }
+
+    /// Clears the common agent-absence finalizer and emits the family-specific
+    /// operator message. Returns false for a live resource so the caller can
+    /// continue with missing-resource handling.
+    private func confirmTeardown<R: FinalizableResource>(
+        _ resource: R,
+        removedMessage: String,
+        heldMessage: String? = nil,
+        metadata: Logger.Metadata,
+        on db: any Database
+    ) async throws -> Bool {
+        guard resource.isTerminating else { return false }
+        switch try await ResourceFinalizerService.clear(
+            .agentAbsent, from: resource, on: db, app: app)
+        {
+        case .reaped:
+            app.logger.info("\(removedMessage)", metadata: metadata)
+        case .held(let remaining):
+            if let heldMessage {
+                var heldMetadata = metadata
+                heldMetadata["finalizers"] = .string(remaining.joined(separator: ","))
+                app.logger.debug("\(heldMessage)", metadata: heldMetadata)
+            }
+        case .alreadyGone, .notTerminating:
+            break
+        }
+        return true
+    }
+
     /// Immutable report-level projection used to gate VM convergence without
     /// issuing one boot-volume query per VM.
     private struct BootVolumeDependency {
@@ -228,7 +316,7 @@ struct ObservedStateApplier {
                 .filter(\.$vm.$id ~~ interfaceVMIDs)
                 .with(\.$observedAddresses)
                 .all()
-            interfacesByVMID = Dictionary(grouping: interfaces, by: \.$vm.id)
+            interfacesByVMID = Dictionary(grouping: interfaces) { $0.$vm.id }
         }
 
         // Volumes are dependencies of VM convergence (STR-242), so apply this
@@ -794,8 +882,8 @@ struct ObservedStateApplier {
         // says the target generation no longer contains the interface. The
         // generation check rejects a stale report; the explicit id set rejects
         // the more dangerous interpretation of silence as absence.
-        if let appliedInterfaceIDs = observed.appliedNetworkInterfaceIds {
-            let applied = Set(appliedInterfaceIDs)
+        if let appliedNetworkInterfaceIds = observed.appliedNetworkInterfaceIds {
+            let applied = Set(appliedNetworkInterfaceIds)
             for interface in interfaces {
                 guard let detachGeneration = interface.detachGeneration,
                     observed.observedGeneration >= detachGeneration,
@@ -854,80 +942,30 @@ struct ObservedStateApplier {
             await emitVMStatusTransition(statusTransition, vm: vm, on: db)
             return
         }
-        // Deletions are settled by absence from the report, never by a status.
-        //
-        // The save is deferred to the transition below where there is one:
-        // `recordSuccess`/`recordFailure` persist the model inside the same
-        // transaction as the outbox row, and this report's changes include the
-        // mirrored `failedGeneration` that would otherwise suppress every
-        // future pass if it committed alone.
-        let settlesConvergence =
-            vm.desiredStatus != .absent
-            && ((!wasConverged && vm.isConverged)
-                || (observed.lastError != nil && observed.failedGeneration == vm.generation))
-        if !settlesConvergence {
-            if changed {
-                try await vm.save(on: db)
-            }
-            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
-            return
-        }
-
-        if !wasConverged, vm.isConverged {
-            // The agent converged to the current generation and the observed
-            // status satisfies the desired one: everything outstanding reached
-            // its goal.
-            _ = try await ResourceConvergence.recordSuccess(vm, on: db)
-            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
-        } else if let lastError = observed.lastError, observed.failedGeneration == vm.generation {
-            // The agent tried to converge to *this* generation and failed —
-            // the failedGeneration match is what distinguishes that from a
-            // stale error still carried on heartbeats while a newer mutation
-            // waits for its first attempt. Report the real reason instead of
-            // waiting out the convergence deadline.
-            //
-            // `recordFailure` resolves the in-flight state and realigns desired
-            // with observed, so the unachieved intent does not linger and
-            // replay on a later sync; its `failedGeneration` guard is what
-            // keeps the failure webhook to one per generation, however many
-            // reports repeat the error.
-            let mutation =
-                try await ResourceEvent.latest(
-                    .requested, resourceKind: .virtualMachine, resourceID: vmID, on: db
-                )?.mutation ?? .boot
-
-            // A VM with no settled presence on the agent (e.g. a create that
-            // never got off the ground) is surfaced as `.error` rather than
-            // left in a healthy-looking resting state — and *before*
-            // `recordFailure`, because the realignment of desired state it
-            // performs reads the status. Gated on the same guard
-            // `recordFailure` applies, so a repeated report of an
-            // already-recorded failure changes nothing.
-            let previousStatus = vm.status
-            var enteredError = false
-            if failedBefore != vm.generation, observed.status == .unknown, vm.status != .error {
+        let previousStatus = vm.status
+        var enteredError = false
+        let settlement = try await settleConvergence(
+            vm,
+            wasConverged: wasConverged,
+            changed: changed,
+            reportedError: observed.lastError,
+            reportedFailedGeneration: observed.failedGeneration,
+            previousFailureGeneration: failedBefore,
+            defaultMutation: .boot,
+            prepareFailure: { vm in
+                guard failedBefore != vm.generation,
+                    observed.status == .unknown,
+                    vm.status != .error
+                else { return }
                 vm.setStatus(.error)
                 enteredError = true
                 Telemetry.vmEnteredError(reason: "convergence_failed")
-            }
-
-            let outcome = try await ResourceConvergence.recordFailure(
-                vm, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed",
-                context: .observedReport(
-                    previousFailureGeneration: failedBefore,
-                    hadActiveDeadline: vm.convergenceDeadline != nil), on: db)
-            if outcome == .alreadyRecorded, changed {
-                // A repeat of an already-recorded failure: nothing was
-                // persisted by the call above, so this report's own changes
-                // (observed generation, status) still need writing.
-                try await vm.save(on: db)
-            }
-            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
-            if outcome == .recorded, enteredError {
-                await WebhookEvents.emitVMStateChanged(
-                    vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
-            }
+            },
+            on: db)
+        await emitVMStatusTransition(statusTransition, vm: vm, on: db)
+        if case .failed(.recorded) = settlement, enteredError {
+            await WebhookEvents.emitVMStateChanged(
+                vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
         }
     }
 
@@ -1122,31 +1160,16 @@ struct ObservedStateApplier {
     ) async throws {
         let vmID = try vm.requireID()
 
-        if vm.desiredStatus == .absent {
-            // Teardown confirmed: this is the `agent.absent` finalizer's
-            // participant (ADR 0001). Nothing is recorded *here* — the reap
-            // that clearing the last token triggers appends the terminal
-            // `resource_events` row, which is what tells a client polling a
-            // delete that it finished (STR-147).
-            switch try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: db, app: app) {
-            case .reaped:
-                app.logger.info(
-                    "VM deletion confirmed by agent report; record removed",
-                    metadata: ["strato.vm.id": .string(vmID.uuidString), "strato.agent.id": .string(agentId)])
-            case .held(let remaining):
-                // Other participants still owe cleanup. Logged on every report
-                // until they finish, so this stays at debug.
-                app.logger.debug(
-                    "VM teardown confirmed by agent report; awaiting finalizers",
-                    metadata: [
-                        "strato.vm.id": .string(vmID.uuidString), "strato.agent.id": .string(agentId),
-                        "finalizers": .string(remaining.joined(separator: ",")),
-                    ])
-            case .alreadyGone, .notTerminating:
-                // Raced another reaper, or the row went between the query and
-                // here. Nothing to say: whoever removed it logged the removal.
-                break
-            }
+        if try await confirmTeardown(
+            vm,
+            removedMessage: "VM deletion confirmed by agent report; record removed",
+            heldMessage: "VM teardown confirmed by agent report; awaiting finalizers",
+            metadata: [
+                "strato.vm.id": .string(vmID.uuidString),
+                "strato.agent.id": .string(agentId),
+            ],
+            on: db)
+        {
             return
         }
 
@@ -1265,44 +1288,20 @@ struct ObservedStateApplier {
             }
             return
         }
-        // Deletions are settled by absence from the report, never by a status.
-        // The save is deferred to the transition where there is one, for the
-        // reason the VM path defers it.
-        let settlesConvergence =
-            sandbox.desiredStatus != .absent
-            && ((!wasConverged && sandbox.isConverged)
-                || (observed.lastError != nil && observed.failedGeneration == sandbox.generation))
-        if !settlesConvergence {
-            if changed {
-                try await sandbox.save(on: db)
-            }
-            return
-        }
-
-        if !wasConverged, sandbox.isConverged {
-            _ = try await ResourceConvergence.recordSuccess(sandbox, on: db)
-        } else if let lastError = observed.lastError, observed.failedGeneration == sandbox.generation {
-            // The agent tried to converge to *this* generation and failed —
-            // report the real reason instead of waiting out the convergence
-            // deadline (same contract as VMs, including the pre-escalation of a
-            // sandbox with no settled presence on the agent).
-            let mutation =
-                try await ResourceEvent.latest(
-                    .requested, resourceKind: .sandbox, resourceID: sandboxID, on: db
-                )?.mutation ?? .boot
-            if failedBefore != sandbox.generation, observed.status == .unknown {
-                sandbox.setStatus(.error)
-            }
-            let outcome = try await ResourceConvergence.recordFailure(
-                sandbox, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed",
-                context: .observedReport(
-                    previousFailureGeneration: failedBefore,
-                    hadActiveDeadline: sandbox.convergenceDeadline != nil), on: db)
-            if outcome == .alreadyRecorded, changed {
-                try await sandbox.save(on: db)
-            }
-        }
+        _ = try await settleConvergence(
+            sandbox,
+            wasConverged: wasConverged,
+            changed: changed,
+            reportedError: observed.lastError,
+            reportedFailedGeneration: observed.failedGeneration,
+            previousFailureGeneration: failedBefore,
+            defaultMutation: .boot,
+            prepareFailure: { sandbox in
+                if failedBefore != sandbox.generation, observed.status == .unknown {
+                    sandbox.setStatus(.error)
+                }
+            },
+            on: db)
     }
 
     /// A sandbox the database maps to this agent is absent from its full
@@ -1314,26 +1313,16 @@ struct ObservedStateApplier {
     ) async throws {
         let sandboxID = try sandbox.requireID()
 
-        if sandbox.desiredStatus == .absent {
-            // Teardown confirmed: the `agent.absent` participant. The reap
-            // appends the terminal event, same as VMs.
-            switch try await ResourceFinalizerService.clear(
-                .agentAbsent, from: sandbox, on: db, app: app)
-            {
-            case .reaped:
-                app.logger.info(
-                    "Sandbox deletion confirmed by agent report; record removed",
-                    metadata: ["strato.sandbox.id": .string(sandboxID.uuidString), "strato.agent.id": .string(agentId)])
-            case .held(let remaining):
-                app.logger.debug(
-                    "Sandbox teardown confirmed by agent report; awaiting finalizers",
-                    metadata: [
-                        "strato.sandbox.id": .string(sandboxID.uuidString), "strato.agent.id": .string(agentId),
-                        "finalizers": .string(remaining.joined(separator: ",")),
-                    ])
-            case .alreadyGone, .notTerminating:
-                break
-            }
+        if try await confirmTeardown(
+            sandbox,
+            removedMessage: "Sandbox deletion confirmed by agent report; record removed",
+            heldMessage: "Sandbox teardown confirmed by agent report; awaiting finalizers",
+            metadata: [
+                "strato.sandbox.id": .string(sandboxID.uuidString),
+                "strato.agent.id": .string(agentId),
+            ],
+            on: db)
+        {
             return
         }
 
@@ -1633,34 +1622,15 @@ struct ObservedStateApplier {
             }
             return normalizedDesiredSize
         }
-        let settlesConvergence =
-            volume.desiredStatus != .absent
-            && ((!wasConverged && volume.isConverged)
-                || (observed.lastError != nil && observed.failedGeneration == volume.generation))
-        if !settlesConvergence {
-            if changed {
-                try await volume.save(on: db)
-            }
-            return normalizedDesiredSize
-        }
-
-        if !wasConverged, volume.isConverged {
-            _ = try await ResourceConvergence.recordSuccess(volume, on: db)
-        } else if let lastError = observed.lastError, observed.failedGeneration == volume.generation {
-            let mutation =
-                try await ResourceEvent.latest(
-                    .requested, resourceKind: .volume, resourceID: volumeID, on: db
-                )?.mutation ?? .create
-            let outcome = try await ResourceConvergence.recordFailure(
-                volume, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed",
-                context: .observedReport(
-                    previousFailureGeneration: failedBefore,
-                    hadActiveDeadline: volume.convergenceDeadline != nil), on: db)
-            if outcome == .alreadyRecorded, changed {
-                try await volume.save(on: db)
-            }
-        }
+        _ = try await settleConvergence(
+            volume,
+            wasConverged: wasConverged,
+            changed: changed,
+            reportedError: observed.lastError,
+            reportedFailedGeneration: observed.failedGeneration,
+            previousFailureGeneration: failedBefore,
+            defaultMutation: .create,
+            on: db)
         return normalizedDesiredSize
     }
 
@@ -1730,7 +1700,6 @@ struct ObservedStateApplier {
         observed: ObservedSnapshotState,
         on db: Database
     ) async throws -> Bool {
-        let artifactID = try artifact.requireID()
         try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for the reasons the VM path
         // documents: `recordConvergence` mirrors the agent's own
@@ -1793,35 +1762,18 @@ struct ObservedStateApplier {
             return footprintChanged
         }
 
-        let settlesConvergence =
-            artifact.desiredStatus != .absent
-            && ((!wasConverged && artifact.isConverged)
-                || (observed.lastError != nil && observed.failedGeneration == artifact.generation))
-        if !settlesConvergence {
-            if changed {
-                try await artifact.save(on: db)
-            }
+        let settlement = try await settleConvergence(
+            artifact,
+            wasConverged: wasConverged,
+            changed: changed,
+            reportedError: observed.lastError,
+            reportedFailedGeneration: observed.failedGeneration,
+            previousFailureGeneration: failedBefore,
+            defaultMutation: .create,
+            on: db)
+        if case .unchanged = settlement {
             return false
         }
-
-        if !wasConverged, artifact.isConverged {
-            _ = try await ResourceConvergence.recordSuccess(artifact, on: db)
-        } else if let lastError = observed.lastError, observed.failedGeneration == artifact.generation {
-            let mutation =
-                try await ResourceEvent.latest(
-                    .requested, resourceKind: A.operationResourceKind, resourceID: artifactID, on: db
-                )?.mutation ?? .create
-            let outcome = try await ResourceConvergence.recordFailure(
-                artifact, mutation: mutation, reason: lastError,
-                telemetryReason: "convergence_failed",
-                context: .observedReport(
-                    previousFailureGeneration: failedBefore,
-                    hadActiveDeadline: artifact.convergenceDeadline != nil), on: db)
-            if outcome == .alreadyRecorded, changed {
-                try await artifact.save(on: db)
-            }
-        }
-
         return footprintChanged
     }
 
@@ -1894,18 +1846,16 @@ struct ObservedStateApplier {
     ) async throws {
         let artifactID = try artifact.requireID()
 
-        if artifact.desiredStatus == .absent {
-            let outcome = try await ResourceFinalizerService.clear(
-                .agentAbsent, from: artifact, on: db, app: app)
-            if outcome.isRemoved {
-                app.logger.info(
-                    "Snapshot deletion confirmed by agent report; record removed",
-                    metadata: [
-                        "resourceKind": .string(A.operationResourceKind.rawValue),
-                        "resourceId": .string(artifactID.uuidString),
-                        "strato.agent.id": .string(agentId),
-                    ])
-            }
+        if try await confirmTeardown(
+            artifact,
+            removedMessage: "Snapshot deletion confirmed by agent report; record removed",
+            metadata: [
+                "resourceKind": .string(A.operationResourceKind.rawValue),
+                "resourceId": .string(artifactID.uuidString),
+                "strato.agent.id": .string(agentId),
+            ],
+            on: db)
+        {
             return
         }
 
@@ -1950,16 +1900,14 @@ struct ObservedStateApplier {
 
         if volume.desiredStatus == .absent {
             if try await VolumeService.pool(of: volume, on: db)?.mode == .ceph {
-                switch try await ResourceFinalizerService.clear(
-                    .agentAbsent, from: volume, on: db, app: app)
-                {
-                case .reaped:
-                    app.logger.info(
-                        "Ceph volume deletion confirmed by reconciler; record removed",
-                        metadata: ["volumeId": .string(volumeID.uuidString), "agentId": .string(agentId)])
-                case .held, .alreadyGone, .notTerminating:
-                    break
-                }
+                _ = try await confirmTeardown(
+                    volume,
+                    removedMessage: "Ceph volume deletion confirmed by reconciler; record removed",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString),
+                        "agentId": .string(agentId),
+                    ],
+                    on: db)
                 return
             }
             // One report only confirms one physical copy is gone. Remove that
@@ -1983,23 +1931,15 @@ struct ObservedStateApplier {
                     ])
                 return
             }
-            switch try await ResourceFinalizerService.clear(
-                .agentAbsent, from: volume, on: db, app: app)
-            {
-            case .reaped:
-                app.logger.info(
-                    "Volume deletion confirmed by agent report; record removed",
-                    metadata: ["volumeId": .string(volumeID.uuidString), "strato.agent.id": .string(agentId)])
-            case .held(let remaining):
-                app.logger.debug(
-                    "Volume teardown confirmed by agent report; awaiting finalizers",
-                    metadata: [
-                        "volumeId": .string(volumeID.uuidString), "strato.agent.id": .string(agentId),
-                        "finalizers": .string(remaining.joined(separator: ",")),
-                    ])
-            case .alreadyGone, .notTerminating:
-                break
-            }
+            _ = try await confirmTeardown(
+                volume,
+                removedMessage: "Volume deletion confirmed by agent report; record removed",
+                heldMessage: "Volume teardown confirmed by agent report; awaiting finalizers",
+                metadata: [
+                    "volumeId": .string(volumeID.uuidString),
+                    "strato.agent.id": .string(agentId),
+                ],
+                on: db)
             return
         }
 

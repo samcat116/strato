@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatDetailedDateTime } from "@/lib/format-time";
 import {
   useRedeliverWebhookDelivery,
   useSendTestWebhook,
@@ -48,20 +49,6 @@ function statusBadgeClass(status: WebhookDelivery["status"]): string {
     default:
       return "bg-amber-900/30 text-amber-700 border-transparent";
   }
-}
-
-function formatTimestamp(value?: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 }
 
 function prettyPayload(payload: string): string {
@@ -269,7 +256,7 @@ function DeliveryRows({
           </Button>
         </TableCell>
         <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
-          {formatTimestamp(delivery.createdAt)}
+          {formatDetailedDateTime(delivery.createdAt)}
         </TableCell>
         <TableCell className="font-mono text-sm text-foreground">
           {delivery.eventType}
@@ -279,12 +266,12 @@ function DeliveryRows({
             className={statusBadgeClass(delivery.status)}
             title={
               delivery.status === "pending" && delivery.nextAttemptAt
-                ? `Next attempt ${formatTimestamp(delivery.nextAttemptAt)}`
+                ? `Next attempt ${formatDetailedDateTime(delivery.nextAttemptAt)}`
                 : delivery.status === "dropped"
                   ? (delivery.lastError ??
                     "Dropped to enforce this subscription's pending-delivery ceiling")
                 : delivery.status === "succeeded" && delivery.deliveredAt
-                  ? `Delivered ${formatTimestamp(delivery.deliveredAt)}`
+                  ? `Delivered ${formatDetailedDateTime(delivery.deliveredAt)}`
                   : undefined
             }
           >

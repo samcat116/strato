@@ -336,16 +336,13 @@ struct WebAuthnService {
 // MARK: - Errors
 
 enum WebAuthnError: Error, AbortError, Sendable {
-    case registrationFailed
-    case authenticationFailed
     case challengeNotFound
     case credentialNotFound
-    case userNotFound
     case invalidConfiguration
 
     var status: HTTPResponseStatus {
         switch self {
-        case .credentialNotFound, .userNotFound:
+        case .credentialNotFound:
             return .notFound
         case .challengeNotFound:
             return .badRequest
@@ -356,16 +353,10 @@ enum WebAuthnError: Error, AbortError, Sendable {
 
     var reason: String {
         switch self {
-        case .registrationFailed:
-            return "Registration failed"
-        case .authenticationFailed:
-            return "Authentication failed"
         case .challengeNotFound:
             return "Authentication challenge not found or expired"
         case .credentialNotFound:
             return "User/Passkey not found"
-        case .userNotFound:
-            return "User not found"
         case .invalidConfiguration:
             return "WebAuthn configuration error"
         }

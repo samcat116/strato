@@ -16,16 +16,12 @@ extension NetworkSpec {
     /// sandbox NICs alike since STR-102, resolved from whichever join table
     /// owns the NIC. Nil is "unmanaged", never "no groups".
     ///
-    /// `sendsMetadataPort` controls `metadataEnabled` (STR-49): false omits the
-    /// field, so nil means "the sender has no opinion" rather than "off".
-    ///
     /// `siteResolverCapable` carries both halves of the resolver gate (STR-40)
     /// in one parameter, because neither alone decides the field. Nil omits the
     /// resolver fields. A non-nil value says whether every agent in the site can
     /// answer on the resolver address and is combined with the network's opt-out.
     static func build(
         interface: some NetworkAddressable, network: LogicalNetwork, securityGroupIds: [UUID]? = nil,
-        sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true
     ) -> NetworkSpec {
         let ipv4 = interface.ipv4Address
@@ -56,7 +52,7 @@ extension NetworkSpec {
             domainName: network.domainName,
             leaseTime: network.leaseTime,
             securityGroupIds: securityGroupIds,
-            metadataEnabled: sendsMetadataPort ? network.metadataEnabled : nil,
+            metadataEnabled: network.metadataEnabled,
             resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled },
             resolverAddresses: network.resolverAddressesIfEnabled(siteCapable: siteResolverCapable)
         )

@@ -848,7 +848,6 @@ private func encodeGuestExecAgentRegister(agentName: String) throws -> String {
                     type: .qemu,
                     available: true,
                     accelerated: true,
-                    capabilities: .capabilities(for: .qemu),
                     supportsVsock: true,
                     supportsGuestExec: true)
             ],

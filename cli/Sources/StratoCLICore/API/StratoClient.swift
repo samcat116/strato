@@ -31,18 +31,6 @@ public enum StratoClient {
     ///   `.ok`/`.accepted` directly; a `switch` written over those cases would
     ///   silently never fire. Catch `CLIError.api` and read its `status`
     ///   instead.
-    public static func authenticated(
-        serverURL: URL,
-        contextName: String,
-        credentialStore: CredentialStore,
-        transport: any ClientTransport = URLSessionClientTransport()
-    ) -> StratoAPIClient.Client {
-        authenticatedSession(
-            serverURL: serverURL, contextName: contextName,
-            credentialStore: credentialStore, transport: transport
-        ).client
-    }
-
     public static func authenticatedSession(
         serverURL: URL,
         contextName: String,

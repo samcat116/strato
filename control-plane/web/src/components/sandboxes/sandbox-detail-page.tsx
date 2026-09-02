@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
+
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
@@ -206,10 +208,10 @@ export function SandboxDetailPage({ id }: { id: string }) {
               </CardHeader>
               <CardContent>
                 <div className="text-sm font-medium text-foreground">
-                  {new Date(sandbox.createdAt).toLocaleDateString()}
+                  {formatDate(sandbox.createdAt)}
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {new Date(sandbox.createdAt).toLocaleTimeString()}
+                  {formatTime(sandbox.createdAt)}
                 </p>
               </CardContent>
             </Card>
@@ -278,7 +280,7 @@ export function SandboxDetailPage({ id }: { id: string }) {
                 <div>
                   <p className="text-muted-foreground">Last Updated</p>
                   <p className="text-foreground">
-                    {new Date(sandbox.updatedAt).toLocaleString()}
+                    {formatDateTime(sandbox.updatedAt)}
                   </p>
                 </div>
               </div>

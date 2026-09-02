@@ -100,10 +100,10 @@ struct EdgeNonceProtocolTests {
         #expect(decoded.restore?.generation == 5)
         #expect(decoded.restore?.artifacts?.count == 1)
         #expect(decoded.restore?.artifacts?.first?.sha256 == "abc123")
-        // `restore` and `restoreFrom` are different fields with different
+        // `restore` and `spec.restoreFrom` have different
         // meanings — an edge on an existing sandbox versus a fork's create
         // strategy — and nothing may conflate them.
-        #expect(decoded.restoreFrom == nil)
+        #expect(decoded.spec.restoreFrom == nil)
     }
 
 }

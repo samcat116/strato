@@ -91,10 +91,6 @@ public struct SPIRETrustBundle: Sendable {
         self.sequenceNumber = sequenceNumber
     }
 
-    /// Combined authorities as single PEM string
-    public var x509AuthoritiesPEM: String {
-        x509Authorities.joined(separator: "\n")
-    }
 }
 
 // MARK: - Validated identity

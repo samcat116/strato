@@ -204,6 +204,30 @@ struct GuestJWTSVIDMintTests {
         }
     }
 
+    @Test("A stalled guest-mint limiter backend fails open promptly")
+    func stalledRateLimitBackendFailsOpen() async throws {
+        try await withRunningMintApp { app, port in
+            let fixture = try await fixture(on: app)
+            let backend = RateLimitBackend(
+                fallbackStore: StalledGuestMintRateLimitStore(),
+                deadline: .milliseconds(10))
+            app.agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
+                config: rateLimitConfig(apiLimit: 1),
+                backend: backend)
+
+            let clock = ContinuousClock()
+            let started = clock.now
+            let response = try await mint(
+                app: app,
+                port: port,
+                vmID: try fixture.vm.requireID().uuidString)
+
+            #expect(response.status == .ok)
+            #expect(response.headers.first(name: "X-RateLimit-Limit") == nil)
+            #expect(started.duration(to: clock.now) < .seconds(1))
+        }
+    }
+
     @Test("Unknown, unplaced, nil-placement, and revoked identities collapse to one 404")
     func placementOracleIsCollapsed() async throws {
         try await withRunningMintApp { app, port in
@@ -411,6 +435,17 @@ struct GuestJWTSVIDMintTests {
             #expect(events.allSatisfy { !($0.metadataJSON ?? "").contains("fake-jwt-svid") })
         }
     }
+}
+
+private struct StalledGuestMintRateLimitStore: RateLimitStore {
+    func hit(_ key: String, window: Int) async throws -> RateLimitCount {
+        try await Task.sleep(for: .seconds(60))
+        return RateLimitCount(count: 1, ttl: window)
+    }
+
+    func readInt(_ key: String) async throws -> Int? { nil }
+    func writeInt(_ key: String, value: Int, ttl: Int) async throws {}
+    func reset(_ key: String) async throws {}
 }
 
 private struct AbortErrorResponse: Decodable {

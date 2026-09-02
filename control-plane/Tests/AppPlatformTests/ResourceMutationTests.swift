@@ -206,7 +206,7 @@ final class ResourceMutationTests {
 
             let accepted = try await self.mutation(app, fake).accept(
                 .boot, on: vm, actor: .user(UUID()),
-                dispatch: .directResolution { _ in false },
+                dispatch: .directResolution { _ in },
                 on: app.db, app: app
             ) { _ in
                 vm.setDesiredStatus(.running)
@@ -233,7 +233,7 @@ final class ResourceMutationTests {
                 .delete, on: vm, actor: .user(UUID()),
                 dispatch: .directResolution { db in
                     try await ResourceFinalizerService.stampForDeletion(vm, on: db)
-                    return try await ResourceFinalizerService.clear(
+                    _ = try await ResourceFinalizerService.clear(
                         .agentAbsent, from: vm, on: db, app: app
                     ).isRemoved
                 },
@@ -419,7 +419,7 @@ final class ResourceMutationTests {
             let deleteCopy = try #require(try await VM.find(vmID, on: app.db))
             let acceptedDelete = try await self.mutation(app, fake).accept(
                 .delete, on: deleteCopy, actor: .user(UUID()),
-                dispatch: .directResolution { _ in false },
+                dispatch: .directResolution { _ in },
                 on: app.db, app: app
             ) { db in
                 try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
@@ -461,7 +461,7 @@ final class ResourceMutationTests {
             let deleteCopy = try #require(try await Sandbox.find(sandboxID, on: app.db))
             let acceptedDelete = try await self.mutation(app, fake).accept(
                 .delete, on: deleteCopy, actor: .user(UUID()),
-                dispatch: .directResolution { _ in false },
+                dispatch: .directResolution { _ in },
                 on: app.db, app: app
             ) { db in
                 try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)

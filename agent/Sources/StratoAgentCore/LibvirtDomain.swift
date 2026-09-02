@@ -19,9 +19,7 @@ public enum LibvirtDomain {
 
     /// `virDomainState`, as returned by `virDomainGetState`.
     ///
-    /// Mapping to `VMStatus` is markedly simpler than
-    /// the process driver's `vmStatus(from:awaitingFirstStart:)`, and the reason is the
-    /// create path rather than this enum: `domainDefineXML` leaves the domain
+    /// Mapping to `VMStatus` is simple because `domainDefineXML` leaves the domain
     /// `SHUTOFF`, which satisfies `ReconcileStep.create`'s "exists, not
     /// running" contract directly. There is no `prelaunch`-versus-`paused`
     /// ambiguity to recover from the driver's own memory, so there is no
@@ -439,8 +437,7 @@ public enum LibvirtFailure {
     /// (`VIR_ERR_NO_DOMAIN_SNAPSHOT`).
     ///
     /// Read as **success** by a checkpoint delete, whose post-condition is
-    /// exactly this — the same idempotency the process driver's `deleteVMCheckpoint`
-    /// reaches by finding no block node carrying the tag. Read as a failure by
+    /// exactly this. Read as a failure by
     /// a restore, which has nothing to load.
     public static func isSnapshotMissing(_ error: any Error) -> Bool {
         (error as? LibvirtError)?.code == .noDomainSnapshot
@@ -575,12 +572,10 @@ public enum LibvirtFailure {
 /// entirely. So absence, not a sentinel, is what this reads.
 public enum LibvirtMemoryStats {
 
-    /// `virDomainMemoryStatTags`. Only the four Strato reports are named; the
+    /// `virDomainMemoryStatTags`. Only the three Strato reads are named; the
     /// rest (swap, faults, RSS, disk caches, hugetlb) are collected by the
     /// daemon and dropped here.
     enum Tag: Int32 {
-        /// `VIR_DOMAIN_MEMORY_STAT_UNUSED`: strictly free guest pages.
-        case unused = 4
         /// `VIR_DOMAIN_MEMORY_STAT_AVAILABLE`: total memory the guest sees.
         case available = 5
         /// `VIR_DOMAIN_MEMORY_STAT_ACTUAL_BALLOON`: what the balloon currently

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { oidcProvidersApi } from "@/lib/api/oidc-providers";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type {
   CreateOIDCProviderRequest,
   UpdateOIDCProviderRequest,
@@ -59,8 +59,7 @@ export function oidcProviderErrorMessage(
   error: unknown,
   fallback: string
 ): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need admin rights to manage SSO providers.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need admin rights to manage SSO providers.",
+  });
 }

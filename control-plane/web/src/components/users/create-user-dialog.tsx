@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Copy, Loader2 } from "lucide-react";
@@ -286,7 +288,7 @@ function ClaimLinkView({
       : result.claimUrl;
 
   const expires = result.claimExpiresAt
-    ? new Date(result.claimExpiresAt).toLocaleString()
+    ? formatDateTime(result.claimExpiresAt)
     : null;
 
   const copy = async () => {

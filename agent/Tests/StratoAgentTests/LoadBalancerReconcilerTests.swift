@@ -44,7 +44,7 @@ struct LoadBalancerReconcilerTests {
             ])
     }
 
-    private func network(loadBalancers: [DesiredLoadBalancer]?) -> DesiredNetworkState {
+    private func network(loadBalancers: [DesiredLoadBalancer]) -> DesiredNetworkState {
         DesiredNetworkState(
             networkId: vipNetworkID,
             name: "frontend",
@@ -210,25 +210,6 @@ struct LoadBalancerReconcilerTests {
         #expect(await actuator.removedCount() == 1)
     }
 
-    @Test("A pre-v43 nil collection has no deletion opinion")
-    func nilCollectionDoesNotDelete() async throws {
-        let actuator = FakeLoadBalancerActuator(backendHealth: [])
-        await actuator.seed(
-            ManagedLoadBalancerObservation(
-                rowUUID: "existing-row",
-                ownerID: loadBalancerID,
-                switchNames: ["ls-existing"],
-                routerNames: ["lr-existing"]))
-
-        let result = await LoadBalancerReconciler.reconcile(
-            networks: [network(loadBalancers: nil)],
-            actuator: actuator,
-            logger: Logger(label: "LoadBalancerReconcilerTests"))
-
-        #expect(result == nil)
-        #expect(await actuator.rowCount() == 1)
-        #expect(await actuator.removedCount() == 0)
-    }
 }
 
 private actor FakeLoadBalancerActuator: LoadBalancerActuator {

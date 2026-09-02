@@ -329,6 +329,7 @@ final class ProjectTests {
                 #expect(projects.count >= 2)
                 #expect(projects.contains { $0.name == "Org Project" })
                 #expect(projects.contains { $0.name == "OU Project" })
+                #expect(projects.map(\.name) == projects.map(\.name).sorted())
             }
         }
     }
@@ -364,6 +365,7 @@ final class ProjectTests {
                 // project switcher can reach them.
                 #expect(projects.contains { $0.name == "Org Project" })
                 #expect(projects.contains { $0.name == "OU Project" })
+                #expect(projects.map(\.name) == projects.map(\.name).sorted())
             }
         }
     }

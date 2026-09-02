@@ -325,10 +325,9 @@ extension Sandbox {
     /// by any agent (`observedGeneration == 0`; sandboxes have no
     /// `.created`-style pre-placement status) — to `.error`, then realigns
     /// desired state with observed reality (a stuck *delete* is exempt, so it
-    /// cannot resurrect the sandbox). Shared by
-    /// `ResourceOperationCoordinator.recordVerdict` and the stuck-convergence
-    /// sweep. Takes the mutation kind rather than an operation row, for the
-    /// reason the VM's does (STR-147). Returns whether desired state changed
+    /// cannot resurrect the sandbox). Shared by reported-failure handling and
+    /// the stuck-convergence sweep. Takes the mutation kind rather than an
+    /// operation row, for the reason the VM's does (STR-147). Returns whether desired state changed
     /// and needs a new generation; a status-only escalation does not. Does not
     /// persist.
     ///

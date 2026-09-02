@@ -29,9 +29,10 @@ struct OperationWaiterTests {
     private func client(transport: MockTransport, directory: URL) throws -> any APIProtocol {
         let store = CredentialStore(directory: directory)
         try store.store(StoredCredentials(accessToken: "st_x", refreshToken: "rt_x"), for: "test")
-        return StratoClient.authenticated(
+        return StratoClient.authenticatedSession(
             serverURL: URL(string: "https://strato.example.com")!, contextName: "test",
-            credentialStore: store, transport: transport)
+            credentialStore: store, transport: transport
+        ).client
     }
 
     @Test("Polls until the operation succeeds")

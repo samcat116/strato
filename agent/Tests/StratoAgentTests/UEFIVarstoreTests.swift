@@ -84,16 +84,15 @@ struct UEFIVarstoreTests {
                 logger: logger, qemuImgPath: "/usr/bin/qemu-img", runSubprocess: recorder.runner)
             let path = VMDirectoryLayout.nvram(vmDirectory: directory)
 
-            let outcome = try await varstore.materialize(
+            try await varstore.materialize(
                 at: path, from: "/usr/share/OVMF/OVMF_VARS_4M.fd")
 
-            #expect(outcome == .created)
             #expect(FileManager.default.fileExists(atPath: path))
             let invocations = await recorder.invocations
-            #expect(
-                invocations == [
-                    ["convert", "-O", "qcow2", "/usr/share/OVMF/OVMF_VARS_4M.fd", path + ".partial"]
-                ])
+            #expect(invocations.count == 1)
+            let invocation = try #require(invocations.first)
+            #expect(Array(invocation.dropLast()) == ["convert", "-O", "qcow2", "/usr/share/OVMF/OVMF_VARS_4M.fd"])
+            #expect(invocation.last?.hasPrefix(path + ".partial.") == true)
         }
     }
 
@@ -127,9 +126,8 @@ struct UEFIVarstoreTests {
             let guestVariables = Data("the guest's own boot entries".utf8)
             FileManager.default.createFile(atPath: path, contents: guestVariables)
 
-            let outcome = try await varstore.materialize(at: path, from: "/vars.fd")
+            try await varstore.materialize(at: path, from: "/vars.fd")
 
-            #expect(outcome == .reused)
             // Its format is read; nothing is written. `convert` is the only
             // invocation that could touch the bytes.
             #expect(await recorder.converts.isEmpty)
@@ -202,7 +200,7 @@ struct UEFIVarstoreTests {
             }
 
             #expect(!FileManager.default.fileExists(atPath: path))
-            #expect(!FileManager.default.fileExists(atPath: path + ".partial"))
+            #expect(partialSiblings(of: path).isEmpty)
         }
     }
 
@@ -241,7 +239,15 @@ struct UEFIVarstoreTests {
             try await varstore.materialize(at: path, from: "/vars.fd")
 
             #expect(FileManager.default.contents(atPath: path) == Data("varstore".utf8))
+            #expect(!FileManager.default.fileExists(atPath: path + ".partial"))
         }
+    }
+
+    private func partialSiblings(of path: String) -> [String] {
+        let directory = (path as NSString).deletingLastPathComponent
+        let prefix = (path as NSString).lastPathComponent + ".partial."
+        return ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? [])
+            .filter { $0.hasPrefix(prefix) }
     }
 
     /// The varstore lives in the VM's own directory, which on the create path

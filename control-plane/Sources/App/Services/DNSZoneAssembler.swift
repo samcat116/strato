@@ -208,12 +208,6 @@ enum DNSZoneAssembler {
 
     // MARK: - Authored
 
-    static func authoredRecords(
-        zoneID: UUID, zoneName: String, on db: any Database
-    ) async throws -> [AssembledDNSRecord] {
-        try await authoredRecords(forZones: [zoneID: zoneName], on: db)[zoneID] ?? []
-    }
-
     /// The authored records of several zones at once, in one query.
     private static func authoredRecords(
         forZones zones: [UUID: String], on db: any Database
@@ -372,17 +366,10 @@ extension DNSZoneAssembler {
             update(record.type)
             withUnsafeBytes(of: UInt32(record.values.count).bigEndian) { hasher.update(data: Data($0)) }
             for value in record.values { update(value) }
-            // Absent and present-but-default are different claims — a zone
-            // whose TTL the control plane declines to state is not the same
-            // input as one that states 300 — so the marker byte distinguishes
-            // them rather than hashing nil as zero.
-            if let ttl = record.ttl {
-                hasher.update(data: Data([1]))
-                withUnsafeBytes(of: UInt32(bitPattern: Int32(truncatingIfNeeded: ttl)).bigEndian) {
-                    hasher.update(data: Data($0))
-                }
-            } else {
-                hasher.update(data: Data([0]))
+            withUnsafeBytes(
+                of: UInt32(bitPattern: Int32(truncatingIfNeeded: record.ttl)).bigEndian
+            ) {
+                hasher.update(data: Data($0))
             }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()

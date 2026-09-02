@@ -2,30 +2,30 @@ import Foundation
 import Testing
 import StratoShared
 
-@Suite("AnyCodableValue / CodableValue dynamic payloads")
-struct CodableValueTests {
+@Suite("JSONValue dynamic payloads")
+struct JSONValueDynamicPayloadTests {
     @Test func stringRoundTrip() throws {
-        let value = try AnyCodableValue("hello")
+        let value = JSONValue.string("hello")
         #expect(try roundTrip(value).decode(as: String.self) == "hello")
     }
 
     @Test func intRoundTrip() throws {
-        let value = try AnyCodableValue(42)
+        let value = JSONValue.int(42)
         #expect(try roundTrip(value).decode(as: Int.self) == 42)
     }
 
     @Test func doubleRoundTrip() throws {
-        let value = try AnyCodableValue(3.25)
+        let value = JSONValue.double(3.25)
         #expect(try roundTrip(value).decode(as: Double.self) == 3.25)
     }
 
     @Test func boolRoundTrip() throws {
-        let value = try AnyCodableValue(true)
+        let value = JSONValue.bool(true)
         #expect(try roundTrip(value).decode(as: Bool.self) == true)
     }
 
     @Test func nullDecodesAsNullCase() throws {
-        let decoded = try decodeJSON(CodableValue.self, from: "null")
+        let decoded = try decodeJSON(JSONValue.self, from: "null")
         guard case .null = decoded else {
             Issue.record("expected .null, got \(decoded)")
             return
@@ -33,7 +33,7 @@ struct CodableValueTests {
     }
 
     @Test func arrayRoundTrip() throws {
-        let value = try AnyCodableValue(["a", "b", "c"])
+        let value = JSONValue.array([.string("a"), .string("b"), .string("c")])
         #expect(try roundTrip(value).decode(as: [String].self) == ["a", "b", "c"])
     }
 
@@ -54,7 +54,9 @@ struct CodableValueTests {
             ],
             note: nil
         )
-        let decoded = try roundTrip(AnyCodableValue(payload)).decode(as: Payload.self)
+        let encoded = try WireProtocol.makeEncoder().encode(payload)
+        let value = try WireProtocol.makeDecoder().decode(JSONValue.self, from: encoded)
+        let decoded = try roundTrip(value).decode(as: Payload.self)
         #expect(decoded == payload)
     }
 
@@ -64,7 +66,7 @@ struct CodableValueTests {
             {"state":"Running","cpus":4,"balloon":0.5,"paused":false,
              "tags":["web","prod"],"nested":{"depth":2},"missing":null}
             """
-        let value = try decodeJSON(CodableValue.self, from: json)
+        let value = try decodeJSON(JSONValue.self, from: json)
         let reencoded = try roundTrip(value)
 
         guard case .object(let object) = reencoded else {

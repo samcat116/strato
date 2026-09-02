@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { organizationsApi } from "@/lib/api/organizations";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 
 export function useOrganizationMembers(orgId: string) {
   return useQuery({
@@ -58,8 +58,7 @@ export function useUpdateMemberRole(orgId: string) {
  * clear "you need admin rights" message rather than a generic failure.
  */
 export function memberErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need admin rights to manage organization members.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need admin rights to manage organization members.",
+  });
 }

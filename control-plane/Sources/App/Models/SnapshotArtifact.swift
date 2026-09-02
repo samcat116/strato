@@ -17,7 +17,7 @@ import Vapor
 /// exactly like `VM`, `Sandbox` and `Volume`: mutations answer `202`, clients
 /// poll `conditions`, and the row outlives its `DELETE` until an agent confirms
 /// the bytes are gone.
-protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
+protocol SnapshotArtifactResource: FinalizableResource {
     /// Which family this table holds. A static because a table holds one.
     static var artifactKind: SnapshotArtifactKind { get }
 
@@ -35,9 +35,6 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
 
     var desiredStatus: DesiredSnapshotStatus { get set }
 
-    /// Settable so the shared SQL writer can refresh the database-assigned
-    /// generation and the observed-state applier can advance the observation.
-    var generation: Int64 { get set }
     var observedGeneration: Int64 { get set }
 
     /// When the retention sweep should mark this artifact `.absent`, or nil to
@@ -155,12 +152,6 @@ extension SnapshotArtifactResource {
 /// lineage guard already refuses. Time is enough to bound the leak; count can
 /// be layered on later without changing the artifact model.
 enum SnapshotRetention {
-    /// Environment key for the fleet-wide default TTL, in seconds. Unset — the
-    /// default — means artifacts are kept until deleted, which is the behavior
-    /// every snapshot taken before this change had, so an upgrade changes
-    /// nothing until an operator opts in.
-    static let defaultTTLEnvironmentKey = "SNAPSHOT_DEFAULT_TTL_SECONDS"
-
     /// Upper bound on a caller-supplied TTL: ten years. Generous enough never
     /// to bind in practice, and low enough that a bad `ttlSeconds` cannot
     /// overflow the date arithmetic.

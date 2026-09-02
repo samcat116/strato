@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { webhooksApi } from "@/lib/api/webhooks";
-import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import type { CreateWebhookRequest, UpdateWebhookRequest } from "@/types/api";
 
 export function useWebhooks(orgId: string, enabled = true) {
@@ -100,8 +100,7 @@ export function useRedeliverWebhookDelivery(orgId: string) {
 }
 
 export function webhookErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError && error.status === 403) {
-    return "You need admin rights to manage webhooks.";
-  }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback, {
+    forbidden: "You need admin rights to manage webhooks.",
+  });
 }

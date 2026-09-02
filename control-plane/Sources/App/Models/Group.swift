@@ -52,26 +52,6 @@ final class Group: Model, @unchecked Sendable {
 
 extension Group: Content {}
 
-extension Group {
-    struct Public: Content {
-        let id: UUID?
-        let name: String
-        let description: String
-        let organizationId: UUID
-        let createdAt: Date?
-    }
-
-    func asPublic() -> Public {
-        return Public(
-            id: self.id,
-            name: self.name,
-            description: self.description,
-            organizationId: self.$organization.id,
-            createdAt: self.createdAt
-        )
-    }
-}
-
 // MARK: - User-Group Relationship (Many-to-Many)
 
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks

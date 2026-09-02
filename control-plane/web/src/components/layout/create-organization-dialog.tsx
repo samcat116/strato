@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -53,7 +55,7 @@ export function CreateOrganizationDialog({
       setFormData({ name: "", description: "" });
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create organization"
+        errorMessage(error, "Failed to create organization")
       );
     } finally {
       setIsLoading(false);

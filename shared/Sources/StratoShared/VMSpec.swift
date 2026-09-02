@@ -357,9 +357,7 @@ public struct NetworkSpec: Codable, Equatable, Sendable {
     /// workloads' specs. Same shape as `securityGroupIds`, which is per-NIC for
     /// the same "this host owns it even without topology authority" reason.
     ///
-    /// Nil means the sender has no service opinion; the agent converges nothing
-    /// rather than reading silence as "tear down".
-    public let metadataEnabled: Bool?
+    public let metadataEnabled: Bool
     /// Whether this NIC's network publishes the per-network DNS resolver
     /// (STR-40, wire v37).
     ///
@@ -402,7 +400,7 @@ public struct NetworkSpec: Codable, Equatable, Sendable {
         domainName: String? = nil,
         leaseTime: Int? = nil,
         securityGroupIds: [UUID]? = nil,
-        metadataEnabled: Bool? = nil,
+        metadataEnabled: Bool = false,
         resolverEnabled: Bool? = nil,
         resolverAddresses: [String]? = nil
     ) {

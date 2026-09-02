@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
@@ -97,7 +99,7 @@ export default function GovernancePage() {
 
       <Card><CardHeader><CardTitle>Who can?</CardTitle></CardHeader><CardContent className="space-y-4"><form className="grid gap-3 md:grid-cols-[1fr_1fr_2fr_auto]" onSubmit={(event) => { event.preventDefault(); whoCan.mutate(); }}><div><Label htmlFor="who-action">Action</Label><Input id="who-action" value={whoAction} onChange={(e) => setWhoAction(e.target.value)} required /></div><div><Label htmlFor="who-node-type">Node type</Label><Input id="who-node-type" value={whoNodeType} onChange={(e) => setWhoNodeType(e.target.value)} required /></div><div><Label htmlFor="who-node-id">Node ID</Label><Input id="who-node-id" value={whoNodeId} onChange={(e) => setWhoNodeId(e.target.value)} placeholder={currentProject?.id} required /></div><Button className="self-end">Resolve</Button></form>{whoCan.data && <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-3 text-xs">{JSON.stringify(whoCan.data, null, 2)}</pre>}</CardContent></Card>
 
-      <Card><CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5" />Recent authorization decisions</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-2">Time</th><th className="p-2">Decision</th><th className="p-2">Action</th><th className="p-2">Subject</th><th className="p-2">Tier</th></tr></thead><tbody>{(logsQuery.data ?? []).map((entry) => <tr key={entry.id} className="border-b"><td className="p-2 whitespace-nowrap">{entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}</td><td className="p-2">{entry.decision}</td><td className="p-2 font-mono">{entry.action ?? "—"}</td><td className="p-2 font-mono">{entry.subject}</td><td className="p-2">{entry.tier ?? "—"}</td></tr>)}</tbody></table></div></CardContent></Card>
+      <Card><CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-5 w-5" />Recent authorization decisions</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-2">Time</th><th className="p-2">Decision</th><th className="p-2">Action</th><th className="p-2">Subject</th><th className="p-2">Tier</th></tr></thead><tbody>{(logsQuery.data ?? []).map((entry) => <tr key={entry.id} className="border-b"><td className="p-2 whitespace-nowrap">{entry.createdAt ? formatDateTime(entry.createdAt) : "—"}</td><td className="p-2">{entry.decision}</td><td className="p-2 font-mono">{entry.action ?? "—"}</td><td className="p-2 font-mono">{entry.subject}</td><td className="p-2">{entry.tier ?? "—"}</td></tr>)}</tbody></table></div></CardContent></Card>
     </div>
   );
 }

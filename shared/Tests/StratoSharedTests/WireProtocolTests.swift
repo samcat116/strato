@@ -17,7 +17,7 @@ struct WireProtocolTests {
 
     @Test("the current wire contract is exact")
     func currentContractVersion() {
-        #expect(WireProtocol.currentVersion == 57)
+        #expect(WireProtocol.currentVersion == 58)
     }
     @Test("the sandbox guest control contract is exact")
     func sandboxGuestControlContract() {
@@ -37,7 +37,7 @@ struct WireProtocolTests {
         #expect(try throughEnvelope(register).protocolVersion == WireProtocol.currentVersion)
 
         let missing =
-            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1}}"#
+            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"architecture":"x86_64","hypervisors":[],"sandboxCapable":false,"sandboxNetworkingCapable":false,"tpmCapable":false,"operatingSystem":"linux","resolverCapable":false,"metadataServiceCapable":false,"dependencyObservations":[]}"#
         #expect(throws: DecodingError.self) {
             try decodeJSON(AgentRegisterMessage.self, from: missing)
         }
@@ -84,7 +84,7 @@ struct WireProtocolTests {
         // already read it so the eventual encoder flip needs no rollout window.
         // 2023-11-14T22:13:20Z == Fixtures.timestamp (1_700_000_000 since 1970).
         let json =
-            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","vmId":"vm-1","sessionId":"s"}"#
+            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","vmId":"vm-1","sessionId":"s","stream":"Serial"}"#
         let decoded = try decodeJSON(ConsoleConnectMessage.self, from: json)
         #expect(decoded.timestamp == Fixtures.timestamp)
         #expect(decoded.vmId == "vm-1")
@@ -92,7 +92,7 @@ struct WireProtocolTests {
 
     @Test("a malformed date string is a decode error, not a silent zero date")
     func malformedDateStringThrows() {
-        let json = #"{"requestId":"r","timestamp":"not-a-date","vmId":"vm-1","sessionId":"s"}"#
+        let json = #"{"requestId":"r","timestamp":"not-a-date","vmId":"vm-1","sessionId":"s","stream":"serial"}"#
         #expect(throws: DecodingError.self) {
             try decodeJSON(ConsoleConnectMessage.self, from: json)
         }

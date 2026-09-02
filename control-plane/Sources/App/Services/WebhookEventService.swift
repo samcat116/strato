@@ -48,14 +48,14 @@ struct WebhookEvent: Sendable {
     let organizationID: UUID
     let projectID: UUID?
     let resource: Resource?
-    let data: [String: CodableValue]
+    let data: [String: JSONValue]
 
     init(
         type: WebhookEventType,
         organizationID: UUID,
         projectID: UUID? = nil,
         resource: Resource? = nil,
-        data: [String: CodableValue] = [:]
+        data: [String: JSONValue] = [:]
     ) {
         self.id = UUID()
         self.type = type
@@ -74,7 +74,7 @@ struct WebhookEvent: Sendable {
         let organizationId: UUID
         let projectId: UUID?
         let resource: Resource?
-        let data: [String: CodableValue]
+        let data: [String: JSONValue]
     }
 
     func encodedPayload() throws -> String {
@@ -331,7 +331,7 @@ enum WebhookEvents {
         }
         guard let context else { return }
 
-        var data: [String: CodableValue] = [
+        var data: [String: JSONValue] = [
             "operationId": .string(mutation?.id?.uuidString ?? ""),
             "operationKind": .string(mutation?.mutation.rawValue ?? ""),
             "status": .string((succeeded ? VMOperationStatus.succeeded : .failed).rawValue),

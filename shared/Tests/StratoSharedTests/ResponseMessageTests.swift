@@ -18,7 +18,7 @@ struct ResponseMessageTests {
     }
 
     /// `SuccessMessage.data` carried an arbitrary `Codable` through
-    /// `AnyCodableValue` until STR-152 removed it: every typed reply that rode
+    /// a dynamic JSON wrapper until STR-152 removed it: every typed reply that rode
     /// it was already gone — `VolumeStatusResponse` and the two snapshot
     /// reports with wire v33 (STR-150), `VolumeInfoResponse` with v32
     /// (STR-149) — because the facts they carried are desired/observed state

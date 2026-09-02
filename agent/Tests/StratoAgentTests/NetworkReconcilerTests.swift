@@ -16,12 +16,12 @@ struct NetworkReconcilerTests {
         gateway6: String? = nil,
         routerKey: String,
         externalAccess: Bool = true,
-        metadataEnabled: Bool? = nil,
+        metadataEnabled: Bool = false,
         resolverEnabled: Bool? = nil,
         resolverAddresses: [String]? = nil,
         generation: Int64 = 1,
         id: UUID = UUID(),
-        floatingIPs: [DesiredFloatingIP]? = nil
+        floatingIPs: [DesiredFloatingIP] = []
     ) -> DesiredNetworkState {
         DesiredNetworkState(
             networkId: id,
@@ -508,27 +508,6 @@ struct NetworkReconcilerTests {
             observed: ObservedNetworkTopology(serviceLocalPortNames: [portName]),
             protected: NetworkReconciler.serviceLocalPortProtection(for: [disabled]))
         #expect(actions == [.serviceLocalPort(name: portName)])
-    }
-
-    @Test("A nil metadataEnabled protects a live port instead of deleting it")
-    func metadataPortProtectedWhenOpinionless() {
-        // The rollback case: a control plane older than the field says nothing,
-        // and teardown is `observed - desired`. Without the protection this
-        // would delete every live metadata port on the next sync.
-        let id = UUID()
-        let portName = OVNNaming.serviceLocalPortName(networkId: id)
-        let silent = network(
-            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
-            metadataEnabled: nil, id: id)
-        let plan = NetworkReconciler.plan(networks: [silent])
-
-        #expect(plan.switches[0].serviceLocalPort == nil)
-
-        let actions = NetworkReconciler.teardownActions(
-            desired: plan,
-            observed: ObservedNetworkTopology(serviceLocalPortNames: [portName]),
-            protected: NetworkReconciler.serviceLocalPortProtection(for: [silent]))
-        #expect(actions.isEmpty)
     }
 
     @Test("A stale network's metadata port survives teardown")

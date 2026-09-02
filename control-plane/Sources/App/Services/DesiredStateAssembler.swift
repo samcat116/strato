@@ -152,7 +152,6 @@ struct DesiredStateAssembler {
                     diskAttachmentsByVolumeID: volumeDiskAttachments,
                     resolvedInterfaces: resolvedInterfaces,
                     securityGroupsByInterface: securityGroupsByInterface,
-                    sendsMetadataPort: true,
                     siteResolverCapable: siteResolverCapable
                 )
             } catch {
@@ -379,7 +378,6 @@ struct DesiredStateAssembler {
                 from: interface,
                 network: interface.flatMap { networksByID[$0.logicalNetworkID] },
                 securityGroupIds: interface?.id.flatMap { sandboxSecurityGroupsByInterface[$0] },
-                sendsMetadataPort: true,
                 siteResolverCapable: siteResolverCapable,
                 agentRealizesSandboxNICs: sendSandboxNetwork)
             // Debug, not warning, despite being worth knowing: assembly runs on
@@ -428,7 +426,6 @@ struct DesiredStateAssembler {
                     desiredStatus: sandbox.desiredStatus,
                     generation: sandbox.generation,
                     registryCredential: registryCredential,
-                    restoreFrom: restoreFrom,
                     restore: restore
                 ))
         }

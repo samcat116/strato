@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatDetailedDateTime } from "@/lib/format-time";
 import type { AuditEvent } from "@/types/api";
 
 interface AuditEventTableProps {
@@ -58,20 +59,6 @@ function statusBadgeClass(status: number): string {
   if (status >= 500) return "bg-red-900/40 text-red-700 border-transparent";
   if (status >= 400) return "bg-amber-900/30 text-amber-700 border-transparent";
   return "bg-emerald-900/30 text-emerald-700 border-transparent";
-}
-
-function formatTimestamp(value?: string): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 }
 
 /** "vm 4f2a…" when the event names a resource, otherwise the request line. */
@@ -151,7 +138,7 @@ export function AuditEventTable({
           return (
             <TableRow key={event.id} className="border-border hover:bg-accent/60">
               <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
-                {formatTimestamp(event.createdAt)}
+                {formatDetailedDateTime(event.createdAt)}
               </TableCell>
               <TableCell>
                 <div className="space-y-1 max-w-96">

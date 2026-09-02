@@ -23,12 +23,24 @@ const KNOWN_ERRORS: Array<{ pattern: RegExp; message: string }> = [
 ];
 
 /**
- * Returns a user-friendly message for an error: known backend errors are
- * mapped to friendly text, other errors keep their message (which is still
- * more informative than a generic fallback), and non-Error values fall back
- * to `fallback`.
+ * Returns a user-friendly message for an error. Callers may provide a
+ * context-specific authorization message without duplicating the ApiError
+ * status check; known backend errors are mapped to actionable text, other
+ * errors keep their message, and non-Error values use `fallback`.
  */
-export function friendlyErrorMessage(error: unknown, fallback: string): string {
+export function errorMessage(
+  error: unknown,
+  fallback: string,
+  options: { forbidden?: string } = {}
+): string {
+  if (
+    options.forbidden &&
+    error instanceof ApiError &&
+    error.status === 403
+  ) {
+    return options.forbidden;
+  }
+
   const raw =
     error instanceof Error
       ? error.message
@@ -44,3 +56,4 @@ export function friendlyErrorMessage(error: unknown, fallback: string): string {
 
   return raw || fallback;
 }
+import { ApiError } from "@/lib/api/client";

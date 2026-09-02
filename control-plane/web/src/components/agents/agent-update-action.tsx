@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { ArrowUpCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -67,7 +69,7 @@ export function AgentUpdateAction({ agent, size = "default" }: AgentUpdateAction
         setConflict(error.message);
       } else {
         closeDialog();
-        toast.error(error instanceof Error ? error.message : "Failed to update agent");
+        toast.error(errorMessage(error, "Failed to update agent"));
       }
     }
   };

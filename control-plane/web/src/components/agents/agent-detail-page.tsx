@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
+
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -192,12 +194,12 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
           <CardContent>
             <div className="text-sm font-medium text-foreground">
               {agent.lastHeartbeat
-                ? new Date(agent.lastHeartbeat).toLocaleDateString()
+                ? formatDate(agent.lastHeartbeat)
                 : "Never"}
             </div>
             <p className="text-sm text-muted-foreground">
               {agent.lastHeartbeat
-                ? new Date(agent.lastHeartbeat).toLocaleTimeString()
+                ? formatTime(agent.lastHeartbeat)
                 : "-"}
             </p>
           </CardContent>
@@ -240,7 +242,7 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
             <div>
               <p className="text-muted-foreground">Registered</p>
               <p className="text-foreground">
-                {agent.createdAt ? new Date(agent.createdAt).toLocaleString() : "Unknown"}
+                {agent.createdAt ? formatDateTime(agent.createdAt) : "Unknown"}
               </p>
             </div>
           </div>

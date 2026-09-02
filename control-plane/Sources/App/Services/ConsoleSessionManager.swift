@@ -500,12 +500,10 @@ final class ConsoleSessionManager: @unchecked Sendable {
                 "stream": .string(stream.rawValue),
             ])
 
-        // Omit the selector for a serial connect, so the frame a pre-v23 agent
-        // receives is byte-identical to the one it already handles.
         let message = ConsoleConnectMessage(
             vmId: vmId,
             sessionId: sessionId,
-            stream: stream == .serial ? nil : stream
+            stream: stream
         )
 
         try await sendMessageToAgent(message, agentKey: agentKey)
@@ -566,7 +564,6 @@ final class ConsoleSessionManager: @unchecked Sendable {
 enum ConsoleSessionError: Error, LocalizedError {
     case sessionNotFound(String)
     case agentNotConnected(String)
-    case vmNotRunning(String)
     case sessionExpired(String)
     case sessionMismatch(String)
     case alreadyAttached(String)
@@ -577,8 +574,6 @@ enum ConsoleSessionError: Error, LocalizedError {
             return "Console session not found: \(sessionId)"
         case .agentNotConnected(let agentKey):
             return "Agent not connected: \(agentKey)"
-        case .vmNotRunning(let vmId):
-            return "VM is not running: \(vmId)"
         case .sessionExpired(let sessionId):
             return "Console session expired: \(sessionId)"
         case .sessionMismatch(let sessionId):

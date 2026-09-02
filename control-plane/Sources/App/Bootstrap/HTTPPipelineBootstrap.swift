@@ -152,23 +152,24 @@ extension Application {
         let rateLimitFallbackStore = InMemoryRateLimitStore()
         let valkeyRateLimitStore =
             valkeyEnabled ? ValkeyRateLimitStore(client: coordinationValkey) : nil
+        let rateLimitBackend = RateLimitBackend(
+            fallbackStore: rateLimitFallbackStore,
+            valkeyStore: valkeyRateLimitStore)
         // Agent minting authenticates inside its controller, after this global
         // middleware runs. Give it the same policy and stores but a dedicated,
         // verified-agent key space so every Envoy sidecar request does not share
         // the loopback-IP API bucket.
         agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
             config: rateLimitConfig,
-            fallbackStore: rateLimitFallbackStore,
-            valkeyStore: valkeyRateLimitStore)
+            backend: rateLimitBackend)
         if rateLimitConfig.enabled {
             middleware.use(
                 RateLimitMiddleware(
                     config: rateLimitConfig,
-                    fallbackStore: rateLimitFallbackStore,
                     // Coordination, not sessions: these are cross-replica counters
                     // whose backend errors fail open without rejecting the request,
                     // which is exactly the coordination contract.
-                    valkeyStore: valkeyRateLimitStore
+                    backend: rateLimitBackend
                 ))
             logger.info(
                 "Rate limiting enabled",

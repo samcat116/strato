@@ -260,7 +260,7 @@ public enum SecurityGroupACLBuilder {
 
         // Logging is opt-in per rule (STR-34). Nil from a control plane that
         // predates the field reads as off, same as an explicit false.
-        let logged = rule.log ?? false
+        let logged = rule.log
         return ACLSpec(
             direction: rule.direction == "ingress" ? "to-lport" : "from-lport",
             priority: allowPriority,
@@ -573,9 +573,8 @@ public struct ObservedPortGroup: Equatable, Sendable {
 
 /// The desired group membership of one workload port on this host — a VM's or
 /// a sandbox's, indistinguishably (STR-102); only the port name differs.
-/// `groupIds` nil means the NIC is unmanaged (a spec from a pre-security-group
-/// control plane, or one omitting the field for this agent's version): its
-/// membership is left exactly as-is — absence of the field is "no opinion",
+/// `groupIds` nil means the NIC is unmanaged: its membership is left exactly
+/// as-is — absence of the field is "no opinion",
 /// never "remove from all groups".
 public struct DesiredPortMembership: Equatable, Sendable {
     public let portName: String

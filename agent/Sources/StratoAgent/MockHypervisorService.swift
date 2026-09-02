@@ -118,12 +118,6 @@ actor MockHypervisorService: HypervisorService {
         return vm.status
     }
 
-    /// Never nil: the VM table is this actor's own, so there is no query that
-    /// can fail and no state in which it does not know (STR-196).
-    func listVMs() async -> [String]? {
-        Array(vms.keys)
-    }
-
     func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
         guard let vm = vms[vmId] else { return nil }
         return ConsoleEndpoint(
@@ -201,17 +195,6 @@ actor MockHypervisorService: HypervisorService {
             realizedMemoryReservationBytes: hypervisorType == .qemu
                 ? max(spec.memoryBytes, spec.maxMemoryBytes) : nil)
         return .running
-    }
-
-    /// Real committed CPU/memory across every tracked VM, so the agent reports
-    /// depleting capacity to the scheduler as placements land — the whole point
-    /// of simulation-mode scale testing.
-    ///
-    /// Never nil, for the same reason as `listVMs()`: the specs are held here,
-    /// so a zero from this backend is always a real zero.
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
-        let reserved = reservation
-        return (reserved.cpus, reserved.memoryBytes)
     }
 
     /// Simulation must model the same fixed QEMU hot-plug reservation as a

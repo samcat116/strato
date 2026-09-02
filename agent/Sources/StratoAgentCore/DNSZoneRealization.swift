@@ -137,11 +137,11 @@ public enum OVNDNSRecords {
             }
             switch type {
             case "A":
-                let valid = record.values.filter { IPv4Address($0) != nil }
+                let valid = record.values.filter(IPFamily.ipv4.matches)
                 if valid.count != record.values.count { malformed.insert(record.name) }
                 v4[name, default: []].append(contentsOf: valid)
             case "AAAA":
-                let valid = record.values.filter { IPv6Address($0) != nil }
+                let valid = record.values.filter(IPFamily.ipv6.matches)
                 if valid.count != record.values.count { malformed.insert(record.name) }
                 v6[name, default: []].append(contentsOf: valid)
             default:

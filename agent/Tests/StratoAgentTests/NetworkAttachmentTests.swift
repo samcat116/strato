@@ -86,7 +86,7 @@ struct NetworkAttachmentTests {
 
         let networks = [
             NetworkSpec(network: "private", networkId: UUID(), metadataEnabled: false),
-            NetworkSpec(network: "unknown", networkId: UUID(), metadataEnabled: nil),
+            NetworkSpec(network: "unknown", networkId: UUID(), metadataEnabled: false),
             NetworkSpec(network: "service", networkId: UUID(), metadataEnabled: true),
         ]
         #expect(FirecrackerMMDSInterfacePlan.interfaceIDs(for: networks) == ["eth2"])

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { passkeysApi } from "@/lib/api/passkeys";
 import { ApiError } from "@/lib/api/client";
+import { errorMessage } from "@/lib/errors";
 import { webAuthnClient } from "@/lib/webauthn";
 
 export function usePasskeys() {
@@ -65,5 +66,5 @@ export function passkeyErrorMessage(error: unknown, fallback: string): string {
         return error.message || fallback;
     }
   }
-  return error instanceof Error ? error.message : fallback;
+  return errorMessage(error, fallback);
 }

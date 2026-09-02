@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate } from "@/lib/format-time";
+
 import Link from "next/link";
 
 import {
@@ -129,7 +131,7 @@ export function ImageTable({
             </TableCell>
             <TableCell className="text-foreground/80">
               {image.createdAt
-                ? new Date(image.createdAt).toLocaleDateString()
+                ? formatDate(image.createdAt)
                 : "—"}
             </TableCell>
             <TableCell className="text-right">

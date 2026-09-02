@@ -35,23 +35,13 @@ struct ProjectsAPIService: APIProtocol {
             return .ok(.init(body: .json([])))
         }
 
-        var allProjects = try await Project.query(on: req.db)
-            .filter(\.$organization.$id ~~ organizationIDs)
-            .sort(\.$name)
-            .all()
-
         // Projects nested under folders (OUs) within those organizations.
         let ous = try await OrganizationalUnit.query(on: req.db)
             .filter(\.$organization.$id ~~ organizationIDs)
             .all()
         let ouIDs = ous.compactMap { $0.id }
-        if !ouIDs.isEmpty {
-            let ouProjects = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .sort(\.$name)
-                .all()
-            allProjects.append(contentsOf: ouProjects)
-        }
+        let allProjects = try await Project.all(
+            inOrganizations: organizationIDs, folders: ouIDs, on: req.db)
 
         return .ok(.init(body: .json(try await readableSummaries(for: allProjects, on: req))))
     }
@@ -60,7 +50,7 @@ struct ProjectsAPIService: APIProtocol {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
@@ -80,7 +70,7 @@ struct ProjectsAPIService: APIProtocol {
             switch input.body {
             case .json(let payload): payload
             }
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
 
@@ -195,7 +185,7 @@ struct ProjectsAPIService: APIProtocol {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectAction("project:delete", project: project, on: req)
 
@@ -322,22 +312,12 @@ struct ProjectsAPIService: APIProtocol {
 
         // The full project set within the organization's hierarchy, so callers
         // (e.g. the project switcher) can reach folder-scoped projects too.
-        var projects = try await Project.query(on: req.db)
-            .filter(\.$organization.$id == organizationID)
-            .sort(\.$name)
-            .all()
-
         let ous = try await OrganizationalUnit.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
             .all()
         let ouIDs = ous.compactMap { $0.id }
-        if !ouIDs.isEmpty {
-            let ouProjects = try await Project.query(on: req.db)
-                .filter(\.$organizationalUnit.$id ~~ ouIDs)
-                .sort(\.$name)
-                .all()
-            projects.append(contentsOf: ouProjects)
-        }
+        let projects = try await Project.all(
+            inOrganization: organizationID, folders: ouIDs, on: req.db)
 
         return .ok(.init(body: .json(try await readableSummaries(for: projects, on: req))))
     }
@@ -458,7 +438,7 @@ struct ProjectsAPIService: APIProtocol {
             switch input.body {
             case .json(let payload): payload.environment
             }
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
 
@@ -476,7 +456,7 @@ struct ProjectsAPIService: APIProtocol {
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
         let environment = input.path.environment
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
 
@@ -513,7 +493,7 @@ struct ProjectsAPIService: APIProtocol {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
@@ -528,7 +508,7 @@ struct ProjectsAPIService: APIProtocol {
         let req = try OpenAPIRequestContext.require()
         try Self.requireAuthenticated(req)
         let projectID = try Self.uuid(input.path.projectID, name: "project ID")
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
@@ -586,7 +566,7 @@ struct ProjectsAPIService: APIProtocol {
             try Self.uuid($0, name: "organization ID")
         }
         let destinationOUID = try transfer.organizationalUnitId.map { try Self.uuid($0, name: "folder ID") }
-        let project = try await Self.findProject(projectID, on: req.db)
+        let project = try await req.requireProject(id: projectID)
 
         try await OrganizationAccessService.requireProjectAction("project:transfer", project: project, on: req)
 
@@ -698,13 +678,6 @@ struct ProjectsAPIService: APIProtocol {
             throw Abort(.badRequest, reason: "Invalid \(name)")
         }
         return uuid
-    }
-
-    private static func findProject(_ projectID: UUID, on db: any Database) async throws -> Project {
-        guard let project = try await Project.find(projectID, on: db) else {
-            throw Abort(.notFound, reason: "Project not found")
-        }
-        return project
     }
 
     private struct ProjectDestination: Sendable {

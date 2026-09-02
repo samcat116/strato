@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { formatDateTime } from "@/lib/format-time";
 import { Skeleton } from "@/components/ui/skeleton";
 import { webhookEventLabel } from "./event-catalog";
 import type { Project } from "@/lib/api/projects";
@@ -172,9 +173,9 @@ export function WebhooksTable({
                     {webhook.isActive && webhook.failingSince && (
                       <Badge
                         className="bg-amber-900/30 text-amber-700 border-transparent gap-1"
-                        title={`Deliveries have been failing since ${new Date(
+                        title={`Deliveries have been failing since ${formatDateTime(
                           webhook.failingSince
-                        ).toLocaleString()}`}
+                        )}`}
                       >
                         <AlertTriangle className="h-3 w-3" />
                         Failing

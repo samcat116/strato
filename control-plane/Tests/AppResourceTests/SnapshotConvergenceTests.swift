@@ -60,10 +60,9 @@ final class SnapshotConvergenceTests {
             hostname: "\(name).test",
             hypervisors: [
                 HypervisorSupport(
-                    type: .qemu, available: true, accelerated: true, capabilities: .qemu),
+                    type: .qemu, available: true, accelerated: true),
                 HypervisorSupport(
-                    type: .firecracker, available: true, accelerated: true,
-                    capabilities: .firecracker),
+                    type: .firecracker, available: true, accelerated: true),
             ],
             protocolVersion: protocolVersion,
             sandboxCapable: true)
@@ -296,7 +295,7 @@ final class SnapshotConvergenceTests {
 
             let accepted = try await app.resourceMutation.accept(
                 .delete, on: deleteCopy, actor: .user(try user.requireID()),
-                dispatch: .directResolution { _ in false }, on: app.db, app: app
+                dispatch: .directResolution { _ in }, on: app.db, app: app
             ) { db in
                 try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
                 deleteCopy.setDesiredStatus(.absent)

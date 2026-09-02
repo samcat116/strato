@@ -37,7 +37,7 @@ public enum FirecrackerMMDSInterfacePlan {
     ) -> [String] {
         guard metadataServiceEnabled else { return [] }
         return networks.enumerated().compactMap { index, network in
-            network.metadataEnabled == true ? "eth\(index)" : nil
+            network.metadataEnabled ? "eth\(index)" : nil
         }
     }
 }

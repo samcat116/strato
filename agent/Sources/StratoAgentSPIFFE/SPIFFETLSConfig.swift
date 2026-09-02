@@ -67,37 +67,6 @@ public enum SPIFFETLSConfig {
         return config
     }
 
-    /// Create a server TLS configuration for mTLS using an SVID
-    /// - Parameters:
-    ///   - svid: The X.509 SVID to use for server identity
-    ///   - requireClientCert: Whether to require client certificates (default: true for mTLS)
-    /// - Returns: TLSConfiguration for server connections
-    public static func makeServerConfiguration(
-        svid: X509SVID,
-        requireClientCert: Bool = true
-    ) throws -> TLSConfiguration {
-        // Parse certificate chain
-        let certificates = try svid.certificateChain.map { pemString in
-            try NIOSSLCertificate(bytes: [UInt8](pemString.utf8), format: .pem)
-        }
-
-        // Parse private key
-        let privateKey = try NIOSSLPrivateKey(bytes: [UInt8](svid.privateKey.utf8), format: .pem)
-
-        // Parse trust bundle for client verification
-        let trustedCerts = try svid.trustBundle.map { pemString in
-            try NIOSSLCertificate(bytes: [UInt8](pemString.utf8), format: .pem)
-        }
-
-        var config = TLSConfiguration.makeServerConfiguration(
-            certificateChain: certificates.map { .certificate($0) },
-            privateKey: .privateKey(privateKey)
-        )
-        config.trustRoots = .certificates(trustedCerts)
-        config.certificateVerification = requireClientCert ? .fullVerification : .none
-
-        return config
-    }
 }
 
 // MARK: - SVID Manager

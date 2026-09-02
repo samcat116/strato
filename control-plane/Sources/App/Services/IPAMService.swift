@@ -149,7 +149,7 @@ enum IPAMService {
             throw IPAMError.invalidSubnet(subnet)
         }
 
-        let mask: UInt32 = ~UInt32(0) << (32 - prefix)
+        let mask = IPv4CIDR(base: IPv4Address(raw: base), prefix: prefix).mask
         let networkAddress = base & mask
         let broadcastAddress = networkAddress | ~mask
 
@@ -276,7 +276,7 @@ enum IPAMService {
     /// explicit gateway.
     static func firstHostAddress(inSubnet subnet: String) -> String? {
         guard let (base, prefix) = parseCIDR(subnet), allocatablePrefixRange.contains(prefix) else { return nil }
-        let mask: UInt32 = ~UInt32(0) << (32 - prefix)
+        let mask = IPv4CIDR(base: IPv4Address(raw: base), prefix: prefix).mask
         return formatIPv4((base & mask) + 1)
     }
 

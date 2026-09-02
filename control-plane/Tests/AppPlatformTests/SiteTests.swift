@@ -584,7 +584,7 @@ final class SiteTests {
                     totalDisk: 1 << 40, availableDisk: 1 << 40),
                 hypervisors: [
                     HypervisorSupport(
-                        type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+                        type: .qemu, available: true, accelerated: true)
                 ],
                 networkCapability: .overlay)
             let organizationID = try #require(

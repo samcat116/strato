@@ -25,7 +25,6 @@ struct HypervisorProbeTests {
         let report = HypervisorProbe.qemuReport(libvirt: libvirtOK, acceleration: accelerationOn)
 
         #expect(report.type == .qemu)
-        #expect(report.capabilities == .qemu)
         #if os(Linux)
         #expect(report.available)
         #expect(report.accelerated)
@@ -85,7 +84,6 @@ struct HypervisorProbeTests {
         #expect(report.available)
         #expect(report.accelerated)
         #expect(report.unavailabilityReason == nil)
-        #expect(report.capabilities == .firecracker)
     }
 
     @Test("Firecracker is unavailable without acceleration even if the binary exists")

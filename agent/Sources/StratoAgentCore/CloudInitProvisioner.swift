@@ -866,8 +866,7 @@ public struct CloudInitProvisioner {
 
     private static func dottedIPv4Netmask(prefixLength: Int?) -> String? {
         guard let prefixLength, (0...32).contains(prefixLength) else { return nil }
-        let mask: UInt32 = prefixLength == 0 ? 0 : ~UInt32(0) << (32 - prefixLength)
-        return IPv4Address(raw: mask).description
+        return IPv4CIDR(base: IPv4Address(raw: 0), prefix: prefixLength).netmask.description
     }
 
     /// The `routes:` block giving a guest on-link routes to the link-local

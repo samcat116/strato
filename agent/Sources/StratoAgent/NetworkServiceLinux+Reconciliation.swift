@@ -87,10 +87,8 @@ extension NetworkServiceLinux {
             current.append(network)
         }
         var protected = NetworkReconciler.protectedTopology(forStale: stale)
-        // A control plane that predates `metadataEnabled` says nothing about
-        // metadata ports, and teardown is a set difference — so without this a
-        // rollback would delete every live port on the next sync. See
-        // `serviceLocalPortProtection(for:)`.
+        // Resolver service capability is still optional; protect an existing
+        // resolver port when the control plane expresses no opinion about it.
         protected.formUnion(NetworkReconciler.serviceLocalPortProtection(for: current))
 
         do {
@@ -116,12 +114,9 @@ extension NetworkServiceLinux {
         // network generations, and converged VMs never re-run createVMNetwork,
         // so this is the only path that reaches a live network whose DHCP
         // config changed — including deleting its rows when DHCP is turned
-        // off (their weak refs clear every port's binding). A nil dhcpEnabled
-        // means the control plane predates the field; leave the rows to the
-        // NIC-driven path exactly as before.
+        // off (their weak refs clear every port's binding).
         for network in current {
-            guard let dhcpEnabled = network.dhcpEnabled else { continue }
-            await attemptDHCPConvergence(for: network, dhcpEnabled: dhcpEnabled)
+            await attemptDHCPConvergence(for: network, dhcpEnabled: network.dhcpEnabled)
         }
 
         // DNS zones (STR-39), converged here for the DHCP rows' reason and on
@@ -591,7 +586,7 @@ extension NetworkServiceLinux {
                     networkName: network.name,
                     subnet: "\(cidr.networkAddress)/\(cidr.prefix)",
                     gateway: gateway,
-                    dnsServers: network.dnsServers ?? [], domainName: network.domainName,
+                    dnsServers: network.dnsServers, domainName: network.domainName,
                     leaseTime: network.leaseTime,
                     // `== true`, matching how the topology plan reads these
                     // fields: a control plane with no opinion advertises no
@@ -599,14 +594,14 @@ extension NetworkServiceLinux {
                     // have published — and, for the resolver, leaves the guest
                     // pointed at the configured servers rather than at an
                     // address that may terminate nothing.
-                    metadataEnabled: network.metadataEnabled == true,
+                    metadataEnabled: network.metadataEnabled,
                     resolverAddresses: network.resolverEnabled == true
                         ? (network.resolverAddresses ?? []) : [])
             }
             if let subnet6 = network.subnet6 {
                 _ = try await ensureDHCPOptions6(
                     networkId: network.networkId, networkName: network.name, subnet6: subnet6,
-                    dnsServers: network.dnsServers ?? [], domainName: network.domainName,
+                    dnsServers: network.dnsServers, domainName: network.domainName,
                     resolverAddresses: network.resolverEnabled == true
                         ? (network.resolverAddresses ?? []) : [])
             }

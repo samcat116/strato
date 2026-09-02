@@ -379,7 +379,7 @@ extension NetworkServiceLinux: NetworkActuator {
                 // not ready, and it then skips *every* SNAT rule on the router —
                 // so a typo in the optional v6 next hop would take IPv4 egress
                 // down with it. Degrade to a v4 uplink instead.
-                if IPv6Address(nextHop6) != nil {
+                if IPFamily.ipv6.matches(nextHop6) {
                     try await ensureDefaultRoute(router: router.name, nextHop: nextHop6, family: .v6)
                     installedIPv6Default = true
                 } else {

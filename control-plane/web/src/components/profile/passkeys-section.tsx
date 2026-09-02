@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatShortDate } from "@/lib/format-time";
 import {
   Table,
   TableBody,
@@ -27,15 +28,6 @@ import {
 import { useAuth } from "@/providers";
 import { toast } from "sonner";
 import type { Passkey } from "@/types/api";
-
-function formatDate(value?: string): string {
-  if (!value) return "—";
-  return new Date(value).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 /** Rename in place: the label is the only editable field on a credential. */
 function NameCell({ passkey }: { passkey: Passkey }) {
@@ -230,10 +222,10 @@ export function PasskeysSection() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {formatDate(passkey.createdAt)}
+                      {formatShortDate(passkey.createdAt)}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {formatDate(passkey.lastUsedAt)}
+                      {formatShortDate(passkey.lastUsedAt)}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

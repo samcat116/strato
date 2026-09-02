@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -93,7 +95,7 @@ function OrganizationSettingsContent() {
       refetch();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to update organization"
+        errorMessage(error, "Failed to update organization")
       );
     } finally {
       setIsLoading(false);

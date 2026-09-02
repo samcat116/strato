@@ -826,8 +826,8 @@ final class VMNetworkSelectionTests {
         }
     }
 
-    @Test("GET /api/vms/:id includes the VM's network interfaces")
-    func showIncludesNetworkInterfaces() async throws {
+    @Test("GET /api/vms/:id and /status include complete network interfaces")
+    func showAndStatusIncludeNetworkInterfaces() async throws {
         try await withApp { app, _, _, project, _, token in
             let builder = TestDataBuilder(db: app.db)
             let vm = try await builder.createVM(name: "iface-vm", project: project)
@@ -843,22 +843,25 @@ final class VMNetworkSelectionTests {
                 address: "192.168.1.42", prefixLength: 24, gateway: "192.168.1.1")
             try await address.save(on: app.db)
 
-            try await app.test(.GET, "/api/vms/\(vm.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-                let detail = try res.content.decode(VMDetailResponse.self)
-                #expect(detail.networkInterfaces.count == 1)
-                let iface = detail.networkInterfaces.first
-                #expect(iface?.networkId == network.id)
-                #expect(iface?.addresses.count == 1)
-                let respAddress = iface?.addresses.first
-                #expect(respAddress?.family == "ipv4")
-                #expect(respAddress?.address == "192.168.1.42")
-                #expect(respAddress?.prefixLength == 24)
-                #expect(respAddress?.gateway == "192.168.1.1")
-                #expect(iface?.macAddress == "00:0c:29:aa:bb:cc")
-                #expect(iface?.deviceName == "net0")
+            for path in ["/api/vms/\(vm.id!)", "/api/vms/\(vm.id!)/status"] {
+                try await app.test(.GET, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                    let detail = try res.content.decode(VMDetailResponse.self)
+                    #expect(detail.networkInterfaces.count == 1)
+                    let iface = detail.networkInterfaces.first
+                    #expect(iface?.networkId == network.id)
+                    #expect(iface?.network == "iface-net")
+                    #expect(iface?.addresses.count == 1)
+                    let respAddress = iface?.addresses.first
+                    #expect(respAddress?.family == "ipv4")
+                    #expect(respAddress?.address == "192.168.1.42")
+                    #expect(respAddress?.prefixLength == 24)
+                    #expect(respAddress?.gateway == "192.168.1.1")
+                    #expect(iface?.macAddress == "00:0c:29:aa:bb:cc")
+                    #expect(iface?.deviceName == "net0")
+                }
             }
         }
     }

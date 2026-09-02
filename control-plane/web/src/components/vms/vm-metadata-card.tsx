@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useRef, useState, type FormEvent } from "react";
 import { KeyRound, Loader2, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -154,7 +156,7 @@ function VMMetadataForm({
     try {
       parsedTags = tagsForRequest(tags);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Invalid tags");
+      toast.error(errorMessage(error, "Invalid tags"));
       return;
     }
 
@@ -169,7 +171,7 @@ function VMMetadataForm({
       onUpdated?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to update instance metadata"
+        errorMessage(error, "Failed to update instance metadata")
       );
     } finally {
       setIsLoading(false);

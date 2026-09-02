@@ -112,8 +112,6 @@ public struct ResolverRenderRequest: Sendable {
         self.networks = networks
     }
 
-    public var isEmpty: Bool { networks.isEmpty }
-
     public var renderKey: ResolverRenderKey {
         ResolverRenderKey(
             zoneHashes: networks.flatMap { network in
@@ -275,7 +273,7 @@ public enum ResolverSupervisionPolicy {
 
     /// The subset of a network's addresses this host can actually bind.
     public static func bindable(_ addresses: [String], ipv6Available: Bool) -> [String] {
-        ipv6Available ? addresses : addresses.filter { IPv4Address($0) != nil }
+        ipv6Available ? addresses : addresses.filter(IPFamily.ipv4.matches)
     }
 
     /// The files that should exist, so the supervisor can delete the ones left

@@ -7,6 +7,8 @@ import FoundationNetworking
 
 /// Service for managing local image cache on the agent
 public actor ImageCacheService {
+    private static let stalePartialAge: TimeInterval = 24 * 60 * 60
+
     private let logger: Logger
     private let cachePath: String
     /// Base the control plane's relative download paths resolve against — the
@@ -134,6 +136,10 @@ public actor ImageCacheService {
     /// touched first so partial multi-artifact entries are never evicted out
     /// from under the download that is adding to them.
     private func makeRoom(forIncomingBytes incomingBytes: Int64, into entryDirectory: String) {
+        DiskCacheLRU.removeStaleStaging(
+            candidates: stagingFiles(),
+            olderThan: Self.stalePartialAge,
+            logger: logger)
         guard let maxCacheSizeBytes else { return }
         if FileManager.default.fileExists(atPath: entryDirectory) {
             DiskCacheLRU.touch(entryDirectory: entryDirectory)
@@ -145,6 +151,18 @@ public actor ImageCacheService {
             logger: logger
         )
         pruneEmptyProjectDirectories()
+    }
+
+    private func stagingFiles() -> [String] {
+        guard let enumerator = FileManager.default.enumerator(atPath: cachePath) else { return [] }
+        var paths: [String] = []
+        while let relative = enumerator.nextObject() as? String {
+            let name = (relative as NSString).lastPathComponent
+            if name.contains(".partial.") {
+                paths.append(cachePath + "/" + relative)
+            }
+        }
+        return paths
     }
 
     /// Removes project-level directories left empty by eviction so the cache

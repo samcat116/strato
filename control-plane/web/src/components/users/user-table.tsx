@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate } from "@/lib/format-time";
+
 import { useState } from "react";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 import {
@@ -137,7 +139,7 @@ export function UserTable({ users, isLoading, currentUserId }: UserTableProps) {
               </TableCell>
               <TableCell className="text-muted-foreground text-sm">
                 {user.createdAt
-                  ? new Date(user.createdAt).toLocaleDateString()
+                  ? formatDate(user.createdAt)
                   : "—"}
               </TableCell>
               <TableCell className="text-right">

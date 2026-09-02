@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -67,7 +69,7 @@ export function RegisterForm() {
       }, 1500);
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Registration failed"
+        errorMessage(error, "Registration failed")
       );
     } finally {
       setIsLoading(false);

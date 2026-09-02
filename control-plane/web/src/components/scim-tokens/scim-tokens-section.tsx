@@ -1,5 +1,7 @@
 "use client";
 
+import { formatDate, formatDateTime } from "@/lib/format-time";
+
 import { useState } from "react";
 import { Loader2, Plus, Trash2, Power } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -171,12 +173,12 @@ export function SCIMTokensSection({ orgId, canManage }: SCIMTokensSectionProps) 
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">
                       {token.expiresAt
-                        ? new Date(token.expiresAt).toLocaleDateString()
+                        ? formatDate(token.expiresAt)
                         : "Never"}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">
                       {token.lastUsedAt
-                        ? new Date(token.lastUsedAt).toLocaleString()
+                        ? formatDateTime(token.lastUsedAt)
                         : "Never"}
                     </TableCell>
                     <TableCell className="text-right">

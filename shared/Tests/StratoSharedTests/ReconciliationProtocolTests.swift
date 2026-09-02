@@ -117,30 +117,20 @@ struct ReconciliationProtocolTests {
         #expect(decoded.networks[1].gateway == nil)
         #expect(decoded.networks[1].subnet6 == nil)
         #expect(decoded.networks[1].gateway6 == nil)
-        #expect(decoded.networks[1].dhcpEnabled == nil)
-        #expect(decoded.networks[1].metadataEnabled == nil)
+        #expect(decoded.networks[1].dhcpEnabled == false)
+        #expect(decoded.networks[1].metadataEnabled == false)
         #expect(!decoded.networks[1].externalAccess)
     }
 
-    @Test("DesiredNetworkState without v6/DHCP keys (older control plane) decodes to nils")
-    func desiredNetworkStateBackwardCompatibleIPv6() throws {
+    @Test("DesiredNetworkState requires authoritative service fields")
+    func desiredNetworkStateRequiresServiceFields() throws {
         let legacy = """
             {"networkId":"\(UUID().uuidString)","name":"default","subnet":"192.168.1.0/24",
              "gateway":"192.168.1.1","routerKey":"project-x","externalAccess":true,"generation":1}
             """
-        let decoded = try decodeJSON(DesiredNetworkState.self, from: legacy)
-        #expect(decoded.subnet6 == nil)
-        #expect(decoded.gateway6 == nil)
-        // Nil (not false): the agent must leave DHCP rows alone rather than
-        // delete them when a pre-field control plane says nothing.
-        #expect(decoded.dhcpEnabled == nil)
-        #expect(decoded.dnsServers == nil)
-        // Nil again, and for a sharper reason: network teardown is a set
-        // difference, so reading this silence as "off" would delete a live
-        // metadata port. `NetworkReconciler.serviceLocalPortProtection(for:)` is what
-        // enforces that.
-        #expect(decoded.metadataEnabled == nil)
-        #expect(decoded.subnet == "192.168.1.0/24")
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(DesiredNetworkState.self, from: legacy)
+        }
     }
 
     @Test("DesiredStateMessage carries topology authority through the envelope")
@@ -292,7 +282,8 @@ struct ReconciliationProtocolTests {
         // A pre-v15 agent emits no `guestInfo` key at all; the control plane
         // must tolerate its absence rather than fail to decode the report.
         let legacy = """
-            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2}
+            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2,
+             "appliedNetworkInterfaceIds":[]}
             """
         let decoded = try decodeJSON(ObservedVMState.self, from: legacy)
         #expect(decoded.guestInfo == nil)
@@ -334,11 +325,12 @@ struct ReconciliationProtocolTests {
     @Test("ObservedVMState from a pre-v16 agent (no memoryStats key) decodes to nil")
     func observedStateMemoryStatsBackwardCompatible() throws {
         let legacy = """
-            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2}
+            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2,
+             "appliedNetworkInterfaceIds":[]}
             """
         let decoded = try decodeJSON(ObservedVMState.self, from: legacy)
         #expect(decoded.memoryStats == nil)
-        #expect(decoded.appliedNetworkInterfaceIds == nil)
+        #expect(decoded.appliedNetworkInterfaceIds == [])
     }
 
     @Test("ObservedVMState carries applied interface ids and preserves an authoritative empty list")
@@ -355,6 +347,10 @@ struct ReconciliationProtocolTests {
                 vmId: UUID(), status: .shutdown, observedGeneration: 9,
                 appliedNetworkInterfaceIds: []))
         #expect(networkless.appliedNetworkInterfaceIds == [])
+
+        let unknown = try roundTrip(
+            ObservedVMState(vmId: UUID(), status: .unknown, observedGeneration: 0))
+        #expect(unknown.appliedNetworkInterfaceIds == nil)
     }
 
     @Test("DesiredVMStatus decoding is strict: unknown values fail the sync")
@@ -434,7 +430,7 @@ struct ReconciliationProtocolTests {
         // Types travel as strings precisely so a newer control plane's
         // vocabulary reaches an older agent as an entry it can skip.
         let payload = """
-            {"name":"acme.internal","type":"CAA","values":["0 issue \\"letsencrypt.org\\""]}
+            {"name":"acme.internal","type":"CAA","ttl":300,"values":["0 issue \\"letsencrypt.org\\""]}
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredDNSRecord.self, from: Data(payload.utf8))
@@ -462,12 +458,13 @@ struct ReconciliationProtocolTests {
         // rules exist to prevent.
         let legacy = """
             {"networkId":"\(UUID().uuidString)","name":"default","subnet":"10.0.0.0/24",\
-            "routerKey":"k","externalAccess":false,"generation":1}
+            "routerKey":"k","externalAccess":false,"dhcpEnabled":false,"dnsServers":[],\
+            "metadataEnabled":false,"floatingIPs":[],"loadBalancers":[],"generation":1}
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredNetworkState.self, from: Data(legacy.utf8))
         #expect(decoded.resolverEnabled == nil)
-        #expect(decoded.metadataEnabled == nil)
+        #expect(decoded.metadataEnabled == false)
     }
 
     @Test("NetworkSpec carries the per-NIC resolver flag, which is what reaches the chassis")
@@ -491,7 +488,7 @@ struct ReconciliationProtocolTests {
     func networkSpecResolverSemanticAbsence() throws {
         let noOpinion = """
             {"network":"default","networkId":"\(UUID().uuidString)",
-             "dhcpEnabled":false,"dnsServers":[]}
+             "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false}
             """
         let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: Data(noOpinion.utf8))
         #expect(decoded.resolverEnabled == nil)
@@ -505,19 +502,18 @@ struct ReconciliationProtocolTests {
         #expect(decoded.ttl == 60)
     }
 
-    @Test("A record without a TTL decodes to nil rather than to zero")
-    func desiredDNSRecordTTLBackwardCompatible() throws {
-        // A pre-v37 control plane sends no key; zero would be a TTL meaning
-        // "never cache", which is a different claim from "not stated".
+    @Test("A record requires an explicit TTL")
+    func desiredDNSRecordRequiresTTL() throws {
         let legacy = """
             {"name":"web.acme.internal","type":"A","values":["10.0.0.5"]}
             """
-        let decoded = try WireProtocol.makeDecoder().decode(
-            DesiredDNSRecord.self, from: Data(legacy.utf8))
-        #expect(decoded.ttl == nil)
+        #expect(throws: DecodingError.self) {
+            try WireProtocol.makeDecoder().decode(
+                DesiredDNSRecord.self, from: Data(legacy.utf8))
+        }
     }
 
-    @Test("resolverCapable rides registration and is absent-means-false")
+    @Test("resolverCapable rides registration and is required")
     func agentRegisterResolverCapable() throws {
         // Speaking v37 is not the same as having a CoreDNS; the two are folded
         // site-wide before the control plane enables any network's resolver.
@@ -536,9 +532,10 @@ struct ReconciliationProtocolTests {
             "availableCPU":1,"availableMemory":1,"availableDisk":1},\
             "protocolVersion":\(WireProtocol.currentVersion),"dependencyObservations":[]}
             """
-        let old = try WireProtocol.makeDecoder().decode(
-            AgentRegisterMessage.self, from: Data(withoutCapability.utf8))
-        #expect(old.resolverCapable == nil)
+        #expect(throws: DecodingError.self) {
+            try WireProtocol.makeDecoder().decode(
+                AgentRegisterMessage.self, from: Data(withoutCapability.utf8))
+        }
     }
 
     @Test("Each network's resolver addresses are distinct and derive from one index")

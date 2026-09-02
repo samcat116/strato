@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -130,7 +132,7 @@ function SecurityGroupRules({
       onChanged?.();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to delete rule"
+        errorMessage(error, "Failed to delete rule")
       );
     } finally {
       setBusyRuleId(null);
@@ -191,7 +193,7 @@ function SecurityGroupRules({
       }));
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to add rule"
+        errorMessage(error, "Failed to add rule")
       );
     } finally {
       setIsAdding(false);

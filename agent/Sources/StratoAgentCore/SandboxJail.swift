@@ -233,7 +233,7 @@ public struct SandboxJailPlan: Sendable, Equatable {
         guard uidBase > 0 else {
             throw SandboxJailerConfigError.invalidUIDBase(uidBase)
         }
-        let slot = UInt32(fnv1a64(sandboxId) % UInt64(SandboxJailerConfig.uidCount))
+        let slot = UInt32(FNV1a.hash64(sandboxId) % UInt64(SandboxJailerConfig.uidCount))
         let id = uidBase &+ slot
         guard id != UInt32.max else { throw SandboxJailPlanError.rootIdentity }
         return id == 0 ? 1 : id
@@ -308,14 +308,4 @@ public struct SandboxJailPlan: Sendable, Equatable {
         HostMemoryController.isAvailable(readFile: readFile)
     }
 
-    /// Fixed FNV-1a 64 (not Swift's per-process-seeded `Hasher`) retained only
-    /// for the one-time legacy assignment above.
-    private static func fnv1a64(_ input: String) -> UInt64 {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in input.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 0x0000_0100_0000_01b3
-        }
-        return hash
-    }
 }

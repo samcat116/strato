@@ -136,25 +136,6 @@ struct InstanceMetadataTests {
         #expect(identity.ttlSeconds == 3600)
     }
 
-    @Test("Metadata NIC exposes cloud-init style CIDRs, and only when fully known")
-    func metadataNICCIDRs() {
-        let addressed = Self.metadata.nics[0]
-        #expect(addressed.ipv4CIDR == "10.0.0.5/24")
-        #expect(addressed.ipv6CIDR == "fd12:3456:789a::5/64")
-
-        // Half an address is worse than none: a renderer must not emit
-        // "10.0.0.5/nil" or guess a prefix.
-        let halfKnown = MetadataNIC(
-            deviceName: "net0",
-            macAddress: "52:54:00:12:34:56",
-            networkId: Fixtures.uuidA,
-            networkName: "default",
-            ipAddress: "10.0.0.5"
-        )
-        #expect(halfKnown.ipv4CIDR == nil)
-        #expect(halfKnown.ipv6CIDR == nil)
-    }
-
     @Test("A payload with no metadata key — what a pre-v26 control plane sends — decodes to nil")
     func desiredVMStateMetadataBackwardCompatible() throws {
         // A pre-v26 control plane's desired entry differs from this build's
@@ -280,7 +261,6 @@ struct InstanceMetadataTests {
         #expect(!decoded.metadataEnabled)
         #expect(decoded.domainName == nil)
         #expect(decoded.ipAddress == nil)
-        #expect(decoded.ipv4CIDR == nil)
         #expect(decoded.mtu == nil)
     }
 

@@ -152,7 +152,7 @@ HTTP_TLS_ENABLED=$([[ "$SCHEME" == "https" ]] && echo true || echo false)
 # behind the outer proxy, so one user's failed logins could lock out the rest.
 RATE_LIMIT_TRUSTED_PROXY_HOPS=$([[ "$SCHEME" == "https" ]] && echo 2 || echo 1)
 LOG_LEVEL=info
-# Image tag to deploy. `main` is rebuilt on every main-branch merge; pin an
+# Image tag to deploy. \`main\` is rebuilt on every main-branch merge; pin an
 # immutable build (e.g. STRATO_VERSION=main-abc123def456) or, once versioned
 # releases exist, a release tag for reproducible deployments.
 STRATO_VERSION=main

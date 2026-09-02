@@ -1,5 +1,9 @@
 "use client";
 
+import { formatDateTime } from "@/lib/format-time";
+
+import { errorMessage } from "@/lib/errors";
+
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
@@ -81,7 +85,7 @@ function ActivateForm() {
       setOutcome("approved");
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to approve the device"
+        errorMessage(error, "Failed to approve the device")
       );
     }
   };
@@ -93,7 +97,7 @@ function ActivateForm() {
       setOutcome("denied");
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to deny the device"
+        errorMessage(error, "Failed to deny the device")
       );
     }
   };
@@ -174,7 +178,7 @@ function ActivateForm() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Requested</span>
                 <span className="text-foreground">
-                  {new Date(device.createdAt).toLocaleString()}
+                  {formatDateTime(device.createdAt)}
                 </span>
               </div>
             )}

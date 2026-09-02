@@ -1,5 +1,7 @@
 "use client";
 
+import { errorMessage } from "@/lib/errors";
+
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -135,7 +137,7 @@ export function CreateNetworkDialog({
       resetForm();
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to create network"
+        errorMessage(error, "Failed to create network")
       );
     } finally {
       setIsLoading(false);

@@ -13,6 +13,16 @@ import Foundation
 public enum IPFamily: String, Codable, Sendable {
     case ipv4
     case ipv6
+
+    /// Returns whether `address` is valid for this family.
+    public func matches(_ address: String) -> Bool {
+        switch self {
+        case .ipv4:
+            IPv4Address(address) != nil
+        case .ipv6:
+            IPv6Address(address) != nil
+        }
+    }
 }
 
 // MARK: - MAC
@@ -138,6 +148,11 @@ public struct IPv4CIDR: Equatable, Sendable {
         prefix == 0 ? 0 : ~UInt32(0) << (32 - prefix)
     }
 
+    /// The subnet mask in the dotted-quad form used by guest network config.
+    public var netmask: IPv4Address {
+        IPv4Address(raw: mask)
+    }
+
     public var networkAddress: IPv4Address {
         IPv4Address(raw: base.raw & mask)
     }
@@ -260,9 +275,6 @@ public struct IPv6Address: CustomStringConvertible, Equatable, Hashable, Sendabl
     public var isMulticast: Bool { (hi >> 56) == 0xff }
     /// fe80::/10
     public var isLinkLocal: Bool { (hi >> 54) == 0x3fa }
-    /// fc00::/7 — unique local addresses (RFC 4193).
-    public var isUniqueLocal: Bool { (hi >> 57) == 0x7e }
-
     /// The address with all bits beyond `prefix` cleared.
     public func masked(prefix: Int) -> IPv6Address {
         guard (0...128).contains(prefix) else { return self }
