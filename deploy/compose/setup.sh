@@ -15,9 +15,8 @@ cd "$(dirname "$0")"
 
 HOSTNAME_ARG="localhost"
 PORT_ARG="80"
-# Envoy mTLS listener + SPIRE node API ports agents connect to. Kept fixed to
-# match the published ports and the control plane's :8085 derivation; override
-# in .env only if you also change docker-compose.yml.
+# Envoy mTLS listener agents connect to. setup.sh records the SPIRE node port
+# separately below so the advertised node-attestation address stays aligned.
 AGENT_MTLS_PORT="8443"
 
 while [[ $# -gt 0 ]]; do
@@ -98,6 +97,7 @@ fi
 # regardless of the HTTP port. The control plane always emits wss:// agent URLs
 # when SPIRE is enabled, so this works for http:// (localhost) origins too.
 EXTERNAL_HOSTNAME="${HOSTNAME_ARG}:${AGENT_MTLS_PORT}"
+SPIRE_NODE_PORT="${SPIRE_NODE_PORT:-8085}"
 
 umask 077
 cat > .env <<EOF
@@ -124,6 +124,10 @@ STRATO_HOSTNAME=${HOSTNAME_ARG}
 # listener); embedded in the bootstrap commands the UI generates. This is the
 # agent-facing endpoint, not the browser proxy.
 EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME}
+# Public SPIRE node API agents use for node attestation. Keep this address in
+# lockstep with the published SPIRE_NODE_PORT when overriding its default.
+SPIRE_NODE_PORT=${SPIRE_NODE_PORT}
+SPIRE_SERVER_PUBLIC_ADDRESS=${HOSTNAME_ARG}:${SPIRE_NODE_PORT}
 # Published proxy origin (the browser URL). Only used as the BASE_URL default
 # below; agents fetch images through the mTLS listener, not this origin.
 CONTROL_PLANE_URL=${ORIGIN}
@@ -167,7 +171,7 @@ if [[ "$SCHEME" == "https" ]]; then
 fi
 echo
 echo "Agents authenticate over mTLS: make sure ${HOSTNAME_ARG}:${AGENT_MTLS_PORT}"
-echo "(Envoy) and ${HOSTNAME_ARG}:8085 (SPIRE) are reachable from your"
+echo "(Envoy) and ${HOSTNAME_ARG}:${SPIRE_NODE_PORT} (SPIRE) are reachable from your"
 echo "hypervisor nodes. mTLS is end-to-end, so do NOT terminate TLS in front"
 echo "of :${AGENT_MTLS_PORT}."
 echo

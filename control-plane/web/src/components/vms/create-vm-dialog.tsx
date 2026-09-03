@@ -3,15 +3,14 @@
 import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { Loader2, AlertTriangle } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -519,36 +518,16 @@ export function CreateVMDialog({
               }
             />
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
+          <DialogSubmitFooter
+            submitLabel="Create VM"
+            pendingLabel="Creating..."
+            isPending={isLoading}
+            disabled={!projectId || poolsQuery.isLoading || !!poolsQuery.error}
+            onCancel={() => {
                 setQuotaError(null);
                 onOpenChange(false);
-              }}
-              className="border-input text-foreground/80 hover:bg-accent"
-              disabled={isLoading}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              className="bg-primary hover:bg-primary/90"
-              disabled={
-                isLoading || !projectId || poolsQuery.isLoading || !!poolsQuery.error
-              }
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                "Create VM"
-              )}
-            </Button>
-          </DialogFooter>
+            }}
+          />
         </form>
       </DialogContent>
     </Dialog>

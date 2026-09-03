@@ -4,7 +4,7 @@ import { api } from "./client";
 import type {
   ActionCheckItem,
   ActionCheckResponse,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const authorizationApi = {
   /**

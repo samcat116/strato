@@ -51,12 +51,6 @@ podDisruptionBudget:
 networkPolicy:
   enabled: false
 
-monitoring:
-  serviceMonitor:
-    enabled: false
-  metrics:
-    enabled: false
-
 # Disable init containers for CI
 initContainers:
   waitForDB:

@@ -274,9 +274,6 @@ extension Application {
         get {
             lazyService(LokiServiceKey.self) { LokiService(app: self) }
         }
-        set {
-            setStorageValue(LokiServiceKey.self, to: newValue)
-        }
     }
 
     /// Check if Loki is enabled (endpoint configured)

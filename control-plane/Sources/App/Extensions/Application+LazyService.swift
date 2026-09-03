@@ -11,6 +11,17 @@ extension Application {
         storage[key] = value
     }
 
+    /// Replaces a lazily-created service without racing the getter's first
+    /// construction. Both paths take the service key lock before touching
+    /// application storage, so a test or bootstrap injection cannot be
+    /// overwritten by a getter that observed the old empty value.
+    func setService<Key: StorageKey & LockKey>(_ key: Key.Type, to value: Key.Value?) {
+        let lock = locks.lock(for: Key.self)
+        lock.lock()
+        defer { lock.unlock() }
+        setStorageValue(Key.self, to: value)
+    }
+
     /// Constructs each lazy service once and stores it without clobbering another key.
     func lazyService<Key: StorageKey & LockKey>(
         _ key: Key.Type,

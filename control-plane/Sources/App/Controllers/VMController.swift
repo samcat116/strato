@@ -669,9 +669,7 @@ struct VMController: RouteCollection {
 
         try Self.validateSizing(cpu: newCPU, memory: newMemory, balloonTarget: newBalloonTarget)
 
-        guard let project = try await Project.find(existingVM.$project.id, on: req.db) else {
-            throw Abort(.internalServerError, reason: "VM's project no longer exists")
-        }
+        let project = try await existingVM.project(on: req.db)
         // A resting VM can apply the new sizing without live-unplug support.
         // QEMU/libvirt still has a persistent definition to update, so this
         // generation must reach the placed agent before it is converged.

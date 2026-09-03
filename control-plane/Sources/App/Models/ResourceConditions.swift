@@ -336,6 +336,13 @@ where IDValue == UUID {
 }
 
 extension ConvergingResource {
+    func project(on db: any Database) async throws -> Project {
+        guard let project = try await Project.find(projectID, on: db) else {
+            throw Abort(.internalServerError, reason: "Owning project not found")
+        }
+        return project
+    }
+
     func adoptConvergenceBookkeeping(from committed: Self) {
         generation = committed.generation
         observedGeneration = committed.observedGeneration

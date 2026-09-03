@@ -132,8 +132,8 @@ There is deliberately **no** "an operation is already pending" `409`: desired
 state is level-triggered, so overlapping mutations are safe and the last one
 written is the one the agent converges on. Restart and restore are counted
 rather than commanded (a monotonic nonce on the resource's desired entry), so
-they overlap safely too; both are refused with `409` only when the owning agent
-is too old to apply them.
+they overlap safely too. Registration requires the current wire version, so an
+accepted agent always understands those fields.
 
 Responses carry a **`conditions`** block, which is how a mutation is followed:
 

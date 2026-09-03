@@ -14,7 +14,6 @@ sources:
   - https://github.com/samcat116/strato
 maintainers:
   - name: samcat116
-    email: sam@example.com
 dependencies:
   - name: postgresql
     version: "~16.4.0"

@@ -1,5 +1,6 @@
 import Crypto
 import Foundation
+import StratoShared
 import Vapor
 import WebAuthn
 import Fluent
@@ -413,17 +414,7 @@ extension Request {
 
 extension String {
     func base64URLDecodedBytes() throws -> [UInt8] {
-        // Convert base64url to base64
-        var base64 = self.replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-
-        // Add padding if needed
-        let remainder = base64.count % 4
-        if remainder > 0 {
-            base64 += String(repeating: "=", count: 4 - remainder)
-        }
-
-        guard let data = Data(base64Encoded: base64) else {
+        guard let data = Base64URL.decode(self) else {
             throw WebAuthnError.invalidConfiguration
         }
 

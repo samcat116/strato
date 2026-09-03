@@ -1,7 +1,6 @@
 # Reproducible build environment for the Strato sandbox guest image
 # (issue #419): the toolchain to compile the pinned Linux kernel and the
-# static musl init. Used by .github/workflows/sandbox-guest.yaml and usable
-# locally:
+# static musl init. Mirrors the crate's rust-version and is usable locally:
 #
 #   docker build -f sandbox-guest/Dockerfile.build -t strato-sandbox-guest-build sandbox-guest
 #   docker run --rm -v "$PWD/sandbox-guest:/src" -w /src strato-sandbox-guest-build \
@@ -25,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Rust toolchain with both musl targets for the static init.
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --profile minimal --default-toolchain 1.83.0 \
+      | sh -s -- -y --profile minimal --default-toolchain 1.74.0 \
     && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
 WORKDIR /src

@@ -8,7 +8,7 @@ Strato is a fast, secure, and easy to deploy private cloud platform based on bat
 
 ## Features
 
-- 🚀 **High Performance**: Swift control plane and agent, QEMU with KVM/HVF acceleration
+- 🚀 **High Performance**: Swift control plane and agent, QEMU with KVM acceleration on Linux hypervisor nodes
 - 📦 **VM Management**: Full lifecycle management via QEMU, with snapshots, live resize, graphics consoles, and cloud-init provisioning
 - ⚡ **Sandboxes**: Fast, disposable Firecracker microVMs booted straight from OCI images, with exec, fork, and snapshot/restore
 - 🔒 **WebAuthn/Passkey Authentication**: Modern passwordless authentication, plus API keys and optional OIDC/SCIM federation
@@ -94,7 +94,7 @@ image. See the [local development guide](docs/development/local-development.md).
 
 - **[Swift](https://swift.org)** - Modern, safe, and performant programming language
 - **[Vapor](https://vapor.codes)** - Server-side Swift web framework
-- **[QEMU](https://www.qemu.org)** - VM execution with KVM (Linux) / HVF (macOS) acceleration
+- **[QEMU](https://www.qemu.org)** - VM execution with KVM on Linux hypervisor nodes
 - **[Firecracker](https://firecracker-microvm.github.io)** - MicroVMs for sandboxes and lightweight Linux VMs
 - **[PostgreSQL](https://www.postgresql.org)** - Advanced open source database
 - **[Cedar](https://www.cedarpolicy.com)** - Policy language powering the built-in authorization engine

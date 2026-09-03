@@ -2,7 +2,8 @@
 .swiftpm/
 .git/
 .github/
-node_modules/
+**/node_modules/
+**/.next/
 .DS_Store
 *.log
 .vscode/

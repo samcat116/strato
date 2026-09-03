@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { FolderKanban, Plus, Search, X } from "lucide-react";
+import {
+  FolderKanban,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";

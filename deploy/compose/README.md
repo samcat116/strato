@@ -1,145 +1,29 @@
-# Strato single-host deployment (Docker Compose)
+# Strato single-host deployment
 
-The supported way to run Strato on one machine without Kubernetes. Secrets
-are generated locally on first run; nothing insecure ships in the config.
+Docker Compose is the supported way to run Strato on one machine without
+Kubernetes. The canonical installation, configuration, TLS, storage, upgrade,
+and recovery instructions are in the
+[Docker Compose deployment guide](../../docs/deployment/docker-compose.md).
 
 ## Quick start
 
 ```bash
-./setup.sh                 # generates .env with strong random secrets
+./setup.sh
 docker compose up -d
-open http://localhost      # the first registered user becomes system admin
+open http://localhost
 ```
 
-For a real hostname (WebAuthn then requires HTTPS in front of the proxy):
+Use `./setup.sh --hostname strato.example.com` for a real hostname. The setup
+script creates `.env` once with strong random credentials and never overwrites
+it.
 
-```bash
-./setup.sh --hostname strato.example.com
-```
+For a scripted fresh deployment, `docker compose run --rm bootstrap` creates
+the first administrator, organization, project, and API key. To update an
+existing stack, use `./redeploy.sh`; it recreates the control plane together
+with the sidecars that share its network namespace.
 
-## Programmatic access (no browser)
+Run `./smoke-test.sh --api-key sk_...` after deployment to verify the assembled
+proxy, API, image download, and agent-mTLS paths.
 
-First-user registration is a browser WebAuthn flow. For deployments that must
-be driven entirely by scripts (CI, end-to-end tests), seed an admin user +
-organization + project and get an admin-scoped API key instead:
-
-```bash
-docker compose run --rm bootstrap
-# key only on stdout, for scripting:
-docker compose run --rm -e LOG_LEVEL=warning bootstrap bootstrap --quiet --env production
-```
-
-The command hard-refuses when any user already exists — it only works on a
-brand-new deployment. The key is printed once and never stored in plaintext.
-Note the seeded user consumes the first-user-becomes-admin slot: people who
-register in the browser afterwards get no special privileges (manage them via
-the API key).
-
-## Redeploying
-
-To pick up a new image (or after changing `STRATO_VERSION`), use the helper —
-not `docker compose up -d --no-deps control-plane`:
-
-```bash
-./redeploy.sh                # pull + redeploy control-plane (+ its sidecars)
-./redeploy.sh frontend       # just the frontend
-./redeploy.sh all
-```
-
-`envoy` and `spire-api-bridge` share the control-plane container's network
-namespace, so recreating the control plane alone orphans them into a dead
-namespace (symptom: agent enrollment fails with "SPIRE server unreachable:
-127.0.0.1:8081"). The helper always recreates the namespace owner and its
-tenants together.
-
-That stop-then-recreate boundary is also required when upgrading across
-STR-275. The legacy and current advisory locks use disjoint PostgreSQL
-keyspaces, so do not start a second blue/green Compose project against the same
-database. `redeploy.sh` stops the existing control-plane container and lets its
-database sessions close before the replacement starts; use the same helper for
-a rollback.
-
-## Smoke test
-
-Verify the assembled stack through the proxy (health, auth rejection, image
-full + ranged downloads with strict header checks, the Envoy mTLS listener):
-
-```bash
-./smoke-test.sh --api-key sk_...     # or STRATO_API_KEY=... ./smoke-test.sh
-```
-
-Worth running after every deploy: some bugs (duplicate/forced Content-Length,
-issue #517) only manifest between the control plane and a strict proxy, and
-are invisible to unit tests and direct-to-container curl.
-
-## What's included
-
-- **PostgreSQL** — control-plane database (authorization is evaluated
-  in-process by the control plane's Cedar engine; no separate authz service).
-- **Valkey** — control-plane coordination (agent presence, singleton sweeps,
-  scheduler reservations) and session storage; required, password-protected.
-  The two are separately configurable — coordination fails open, sessions do
-  not — but share this one instance by default. See the commented
-  `SESSION_VALKEY_*` block in `docker-compose.yml` to split them.
-- **Control plane + frontend** — published images
-  (`ghcr.io/samcat116/strato-*`), defaulting to the `main` tag (rebuilt on
-  every main-branch merge). Database migrations run automatically at startup.
-  Pin an immutable build with `STRATO_VERSION` in `.env` (e.g. a `main-<sha>`
-  tag).
-- **Image storage** — by default (`IMAGE_STORAGE_BACKEND=filesystem`) base
-  images are written to the `image_storage` volume (`IMAGE_STORAGE_PATH`). A
-  one-shot `image-storage-init` service chowns the volume to the non-root
-  control-plane user on each `up` so imports can write to it. Agents fetch
-  images through the Envoy mTLS listener (`:8443`) they already dial,
-  authenticated by their SPIFFE SVID — no separate download origin to
-  configure. To keep images in an S3-compatible bucket instead, set
-  `IMAGE_STORAGE_BACKEND=s3` and the `IMAGE_S3_*` variables in your `.env` (no
-  object store is bundled — you supply the bucket). Agents still fetch through
-  the control plane either way. See `docs/architecture/storage.md`.
-- **SPIRE + Envoy (mTLS agent auth, on by default)** — a SPIRE server issues
-  X.509 SVIDs; an Envoy front terminates agent mTLS on `:8443` and forwards the
-  verified client identity to the control plane. A one-shot `spire-bootstrap`
-  provisions the Envoy server cert and trust bundle. The small helper image
-  (`strato-spire-helper:local`) is built locally from `./spiffe/` on first `up`.
-  See [`spiffe/`](spiffe/) for the SPIRE/Envoy config.
-- **Prometheus + Loki (host telemetry + VM logs)** — hypervisor nodes push
-  node metrics and journal logs through Envoy's mTLS listener
-  (`/ingest/metrics` → Prometheus, `/ingest/logs` → Loki), authenticated by
-  their SPIFFE identity; only `spiffe://…/agent/…` identities may write.
-  Loki also stores VM console logs (via the control plane) and backs the
-  logs UI. Neither service publishes a port. Prometheus keeps 15 days of
-  data in the `prometheus_data` volume.
-- **nginx proxy** — the browser-facing service.
-
-## Published ports
-
-| Port | Service | For |
-|------|---------|-----|
-| `${HTTP_PORT:-80}` | nginx proxy | browser UI + API |
-| `${AGENT_MTLS_PORT:-8443}` | Envoy | agent mTLS (`wss://host:8443/agent/ws`) |
-| `${SPIRE_NODE_PORT:-8085}` | SPIRE server | agent node attestation |
-
-mTLS is end-to-end: `:8443` and `:8085` must be reachable from your hypervisor
-nodes, and you must **not** terminate TLS in front of `:8443`. The browser
-origin (`:80`/`:443`) is independent and may sit behind a TLS terminator.
-
-## Adding a hypervisor
-
-In the web UI, go to Agents → Add Agent. Enrollment provisions the node in
-SPIRE — the only way agents authenticate — and the dialog shows a one-line
-`curl … deploy/agent/install.sh | sudo bash …` command; run it on the
-hypervisor host. It downloads the binaries, starts a `spire-agent` (attested
-with the one-time join token) and the `strato-agent` (which connects over
-mTLS), and brings up host telemetry (Grafana Alloy + spiffe-helper) pushing
-metrics and logs back here. See the agent documentation for details.
-
-## Notes
-
-- `setup.sh` is idempotent: it never overwrites an existing `.env`. The
-  PostgreSQL password cannot be changed after the volume is initialized
-  without also updating the database.
-- `docker compose down` keeps data; `docker compose down -v` wipes it.
-- To run this stack from source, swap `image:` for `build:` on the
-  `control-plane`/`frontend` services in an untracked
-  `docker-compose.override.yml` — never in the tracked compose file. See
-  `docs/development/local-development.md`.
+To build from a working tree, create an untracked
+`docker-compose.override.yml`; do not edit the tracked Compose file.

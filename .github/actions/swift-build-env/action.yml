@@ -1,0 +1,66 @@
+name: Prepare Swift build environment
+description: Claim a persistent scratch slot, prune oversized trees, and resolve the SwiftPM cache.
+
+inputs:
+  pool:
+    description: Scratch-slot pool name. Leave empty when the job uses no persistent scratch tree.
+    required: false
+    default: ""
+  scratch-dirs:
+    description: Space-separated BUILD_SCRATCH_ROOT-relative directories to prune when oversized.
+    required: false
+    default: ""
+  orphan-dirs:
+    description: Space-separated obsolete BUILD_SCRATCH_ROOT-relative directories to remove.
+    required: false
+    default: ""
+  max-size-gb:
+    description: Maximum size of each retained scratch directory.
+    required: false
+    default: "10"
+
+runs:
+  using: composite
+  steps:
+    - name: Claim build scratch slot
+      if: inputs.pool != ''
+      shell: bash
+      env:
+        SCRATCH_POOL: ${{ inputs.pool }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/claim-build-scratch.sh" "$SCRATCH_POOL"
+
+    - name: Prune build scratch directories
+      if: inputs.pool != ''
+      shell: bash
+      env:
+        SCRATCH_DIRS: ${{ inputs.scratch-dirs }}
+        ORPHAN_DIRS: ${{ inputs.orphan-dirs }}
+        MAX_SIZE_GB: ${{ inputs.max-size-gb }}
+      run: |
+        for relative in $ORPHAN_DIRS; do
+          rm -rf "$BUILD_SCRATCH_ROOT/$relative"
+        done
+        for relative in $SCRATCH_DIRS; do
+          scratch="$BUILD_SCRATCH_ROOT/$relative"
+          if [ -d "$scratch" ]; then
+            size_kb=$(du -sk "$scratch" | cut -f1)
+            if [ "$size_kb" -gt $((MAX_SIZE_GB * 1024 * 1024)) ]; then
+              echo "$scratch is $((size_kb / 1024 / 1024))GB (>${MAX_SIZE_GB}GB); wiping for a cold rebuild"
+              rm -rf "$scratch"
+            fi
+          fi
+        done
+
+    - name: Resolve SwiftPM shared cache path
+      shell: bash
+      run: |
+        shared=/cache/swiftpm
+        if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
+          echo "using shared SwiftPM cache at $shared"
+          echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
+        else
+          fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
+          mkdir -p "$fallback"
+          echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
+          echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
+        fi

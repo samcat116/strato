@@ -1,4 +1,5 @@
 import Foundation
+import StratoAPITypes
 import Vapor
 
 /// Conversions from the persistence models to the schemas generated from

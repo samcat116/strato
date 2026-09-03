@@ -1,10 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 /**
- * Builds the log-polling hook and its companion invalidator for one resource
+ * Builds the log-polling hook for one resource
  * kind. VMs and sandboxes differ only in their query-key prefix, API method,
- * and entry/param types — everything else (polling interval, enabled guard,
- * placeholder data, invalidation semantics) is shared.
+ * and entry/param types — everything else is shared.
  */
 export function makeResourceLogsHooks<TParams, TEntry>(
   resourceKey: string,
@@ -21,16 +20,5 @@ export function makeResourceLogsHooks<TParams, TEntry>(
     });
   }
 
-  function useInvalidateLogs() {
-    const queryClient = useQueryClient();
-    return (id?: string) => {
-      if (id) {
-        queryClient.invalidateQueries({ queryKey: [resourceKey, id] });
-      } else {
-        queryClient.invalidateQueries({ queryKey: [resourceKey] });
-      }
-    };
-  }
-
-  return { useLogs, useInvalidateLogs };
+  return useLogs;
 }

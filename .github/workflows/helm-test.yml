@@ -5,7 +5,7 @@ permissions:
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - "helm/**"
       - "control-plane/web/src/lib/control-plane-route-prefixes.json"
@@ -13,7 +13,7 @@ on:
       - ".github/scripts/test-control-plane-route-parity.py"
       - ".github/workflows/helm-test.yml"
   pull_request:
-    branches: [main, develop]
+    branches: [main]
     paths:
       - "helm/**"
       - "control-plane/web/src/lib/control-plane-route-prefixes.json"
@@ -397,12 +397,6 @@ jobs:
           EOF
           done
 
-      - name: Upload templates as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: helm-templates
-          path: /tmp/*-template.yaml
-
   security-scan:
     runs-on: ubuntu-latest
     name: Security Scanning
@@ -457,12 +451,4 @@ jobs:
             exit 1
           else
             echo "✅ No hardcoded secrets found in templates"
-          fi
-      - name: Validate RBAC permissions
-        run: |
-          # Check if ServiceAccount has minimal permissions
-          if helm template test helm/strato-control-plane/ | grep -A 20 -B 5 "kind: ClusterRole\|kind: Role"; then
-            echo "⚠️  Found RBAC roles - please review permissions"
-          else
-            echo "✅ No additional RBAC permissions found"
           fi

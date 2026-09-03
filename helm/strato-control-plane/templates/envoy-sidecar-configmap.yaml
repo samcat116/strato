@@ -1,4 +1,6 @@
 {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
+{{- $prometheusURL := include "strato-control-plane.prometheusQueryURL" . }}
+{{- $lokiURL := .Values.strato.lokiEndpoint }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -91,6 +93,54 @@ data:
                         - name: control_plane
                           domains: ["*"]
                           routes:
+                            {{- if $prometheusURL }}
+                            # Agent telemetry is authenticated by mTLS and may
+                            # write only through this agent-SVID route.
+                            - match:
+                                path: "/ingest/metrics"
+                              route:
+                                cluster: prometheus
+                                prefix_rewrite: "/api/v1/write"
+                                timeout: 30s
+                              typed_per_filter_config:
+                                envoy.filters.http.rbac:
+                                  "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                                  rbac:
+                                    rules:
+                                      action: ALLOW
+                                      policies:
+                                        agents-only:
+                                          permissions:
+                                            - any: true
+                                          principals:
+                                            - authenticated:
+                                                principal_name:
+                                                  safe_regex:
+                                                    regex: 'spiffe://(org-[0-9a-f]{16}\.)?{{ regexQuoteMeta (lower .Values.spire.trustDomain) }}/agent/.+'
+                            {{- end }}
+                            {{- if $lokiURL }}
+                            - match:
+                                path: "/ingest/logs"
+                              route:
+                                cluster: loki
+                                prefix_rewrite: "/loki/api/v1/push"
+                                timeout: 30s
+                              typed_per_filter_config:
+                                envoy.filters.http.rbac:
+                                  "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute
+                                  rbac:
+                                    rules:
+                                      action: ALLOW
+                                      policies:
+                                        agents-only:
+                                          permissions:
+                                            - any: true
+                                          principals:
+                                            - authenticated:
+                                                principal_name:
+                                                  safe_regex:
+                                                    regex: 'spiffe://(org-[0-9a-f]{16}\.)?{{ regexQuoteMeta (lower .Values.spire.trustDomain) }}/agent/.+'
+                            {{- end }}
                             # Image/artifact downloads (issue #493): agents
                             # fetch base-image bytes with their SVID as the
                             # client cert; the control plane re-verifies the
@@ -291,6 +341,64 @@ data:
                         socket_address:
                           address: 127.0.0.1
                           port_value: {{ .Values.service.port }}
+
+        {{- if $prometheusURL }}
+        {{- $parsedPrometheus := urlParse $prometheusURL }}
+        {{- $prometheusHostPort := index $parsedPrometheus "host" }}
+        {{- $prometheusHost := regexReplaceAll ":[0-9]+$" $prometheusHostPort "" }}
+        {{- $prometheusPortMatch := regexFind ":[0-9]+$" $prometheusHostPort }}
+        {{- $prometheusPort := ternary 443 80 (eq (index $parsedPrometheus "scheme") "https") }}
+        {{- if $prometheusPortMatch }}{{- $prometheusPort = int (trimPrefix ":" $prometheusPortMatch) }}{{- end }}
+        - name: prometheus
+          connect_timeout: 5s
+          type: LOGICAL_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: prometheus
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: {{ $prometheusHost | quote }}
+                          port_value: {{ $prometheusPort }}
+          {{- if eq (index $parsedPrometheus "scheme") "https" }}
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: {{ $prometheusHost | quote }}
+          {{- end }}
+        {{- end }}
+
+        {{- if $lokiURL }}
+        {{- $parsedLoki := urlParse $lokiURL }}
+        {{- $lokiHostPort := index $parsedLoki "host" }}
+        {{- $lokiHost := regexReplaceAll ":[0-9]+$" $lokiHostPort "" }}
+        {{- $lokiPortMatch := regexFind ":[0-9]+$" $lokiHostPort }}
+        {{- $lokiPort := ternary 443 80 (eq (index $parsedLoki "scheme") "https") }}
+        {{- if $lokiPortMatch }}{{- $lokiPort = int (trimPrefix ":" $lokiPortMatch) }}{{- end }}
+        - name: loki
+          connect_timeout: 5s
+          type: LOGICAL_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: loki
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: {{ $lokiHost | quote }}
+                          port_value: {{ $lokiPort }}
+          {{- if eq (index $parsedLoki "scheme") "https" }}
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: {{ $lokiHost | quote }}
+          {{- end }}
+        {{- end }}
 
         # SPIRE Agent for SDS (Secret Discovery Service)
         - name: spire_agent

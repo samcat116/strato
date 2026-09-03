@@ -276,6 +276,51 @@ final class ProjectTests {
         }
     }
 
+    @Test("Cannot remove an environment used by storage or quota resources")
+    func testCannotRemoveEnvironmentWithStorageOrQuotaResources() async throws {
+        try await withProjectTestApp { app, testUser, testOrganization, _, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            let project = try await builder.createProject(
+                name: "Protected Environment",
+                description: "Environment dependency coverage",
+                organization: testOrganization,
+                environments: ["dev", "staging"],
+                defaultEnvironment: "dev")
+            let volume = try await builder.createVolume(
+                name: "staging-data",
+                project: project,
+                environment: "staging",
+                createdBy: testUser)
+
+            try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("volumes"))
+            }
+
+            try await volume.delete(on: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "staging-quota",
+                project: project,
+                environment: "staging")
+
+            try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("resource quotas"))
+            }
+
+            try await quota.delete(on: app.db)
+            try await app.test(.DELETE, "/api/projects/\(project.id!)/environments/staging") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
     @Test("Cannot remove default environment")
     func testCannotRemoveDefaultEnvironment() async throws {
         try await withProjectTestApp { app, _, testOrganization, _, authToken in

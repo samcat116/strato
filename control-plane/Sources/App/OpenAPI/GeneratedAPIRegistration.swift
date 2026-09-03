@@ -1,4 +1,5 @@
 import OpenAPIVapor
+import StratoAPITypes
 import Vapor
 
 /// The route keys (`METHOD /path`, path parameters collapsed to `{}`) that were

@@ -15,15 +15,6 @@ data:
         server_address = "{{ include "strato-control-plane.fullname" . }}-spire-server"
         server_port = "{{ .Values.spire.service.grpcPort }}"
         socket_path = "/var/run/spire/sockets/workload.sock"
-        {{- if .Values.spire.agent.guestIdentity.enabled }}
-        # Keep this above /var/run/spire/sockets: SPIRE refuses an admin socket
-        # in or below the Workload API socket directory. Its dedicated
-        # node-local directory is mounted only into SPIRE and the authorized
-        # control-plane workload.
-        admin_socket_path = "/var/run/spire/admin.sock"
-        # The control-plane process's workload SVID, not its k8s_psat node ID.
-        authorized_delegates = ["spiffe://{{ .Values.spire.trustDomain }}/control-plane/admin"]
-        {{- end }}
         trust_domain = "{{ .Values.spire.trustDomain }}"
         {{- if .Values.spire.notifier.k8sbundle.enabled }}
         {{- /*
@@ -47,18 +38,12 @@ data:
     }
 
     plugins {
-        {{- if .Values.spire.attestors.k8sPsat.enabled }}
         NodeAttestor "k8s_psat" {
             plugin_data {
                 cluster = "{{ .Values.spire.clusterName }}"
                 token_path = "/var/run/secrets/tokens/spire-agent"
             }
         }
-        {{- else }}
-        NodeAttestor "join_token" {
-            plugin_data {}
-        }
-        {{- end }}
 
         KeyManager "memory" {
             plugin_data {}

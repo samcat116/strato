@@ -508,7 +508,7 @@ differently from its filing is the opt-in switch, which was dropped — see
 
 ## What the spike proved
 
-`strato-agent spiffe-delegated-probe` (in `agent/Sources/StratoAgent/`, with the
+`strato-agent spiffe-delegated-probe` (in `agent/Sources/StratoAgentRuntime/`, with the
 client and report types in `StratoAgentSPIFFE`) reports one of four outcomes:
 `DELEGATED IDENTITY OK`, `REFUSED`, `UNAVAILABLE`, or `NO ENTRY MATCHED`. The
 last is deliberately not a success: an empty SVID set is a normal, meaningful

@@ -74,11 +74,22 @@ extension Application {
         return statementTimeouts
     }
 
-    private func registerMigrations() {
+    /// Registers the frozen fresh-install baseline followed by every upgrade
+    /// migration. Internal so the baseline policy test can prove the full chain
+    /// reaches the reviewed current catalog.
+    func registerMigrations() {
         // STR-234 replaces the executable historical chain with the reviewed
         // current-schema baseline. This migration intentionally accepts only a
         // fresh database; see ADR 0009 for the cutover decision.
         migrations.add(CurrentSchemaBaseline())
+
+        registerForwardMigrations()
+    }
+
+    /// Registers upgrades that follow the current-schema snapshot. Kept
+    /// separate so the schema test can compare the baseline and upgrade paths
+    /// in one database without registering the baseline twice.
+    func registerForwardMigrations() {
 
         // STR-28: project-scoped native OVN load balancers, incremental listener
         // and backend membership, external Floating IP attachment, and quota.
@@ -86,10 +97,6 @@ extension Application {
         migrations.add(CreateLoadBalancerListener())
         migrations.add(CreateLoadBalancerBackend())
         migrations.add(AddLoadBalancerCountToResourceQuota())
-
-        // STR-236: initialize the previously inert network counter from the
-        // project-wide logical networks each global quota actually governs.
-        migrations.add(BackfillNetworkQuotaAccounting())
 
         // STR-237: fresh, feature-scoped dependency health becomes the authority
         // for new placement while existing workloads remain untouched.

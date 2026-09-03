@@ -257,8 +257,8 @@ struct QuotaUsageAggregator {
     ///
     /// * **A volume is charged its desired size**, not raw
     ///   `observed_size_bytes`. Normally that is the size it asked for. A
-    ///   source-backed attachment first admits any larger materialized virtual
-    ///   size and raises the desired value to match. The other mismatch is an
+    ///   source-backed volume report first admits any larger materialized
+    ///   virtual size and raises the desired value to match. The other mismatch is an
     ///   outstanding grow — STR-199's refused-because-the-guest-is-running case
     ///   — and that grow is blocked, not withdrawn: it lands the moment the
     ///   guest stops, with no admission point in between. Charging the smaller

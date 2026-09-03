@@ -7,7 +7,7 @@
 // browser credential call around these two requests.
 
 import { api } from "./client";
-import type { Passkey } from "@/types/api-contracts";
+import type { Passkey } from "@/types/api";
 import type { PublicKeyCredentialCreationOptionsJSON } from "@/lib/webauthn/types";
 
 export const passkeysApi = {

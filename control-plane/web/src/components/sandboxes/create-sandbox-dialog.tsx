@@ -2,16 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Loader2, AlertTriangle } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { AlertTriangle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
@@ -443,34 +442,16 @@ export function CreateSandboxDialog({
               </p>
             )}
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
+          <DialogSubmitFooter
+            submitLabel="Create Sandbox"
+            pendingLabel="Creating..."
+            isPending={isLoading}
+            disabled={!projectId}
+            onCancel={() => {
                 setQuotaError(null);
                 onOpenChange(false);
-              }}
-              className="border-input text-foreground/80 hover:bg-accent"
-              disabled={isLoading}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              className="bg-primary hover:bg-primary/90"
-              disabled={isLoading || !projectId}
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                "Create Sandbox"
-              )}
-            </Button>
-          </DialogFooter>
+            }}
+          />
         </form>
       </DialogContent>
     </Dialog>

@@ -4,6 +4,7 @@ import StratoShared
 import Testing
 
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 /// The properties of the domain document that **only real libvirt can answer**,
 /// because none is visible in the document the builder writes (STR-192,

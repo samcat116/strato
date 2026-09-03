@@ -12,10 +12,6 @@ import Vapor
 /// closes the classic algorithm-confusion holes of trusting `alg` alone.
 /// Supported algorithms: RS256/RS384/RS512, ES256/ES384/ES512, and EdDSA.
 enum OIDCTokenVerification {
-    private struct JWKSKeysEnvelope: Decodable {
-        let keys: [JSONValue]
-    }
-
     /// JWS algorithms accepted in an ID token header. All are asymmetric:
     /// `none` and the HMAC family are rejected outright, since an HMAC
     /// "signature" would be forgeable by anyone holding the (public) JWKS.
@@ -41,49 +37,19 @@ enum OIDCTokenVerification {
     /// decode would turn one exotic key into a login outage for the provider.
     /// Throws only when the document is malformed or yields no usable key.
     static func makeVerifiers(jwksJSON: Data, logger: Logger? = nil) async throws -> OIDCTokenVerifiers {
-        guard let envelope = try? JSONDecoder().decode(JWKSKeysEnvelope.self, from: jwksJSON) else {
-            throw Abort(.badGateway, reason: "Provider JWKS document is malformed")
-        }
-
-        let keys = JWTKeyCollection()
-        let decoder = JSONDecoder()
-        var registered = 0
-        var knownKeyIDs: Set<String> = []
-        for rawKey in envelope.keys {
-            guard let keyObject = rawKey.objectValue else { continue }
-            // Keys published for encryption are not signature keys.
-            if let use = keyObject["use"]?.stringValue, use != "sig" { continue }
-            guard let keyData = try? JSONEncoder().encode(JSONValue.object(keyObject)),
-                var jwk = try? decoder.decode(JWK.self, from: keyData)
-            else {
-                logger?.debug(
-                    "Skipping unsupported key in provider JWKS",
-                    metadata: ["kty": .string(keyObject["kty"]?.stringValue ?? "<missing>")])
-                continue
-            }
-            // JWTKit refuses keys without a `kid`. Some single-key IdPs omit it,
-            // so synthesize one: the first registered key doubles as the default
-            // signer, which is what verifies tokens whose header carries no kid.
-            if jwk.keyIdentifier == nil {
-                jwk.keyIdentifier = JWKIdentifier(string: "strato-unnamed-key-\(registered)")
-            }
-            do {
-                try await keys.add(jwk: jwk)
-                registered += 1
-                if let kid = jwk.keyIdentifier?.string {
-                    knownKeyIDs.insert(kid)
-                }
-            } catch {
-                logger?.debug(
-                    "Skipping unusable key in provider JWKS",
-                    metadata: ["kid": .string(jwk.keyIdentifier?.string ?? "<missing>")])
-            }
-        }
-
-        guard registered > 0 else {
-            throw Abort(.badGateway, reason: "Provider JWKS contained no usable signing keys")
-        }
-        return OIDCTokenVerifiers(keys: keys, knownKeyIDs: knownKeyIDs)
+        let result = try await JWKSKeyCollectionBuilder.build(
+            jwksJSON: jwksJSON,
+            logger: logger,
+            policy: .init(
+                acceptedUses: ["sig"],
+                normalizedUse: nil,
+                requiresKeyID: false,
+                synthesizesMissingKeyIDs: true,
+                decodeFailureMessage: "Skipping unsupported key in provider JWKS",
+                registrationFailureMessage: "Skipping unusable key in provider JWKS"),
+            malformed: { Abort(.badGateway, reason: "Provider JWKS document is malformed") },
+            empty: { Abort(.badGateway, reason: "Provider JWKS contained no usable signing keys") })
+        return OIDCTokenVerifiers(keys: result.keys, knownKeyIDs: result.knownKeyIDs)
     }
 }
 

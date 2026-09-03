@@ -41,7 +41,7 @@
      authorization service is deployed).
 
 4. WebAuthn Configuration:
-   - Relying Party ID: {{ .Values.strato.webauthn.relyingPartyId }}
+   - Relying Party ID: {{ include "strato-control-plane.webauthnRelyingPartyId" . }}
    - Relying Party Name: {{ .Values.strato.webauthn.relyingPartyName }}
    - Origin: {{ include "strato-control-plane.webauthnOrigin" . }}
 
@@ -75,7 +75,7 @@
 
 9. Configuration:
    - Log Level: {{ .Values.strato.logLevel }}
-   - WebAuthn Relying Party: {{ .Values.strato.webauthn.relyingPartyId }}
+   - WebAuthn Relying Party: {{ include "strato-control-plane.webauthnRelyingPartyId" . }}
    - Resources:
      * Control Plane CPU: {{ .Values.resources.requests.cpu }}/{{ .Values.resources.limits.cpu }}
      * Control Plane Memory: {{ .Values.resources.requests.memory }}/{{ .Values.resources.limits.memory }}

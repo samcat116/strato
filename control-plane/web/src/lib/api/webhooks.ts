@@ -10,7 +10,7 @@ import type {
   WebhookDelivery,
   WebhookSubscription,
   WebhookWithSecret,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 const base = (orgId: string) => `/api/organizations/${orgId}/webhooks`;
 

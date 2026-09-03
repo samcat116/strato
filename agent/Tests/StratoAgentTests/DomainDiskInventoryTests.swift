@@ -3,6 +3,7 @@ import StratoShared
 import Testing
 
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 #if canImport(FoundationXML)
 import FoundationXML

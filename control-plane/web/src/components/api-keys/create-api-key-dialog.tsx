@@ -1,11 +1,14 @@
 "use client";
 
+import {
+  DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+
 import { formatDateTime } from "@/lib/format-time";
 
 import { errorMessage } from "@/lib/errors";
 
 import { useState } from "react";
-import { Loader2, Copy, Check } from "lucide-react";
+import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -317,31 +320,12 @@ export function CreateAPIKeyDialog({
               </div>
             </div>
 
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                className="border-input"
-                onClick={handleClose}
-                disabled={createKey.isPending}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                className="bg-primary hover:bg-primary/90"
-                disabled={createKey.isPending}
-              >
-                {createKey.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  "Create Key"
-                )}
-              </Button>
-            </DialogFooter>
+            <DialogSubmitFooter
+              submitLabel="Create Key"
+              pendingLabel="Creating..."
+              isPending={createKey.isPending}
+              onCancel={handleClose}
+            />
           </form>
         )}
       </DialogContent>

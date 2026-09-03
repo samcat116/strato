@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { FolderKanban, Rows3, Search, type LucideIcon } from "lucide-react";
+import {
+  FolderKanban,
+  Rows3,
+  Search,
+  type LucideIcon,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,

@@ -1,5 +1,10 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, RotateCw, SearchX } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  RotateCw,
+  SearchX,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import { errorMessage } from "@/lib/errors";

@@ -1,0 +1,19 @@
+generate:
+  - types
+accessModifier: public
+namingStrategy: idiomatic
+filter:
+  operations:
+    - listProjects
+    - getProject
+    - updateProject
+    - deleteProject
+    - getProjectStats
+    - getProjectPath
+    - transferProject
+    - addProjectEnvironment
+    - removeProjectEnvironment
+    - listOrganizationProjects
+    - createOrganizationProject
+    - listFolderProjects
+    - createFolderProject

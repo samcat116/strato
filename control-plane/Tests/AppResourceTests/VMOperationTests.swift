@@ -33,39 +33,10 @@ final class VMOperationTests {
     private func withVMTestApp(
         _ test: (Application, User, VM, String) async throws -> Void
     ) async throws {
-        let app = try await Application.makeForTesting()
-
-        do {
-            try await configure(app)
-
-            let builder = TestDataBuilder(db: app.db)
-            let user = try await builder.createUser(
-                username: "vmopuser",
-                email: "vmop@example.com",
-                displayName: "VM Op User",
-                isSystemAdmin: false
-            )
-            let org = try await builder.createOrganization(name: "VM Op Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
-
-            let project = try await builder.createProject(
-                name: "VM Op Project",
-                description: "Project for VM operation tests",
-                organization: org
-            )
-            let vm = try await builder.createVM(name: "op-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
-
-            try await test(app, user, vm, token)
-
-        } catch {
-            try await app.shutdownForTesting()
-            throw error
+        try await withProjectApp(prefix: "vmop") { app, builder, fixture in
+            let vm = try await builder.createVM(name: "op-vm", project: fixture.project)
+            try await test(app, fixture.user, vm, fixture.token)
         }
-
-        try await app.shutdownForTesting()
     }
 
     /// Waits for the background dispatch task to resolve the VM to `expected`.
@@ -519,9 +490,10 @@ final class VMOperationTests {
             try await execution.create(command: ["/usr/bin/printenv"], on: app.db)
             let executionID = try execution.requireID()
             let payload = try #require(try await VMCommandPayload.find(executionID, on: app.db))
-            payload.recordResult(
-                stdout: Data("SECRET=value\n".utf8), stderr: Data(), exitCode: 0,
-                truncated: false)
+            payload.stdout = Data("SECRET=value\n".utf8)
+            payload.stderr = Data()
+            payload.exitCode = 0
+            payload.truncated = false
             try await payload.update(on: app.db)
             execution.status = .succeeded
             execution.completedAt = Date()

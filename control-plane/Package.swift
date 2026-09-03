@@ -39,9 +39,27 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.1"),
         .package(url: "https://github.com/soto-project/soto.git", from: "7.0.0"),
+        .package(url: "https://github.com/soto-project/soto-core.git", from: "7.14.0"),
         .package(url: "https://github.com/samcat116/swift-cedar.git", from: "0.2.0"),
+        .package(url: "https://github.com/vapor/sql-kit.git", from: "3.36.0"),
+        .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.33.0"),
+        .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.11.0"),
     ],
     targets: [
+        // Generated OpenAPI vocabulary is independent from Vapor and the App
+        // executable. Keeping it in a sibling module lets clients and tests
+        // compile against the contract without rebuilding server handlers.
+        .target(
+            name: "StratoAPITypes",
+            dependencies: [
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
+            ],
+            path: "Sources/StratoAPITypes",
+            swiftSettings: swiftSettings,
+            plugins: [
+                .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")
+            ]
+        ),
         // SPIRE Server registration API client (join tokens + registration
         // entries). A separate library target so tests can exercise it against
         // an in-process gRPC server and so the generated protobuf code stays
@@ -58,6 +76,7 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "SPIFFEVerification", package: "shared"),
+                .product(name: "SPIFFEKit", package: "shared"),
             ],
             exclude: ["Generated/README.md", "Generated/proto"],
             swiftSettings: swiftSettings
@@ -65,14 +84,22 @@ let package = Package(
         .executableTarget(
             name: "App",
             dependencies: [
+                .target(name: "StratoAPITypes"),
                 .target(name: "SPIREServerAPI"),
                 .product(name: "StratoShared", package: "shared"),
+                .product(name: "SPIFFEKit", package: "shared"),
                 .product(name: "Fluent", package: "fluent"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "SQLKit", package: "sql-kit"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "WebAuthn", package: "webauthn-swift"),
                 .product(name: "SwiftSCIM", package: "swift-scim"),
                 .product(name: "JWT", package: "jwt"),
@@ -88,6 +115,7 @@ let package = Package(
                 .product(name: "Tracing", package: "swift-distributed-tracing"),
                 .product(name: "Valkey", package: "valkey-swift"),
                 .product(name: "SotoS3", package: "soto"),
+                .product(name: "SotoCore", package: "soto-core"),
                 .product(name: "CedarPolicy", package: "swift-cedar"),
             ],
             resources: [
@@ -129,11 +157,11 @@ let package = Package(
             path: "Tests/AppTestSupport",
             swiftSettings: testSwiftSettings
         ),
-        // The suite is split across four targets rather than one, because a
+        // The suite is split across five targets rather than one, because a
         // module's `-emit-module` job is single-threaded and re-runs whenever
         // any file in it changes: at 59k lines in one target it cost ~9.8s on
         // every test edit, which was the floor of the whole edit/test loop.
-        // Four ~15k-line targets emit-module in parallel at ~2.4s each. Keep
+        // Smaller targets emit-module in parallel. Keep
         // them roughly balanced when adding suites; the split is by domain so
         // there is an obvious home for a new file.
         .testTarget(
@@ -143,7 +171,6 @@ let package = Package(
                 .target(name: "SPIREServerAPI"),
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
@@ -156,8 +183,14 @@ let package = Package(
             dependencies: [
                 .target(name: "App"),
                 .target(name: "AppTestSupport"),
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Fluent", package: "fluent"),
+                .product(name: "Vapor", package: "vapor"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "SQLKit", package: "sql-kit"),
+                .product(name: "Logging", package: "swift-log"),
             ],
             swiftSettings: testSwiftSettings
         ),
@@ -166,8 +199,28 @@ let package = Package(
             dependencies: [
                 .target(name: "App"),
                 .target(name: "AppTestSupport"),
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Fluent", package: "fluent"),
+                .product(name: "Vapor", package: "vapor"),
                 .product(name: "VaporTesting", package: "vapor"),
-                .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "SQLKit", package: "sql-kit"),
+            ],
+            swiftSettings: testSwiftSettings
+        ),
+        .testTarget(
+            name: "AppNetworkTests",
+            dependencies: [
+                .target(name: "App"),
+                .target(name: "AppTestSupport"),
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Fluent", package: "fluent"),
+                .product(name: "Vapor", package: "vapor"),
+                .product(name: "VaporTesting", package: "vapor"),
+                .product(name: "SQLKit", package: "sql-kit"),
             ],
             swiftSettings: testSwiftSettings
         ),

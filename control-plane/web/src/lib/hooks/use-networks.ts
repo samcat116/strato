@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { networksApi } from "@/lib/api/networks";
-import type { CreateNetworkACLRuleRequest } from "@/types/api-contracts";
+import type { CreateNetworkACLRuleRequest } from "@/types/api";
 
 export function useNetworks(projectId?: string) {
   return useQuery({

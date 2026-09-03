@@ -1,17 +1,12 @@
 import Foundation
 import Testing
+import StratoAgentTestSupport
 import StratoShared
 
 @testable import StratoAgentCore
 
 @Suite("Host Preflight Tests")
 struct HostPreflightTests {
-
-    private func makeTempDir() throws -> String {
-        let dir = NSTemporaryDirectory() + "host-preflight-tests-" + UUID().uuidString
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        return dir
-    }
 
     /// Inputs where everything passes: directories under a writable temp
     /// root, `/bin/ls` standing in for qemu-img, a libvirt above the floor, no
@@ -62,7 +57,6 @@ struct HostPreflightTests {
         let check = try #require(report.check(.sandboxJailerUIDRange))
         #expect(check.passed)
         #expect(check.severity == .gating)
-        #expect(report.sandboxJailerUIDRangeReady)
         #expect(report.sandboxJailerUIDRangeFailureDetail == nil)
     }
 
@@ -145,7 +139,7 @@ struct HostPreflightTests {
         let requiredCheck = try #require(requiredReport.check(.sandboxJailerUIDRange))
         #expect(requiredCheck.severity == .gating)
         #expect(!requiredCheck.passed)
-        #expect(!requiredReport.sandboxJailerUIDRangeReady)
+        #expect(requiredReport.sandboxJailerUIDRangeFailureDetail != nil)
 
         var autoInputs = passingInputs(root: root)
         var autoRange = requiredRange
@@ -155,7 +149,7 @@ struct HostPreflightTests {
         let autoCheck = try #require(autoReport.check(.sandboxJailerUIDRange))
         #expect(autoCheck.severity == .advisory)
         #expect(!autoCheck.passed)
-        #expect(!autoReport.sandboxJailerUIDRangeReady)
+        #expect(autoReport.sandboxJailerUIDRangeFailureDetail != nil)
     }
 
     @Test("Missing optional subordinate-id files are clean, but required identity files are not")

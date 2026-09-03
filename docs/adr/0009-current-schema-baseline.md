@@ -23,9 +23,11 @@ runtime code does not need to be the archive.
 
 ## Decision
 
-`CurrentSchemaBaseline` is the only registered migration. It
-applies the reviewed `CurrentSchema.sql` resource, generated with `pg_dump
---schema-only` from a fresh database migrated by the chain at `74b81d8`.
+`CurrentSchemaBaseline` is the first registered migration. It applies the
+reviewed `CurrentSchema.sql` resource. The snapshot was amended while Strato
+had no supported persistent deployments; as of 2026-09-02 it is frozen. The
+current schema is the baseline followed by every registered forward migration.
+Future schema changes append migrations and do not edit `CurrentSchema.sql`.
 `SchemaMigrator` is unchanged: it still holds the PostgreSQL advisory lock and
 commits the baseline DDL and its `_fluent_migrations` row in one transaction.
 
@@ -59,21 +61,25 @@ objects and could conceal partial state.
 
 ## Verification and provenance
 
-The committed schema was captured from PostgreSQL 16 after the final chain ran
-on an empty database. The obsolete global default network created early in that
+The initial committed schema was captured from PostgreSQL 16 after the chain at
+`74b81d8` ran on an empty database. The obsolete global default network created early in that
 chain was removed in the disposable capture database so the site cutover could
 continue; the later project-network cutover removes the same compatibility row,
-and it is absent from the resulting current schema. A catalog manifest covering
-enum values, columns and defaults, constraints, index definitions, triggers,
-and functions hashed to:
+and it is absent from the resulting current schema. That initial catalog
+manifest covering enum values, columns and defaults, constraints, index
+definitions, triggers, and functions hashed to:
 
 `42a63d3b96fe17dcf08346be422d3f036ba89689aab6e376af15c786e8d26287`
 
-The in-database MD5 used by the regression test (to avoid client newline and
-encoding differences) is `79bd505a06c0e20e36d670eb8302201c`.
+The frozen baseline's in-database MD5 used by the regression test (to avoid
+client newline and encoding differences) is
+`848631eafc007aca56e77448502c7d5e`. The complete forward chain produces the
+current catalog MD5 `7803167fccae80130778a2d05af6dfe6`.
 
-The baseline tests apply only `CurrentSchemaBaseline` to an empty database and
-compare that same catalog manifest. They also verify that a populated unknown
+The baseline tests pin both sides of that boundary: the frozen baseline alone,
+and the baseline followed by the complete registered chain. This makes an edit
+to the frozen SQL or an incomplete forward migration fail in CI. They also
+verify that a populated unknown
 schema is rejected without changing its sentinel row or recording the baseline,
 including when the connection's search path selects an empty custom schema
 before `public`. The historical migration sources remain available in Git at
@@ -83,7 +89,7 @@ before `public`. The historical migration sources remain available in Git at
 
 - Fresh-install behavior is one migration and one reviewable SQL definition.
 - Historical snapshot-only models are no longer compiled.
-- Future schema changes append normal forward migrations after the baseline;
-  they do not edit a baseline that has already shipped.
+- Future schema changes append normal forward migrations after the frozen
+  baseline. `CurrentSchema.sql` is not a rolling snapshot.
 - Existing installations cannot upgrade this boundary in place. That cost is
   explicit and test-enforced instead of being an implicit risk to retained data.

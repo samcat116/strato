@@ -11,7 +11,7 @@ import type {
   UpdateOIDCProviderRequest,
   OIDCProviderTestResult,
   SSOLookupResponse,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 const base = (orgId: string) => `/api/organizations/${orgId}/oidc-providers`;
 

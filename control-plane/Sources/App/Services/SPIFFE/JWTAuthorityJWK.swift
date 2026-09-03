@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// Conversion of SPIRE's JWT authorities into a JWKS document (issue #495).
 ///
@@ -51,8 +52,8 @@ enum JWTAuthorityJWK {
             return [
                 "kty": "EC",
                 "crv": curve.jwkName,
-                "x": base64URLEncode(x),
-                "y": base64URLEncode(y),
+                "x": Base64URL.encode(x),
+                "y": Base64URL.encode(y),
             ]
 
         case OID.rsaEncryption:
@@ -60,8 +61,8 @@ enum JWTAuthorityJWK {
             guard let rsa = try? parseRSAPublicKey(spki.subjectPublicKey) else { return nil }
             return [
                 "kty": "RSA",
-                "n": base64URLEncode(rsa.modulus),
-                "e": base64URLEncode(rsa.exponent),
+                "n": Base64URL.encode(rsa.modulus),
+                "e": Base64URL.encode(rsa.exponent),
             ]
 
         case OID.ed25519:
@@ -70,7 +71,7 @@ enum JWTAuthorityJWK {
             return [
                 "kty": "OKP",
                 "crv": "Ed25519",
-                "x": base64URLEncode(spki.subjectPublicKey),
+                "x": Base64URL.encode(spki.subjectPublicKey),
             ]
 
         default:
@@ -183,13 +184,6 @@ enum JWTAuthorityJWK {
     private static func stripLeadingZero(_ bytes: [UInt8]) -> [UInt8] {
         guard bytes.count > 1, bytes[0] == 0x00 else { return bytes }
         return Array(bytes.dropFirst())
-    }
-
-    static func base64URLEncode(_ bytes: [UInt8]) -> String {
-        Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
     }
 
     /// A cursor over DER values that reads one tag-length-value at a time.

@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, FolderKanban, Settings } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  FolderKanban,
+  Settings,
+} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,

@@ -153,7 +153,7 @@ extension Application {
             }
         }
         set {
-            setStorageValue(ImageObjectStoreKey.self, to: newValue)
+            setService(ImageObjectStoreKey.self, to: newValue)
         }
     }
 }

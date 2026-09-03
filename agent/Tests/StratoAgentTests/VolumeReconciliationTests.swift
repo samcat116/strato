@@ -1,4 +1,5 @@
 import Testing
+import StratoAgentTestSupport
 import Foundation
 @testable import StratoAgentCore
 import StratoShared
@@ -392,13 +393,13 @@ struct VolumeReconciliationTests {
 
     @Test("A shrink and an unknown format are permanent, a missing dependency is not")
     func failureClassifications() {
-        #expect(VolumeConvergenceError.unsupported("shrink").failureClassification == .permanent)
+        #expect(ConvergenceError.unsupported("shrink").failureClassification == .permanent)
         #expect(
-            VolumeConvergenceError.sourceNotReady("vm not here").failureClassification
+            ConvergenceError.sourceNotReady("vm not here").failureClassification
                 == .waitingOnDependency)
         // A refusal whose remedy is "stop the guest" is neither: an operator
         // has to see it, and doing what it says has to work (STR-199).
-        #expect(VolumeConvergenceError.blocked("guest is running").failureClassification == .blocked)
+        #expect(ConvergenceError.blocked("guest is running").failureClassification == .blocked)
     }
 
     // MARK: - Lanes
@@ -771,7 +772,7 @@ struct VolumeReconciliationTests {
         let actuator = MockVolumeActuator(
             volumes: [id.uuidString: .managed(Self.facts(sizeBytes: 1 << 30))])
         await actuator.setResizeFailure(
-            VolumeConvergenceError.blocked(
+            ConvergenceError.blocked(
                 "refusing to grow volume \(id): it is attached to VM x, which is not confirmed "
                     + "shut down, and this agent has no online grow path"))
         let reconciler = Self.reconciler(actuator)
@@ -808,7 +809,7 @@ struct VolumeReconciliationTests {
         let id = UUID()
         let actuator = MockVolumeActuator(
             volumes: [id.uuidString: .managed(Self.facts(sizeBytes: 1 << 30))])
-        await actuator.setResizeFailure(VolumeConvergenceError.unsupported("no storage backend"))
+        await actuator.setResizeFailure(ConvergenceError.unsupported("no storage backend"))
         let reconciler = Self.reconciler(actuator)
         let message = Self.sync(volumes: [Self.desired(id, generation: 3, sizeBytes: 3 << 30)])
 

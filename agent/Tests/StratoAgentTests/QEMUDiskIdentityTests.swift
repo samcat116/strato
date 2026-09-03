@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 /// STR-129: hot-plug used to name the QMP device after the volume's *device
 /// name*, so detach resolved a disk by a string the control plane had never

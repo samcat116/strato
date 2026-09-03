@@ -1,4 +1,5 @@
 import Testing
+import StratoAgentTestSupport
 import Foundation
 import Synchronization
 @testable import StratoAgentCore
@@ -169,10 +170,6 @@ struct ReconciliationTests {
 
         func setAdoptedStatus(_ status: VMStatus) {
             adoptedStatus = status
-        }
-
-        func setEdgeNonces(_ nonces: [String: AppliedEdgeNonces]) {
-            edgeNonces = nonces
         }
 
         func observedEdgeNonces() -> [String: AppliedEdgeNonces] {
@@ -894,7 +891,7 @@ struct ReconciliationTests {
         let actuator = MockActuator()
         // e.g. a VM port on a shared site NB whose switch the site's network
         // controller hasn't realized yet (issue #343).
-        await actuator.setFailure(DependencyPendingError("switch not realized yet"))
+        await actuator.setFailure(ConvergenceError.sourceNotReady("switch not realized yet"))
         let reconciler = makeReconciler(actuator)
         let message = Self.sync([Self.desired(vmId, status: .running, generation: 1)])
 

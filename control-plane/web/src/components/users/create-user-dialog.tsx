@@ -1,10 +1,13 @@
 "use client";
 
+import {
+  DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+
 import { formatDateTime } from "@/lib/format-time";
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Copy, Loader2 } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -241,31 +244,12 @@ function CreateUserForm({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            className="border-input"
-            onClick={onClose}
-            disabled={createUser.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            className="bg-primary hover:bg-primary/90"
-            disabled={createUser.isPending}
-          >
-            {createUser.isPending ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Creating...
-              </>
-            ) : (
-              "Create User"
-            )}
-          </Button>
-        </DialogFooter>
+        <DialogSubmitFooter
+          submitLabel="Create User"
+          pendingLabel="Creating..."
+          isPending={createUser.isPending}
+          onCancel={onClose}
+        />
       </form>
     </>
   );

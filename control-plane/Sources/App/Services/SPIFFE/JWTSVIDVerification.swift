@@ -77,10 +77,6 @@ enum JWTSVIDVerificationError: Error, CustomStringConvertible {
 /// verifier when the header's `alg` is compatible with that key's type, which
 /// is what closes the algorithm-confusion holes of trusting `alg` alone.
 enum JWTSVIDVerification {
-    private struct JWKSKeysEnvelope: Decodable {
-        let keys: [JSONValue]
-    }
-
     /// JWS algorithms accepted in a JWT-SVID header. All asymmetric: `none` and
     /// the HMAC family are rejected outright, since an HMAC "signature" would
     /// be forgeable by anyone holding the (public) JWKS.
@@ -97,7 +93,7 @@ enum JWTSVIDVerification {
         guard segments.count == 3 else {
             throw JWTSVIDVerificationError.malformed("expected 3 JWS segments, got \(segments.count)")
         }
-        guard let headerData = JWTSVIDVerification.base64URLDecode(String(segments[0])) else {
+        guard let headerData = Base64URL.decode(String(segments[0])) else {
             throw JWTSVIDVerificationError.malformed("header is not valid base64url")
         }
         guard let header = try? JSONDecoder().decode(IDTokenHeader.self, from: headerData) else {
@@ -122,58 +118,23 @@ enum JWTSVIDVerification {
     /// authentication — but a document yielding no usable key throws, because
     /// "no keys" can never mean "accept".
     static func makeVerifiers(jwksJSON: Data, logger: Logger? = nil) async throws -> JWTSVIDVerifiers {
-        guard let envelope = try? JSONDecoder().decode(JWKSKeysEnvelope.self, from: jwksJSON) else {
-            throw JWTSVIDVerificationError.malformed("trust domain JWKS document is malformed")
-        }
-
-        let keys = JWTKeyCollection()
-        let decoder = JSONDecoder()
-        var knownKeyIDs: Set<String> = []
-        for rawKey in envelope.keys {
-            guard var keyObject = rawKey.objectValue else { continue }
-            // SPIFFE bundles mark JWT signing keys `use: "jwt-svid"` and X.509
-            // roots `use: "x509-svid"`. Only the former are signing keys here,
-            // and JWTKit expects the JOSE spelling — so select on the SPIFFE
-            // value and hand JWTKit the JOSE one. A key with no `use` at all is
-            // taken as a signing key (a plain JWKS, e.g. from FetchJWTBundles).
-            if let use = keyObject["use"]?.stringValue {
-                guard use == "jwt-svid" || use == "sig" else { continue }
-                keyObject["use"] = .string("sig")
-            }
-            guard let keyData = try? JSONEncoder().encode(JSONValue.object(keyObject)),
-                let jwk = try? decoder.decode(JWK.self, from: keyData),
-                let kid = jwk.keyIdentifier?.string
-            else {
-                logger?.debug(
-                    "Skipping unusable key in trust domain JWKS",
-                    metadata: ["kty": .string(keyObject["kty"]?.stringValue ?? "<missing>")])
-                continue
-            }
-            do {
-                try await keys.add(jwk: jwk)
-                knownKeyIDs.insert(kid)
-            } catch {
-                logger?.debug(
-                    "Skipping unregisterable key in trust domain JWKS",
-                    metadata: ["kid": .string(kid)])
-            }
-        }
-
-        guard !knownKeyIDs.isEmpty else {
-            throw JWTSVIDVerificationError.malformed("trust domain JWKS contained no usable signing keys")
-        }
-        return JWTSVIDVerifiers(keys: keys, knownKeyIDs: knownKeyIDs)
-    }
-
-    /// Decode one base64url segment (RFC 7515 §2).
-    static func base64URLDecode(_ segment: String) -> Data? {
-        var base64 =
-            segment
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = (4 - base64.count % 4) % 4
-        base64 += String(repeating: "=", count: padding)
-        return Data(base64Encoded: base64)
+        let result = try await JWKSKeyCollectionBuilder.build(
+            jwksJSON: jwksJSON,
+            logger: logger,
+            policy: .init(
+                acceptedUses: ["jwt-svid", "sig"],
+                normalizedUse: "sig",
+                requiresKeyID: true,
+                synthesizesMissingKeyIDs: false,
+                decodeFailureMessage: "Skipping unusable key in trust domain JWKS",
+                registrationFailureMessage: "Skipping unregisterable key in trust domain JWKS"),
+            malformed: {
+                JWTSVIDVerificationError.malformed("trust domain JWKS document is malformed")
+            },
+            empty: {
+                JWTSVIDVerificationError.malformed("trust domain JWKS contained no usable signing keys")
+            })
+        return JWTSVIDVerifiers(keys: result.keys, knownKeyIDs: result.knownKeyIDs)
     }
 
     /// Whether a bearer credential looks like a compact-serialized JWS, so it

@@ -793,14 +793,10 @@ extension SecurityGroupReconciler {
 
         let observed = try await actuator.observeSecurityGroups()
         for name in teardownNames(desired: plans, observed: observed) {
-            do {
+            let removed = await attempt(logger, "tear down security-group port group \(name)") {
                 try await actuator.removePortGroup(named: name)
-            } catch {
-                fullyConverged = false
-                logger.error(
-                    "Failed to tear down security-group port group",
-                    metadata: ["portGroup": .string(name), "error": .string(error.localizedDescription)])
             }
+            fullyConverged = fullyConverged && removed
         }
         // Re-observe after both ensure and teardown. Best-effort calls alone do
         // not prove readiness: a missing planned group or an old tier-0 group

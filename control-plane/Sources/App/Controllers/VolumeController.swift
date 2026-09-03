@@ -568,35 +568,6 @@ struct VolumeController: RouteCollection {
         guard let poolForAttachment = try await volume.$pool.get(on: req.db) else {
             throw Abort(.internalServerError, reason: "Volume references a missing storage pool")
         }
-        var vmAgentForAttachment: Agent?
-        if let vmHypervisorId = vm.hypervisorId {
-            let replicaAgentIds = try await VolumeService.agentIDs(holding: volume, on: req.db)
-            guard let vmAgentID = UUID(uuidString: vmHypervisorId),
-                let vmAgent = try await Agent.find(vmAgentID, on: req.db)
-            else {
-                throw Abort(.conflict, reason: "VM's assigned agent no longer exists")
-            }
-
-            guard
-                StoragePool.agentCanReach(
-                    agent: vmAgent, pool: poolForAttachment,
-                    replicaAgentIds: replicaAgentIds)
-            else {
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "Volume is not reachable from the VM's agent. Volume is on '\(replicaAgentIds.joined(separator: ", "))', VM is on '\(vmHypervisorId)'"
-                )
-            }
-            vmAgentForAttachment = vmAgent
-        } else if poolForAttachment.mode == .ceph {
-            // Local attachment historically may precede placement. Ceph
-            // cannot: the VM host is the desired-state execution owner, and
-            // accepting without one would leave the volume on its old client
-            // with no later transition that moves it.
-            throw Abort(.conflict, reason: "Ceph attachment requires a placed VM")
-        }
-
         // A device name from the request body becomes a hypervisor object id,
         // so it is validated here rather than at the point it would otherwise
         // fail — an opaque hot-plug rejection, or a recorded attachment that
@@ -612,30 +583,14 @@ struct VolumeController: RouteCollection {
         let readonly = request.readonly ?? false
         let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
-        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
-            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
-        }
+        let project = try await volume.project(on: req.db)
 
         let attachmentPoolMode = poolForAttachment.mode
-        let attachmentVMHost = vmAgentForAttachment?.id?.uuidString
         let previousReconciler = volume.reconcilerAgentId
         let accepted = try await req.resourceMutation.accept(
             .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable tx in
-            if attachmentPoolMode == .ceph,
-                let currentReconciler = volume.reconcilerAgentId,
-                let vmHost = attachmentVMHost,
-                currentReconciler != vmHost,
-                !volume.isConverged
-            {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "The previous Ceph detach has not converged on its current client. "
-                        + "Wait for the volume's observed generation before attaching it on another host.")
-            }
-
             // A cloned or image-backed volume is materialized at the source's
             // virtual size, which can exceed the size the caller requested.
             // Wait until the owning agent has measured it, then reserve any
@@ -681,9 +636,48 @@ struct VolumeController: RouteCollection {
                 bootOrder: bootOrder,
                 readonly: readonly,
                 on: tx)
+
+            // `claim` locks and refreshes the VM row. Resolve reachability only
+            // after that refresh: placement may have moved while this request
+            // was waiting for the volume/attachment locks.
+            let replicaAgentIds = try await VolumeService.agentIDs(holding: volume, on: tx)
+            guard let currentPool = try await volume.$pool.get(on: tx) else {
+                throw Abort(.internalServerError, reason: "Volume references a missing storage pool")
+            }
+            if let vmHypervisorID = vm.hypervisorId {
+                guard let vmAgentID = UUID(uuidString: vmHypervisorID),
+                    let vmAgent = try await Agent.find(vmAgentID, on: tx)
+                else {
+                    throw Abort(.conflict, reason: "VM's assigned agent no longer exists")
+                }
+                guard
+                    StoragePool.agentCanReach(
+                        agent: vmAgent, pool: currentPool,
+                        replicaAgentIds: replicaAgentIds)
+                else {
+                    throw Abort(
+                        .badRequest,
+                        reason:
+                            "Volume is not reachable from the VM's agent. Volume is on '\(replicaAgentIds.joined(separator: ", "))', VM is on '\(vmHypervisorID)'"
+                    )
+                }
+            } else if attachmentPoolMode == .ceph {
+                throw Abort(.conflict, reason: "Ceph attachment requires a placed VM")
+            }
+
             if attachmentPoolMode == .ceph {
-                guard let vmHost = attachmentVMHost else {
+                guard let vmHost = vm.hypervisorId else {
                     throw Abort(.conflict, reason: "Ceph attachment requires a placed VM")
+                }
+                if let currentReconciler = volume.reconcilerAgentId,
+                    currentReconciler != vmHost,
+                    !volume.isConverged
+                {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "The previous Ceph detach has not converged on its current client. "
+                            + "Wait for the volume's observed generation before attaching it on another host.")
                 }
                 volume.reconcilerAgentId = vmHost
             }
@@ -816,9 +810,7 @@ struct VolumeController: RouteCollection {
 
         let previousSize = volume.size
         let userID = try user.requireID()
-        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
-            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
-        }
+        let project = try await volume.project(on: req.db)
         let environment = volume.environment
         let accepted = try await req.resourceMutation.accept(
             .resize, on: volume, actor: .user(userID), dispatch: .stateSync,
@@ -1012,9 +1004,7 @@ struct VolumeController: RouteCollection {
         snapshot.extendConvergenceDeadline(
             by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create))
 
-        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
-            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
-        }
+        let project = try await volume.project(on: req.db)
 
         // Creator binding on the snapshot, in the same transaction as the row
         // (issue #477), alongside the attribution event — behind the storage
@@ -1117,9 +1107,7 @@ struct VolumeController: RouteCollection {
         // Same create-only transaction as the ordinary volume path: reserve
         // the clone's full storage footprint first, then make generation 1,
         // attribution, and creator access visible together.
-        guard let sourceProject = try await Project.find(sourceVolume.$project.id, on: req.db) else {
-            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
-        }
+        let sourceProject = try await sourceVolume.project(on: req.db)
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)

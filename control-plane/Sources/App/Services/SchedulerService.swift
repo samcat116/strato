@@ -732,9 +732,3 @@ extension Application {
         self.setStorageValue(SchedulerServiceKey.self, to: scheduler)
     }
 }
-
-extension Request {
-    var scheduler: SchedulerService {
-        get throws { try self.application.scheduler }
-    }
-}

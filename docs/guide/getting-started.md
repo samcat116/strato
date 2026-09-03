@@ -45,14 +45,14 @@ Libvirt 11.5 is the local-disk QEMU floor. QEMU with project-namespaced RBD
 needs libvirt 11.6+; Firecracker clients that map RBD through krbd do not need
 libvirt.
 
-#### macOS (development only)
+#### macOS (control-plane and client development only)
 
 - macOS 15.0 or later
-- QEMU: `brew install qemu`
+- QEMU utilities: `brew install qemu`
 - Xcode Command Line Tools
 
-Networking on macOS is QEMU user-mode only — outbound NAT, no inbound and no
-VM-to-VM traffic. Use it for development and testing, not production.
+The agent has no macOS hypervisor driver and cannot host VMs or sandboxes.
+Use macOS for control-plane, CLI, and simulation-mode development only.
 
 ## Installation
 

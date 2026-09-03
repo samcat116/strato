@@ -81,9 +81,7 @@ extension SandboxController {
             // complete copy already exists, since re-exporting overwrites the
             // same keys and adds nothing.
             if !current.isExported {
-                guard let project = try await Project.find(current.$project.id, on: db) else {
-                    throw Abort(.conflict, reason: "Snapshot's project no longer exists")
-                }
+                let project = try await current.project(on: db)
                 try await QuotaEnforcementService.reserveSnapshotStorage(
                     for: project, environment: current.environment,
                     size: current.size ?? 0, on: db)

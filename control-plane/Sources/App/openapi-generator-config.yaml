@@ -1,8 +1,9 @@
 generate:
-  - types
   - server
 accessModifier: public
 namingStrategy: idiomatic
+additionalImports:
+  - StratoAPITypes
 # Incremental adoption (issue #583): only the surfaces already migrated onto
 # generated handlers are emitted, so `APIProtocol` stays implementable without
 # having to port all ~70 operations at once. Add a surface's operationIds here

@@ -10,6 +10,7 @@ import Vapor
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
     private static let expectedCatalogMD5 = "848631eafc007aca56e77448502c7d5e"
+    private static let expectedCurrentCatalogMD5 = "7803167fccae80130778a2d05af6dfe6"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -39,6 +40,39 @@ struct CurrentSchemaBaselineTests {
 
             let catalogMD5 = try await catalogMD5(on: app.db)
             #expect(catalogMD5 == Self.expectedCatalogMD5)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("The frozen baseline plus the complete forward chain reaches the reviewed current schema")
+    func completeForwardChainReachesCurrentSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            app.migrations.add(CurrentSchemaBaseline())
+            try await app.autoMigrate()
+            let baselineMD5 = try await catalogMD5(on: app.db)
+            let baselineCounts = try await catalogCounts(on: app.db)
+
+            app.registerForwardMigrations()
+            try await app.autoMigrate()
+            let upgradedMD5 = try await catalogMD5(on: app.db)
+            let upgradedCounts = try await catalogCounts(on: app.db)
+
+            #expect(baselineMD5 == Self.expectedCatalogMD5)
+            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
+            #expect(upgradedCounts.tables == 78)
+            #expect(upgradedCounts.columns == 1002)
+            #expect(upgradedCounts.constraints == 370)
+            #expect(upgradedCounts.indexes == 240)
+            #expect(upgradedCounts.enums == baselineCounts.enums)
+            #expect(upgradedCounts.triggers == baselineCounts.triggers)
+            #expect(upgradedCounts.functions == baselineCounts.functions)
+            let logs = try await MigrationLog.query(on: app.db).sort(\.$batch).all()
+            #expect(logs.first?.name == CurrentSchemaBaseline().name)
+            #expect(logs.count > 1, "the equivalence check must exercise the forward chain")
         } catch {
             try? await app.shutdownForTesting()
             throw error
@@ -417,7 +451,7 @@ struct CurrentSchemaBaselineTests {
     }
 }
 
-private struct CatalogCounts: Decodable {
+private struct CatalogCounts: Decodable, Equatable {
     let tables: Int
     let columns: Int
     let constraints: Int

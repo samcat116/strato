@@ -45,7 +45,6 @@ jobs:
         uses: actions/checkout@v4
 
       # libjemalloc-dev: the control-plane binary links -ljemalloc.
-      # unzip: setup-bun needs it to extract its download.
       # arm64 runs as root inside the Swift container (which has no sudo
       # binary); x64 runs as the runner image's non-root user (passwordless
       # sudo) — hence the guard.
@@ -54,26 +53,8 @@ jobs:
           SUDO=""
           command -v sudo >/dev/null && SUDO=sudo
           $SUDO apt-get update
-          $SUDO apt-get install -y libjemalloc-dev unzip
+          $SUDO apt-get install -y libjemalloc-dev
 
-      # Build-cache strategy differs by arch:
-      #
-      # x64 runs on the swift-runners-strato ARC scale set and keeps its build
-      # tree in a scratch dir under RUNNER_TOOL_CACHE via --scratch-path rather
-      # than actions/cache, which never helped here: "every run paid a ~5
-      # minute 1.4GB upload for a restore that always missed" (see build.yaml).
-      #
-      # NOTE that tree is NOT warm, despite what this comment asserted until
-      # now. /home/runner/_work is an emptyDir in the runner pod spec and every
-      # job gets a fresh pod, so RUNNER_TOOL_CACHE starts empty and the release
-      # build runs fully cold every time. That is why the x64 leg takes ~16
-      # minutes to build the control plane where arm64 — same commit, also 4
-      # cores, but restoring a warm .build from actions/cache — takes ~4.
-      # build.yaml's jobs now claim a slot from a persistent hostPath pool
-      # instead (.github/scripts/claim-build-scratch.sh); adopting that here is
-      # a straightforward follow-up, and easier than it is there because this
-      # workflow's concurrency group makes it single-writer by construction.
-      #
       # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
       # volume, so it stays on actions/cache + the default .build path. That
       # cache is affordable again for two reasons: the repo is public (Actions
@@ -82,35 +63,6 @@ jobs:
       # GHCR — those type=gha blobs were ~3.8GB of the ~11GB that used to evict
       # this 1.6GB .build between runs. There is far more headroom now than
       # before that change.
-      - name: Configure release build cache
-        run: |
-          if [ "${{ matrix.arch }}" = "x64" ]; then
-            root="$RUNNER_TOOL_CACHE/strato-swift-build-release"
-            echo "CP_SCRATCH_ARG=$root/control-plane" >> "$GITHUB_ENV"
-            echo "AGENT_SCRATCH_ARG=$root/agent" >> "$GITHUB_ENV"
-          else
-            echo "CP_SCRATCH_ARG=" >> "$GITHUB_ENV"
-            echo "AGENT_SCRATCH_ARG=" >> "$GITHUB_ENV"
-          fi
-
-      # Dead code today — the emptyDir means nothing survives to be oversized —
-      # but kept as-is so it starts working the moment this workflow adopts the
-      # persistent pool, which is when a tree can actually grow across runs.
-      - name: Prune release build scratch if oversized
-        if: matrix.arch == 'x64'
-        run: |
-          for scratch in \
-            "$RUNNER_TOOL_CACHE/strato-swift-build-release/control-plane" \
-            "$RUNNER_TOOL_CACHE/strato-swift-build-release/agent"; do
-            if [ -d "$scratch" ]; then
-              size_kb=$(du -sk "$scratch" | cut -f1)
-              if [ "$size_kb" -gt $((12 * 1024 * 1024)) ]; then
-                echo "$scratch is $((size_kb / 1024 / 1024))GB (>12GB); wiping for a cold rebuild"
-                rm -rf "$scratch"
-              fi
-            fi
-          done
-
       # Cache key salt (`v2`): #386 moved the x64 leg out of the swift job
       # container, poisoning the pre-#386 .build ModuleCache; the salt bump
       # sidestepped it. x64 no longer uses this step (see above); arm64 does.
@@ -126,51 +78,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-
 
-      # Identical to the step in build.yaml: probe the shared SwiftPM cache
-      # hostPath and fall back to a pod-local (cold) dir when it is absent.
-      # SwiftPM will not create a missing cache root itself — an unwritable
-      # /cache/swiftpm fails every build with "invalid access" — so the mount
-      # being absent has to degrade rather than break the run. On arm64 the
-      # mount never exists (GitHub-hosted); the fallback covers it, and moving
-      # that leg's SwiftPM cache off ~/.cache is neutral because actions/cache
-      # only ever saved the .build trees.
-      - name: Resolve SwiftPM shared cache path
-        run: |
-          shared=/cache/swiftpm
-          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
-            echo "using shared SwiftPM cache at $shared"
-            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
-          else
-            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
-            mkdir -p "$fallback"
-            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
-            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
-          fi
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install frontend dependencies
-        working-directory: control-plane/web
-        run: bun install --frozen-lockfile
-
-      - name: Build frontend
-        working-directory: control-plane/web
-        run: bun run build
+      - name: Prepare Swift build environment
+        uses: ./.github/actions/swift-build-env
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane
-        # On x64 the release build tree lives in a pod-local scratch dir;
-        # on arm64 CP_SCRATCH_ARG is empty (default .build). POSIX positional
-        # params ("set --" / "$@") keep the empty case a no-op and stay valid in
-        # the arm64 job container's /bin/sh (dash), which has no bash arrays.
         run: |
-          set --
-          [ -n "$CP_SCRATCH_ARG" ] && set -- --scratch-path "$CP_SCRATCH_ARG"
-          swift build -c release --product App -Xlinker -ljemalloc -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@"
-          BIN="$(swift build -c release --show-bin-path -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@")"
+          swift build -c release --product App -Xlinker -ljemalloc -j 4 --cache-path "$SWIFTPM_CACHE_PATH"
+          BIN="$(swift build -c release --show-bin-path -j 4 --cache-path "$SWIFTPM_CACHE_PATH")"
           # Create artifact directory structure
           mkdir -p ../artifacts/control-plane/bin
           mkdir -p ../artifacts/control-plane/resources
@@ -191,15 +106,9 @@ jobs:
 
       - name: Build Agent Release Binary
         working-directory: agent
-        # On x64 the release build tree lives in a pod-local scratch dir;
-        # on arm64 AGENT_SCRATCH_ARG is empty (default .build). POSIX positional
-        # params ("set --" / "$@") keep the empty case a no-op and stay valid in
-        # the arm64 job container's /bin/sh (dash), which has no bash arrays.
         run: |
-          set --
-          [ -n "$AGENT_SCRATCH_ARG" ] && set -- --scratch-path "$AGENT_SCRATCH_ARG"
-          swift build -c release --product StratoAgent -Xlinker -ljemalloc -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@"
-          BIN="$(swift build -c release --show-bin-path -j 4 --cache-path "$SWIFTPM_CACHE_PATH" "$@")"
+          swift build -c release --product StratoAgent -Xlinker -ljemalloc -j 4 --cache-path "$SWIFTPM_CACHE_PATH"
+          BIN="$(swift build -c release --show-bin-path -j 4 --cache-path "$SWIFTPM_CACHE_PATH")"
           mkdir -p ../artifacts/agent/bin
           mkdir -p ../artifacts/agent/resources
           cp "$BIN/StratoAgent" ../artifacts/agent/bin/

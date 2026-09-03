@@ -10,7 +10,7 @@ import type {
   CreateSCIMTokenRequest,
   CreateSCIMTokenResponse,
   UpdateSCIMTokenRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const scimTokensApi = {
   list(orgId: string, signal?: AbortSignal): Promise<SCIMToken[]> {

@@ -949,20 +949,4 @@ extension NetworkReconciler {
         }
     }
 
-    /// Run one side effect, logging and swallowing its error. Returns whether it
-    /// succeeded, so callers can skip dependent steps for a failed object.
-    @discardableResult
-    private static func attempt(
-        _ logger: Logger, _ what: String, _ body: () async throws -> Void
-    ) async -> Bool {
-        do {
-            try await body()
-            return true
-        } catch {
-            logger.error(
-                "Network reconcile step failed",
-                metadata: ["step": .string(what), "error": .string(error.localizedDescription)])
-            return false
-        }
-    }
 }

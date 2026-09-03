@@ -175,25 +175,9 @@ public struct MTLSArtifactDownloader: Sendable {
     /// downloads, for the same SVID-rotation reason.
     @Sendable
     public func uploadFile(url: URL, fromFile sourcePath: String) async throws {
-        var configuration = HTTPClient.Configuration()
-        do {
-            configuration.tlsConfiguration = try await tlsConfigurationProvider()
-        } catch {
-            throw DownloadFailure(
-                reason: "no SVID available for mTLS upload: \(error)", isTransient: false)
-        }
-        configuration.timeout.connect = timeouts.connect
-        configuration.timeout.read = timeouts.read
-        configuration.connectionPool.retryConnectionEstablishment = false
-
-        let client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
-        do {
+        try await withClient(purpose: "upload") { client in
             try await uploadWithClient(client, url: url, sourcePath: sourcePath)
-        } catch {
-            try? await client.shutdown()
-            throw error
         }
-        try await client.shutdown()
     }
 
     private func uploadWithClient(_ client: HTTPClient, url: URL, sourcePath: String) async throws {
@@ -253,26 +237,9 @@ public struct MTLSArtifactDownloader: Sendable {
     public func poll(url: URL, ifNoneMatch: String?, maximumBodyBytes: Int = 64 << 20) async throws
         -> DesiredStatePollResponse
     {
-        var configuration = HTTPClient.Configuration()
-        do {
-            configuration.tlsConfiguration = try await tlsConfigurationProvider()
-        } catch {
-            throw DownloadFailure(
-                reason: "no SVID available for mTLS poll: \(error)", isTransient: false)
-        }
-        configuration.timeout.connect = timeouts.connect
-        configuration.timeout.read = timeouts.read
-        configuration.connectionPool.retryConnectionEstablishment = false
-
-        let client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
-        do {
-            let response = try await pollWithClient(
+        try await withClient(purpose: "poll") { client in
+            try await pollWithClient(
                 client, url: url, ifNoneMatch: ifNoneMatch, maximumBodyBytes: maximumBodyBytes)
-            try await client.shutdown()
-            return response
-        } catch {
-            try? await client.shutdown()
-            throw error
         }
     }
 
@@ -293,20 +260,8 @@ public struct MTLSArtifactDownloader: Sendable {
             throw DownloadFailure(reason: "invalid control-plane URL", isTransient: false)
         }
 
-        var configuration = HTTPClient.Configuration()
-        do {
-            configuration.tlsConfiguration = try await tlsConfigurationProvider()
-        } catch {
-            throw DownloadFailure(
-                reason: "no SVID available for guest identity minting: \(error)",
-                isTransient: false)
-        }
-        configuration.timeout.connect = timeouts.connect
-        configuration.timeout.read = .seconds(10)
-        configuration.connectionPool.retryConnectionEstablishment = false
-
-        let client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
-        do {
+        return try await withClient(readTimeout: .seconds(10), purpose: "guest identity minting") {
+            client in
             var request = HTTPClientRequest(url: url.absoluteString)
             request.method = .POST
             request.headers.add(name: "Content-Type", value: "application/json")
@@ -327,13 +282,8 @@ public struct MTLSArtifactDownloader: Sendable {
                     isTransient: transient)
             }
             let body = try await response.body.collect(upTo: 64 * 1024)
-            let decoded = try WireProtocol.makeDecoder().decode(
+            return try WireProtocol.makeDecoder().decode(
                 GuestJWTSVIDResponse.self, from: Data(body.readableBytesView))
-            try await client.shutdown()
-            return decoded
-        } catch {
-            try? await client.shutdown()
-            throw error
         }
     }
 
@@ -378,17 +328,29 @@ public struct MTLSArtifactDownloader: Sendable {
     /// caller stages into a private path and verifies a checksum before
     /// publishing, so cleanup-on-error is their concern, not a correctness one.
     private func stream(url: URL, to destinationPath: String) async throws {
+        try await withClient(purpose: "download") { client in
+            try await streamWithClient(client, url: url, to: destinationPath)
+        }
+    }
+
+    /// Builds a short-lived client from the current SVID, runs one operation,
+    /// and always shuts the client down. Looking up TLS per call is what lets
+    /// long-running agents pick up rotated credentials without mutable client
+    /// state.
+    private func withClient<T>(
+        readTimeout: TimeAmount? = nil,
+        purpose: String,
+        _ operation: (HTTPClient) async throws -> T
+    ) async throws -> T {
         var configuration = HTTPClient.Configuration()
         do {
             configuration.tlsConfiguration = try await tlsConfigurationProvider()
         } catch {
-            // No SVID means no credential to present; retrying the same
-            // operation won't mint one mid-flight.
             throw DownloadFailure(
-                reason: "no SVID available for mTLS download: \(error)", isTransient: false)
+                reason: "no SVID available for mTLS \(purpose): \(error)", isTransient: false)
         }
         configuration.timeout.connect = timeouts.connect
-        configuration.timeout.read = timeouts.read
+        configuration.timeout.read = readTimeout ?? timeouts.read
         // AsyncHTTPClient retries connection establishment internally by
         // default. Every caller here already sits inside a retry loop that
         // classifies connection errors as transient and backs off
@@ -400,12 +362,13 @@ public struct MTLSArtifactDownloader: Sendable {
 
         let client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: configuration)
         do {
-            try await streamWithClient(client, url: url, to: destinationPath)
+            let result = try await operation(client)
+            try await client.shutdown()
+            return result
         } catch {
             try? await client.shutdown()
             throw error
         }
-        try await client.shutdown()
     }
 
     private func streamWithClient(_ client: HTTPClient, url: URL, to destinationPath: String) async throws {

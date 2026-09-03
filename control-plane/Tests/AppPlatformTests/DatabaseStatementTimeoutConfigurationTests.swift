@@ -11,52 +11,6 @@ import Vapor
 @Suite("Database Statement Timeout Configuration")
 struct DatabaseStatementTimeoutConfigurationTests {
 
-    @Test("Defaults to five minutes when the environment value is absent")
-    func defaultValue() throws {
-        let timeout = try DatabaseStatementTimeout.resolve(nil)
-        #expect(timeout.milliseconds == 300_000)
-    }
-
-    @Test("Accepts positive integer milliseconds")
-    func positiveInteger() throws {
-        #expect(try DatabaseStatementTimeout.resolve("1").milliseconds == 1)
-        #expect(
-            try DatabaseStatementTimeout.resolve(String(Int32.max)).milliseconds
-                == Int(Int32.max)
-        )
-    }
-
-    @Test(
-        "Rejects empty, non-integer, zero, negative, and out-of-range values",
-        arguments: ["", " ", "1.5", "one", "0", "-1", "2147483648"]
-    )
-    func invalidValue(raw: String) {
-        #expect(throws: DatabaseStatementTimeoutConfigurationError.self) {
-            try DatabaseStatementTimeout.resolve(raw)
-        }
-    }
-
-    @Test("Migration timeout defaults to serving timeout and validates its own setting")
-    func migrationValue() throws {
-        let normal = try DatabaseStatementTimeout(milliseconds: 42_000)
-        #expect(
-            try DatabaseStatementTimeout.resolveMigration(nil, defaultingTo: normal)
-                == normal
-        )
-        #expect(
-            try DatabaseStatementTimeout.resolveMigration("900000", defaultingTo: normal)
-                .milliseconds == 900_000
-        )
-
-        var description: String?
-        do {
-            _ = try DatabaseStatementTimeout.resolveMigration("0", defaultingTo: normal)
-        } catch {
-            description = String(describing: error)
-        }
-        #expect(description?.contains(DatabaseStatementTimeout.migrationEnvironmentKey) == true)
-    }
-
     @Test("Does not add statement_timeout to the PostgreSQL startup packet")
     func avoidsStartupParameter() throws {
         var configuration = PostgresTestDatabases.configuration(database: "strato_test")

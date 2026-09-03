@@ -126,9 +126,6 @@ extension Application {
         get {
             lazyService(WebSocketManagerKey.self) { WebSocketManager() }
         }
-        set {
-            setStorageValue(WebSocketManagerKey.self, to: newValue)
-        }
     }
 
     private struct AgentServiceKey: StorageKey, LockKey {
@@ -138,9 +135,6 @@ extension Application {
     var agentService: AgentService {
         get {
             lazyService(AgentServiceKey.self) { AgentService(app: self) }
-        }
-        set {
-            setStorageValue(AgentServiceKey.self, to: newValue)
         }
     }
 

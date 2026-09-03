@@ -76,7 +76,7 @@ struct AgentWorkloadClaimEnumConstraintTests {
                 try await sql.raw(
                     """
                     SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
-                    WHERE conname = \(bind: AgentWorkloadClaim.resourceKindConstraintName)
+                    WHERE conname = 'ck_agent_workload_claims_resource_kind_enum'
                     """
                 ).first()
             )

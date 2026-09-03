@@ -497,43 +497,12 @@ jobs:
       # Separate pool from the control-plane job: the two build disjoint
       # component sets, so sharing a pool would have each of them repeatedly
       # landing on a slot warmed for the other.
-      - name: Claim build scratch slot
-        run: bash .github/scripts/claim-build-scratch.sh packages
-
-      # The shared/ and firecracker/ dirs are orphaned — those packages no
-      # longer build standalone (the agent build compiles both). Remove any a
-      # previous run left behind in this slot, then prune what is still live.
-      - name: Prune build scratch dirs if oversized
-        run: |
-          rm -rf "$BUILD_SCRATCH_ROOT/shared" "$BUILD_SCRATCH_ROOT/firecracker"
-          for scratch in "$BUILD_SCRATCH_ROOT/agent" "$BUILD_SCRATCH_ROOT/cli" "$BUILD_SCRATCH_ROOT/api-client"; do
-            if [ -d "$scratch" ]; then
-              size_kb=$(du -sk "$scratch" | cut -f1)
-              if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
-                echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
-                rm -rf "$scratch"
-              fi
-            fi
-          done
-
-      # Probe the shared SwiftPM cache hostPath and export SWIFTPM_CACHE_PATH.
-      # SwiftPM will not create a missing cache root itself — an unwritable
-      # /cache/swiftpm makes every `swift build` fail with "invalid access" — so
-      # when the homelab-provisioned mount is absent we fall back to a pod-local
-      # (cold) directory instead. Written to $GITHUB_ENV so the build steps
-      # below pick it up.
-      - name: Resolve SwiftPM shared cache path
-        run: |
-          shared=/cache/swiftpm
-          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
-            echo "using shared SwiftPM cache at $shared"
-            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
-          else
-            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
-            mkdir -p "$fallback"
-            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
-            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
-          fi
+      - name: Prepare Swift build environment
+        uses: ./.github/actions/swift-build-env
+        with:
+          pool: packages
+          scratch-dirs: agent cli api-client
+          orphan-dirs: shared firecracker
 
       # There is no standalone shared/ or SwiftFirecracker/ build step: both are
       # `.package(path:)` dependencies of the agent (and shared/ of the control
@@ -568,7 +537,7 @@ jobs:
       # the control plane's, so a spec change that breaks generation fails here
       # rather than in a downstream consumer.
       - name: Build Swift API Client
-        if: ${{ !cancelled() && (needs.changes.outputs.api_client == 'true' || needs.changes.outputs.cp_backend == 'true' || needs.changes.outputs.workflow == 'true') }}
+        if: ${{ !cancelled() && (needs.changes.outputs.api_client == 'true' || needs.changes.outputs.openapi_spec == 'true' || needs.changes.outputs.workflow == 'true') }}
         working-directory: clients/swift
         run: bash "$GITHUB_WORKSPACE/.github/scripts/swift-build.sh" "$BUILD_SCRATCH_ROOT/api-client" -j 4 --cache-path "$SWIFTPM_CACHE_PATH" --force-resolved-versions
 
@@ -597,40 +566,12 @@ jobs:
       # disjoint component sets, so sharing one pool would have each of them
       # repeatedly claiming a slot warmed for the other. See the claim step in
       # the packages job for how slots work.
-      - name: Claim build scratch slot
-        run: bash .github/scripts/claim-build-scratch.sh control-plane
-
-      # Prune only inside the claimed slot — sibling jobs hold other slots on
-      # the same volume, so reaching above it would delete an in-flight tree.
-      # The control-plane-postgres dir is orphaned (its job merged into this
-      # one); remove it if an older run left one behind in this slot.
-      - name: Prune build scratch dir if oversized
-        run: |
-          rm -rf "$BUILD_SCRATCH_ROOT/control-plane-postgres"
-          scratch="$BUILD_SCRATCH_ROOT/control-plane"
-          if [ -d "$scratch" ]; then
-            size_kb=$(du -sk "$scratch" | cut -f1)
-            if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
-              echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
-              rm -rf "$scratch"
-            fi
-          fi
-
-      # See the identical step in the packages job: probe the shared cache mount
-      # and fall back to a pod-local (cold) directory when it is absent, so a
-      # missing /cache/swiftpm degrades instead of failing the build.
-      - name: Resolve SwiftPM shared cache path
-        run: |
-          shared=/cache/swiftpm
-          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
-            echo "using shared SwiftPM cache at $shared"
-            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
-          else
-            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
-            mkdir -p "$fallback"
-            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
-            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
-          fi
+      - name: Prepare Swift build environment
+        uses: ./.github/actions/swift-build-env
+        with:
+          pool: control-plane
+          scratch-dirs: control-plane
+          orphan-dirs: control-plane-postgres
 
       - name: Build Control Plane
         working-directory: control-plane

@@ -11,15 +11,13 @@ import Vapor
 /// A server-enforced upper bound for statements issued through control-plane
 /// PostgreSQL connections.
 struct DatabaseStatementTimeout: Equatable, Sendable {
-    static let environmentKey = "DATABASE_STATEMENT_TIMEOUT_MS"
-    static let migrationEnvironmentKey = "DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS"
     static let defaultMilliseconds = 300_000
     static let maximumMilliseconds = Int(Int32.max)
 
     let milliseconds: Int
 
     init(milliseconds: Int) throws {
-        try self.init(milliseconds: milliseconds, environmentKey: Self.environmentKey)
+        try self.init(milliseconds: milliseconds, environmentKey: "DATABASE_STATEMENT_TIMEOUT_MS")
     }
 
     private init(milliseconds: Int, environmentKey: String) throws {
@@ -30,51 +28,6 @@ struct DatabaseStatementTimeout: Equatable, Sendable {
             )
         }
         self.milliseconds = milliseconds
-    }
-
-    /// Resolve an explicit environment value, or the documented five-minute
-    /// default when it is absent. Split out so tests do not mutate the process
-    /// environment while other suites read it concurrently.
-    static func resolve(_ raw: String?) throws -> DatabaseStatementTimeout {
-        try resolve(
-            raw,
-            environmentKey: environmentKey,
-            defaultMilliseconds: defaultMilliseconds
-        )
-    }
-
-    static func resolveMigration(
-        _ raw: String?,
-        defaultingTo normalTimeout: DatabaseStatementTimeout
-    ) throws -> DatabaseStatementTimeout {
-        try resolve(
-            raw,
-            environmentKey: migrationEnvironmentKey,
-            defaultMilliseconds: normalTimeout.milliseconds
-        )
-    }
-
-    private static func resolve(
-        _ raw: String?,
-        environmentKey: String,
-        defaultMilliseconds: Int
-    ) throws -> DatabaseStatementTimeout {
-        guard let raw else {
-            return try DatabaseStatementTimeout(
-                milliseconds: defaultMilliseconds,
-                environmentKey: environmentKey
-            )
-        }
-        guard let milliseconds = Int(raw), (1...maximumMilliseconds).contains(milliseconds) else {
-            throw DatabaseStatementTimeoutConfigurationError.invalidValue(
-                environmentKey: environmentKey,
-                raw: raw
-            )
-        }
-        return try DatabaseStatementTimeout(
-            milliseconds: milliseconds,
-            environmentKey: environmentKey
-        )
     }
 
     /// Wrap a PostgreSQL Fluent configuration so each physical connection is

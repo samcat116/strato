@@ -147,6 +147,53 @@ final class VolumeObservedSizeTests {
         }
     }
 
+    @Test("A source-backed data volume reserves its materialized size before attachment")
+    func sourceBackedDataVolumeReservesMaterializedSize() async throws {
+        try await withVolumeApp { app, user, project in
+            let agentId = try await self.registerAgent(app: app, named: "materialized-data-agent")
+            let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "materialized-data", maxStorageGB: 4, project: project)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let requestedSize: Int64 = 2 << 30
+            let materializedSize: Int64 = 3 << 30
+            let volume = try await self.makeVolume(
+                app: app,
+                user: user,
+                project: project,
+                agentId: agentId,
+                size: requestedSize,
+                generation: 1,
+                observedGeneration: 0)
+            volume.$sourceImage.id = try image.requireID()
+            try await volume.save(on: app.db)
+
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try volume.requireID(),
+                            present: true,
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/data/volume.qcow2", format: .qcow2),
+                            sizeBytes: materializedSize,
+                            observedGeneration: 1)
+                    ]))
+
+            let admitted = try #require(try await Volume.find(try volume.requireID(), on: app.db))
+            #expect(admitted.size == materializedSize)
+            #expect(admitted.observedSizeBytes == materializedSize)
+            #expect(admitted.generation == 2)
+            #expect(admitted.observedGeneration == 1)
+            #expect(admitted.$vm.id == nil, "accounting must not wait for attachment")
+
+            let updatedQuota = try #require(
+                try await ResourceQuota.find(try quota.requireID(), on: app.db))
+            #expect(updatedQuota.reservedStorage == materializedSize)
+        }
+    }
+
     /// End-to-end through report application for STR-242 and STR-247. The agent
     /// may report the VM's target generation and `Running` in the same heartbeat
     /// that still shows the image-backed root disk at its 112 MiB source size.

@@ -37,13 +37,12 @@ struct ByteConversionTests {
         #expect(Int.max.gbToBytes == nil)
     }
 
-    @Test("Double gbToBytes saturates instead of trapping on out-of-range input (issue #676)")
-    func testDoubleGBToBytesSaturates() {
-        // Before the fix `Int64(_:Double)` trapped on an out-of-range operand.
-        #expect(1e30.gbToBytes == Int64.max)
-        #expect((-1e30).gbToBytes == Int64.min)
-        #expect(Double.infinity.gbToBytes == Int64.max)
-        #expect(Double.nan.gbToBytes == 0)
+    @Test("Double gbToBytes rejects non-finite and out-of-range input")
+    func testDoubleGBToBytesRejectsOutOfRange() {
+        #expect(1e30.gbToBytes == nil)
+        #expect((-1e30).gbToBytes == nil)
+        #expect(Double.infinity.gbToBytes == nil)
+        #expect(Double.nan.gbToBytes == nil)
     }
 }
 

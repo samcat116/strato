@@ -11,8 +11,9 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
-        .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
+        .package(
+            url: "https://github.com/samcat116/swift-toml.git",
+            revision: "10094db34a4eade03c0fc0b1a60ea90df76af93e"),
         // The generated API client (issue #583). Its `openapi.yaml` is a
         // symlink to the control plane's, so the CLI is compiled against the
         // server's own contract: a breaking spec change breaks this build
@@ -32,7 +33,6 @@ let package = Package(
         .target(
             name: "StratoCLICore",
             dependencies: [
-                .product(name: "Logging", package: "swift-log"),
                 .product(name: "Toml", package: "swift-toml"),
                 .product(name: "StratoAPIClient", package: "strato-api-client"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),

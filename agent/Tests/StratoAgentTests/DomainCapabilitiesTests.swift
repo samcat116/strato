@@ -1,6 +1,7 @@
 import Testing
 
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 /// Whether this host can back a guest vTPM is libvirt's answer to give
 /// (STR-136), and it arrives as a `virsh domcapabilities` document. Getting the

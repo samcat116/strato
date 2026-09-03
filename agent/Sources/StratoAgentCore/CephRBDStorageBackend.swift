@@ -10,7 +10,7 @@ import StratoShared
 public actor CephRBDStorageBackend: CephStorageBackend {
     public static let defaultRBDPath = "/usr/bin/rbd"
     public static let defaultVirshPath = "/usr/bin/virsh"
-    public static let defaultClientRoot = "/var/lib/strato/ceph"
+    public static let defaultClientRoot = CephVolumeStorage.defaultClientRoot
     public static let imagePrefix = CephVolumeStorage.imagePrefix
     public static let snapshotPrefix = "strato-snapshot-"
     private static let importImagePrefix = "strato-import-"
@@ -71,13 +71,15 @@ public actor CephRBDStorageBackend: CephStorageBackend {
     public nonisolated static func clientDirectory(
         root: String = defaultClientRoot, clusterId: UUID, credentialId: UUID
     ) -> String {
-        "\(root)/\(clusterId.uuidString.lowercased())/\(credentialId.uuidString.lowercased())"
+        CephVolumeStorage.clientDirectory(
+            root: root, clusterId: clusterId, credentialId: credentialId)
     }
 
     public nonisolated static func configPath(
         root: String = defaultClientRoot, clusterId: UUID, credentialId: UUID
     ) -> String {
-        "\(clientDirectory(root: root, clusterId: clusterId, credentialId: credentialId))/ceph.conf"
+        CephVolumeStorage.configPath(
+            root: root, clusterId: clusterId, credentialId: credentialId)
     }
 
     public nonisolated static func keyringPath(

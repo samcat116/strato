@@ -79,14 +79,4 @@ final class VMCommandPayload: Model, @unchecked Sendable {
         self.command = command
     }
 
-    func recordResult(
-        stdout: Data, stderr: Data, exitCode: Int?, truncated: Bool,
-        resultRevision: Int64? = nil
-    ) {
-        self.stdout = stdout
-        self.stderr = stderr
-        self.exitCode = exitCode
-        self.truncated = truncated
-        self.resultRevision = resultRevision
-    }
 }

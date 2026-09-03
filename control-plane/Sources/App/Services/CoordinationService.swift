@@ -1034,7 +1034,7 @@ extension Application {
             }
         }
         set {
-            setStorageValue(CoordinationServiceKey.self, to: newValue)
+            setService(CoordinationServiceKey.self, to: newValue)
         }
     }
 }

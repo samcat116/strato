@@ -23,13 +23,6 @@ data:
         default_x509_svid_ttl = "{{ .Values.spire.svidTTL }}"
         default_jwt_svid_ttl = "{{ .Values.spire.jwtSvidTTL }}"
 
-        # Federation settings
-        federation {
-            bundle_endpoint {
-                address = "0.0.0.0"
-                port = 8443
-            }
-        }
     }
 
     plugins {
@@ -65,7 +58,6 @@ data:
             plugin_data {}
         }
 
-        {{- if .Values.spire.attestors.k8sPsat.enabled }}
         {{- /*
         Allow-list entries must be "namespace:serviceaccount". When unset,
         default to the agent DaemonSet's own service account — the identity
@@ -84,7 +76,6 @@ data:
                 }
             }
         }
-        {{- end }}
 
         KeyManager "disk" {
             plugin_data {

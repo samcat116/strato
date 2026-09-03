@@ -20,11 +20,6 @@ export type UpdateProjectData = Schemas["UpdateProjectRequest"];
 export type TransferProjectData = Schemas["TransferProjectRequest"];
 
 export const projectsApi = {
-  // Get all projects for the current user
-  list(signal?: AbortSignal): Promise<Project[]> {
-    return api.get<Project[]>("/api/projects", undefined, signal);
-  },
-
   // Get projects for a specific organization
   listForOrganization(organizationId: string, signal?: AbortSignal): Promise<Project[]> {
     return api.get<Project[]>(`/api/organizations/${organizationId}/projects`, undefined, signal);

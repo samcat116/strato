@@ -5,7 +5,7 @@ import type {
   ResourceQuota,
   CreateQuotaRequest,
   UpdateQuotaRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const quotasApi = {
   update(quotaId: string, data: UpdateQuotaRequest): Promise<ResourceQuota> {

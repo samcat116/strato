@@ -155,10 +155,6 @@ enum VolumeService {
     /// since STR-150, rather than re-derived per request: a desired entry has to
     /// appear in exactly one agent's sync, and a volume that moves must not
     /// silently orphan its snapshots into another host's tombstone set.
-    static func agentHolding(_ volume: Volume, on db: any Database) async throws -> String? {
-        try await resolveAgentHolding(volume, on: db).agentID
-    }
-
     static func resolveAgentHolding(
         _ volume: Volume, on db: any Database
     ) async throws -> AgentHoldingResolution {

@@ -1,7 +1,6 @@
 import StratoAgentCore
+import StratoAgentDomainXML
 import Testing
-
-@testable import StratoAgent
 
 private actor RebootingDomainDefinitions {
     private let macAddress = "52:54:00:aa:bb:05"

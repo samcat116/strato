@@ -13,10 +13,6 @@ spec:
       port: {{ .Values.spire.service.grpcPort }}
       targetPort: grpc
       protocol: TCP
-    - name: federation
-      port: {{ .Values.spire.service.federationPort }}
-      targetPort: federation
-      protocol: TCP
   selector:
     {{- include "strato-control-plane.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: spire-server

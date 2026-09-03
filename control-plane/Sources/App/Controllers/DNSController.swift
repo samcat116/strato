@@ -455,27 +455,42 @@ struct DNSController: RouteCollection {
         guard let networkID = req.parameters.get("networkId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid network ID")
         }
-        let network = try await Self.authorizedNetwork(req: req, id: networkID, zone: zone)
+        _ = try await Self.authorizedNetwork(req: req, id: networkID, zone: zone)
 
-        // Detaching a network's primary zone would strand its VMs' derived
-        // records with no zone to live in, so clearing the primary is a
-        // separate, explicit edit on the network.
-        guard network.$primaryDNSZone.id != zoneID else {
-            throw Abort(
-                .conflict,
-                reason: "This zone is the network's primary DNS zone; clear the network's primary zone "
-                    + "before detaching it")
-        }
+        try await req.db.transaction { db in
+            switch try await DesiredStateGenerationWriter.lockCurrent(
+                schema: LogicalNetwork.schema, id: networkID, on: db)
+            {
+            case .applied:
+                break
+            case .missing:
+                throw Abort(.notFound, reason: "Network not found")
+            case .superseded:
+                throw Abort(.internalServerError, reason: "Network could not be locked")
+            }
+            guard let currentNetwork = try await LogicalNetwork.find(networkID, on: db) else {
+                throw Abort(.notFound, reason: "Network not found")
+            }
+            // Network row before zone advisory lock matches NetworkController's
+            // lock order and avoids a cross-endpoint deadlock.
+            try await DNSZoneService.lockZone(zoneID, on: db)
+            guard currentNetwork.$primaryDNSZone.id != zoneID else {
+                throw Abort(
+                    .conflict,
+                    reason: "This zone is the network's primary DNS zone; clear the network's primary zone "
+                        + "before detaching it")
+            }
 
-        guard
-            let attachment = try await DNSZoneNetwork.query(on: req.db)
-                .filter(\.$zone.$id == zoneID)
-                .filter(\.$logicalNetwork.$id == networkID)
-                .first()
-        else {
-            return .noContent
+            guard
+                let attachment = try await DNSZoneNetwork.query(on: db)
+                    .filter(\.$zone.$id == zoneID)
+                    .filter(\.$logicalNetwork.$id == networkID)
+                    .first()
+            else {
+                return
+            }
+            try await attachment.delete(on: db)
         }
-        try await attachment.delete(on: req.db)
         await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(

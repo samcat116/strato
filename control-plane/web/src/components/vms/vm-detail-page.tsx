@@ -5,7 +5,6 @@ import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
-  ArrowLeft,
   Cpu,
   HardDrive,
   MemoryStick,
@@ -14,9 +13,15 @@ import {
   ScrollText,
   Monitor,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DetailGrid,
+  DetailPageHeader,
+  DetailPageLoading,
+  DetailPageMissing,
+  DetailPageShell,
+  StatCard,
+} from "@/components/ui/detail-page-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DetailQueryError } from "@/components/ui/detail-query-error";
 import {
@@ -68,27 +73,12 @@ export function VMDetailPage({ id }: { id: string }) {
 
   if (!id) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center py-12">
-          <p className="text-muted-foreground mb-4">No VM ID provided</p>
-          <Button asChild variant="outline" className="border-input">
-            <Link href="/vms">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to VMs
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <DetailPageMissing message="No VM ID provided" backHref="/vms" backLabel="Back to VMs" />
     );
   }
 
   if (isLoading) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-48 bg-muted" />
-        <Skeleton className="h-64 w-full bg-muted" />
-      </div>
-    );
+    return <DetailPageLoading />;
   }
 
   if (error || !vm) {
@@ -106,27 +96,15 @@ export function VMDetailPage({ id }: { id: string }) {
   const isRunning = vm.status === "Running";
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <Link
-            href="/vms"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center mb-2"
-          >
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back to VMs
-          </Link>
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-semibold text-foreground">{vm.name}</h2>
-            <VMStatusBadge status={vm.status} vmId={vm.id} />
-          </div>
-          {vm.description && (
-            <p className="text-muted-foreground mt-1">{vm.description}</p>
-          )}
-        </div>
-        <VMActions vm={vm} onActionComplete={invalidateVMs} />
-      </div>
+    <DetailPageShell>
+      <DetailPageHeader
+        backHref="/vms"
+        backLabel="Back to VMs"
+        title={vm.name}
+        badge={<VMStatusBadge status={vm.status} vmId={vm.id} />}
+        description={vm.description}
+        actions={<VMActions vm={vm} onActionComplete={invalidateVMs} />}
+      />
 
       <ConvergenceFailureAlert conditions={vm.conditions} />
 
@@ -177,29 +155,14 @@ export function VMDetailPage({ id }: { id: string }) {
 
         <TabsContent value="overview" className="space-y-6 mt-6">
           {/* Resources */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Cpu className="h-4 w-4" />
-                  CPU
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+          <DetailGrid>
+            <StatCard title="CPU" icon={<Cpu className="h-4 w-4" />}>
                 <div className="text-xl font-bold text-foreground">
                   {vm.cpu} / {vm.maxCpu}
                 </div>
                 <p className="text-sm text-muted-foreground">cores</p>
-              </CardContent>
-            </Card>
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <MemoryStick className="h-4 w-4" />
-                  Memory
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+            </StatCard>
+            <StatCard title="Memory" icon={<MemoryStick className="h-4 w-4" />}>
                 <div className="text-xl font-bold text-foreground">
                   {vm.memoryFormatted}
                 </div>
@@ -247,38 +210,21 @@ export function VMDetailPage({ id }: { id: string }) {
                         vm.balloonTarget && " (reclaiming…)"}
                   </p>
                 )}
-              </CardContent>
-            </Card>
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <HardDrive className="h-4 w-4" />
-                  Disk
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+            </StatCard>
+            <StatCard title="Disk" icon={<HardDrive className="h-4 w-4" />}>
                 <div className="text-xl font-bold text-foreground">
                   {vm.diskFormatted}
                 </div>
-              </CardContent>
-            </Card>
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  Created
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+            </StatCard>
+            <StatCard title="Created" icon={<Clock className="h-4 w-4" />}>
                 <div className="text-sm font-medium text-foreground">
                   {formatDate(vm.createdAt)}
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {formatTime(vm.createdAt)}
                 </p>
-              </CardContent>
-            </Card>
-          </div>
+            </StatCard>
+          </DetailGrid>
 
           {/* Details */}
           <Card className="bg-card border-border">
@@ -431,6 +377,6 @@ export function VMDetailPage({ id }: { id: string }) {
           <LogViewer vmId={id} />
         </TabsContent>
       </Tabs>
-    </div>
+    </DetailPageShell>
   );
 }

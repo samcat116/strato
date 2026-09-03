@@ -3,6 +3,7 @@ import Foundation
 import Logging
 import StratoShared
 import Testing
+import StratoAgentTestSupport
 
 @testable import StratoAgentCore
 
@@ -10,12 +11,6 @@ import Testing
 struct AgentUpdaterTests {
 
     private let logger = Logger(label: "test.agent-updater")
-
-    private func makeTempDir() throws -> String {
-        let dir = NSTemporaryDirectory() + "agent-updater-tests-" + UUID().uuidString
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        return dir
-    }
 
     private func write(_ content: String, to path: String, executable: Bool = false) throws {
         try content.write(toFile: path, atomically: true, encoding: .utf8)

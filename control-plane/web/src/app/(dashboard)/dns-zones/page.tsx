@@ -3,20 +3,20 @@
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Network, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 import { SelectField } from "@/components/networking/select-field";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
+import { ProjectRequiredState } from "@/components/ui/project-required-state";
 import {
   dnsApi,
   type CreateDNSRecordRequest,
 } from "@/lib/api/platform-services";
-import { useNetworks, usePermissions } from "@/lib/hooks";
+import { useNetworks, usePermissions, useWorkMutation } from "@/lib/hooks";
 import { useProjectContext } from "@/providers";
 
 export default function DNSZonesPage() {
@@ -89,24 +89,16 @@ export default function DNSZonesPage() {
     void queryClient.invalidateQueries({ queryKey: ["dns-zones"] });
     void queryClient.invalidateQueries({ queryKey: ["dns-records"] });
   };
-  const mutation = useMutation({
-    mutationFn: (work: () => Promise<unknown>) => work(),
-    onSuccess: () => {
-      refresh();
-      toast.success("DNS updated");
-    },
-    onError: (error) => toast.error(error.message),
+  const mutation = useWorkMutation({
+    onSuccess: refresh,
+    successMessage: "DNS updated",
   });
   const confirmMutation = async (message: string, work: () => Promise<unknown>) => {
     if (await confirmAction(message)) mutation.mutate(work);
   };
 
   if (!currentProject) {
-    return (
-      <p className="py-12 text-center text-muted-foreground">
-        Select a project first.
-      </p>
-    );
+    return <ProjectRequiredState resource="DNS zones" />;
   }
 
   const zones = zonesQuery.data ?? [];

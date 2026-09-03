@@ -1,7 +1,7 @@
 // Auth API endpoints
 
 import { api, ApiError } from "./client";
-import type { ClaimInfoResponse, SessionResponse, User } from "@/types/api-contracts";
+import type { ClaimInfoResponse, SessionResponse, User } from "@/types/api";
 import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,

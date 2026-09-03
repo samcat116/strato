@@ -52,8 +52,8 @@ The control plane is declarative, not imperative:
   wire v29), rather than the control plane pushing it. Mutations ring a
   contentless broadcast doorbell so a parked poll answers immediately; the
   agent also re-fetches unconditionally on a slow timer, which is the
-  correctness invariant behind every optimization in the path. Agents that
-  predate v29 are still pushed to, per agent, through the transition.
+  correctness invariant behind every optimization in the path. Registration
+  requires the current wire version, so there is no legacy push branch.
 - The agent-side reconciler diffs observed vs desired and converges via
   per-workload serial lanes, then reports observed state back — including
   the generation it converged toward and any convergence error. Absence
@@ -121,7 +121,7 @@ replicas. Details: [scheduler](./scheduler.md).
 
 ## Workload types
 
-- **VMs** — long-lived machines on QEMU (Linux KVM / macOS HVF) or
+- **VMs** — long-lived machines on QEMU/KVM or
   Firecracker, built from images with typed artifacts.
 - **Sandboxes** — fast, disposable Firecracker microVMs booted from OCI
   images, with their own API surface and data model, TTL/auto-expiry, and
@@ -139,8 +139,8 @@ device name, ordered by index) with per-family address rows — there are no
 single-NIC fields on the VM. **The control plane does IPAM**: static
 IPv4/IPv6 addresses are allocated from a `LogicalNetwork`'s subnets and
 passed to the agent. Agent-side, a network orchestrator resolves specs into
-typed attachments consumed by the hypervisor drivers; Linux uses OVN/OVS
-for real SDN, macOS falls back to user-mode SLIRP (dev/test only).
+typed attachments consumed by the hypervisor drivers; supported Linux nodes
+use OVN/OVS for real SDN. macOS has no production hypervisor driver.
 Details: [networking](./networking.md).
 
 Name resolution is a separate, control-plane-owned model: project-scoped

@@ -631,7 +631,7 @@ host's own namespace answers for every network on the host.
   driven through `NetworkActuator` by `NetworkServiceLinux`
 - CoreDNS realization: `agent/Sources/StratoAgentCore/CoreDNSZoneRenderer.swift`
   (pure), `ResolverSupervisionPolicy.swift` (pure),
-  `agent/Sources/StratoAgent/ResolverSupervisor.swift` (processes)
+  `agent/Sources/StratoAgentCore/ResolverSupervisor.swift` (processes)
 - Addresses: `shared/Sources/StratoShared/NetworkResolverEndpoint.swift`;
   allocation in `control-plane/Sources/App/Services/ResolverAddressAllocator.swift`
 - Host foot: `agent/Sources/StratoAgentCore/ResolverHostPortPlan.swift`, and

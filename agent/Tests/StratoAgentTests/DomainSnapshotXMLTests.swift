@@ -4,6 +4,7 @@ import StratoShared
 import Testing
 
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 /// The checkpoint document and the two readings taken off the result (STR-134,
 /// issue #564).

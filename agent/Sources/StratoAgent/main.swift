@@ -1,0 +1,3 @@
+import StratoAgentRuntime
+
+StratoAgent.main()

@@ -46,15 +46,4 @@ struct MetricsMiddleware: AsyncMiddleware {
             throw error
         }
     }
-
-    /// The low-cardinality `route` label built from the matched route's path
-    /// segments (e.g. `["api", "vms", ":vmID"]` -> `/api/vms/:vmID`), or
-    /// `unmatched` when routing found no route (a genuine 404). Takes plain
-    /// strings — the caller maps the route's `PathComponent`s to their
-    /// descriptions — so the derivation stays unit-testable without standing up
-    /// a `Request` and without naming the ambiguous `PathComponent` type.
-    static func routeLabel(fromSegments segments: [String]?) -> String {
-        guard let segments else { return "unmatched" }
-        return "/" + segments.joined(separator: "/")
-    }
 }

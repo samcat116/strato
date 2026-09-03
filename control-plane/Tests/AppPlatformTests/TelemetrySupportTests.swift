@@ -36,23 +36,6 @@ struct TelemetrySupportTests {
         #expect(IPAMService.IPAMError.invalidGateway("g").metricReason == "invalid_gateway")
     }
 
-    // MARK: - MetricsMiddleware.routeLabel
-
-    @Test("a parameterized route collapses to its pattern, not the concrete path")
-    func routeLabelPattern() {
-        #expect(MetricsMiddleware.routeLabel(fromSegments: ["api", "vms", ":vmID"]) == "/api/vms/:vmID")
-    }
-
-    @Test("a constant route keeps its literal segments")
-    func routeLabelConstant() {
-        #expect(MetricsMiddleware.routeLabel(fromSegments: ["health", "ready"]) == "/health/ready")
-    }
-
-    @Test("an unmatched request falls back rather than leaking a path")
-    func routeLabelUnmatched() {
-        #expect(MetricsMiddleware.routeLabel(fromSegments: nil) == "unmatched")
-    }
-
     // MARK: - Desired-state poll dimensions
 
     @Test("desired-state requests map to two bounded poll modes")

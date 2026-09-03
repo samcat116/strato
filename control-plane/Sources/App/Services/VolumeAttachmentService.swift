@@ -62,6 +62,9 @@ enum VolumeAttachmentService {
     ) async throws -> VolumeDeviceName {
         let vmID = try vm.requireID()
         try await lock(vmID: vmID, on: db)
+        guard try await vm.lockAndRefresh(on: db) else {
+            throw Abort(.conflict, reason: "VM no longer exists")
+        }
 
         // Asked again, and this time of the row as it is: the caller's
         // `canAttach` was answered against the snapshot the request loaded,

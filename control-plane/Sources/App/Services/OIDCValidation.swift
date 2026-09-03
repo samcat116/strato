@@ -1,5 +1,6 @@
 import Crypto
 import Foundation
+import StratoShared
 import Vapor
 
 /// Pure validation and parsing helpers for the OIDC flow, extracted from
@@ -122,22 +123,14 @@ struct OIDCValidation {
     /// 43–128 range and drawn from its unreserved character set).
     static func generateCodeVerifier() -> String {
         let bytes = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-        return base64URLEncode(bytes)
+        return Base64URL.encode(bytes)
     }
 
     /// Derives the S256 `code_challenge` for a verifier:
     /// base64url(SHA256(ASCII(verifier))), unpadded (RFC 7636 §4.2).
     static func codeChallengeS256(for verifier: String) -> String {
         let digest = SHA256.hash(data: Data(verifier.utf8))
-        return base64URLEncode(Data(digest))
-    }
-
-    /// Base64url without padding, as JWTs and PKCE use.
-    private static func base64URLEncode(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        return Base64URL.encode(Data(digest))
     }
 
     // MARK: - Base URL resolution
@@ -205,16 +198,7 @@ struct OIDCValidation {
 
     /// Decodes a base64url-encoded string (JWT segment), restoring padding.
     static func decodeBase64URLSafe(_ string: String) throws -> Data {
-        var base64String =
-            string
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-
-        // Add padding if necessary
-        let paddingLength = (4 - base64String.count % 4) % 4
-        base64String += String(repeating: "=", count: paddingLength)
-
-        guard let data = Data(base64Encoded: base64String) else {
+        guard let data = Base64URL.decode(string) else {
             throw Abort(.badRequest, reason: "Invalid base64 encoding")
         }
 

@@ -3,9 +3,7 @@
 import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
 
 import { useState } from "react";
-import Link from "next/link";
 import {
-  ArrowLeft,
   Cpu,
   Download,
   HardDrive,
@@ -18,7 +16,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DetailGrid,
+  DetailPageHeader,
+  DetailPageLoading,
+  DetailPageMissing,
+  DetailPageShell,
+  StatCard,
+} from "@/components/ui/detail-page-shell";
 import { Badge } from "@/components/ui/badge";
 import { DetailQueryError } from "@/components/ui/detail-query-error";
 import { EditImageDialog } from "@/components/images/edit-image-dialog";
@@ -47,29 +52,16 @@ export function ImageDetailPage({
 
   if (!id || !projectId) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center py-12">
-          <p className="text-muted-foreground mb-4">
-            {!id ? "No Image ID provided" : "No Project ID provided"}
-          </p>
-          <Button asChild variant="outline" className="border-input">
-            <Link href="/images">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Images
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <DetailPageMissing
+        message={!id ? "No Image ID provided" : "No Project ID provided"}
+        backHref="/images"
+        backLabel="Back to Images"
+      />
     );
   }
 
   if (isLoading) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-48 bg-muted" />
-        <Skeleton className="h-64 w-full bg-muted" />
-      </div>
-    );
+    return <DetailPageLoading />;
   }
 
   if (error || !image) {
@@ -90,29 +82,20 @@ export function ImageDetailPage({
   );
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <Link
-            href="/images"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center mb-2"
-          >
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back to Images
-          </Link>
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-semibold text-foreground">{image.name}</h2>
-            <ImageStatusBadge
+    <DetailPageShell>
+      <DetailPageHeader
+        backHref="/images"
+        backLabel="Back to Images"
+        title={image.name}
+        badge={
+          <ImageStatusBadge
               status={image.status}
               downloadProgress={image.downloadProgress}
-            />
-          </div>
-          {image.description && (
-            <p className="text-muted-foreground mt-1">{image.description}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+          />
+        }
+        description={image.description}
+        actions={
+          <div className="flex items-center gap-2">
           <Button
             variant="outline"
             className="border-input"
@@ -136,8 +119,9 @@ export function ImageDetailPage({
             <Pencil className="h-4 w-4 mr-2" />
             Edit
           </Button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {editOpen && (
         <EditImageDialog
@@ -149,41 +133,18 @@ export function ImageDetailPage({
       )}
 
       {/* Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <HardDrive className="h-4 w-4" />
-              Size
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+      <DetailGrid>
+        <StatCard title="Size" icon={<HardDrive className="h-4 w-4" />}>
             <div className="text-xl font-bold text-foreground">
               {image.sizeFormatted || "—"}
             </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <FileType className="h-4 w-4" />
-              Format
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        </StatCard>
+        <StatCard title="Format" icon={<FileType className="h-4 w-4" />}>
             <div className="text-xl font-bold text-foreground uppercase">
               {image.format || "—"}
             </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Clock className="h-4 w-4" />
-              Created
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        </StatCard>
+        <StatCard title="Created" icon={<Clock className="h-4 w-4" />}>
             <div className="text-sm font-medium text-foreground">
               {image.createdAt
                 ? formatDate(image.createdAt)
@@ -194,22 +155,13 @@ export function ImageDetailPage({
                 ? formatTime(image.createdAt)
                 : ""}
             </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Hash className="h-4 w-4" />
-              Checksum
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        </StatCard>
+        <StatCard title="Checksum" icon={<Hash className="h-4 w-4" />}>
             <div className="text-xs font-mono text-foreground truncate">
               {image.checksum || "Not available"}
             </div>
-          </CardContent>
-        </Card>
-      </div>
+        </StatCard>
+      </DetailGrid>
 
       {/* Details */}
       <Card className="bg-card border-border">
@@ -388,6 +340,6 @@ export function ImageDetailPage({
           </CardContent>
         </Card>
       )}
-    </div>
+    </DetailPageShell>
   );
 }

@@ -1,5 +1,5 @@
 {
-  "originHash" : "adf29b7e41551958a3b114a6394d32dda80055e56445a7983920f03cd9798d4a",
+  "originHash" : "e5495d644b2fcf7465d5af89b749fc2bb128e68adf54687b2cb3ba5a052c5e4b",
   "pins" : [
     {
       "identity" : "openapikit",
@@ -71,6 +71,15 @@
       "state" : {
         "revision" : "a0cb0954ecb21e4e31b0070e6ed5674e8556685a",
         "version" : "1.6.0"
+      }
+    },
+    {
+      "identity" : "swift-configuration",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-configuration.git",
+      "state" : {
+        "revision" : "be76c4ad929eb6c4bcaf3351799f2adf9e6848a9",
+        "version" : "1.2.0"
       }
     },
     {
@@ -204,8 +213,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-toml.git",
       "state" : {
-        "branch" : "master",
-        "revision" : "9ec7aa0da2fd7cc26dfe3de300f2c096e0c365e3"
+        "revision" : "10094db34a4eade03c0fc0b1a60ea90df76af93e"
       }
     },
     {

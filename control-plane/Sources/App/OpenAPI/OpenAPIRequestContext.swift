@@ -1,4 +1,5 @@
 import OpenAPIRuntime
+import StratoAPITypes
 import Vapor
 
 /// Access to the Vapor `Request` from inside a generated OpenAPI handler.

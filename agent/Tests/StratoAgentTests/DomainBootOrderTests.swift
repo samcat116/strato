@@ -2,8 +2,8 @@ import Foundation
 import StratoShared
 import Testing
 
-@testable import StratoAgent
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 @Suite("libvirt persistent disk boot order")
 struct DomainBootOrderTests {

@@ -1,43 +1,13 @@
-# Claude Code Configuration
+# Claude Code configuration
 
-This directory contains Claude Code configuration and hooks for the Strato repository.
+`settings.json` registers two repository hooks:
 
-## Hooks
+- `hooks/startup.sh` installs the pinned Swift toolchain and system build
+  dependencies when `CLAUDE_CODE_REMOTE=true`. Local sessions exit without
+  changing the host.
+- `hooks/entire.sh <event>` forwards lifecycle events to Entire when its CLI is
+  installed. A remote session-start reports the installation link when it is
+  unavailable.
 
-### `hooks/startup.sh`
-
-This startup hook automatically installs Swift and required dependencies when running in the Claude web environment.
-
-**Environment Detection:**
-- The hook only runs when `CLAUDE_CODE_REMOTE=true` (Claude web environment)
-- On local Claude Code installations, the hook exits early without making any changes
-
-**Installed Dependencies:**
-- Swift 6.3.2 toolchain
-- System libraries: libssl-dev, libsqlite3-dev, libcurl4-openssl-dev, libxml2-dev
-- Build tools: binutils, git, pkg-config, unzip, wget
-- Runtime dependencies required for Swift Package Manager
-
-**How it works:**
-1. Checks if running in Claude remote environment (`CLAUDE_CODE_REMOTE=true`)
-2. Verifies if Swift is already installed (to avoid re-installation)
-3. Updates package lists and installs system dependencies
-4. Downloads and installs Swift 6.3.2 from official Swift releases
-5. Creates symlinks for swift, swiftc, and swift-package commands
-6. Verifies the installation
-
-**Manual testing:**
-```bash
-# Test locally (should skip installation):
-./.claude/hooks/startup.sh
-
-# Simulate remote environment:
-CLAUDE_CODE_REMOTE=true ./.claude/hooks/startup.sh
-```
-
-## Future Enhancements
-
-Potential additions for the hooks:
-- PostgreSQL client tools (if needed for database migrations)
-- Docker/Podman for container-based development
-- Additional Swift development tools
+Run either script directly to exercise its local no-op path. The startup hook's
+package list and platform checks are the source of truth for remote setup.
