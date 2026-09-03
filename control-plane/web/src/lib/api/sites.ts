@@ -12,7 +12,7 @@ import type {
   StoragePool,
   UpdateCephClusterRequest,
   UpdateSiteRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const sitesApi = {
   list(organizationId?: string, signal?: AbortSignal): Promise<Site[]> {

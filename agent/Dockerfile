@@ -174,4 +174,4 @@ USER strato:strato
 
 # Start the Strato Agent when the image is run
 ENTRYPOINT ["./StratoAgent"]
-CMD ["--control-plane-url", "ws://control-plane:8080/agent/ws"]
+CMD ["--control-plane-url", "wss://control-plane:8443/agent/ws"]

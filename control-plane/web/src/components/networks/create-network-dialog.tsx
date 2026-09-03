@@ -1,15 +1,16 @@
 "use client";
 
+import {
+  DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+
 import { errorMessage } from "@/lib/errors";
 
-import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useEffect,
+  useState } from "react";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -285,31 +286,13 @@ export function CreateNetworkDialog({
               disabled={isLoading}
             />
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="border-input text-foreground/80 hover:bg-accent"
-              disabled={isLoading}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              className="bg-primary hover:bg-primary/90"
-              disabled={isLoading || sitesLoading || !projectId || !siteId}
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                "Create Network"
-              )}
-            </Button>
-          </DialogFooter>
+          <DialogSubmitFooter
+            submitLabel="Create Network"
+            pendingLabel="Creating..."
+            isPending={isLoading}
+            disabled={sitesLoading || !projectId || !siteId}
+            onCancel={() => onOpenChange(false)}
+          />
         </form>
       </DialogContent>
     </Dialog>

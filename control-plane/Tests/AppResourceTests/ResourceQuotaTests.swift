@@ -134,6 +134,41 @@ final class ResourceQuotaTests {
         }
     }
 
+    @Test("Quota APIs reject byte limits outside Int64")
+    func testQuotaLimitsRejectOverflow() async throws {
+        try await withQuotaTestApp { app, _, organization, project, authToken in
+            try await app.test(.POST, "/api/projects/\(project.id!)/quotas") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateResourceQuotaRequest(
+                        name: "Overflow", maxVCPUs: 1, maxMemoryGB: 1e300,
+                        maxStorageGB: 1, maxVMs: 1, maxSandboxes: nil,
+                        maxVolumes: nil, maxNetworks: nil, maxLoadBalancers: nil,
+                        environment: nil, isEnabled: nil))
+            } afterResponse: { response in
+                #expect(response.status == .badRequest)
+                #expect(response.body.string.contains("Memory limit is too large"))
+            }
+
+            let quota = ResourceQuota(
+                name: "Existing", organizationID: organization.id,
+                maxVCPUs: 1, maxMemory: 1.gbToBytes!, maxStorage: 1.gbToBytes!, maxVMs: 1)
+            try await quota.save(on: app.db)
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: nil, maxVCPUs: nil, maxMemoryGB: nil,
+                        maxStorageGB: 1e300, maxVMs: nil, maxSandboxes: nil,
+                        maxVolumes: nil, maxNetworks: nil, maxLoadBalancers: nil,
+                        isEnabled: nil))
+            } afterResponse: { response in
+                #expect(response.status == .badRequest)
+                #expect(response.body.string.contains("Storage limit is too large"))
+            }
+        }
+    }
+
     @Test("Create environment-specific quota")
     func testCreateEnvironmentQuota() async throws {
         try await withQuotaTestApp { app, testUser, testOrganization, testProject, authToken in
@@ -590,8 +625,8 @@ final class ResourceQuotaTests {
         }
     }
 
-    @Test("Network backfill leaves an over-limit quota editable and floors touched limits")
-    func testNetworkBackfillPreservesOverLimitRecovery() async throws {
+    @Test("Network reservation resync leaves an over-limit quota editable")
+    func testNetworkResyncPreservesOverLimitRecovery() async throws {
         try await withQuotaTestApp { app, _, testOrganization, testProject, authToken in
             let builder = TestDataBuilder(db: app.db)
             _ = try await builder.createNetwork(
@@ -612,7 +647,8 @@ final class ResourceQuotaTests {
             try await quota.save(on: app.db)
             #expect(quota.networkCount == 0, "the legacy counter starts stale")
 
-            try await BackfillNetworkQuotaAccounting().backfillQuotaCounters(on: app.db)
+            try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+            try await quota.save(on: app.db)
             let backfilled = try #require(try await ResourceQuota.find(quota.id, on: app.db))
             #expect(backfilled.networkCount == 2)
 

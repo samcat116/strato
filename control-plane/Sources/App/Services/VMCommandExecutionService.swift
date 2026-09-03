@@ -157,8 +157,6 @@ actor VMCommandExecutionService {
     private let sendEnvelope: @Sendable (MessageEnvelope, String) async throws -> Void
     private let beforeClassifyStart: (@Sendable () async throws -> Void)?
     private let beforePersistResult: (@Sendable () async throws -> Void)?
-    private let beforeSweepPersistence: (@Sendable () async throws -> Void)?
-    private let afterTimeoutCommitBeforeAudit: (@Sendable () async -> Void)?
     private let retryDelay: Duration
     private var captures: [UUID: Capture] = [:]
     private var pendingCompletions: [UUID: PendingCompletion] = [:]
@@ -173,15 +171,11 @@ actor VMCommandExecutionService {
         sendEnvelope: (@Sendable (MessageEnvelope, String) async throws -> Void)? = nil,
         beforeClassifyStart: (@Sendable () async throws -> Void)? = nil,
         beforePersistResult: (@Sendable () async throws -> Void)? = nil,
-        beforeSweepPersistence: (@Sendable () async throws -> Void)? = nil,
-        afterTimeoutCommitBeforeAudit: (@Sendable () async -> Void)? = nil,
         retryDelay: Duration = .seconds(1)
     ) {
         self.app = app
         self.beforeClassifyStart = beforeClassifyStart
         self.beforePersistResult = beforePersistResult
-        self.beforeSweepPersistence = beforeSweepPersistence
-        self.afterTimeoutCommitBeforeAudit = afterTimeoutCommitBeforeAudit
         self.retryDelay = retryDelay
         self.sendEnvelope =
             sendEnvelope ?? { [weak app] envelope, agentKey in
@@ -741,7 +735,6 @@ actor VMCommandExecutionService {
         let expiredCaptures = captures.filter { $0.value.deadline <= now }
         guard app.db is any SQLDatabase else { return }
         do {
-            try await beforeSweepPersistence?()
             let (transitions, payloadWrites) = try await app.db.transaction { db in
                 guard let sql = db as? any SQLDatabase else {
                     throw Abort(.internalServerError)
@@ -810,10 +803,6 @@ actor VMCommandExecutionService {
                             timestamp: execution.completedAt))
                 }
                 return (transitions, payloadWrites)
-            }
-
-            if !transitions.isEmpty {
-                await afterTimeoutCommitBeforeAudit?()
             }
 
             // Also bound actor-local memory if a database state transition
@@ -1484,7 +1473,7 @@ extension Application {
 
     var vmCommandExecutionService: VMCommandExecutionService {
         get { lazyService(VMCommandExecutionServiceKey.self) { VMCommandExecutionService(app: self) } }
-        set { setStorageValue(VMCommandExecutionServiceKey.self, to: newValue) }
+        set { setService(VMCommandExecutionServiceKey.self, to: newValue) }
     }
 }
 

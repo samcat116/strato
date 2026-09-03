@@ -65,9 +65,7 @@ extension SandboxController {
         try await SnapshotArtifactMutation.requireCaptureCapableAgent(
             agentId, kind: .sandboxSnapshot, app: req.application)
 
-        guard let project = try await Project.find(sandbox.$project.id, on: req.db) else {
-            throw Abort(.internalServerError, reason: "Sandbox project not found")
-        }
+        let project = try await sandbox.project(on: req.db)
 
         let name =
             request.name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false

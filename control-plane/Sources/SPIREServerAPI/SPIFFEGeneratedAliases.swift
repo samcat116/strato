@@ -1,0 +1,24 @@
+@_exported import SPIFFEKit
+
+public typealias Spire_Api_Types_JWTSVID = SPIFFEKit.Spire_Api_Types_JWTSVID
+public typealias Spire_Api_Types_Selector = SPIFFEKit.Spire_Api_Types_Selector
+public typealias Spire_Api_Types_SelectorMatch = SPIFFEKit.Spire_Api_Types_SelectorMatch
+public typealias Spire_Api_Types_SPIFFEID = SPIFFEKit.Spire_Api_Types_SPIFFEID
+public typealias Spire_Api_Types_X509SVID = SPIFFEKit.Spire_Api_Types_X509SVID
+public typealias Workload_X509SVIDRequest = SPIFFEKit.Workload_X509SVIDRequest
+public typealias Workload_X509SVIDResponse = SPIFFEKit.Workload_X509SVIDResponse
+public typealias Workload_X509SVID = SPIFFEKit.Workload_X509SVID
+public typealias Workload_X509BundlesRequest = SPIFFEKit.Workload_X509BundlesRequest
+public typealias Workload_X509BundlesResponse = SPIFFEKit.Workload_X509BundlesResponse
+public typealias Workload_JWTSVIDRequest = SPIFFEKit.Workload_JWTSVIDRequest
+public typealias Workload_JWTSVIDResponse = SPIFFEKit.Workload_JWTSVIDResponse
+public typealias Workload_JWTSVID = SPIFFEKit.Workload_JWTSVID
+public typealias Workload_JWTBundlesRequest = SPIFFEKit.Workload_JWTBundlesRequest
+public typealias Workload_JWTBundlesResponse = SPIFFEKit.Workload_JWTBundlesResponse
+public typealias Workload_ValidateJWTSVIDRequest = SPIFFEKit.Workload_ValidateJWTSVIDRequest
+public typealias Workload_ValidateJWTSVIDResponse = SPIFFEKit.Workload_ValidateJWTSVIDResponse
+public typealias Workload_WITSVIDRequest = SPIFFEKit.Workload_WITSVIDRequest
+public typealias Workload_WITSVIDResponse = SPIFFEKit.Workload_WITSVIDResponse
+public typealias Workload_WITSVID = SPIFFEKit.Workload_WITSVID
+public typealias Workload_WITBundlesRequest = SPIFFEKit.Workload_WITBundlesRequest
+public typealias Workload_WITBundlesResponse = SPIFFEKit.Workload_WITBundlesResponse

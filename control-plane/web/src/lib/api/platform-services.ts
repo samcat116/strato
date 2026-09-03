@@ -56,7 +56,6 @@ export const floatingIPsApi = {
   listPools: (signal?: AbortSignal) => listAllPages<FloatingIPPool>("/api/floating-ip-pools", {}, signal),
   createPool: (data: CreateFloatingIPPoolRequest) =>
     api.post<FloatingIPPool>("/api/floating-ip-pools", data),
-  deletePool: (id: string) => api.delete<void>(`/api/floating-ip-pools/${id}`),
   list: (projectId: string, signal?: AbortSignal) =>
     listAllPages<FloatingIP>("/api/floating-ips", { project_id: projectId }, signal),
   allocate: (data: CreateFloatingIPRequest) =>

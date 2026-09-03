@@ -27,8 +27,8 @@ The [architecture overview](/architecture/overview) is the full map.
 
 ### Virtual machines
 
-Full-lifecycle VM management on QEMU with hardware acceleration — KVM on
-Linux, Hypervisor.framework on macOS (dev/test). Images carry typed
+Full-lifecycle VM management on QEMU with KVM acceleration on Linux
+hypervisor nodes. Images carry typed
 artifacts per hypervisor and architecture; VMs get cloud-init provisioning,
 snapshots and checkpoints, online resize, virtio-balloon memory management,
 Secure Boot/vTPM for [Windows guests](/guide/windows-guests), and optional

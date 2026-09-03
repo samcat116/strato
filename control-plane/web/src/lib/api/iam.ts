@@ -18,7 +18,7 @@ import type {
   IAMRoleUpdateRequest,
   IAMRoleValidateRequest,
   IAMRoleValidateResponse,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const iamApi = {
   // Roles

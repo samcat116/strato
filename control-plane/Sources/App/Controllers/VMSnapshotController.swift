@@ -71,9 +71,7 @@ extension VMController {
         try await SnapshotArtifactMutation.requireCaptureCapableAgent(
             agentId, kind: .vmCheckpoint, app: req.application)
 
-        guard let project = try await Project.find(vm.$project.id, on: req.db) else {
-            throw Abort(.internalServerError, reason: "VM project not found")
-        }
+        let project = try await vm.project(on: req.db)
 
         let trimmedName = request.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let name =

@@ -1,5 +1,5 @@
 {
-  "originHash" : "f16454d9d78c0fbe3404a130fa5d77459244ab1b8822fc71b00bf8a3df7dc21d",
+  "originHash" : "d93dca95eb576dbdc51cdcb5c42aea49c0b69a5e82fab2f69b5d6f3f4a4ba47f",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -266,7 +266,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/samcat116/swift-toml.git",
       "state" : {
-        "branch" : "master",
         "revision" : "10094db34a4eade03c0fc0b1a60ea90df76af93e"
       }
     },

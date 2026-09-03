@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 // MARK: - JWS decoding
 
@@ -55,7 +56,7 @@ public enum JWTSVIDToken {
                 "JWT-SVID is not a compact-serialized JWS (expected 3 segments, got \(segments.count))")
         }
 
-        guard let payloadData = base64URLDecode(String(segments[1])) else {
+        guard let payloadData = Base64URL.decode(String(segments[1])) else {
             throw SPIFFEError.parseError("JWT-SVID payload is not valid base64url")
         }
 
@@ -97,20 +98,6 @@ public enum JWTSVIDToken {
                     character.isLetter || character.isNumber || character == "-" || character == "_"
                 }
         }
-    }
-
-    /// Decode one base64url segment (RFC 7515 §2: no padding, `-`/`_` for
-    /// `+`/`/`), re-padding to the 4-byte boundary `Data(base64Encoded:)` wants.
-    static func base64URLDecode(_ segment: String) -> Data? {
-        var base64 =
-            segment
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let remainder = base64.count % 4
-        if remainder > 0 {
-            base64 += String(repeating: "=", count: 4 - remainder)
-        }
-        return Data(base64Encoded: base64)
     }
 
     /// The registered claims, with `aud` accepting both JWT spellings: a single

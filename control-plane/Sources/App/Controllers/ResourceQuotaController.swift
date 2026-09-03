@@ -1,4 +1,5 @@
 import Foundation
+import StratoAPITypes
 import Vapor
 import Fluent
 
@@ -234,7 +235,9 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         if let maxMemoryGB = updateRequest.maxMemoryGB {
-            let maxMemoryBytes = maxMemoryGB.gbToBytes
+            guard let maxMemoryBytes = maxMemoryGB.gbToBytes else {
+                throw Abort(.badRequest, reason: "Memory limit is too large")
+            }
             if maxMemoryBytes < quota.reservedMemory {
                 let currentReservedGB = Double(quota.reservedMemory) / 1024 / 1024 / 1024
                 throw Abort(
@@ -247,7 +250,9 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         if let maxStorageGB = updateRequest.maxStorageGB {
-            let maxStorageBytes = maxStorageGB.gbToBytes
+            guard let maxStorageBytes = maxStorageGB.gbToBytes else {
+                throw Abort(.badRequest, reason: "Storage limit is too large")
+            }
             if maxStorageBytes < quota.reservedStorage {
                 let currentReservedGB = Double(quota.reservedStorage) / 1024 / 1024 / 1024
                 throw Abort(
@@ -702,8 +707,12 @@ struct ResourceQuotaController: RouteCollection {
             )
         }
 
-        let maxMemoryBytes = createRequest.maxMemoryGB.gbToBytes
-        let maxStorageBytes = createRequest.maxStorageGB.gbToBytes
+        guard let maxMemoryBytes = createRequest.maxMemoryGB.gbToBytes else {
+            throw Abort(.badRequest, reason: "Memory limit is too large")
+        }
+        guard let maxStorageBytes = createRequest.maxStorageGB.gbToBytes else {
+            throw Abort(.badRequest, reason: "Storage limit is too large")
+        }
 
         let quota = ResourceQuota(
             name: createRequest.name,

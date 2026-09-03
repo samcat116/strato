@@ -22,41 +22,14 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_SH="$SCRIPT_DIR/../e2e-agent.sh"
+export FUNCTION_SOURCE="$AGENT_SH"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 FAILURES=0
 CASES=0
-
-fail() {
-  echo "  FAIL: $*" >&2
-  FAILURES=$((FAILURES + 1))
-}
-
-# check <description> <expected> <actual>
-check() {
-  CASES=$((CASES + 1))
-  if [ "$2" = "$3" ]; then
-    echo "  ok: $1"
-  else
-    fail "$1 — expected '$2', got '$3'"
-  fi
-}
-
-extract_function() {
-  local name="$1" body
-  body="$(sed -n "/^${name}()/,/^}/p" "$AGENT_SH")"
-  case "$body" in
-    "") echo "error: could not extract ${name}() from $AGENT_SH" >&2; exit 1 ;;
-  esac
-  # A truncated extraction (function no longer ends with a lone brace) would
-  # otherwise produce a syntax error blamed on this harness.
-  case "$body" in
-    *$'\n}') ;;
-    *) echo "error: extraction of ${name}() from $AGENT_SH is not brace-terminated" >&2; exit 1 ;;
-  esac
-  printf '%s\n' "$body"
-}
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../../tests/lib.sh"
 
 HARNESS="$WORK_DIR/harness.sh"
 {

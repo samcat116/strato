@@ -354,7 +354,7 @@ struct AgentGuestIdentityController: RouteCollection {
     }
 
     private func organizationID(for vm: VM, on db: any Database) async -> UUID? {
-        guard let project = try? await Project.find(vm.$project.id, on: db) else { return nil }
+        guard let project = try? await vm.project(on: db) else { return nil }
         return try? await project.getRootOrganizationId(on: db)
     }
 

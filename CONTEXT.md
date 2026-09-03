@@ -12,19 +12,8 @@ use in code, tests, docs, and review. Architecture-level maps live in
   is not empty, but that project is not privileged — it is the first row, and
   organizations accumulate more.
 
-  Two create paths used to guess when told nothing, and they guessed
-  differently: VM and sandbox creation took the project literally *named*
-  "Default Project", the five infrastructure creates took the organization's
-  oldest. Neither answer was one anybody chose — the first is a string an
-  organization can rename out from under, the second only became *repeatable*
-  (never right) when a sort was added to it — and both were blind to projects
-  held inside a folder. So the question was withdrawn rather than settled
-  (STR-200), the same way networks lost their implicit fallback in #765.
-
-  The phrase "the default project" outlives the thing: new organizations still
-  get one called that, the UI still pre-selects a project in its switcher, and a
-  migration names the string forever. None of those resolve anything. If someone
-  says "the default project", they mean a label, a UI convenience, or a habit.
+  "Default Project" is only an initial display name and UI convenience. It has
+  no resolution semantics.
 
 ## Resource mutations
 
@@ -35,13 +24,6 @@ use in code, tests, docs, and review. Architecture-level maps live in
   and reads its **conditions**. The `resource_kind` discriminator
   (`OperationResourceKind`) keys the per-kind behavior — one enum, not a fork
   per resource.
-
-  It used to be a `ResourceOperation` row in a side-table, polled to a terminal
-  state. The row said nothing the resource did not already carry
-  (`observedGeneration` against `generation`), so it retired in ADR 0001 stage
-  11 (STR-152) along with its coordinator, its per-kind verdict paths and its
-  cluster-singleton sweep. What the row *did* uniquely carry — attribution —
-  moved to the resource event.
 
 - **Accept** — the atomic first half of a mutation, `ResourceMutation.accept`:
   reserve any caller idempotency key, lock the resource row, apply its
@@ -100,9 +82,7 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Actor** — who performed a mutation, as a *principal type plus id*
   (`user` / `service_account` / `workload` / `system`). `system` is the control
   plane acting with no principal behind it — the sandbox expiry sweep — and is
-  the one actor with no id, because it is not a row. (The operation row could
-  express neither: its `user_id` was a non-null *user* id, and the system actor
-  had to be spelled as a sentinel UUID matching no real user.)
+  the one actor with no id, because it is not a row.
 
 - **Operations façade** — `GET /api/operations/:id` and the per-resource
   history lists, synthesized on read from `resource_events` plus the resource's
@@ -123,8 +103,7 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **AgentDispatch** — the seam a mutation depends on to reach agents
   (`agentIsOnline`, `syncDesiredState`). Production adapter: `AgentService`.
   Test adapter: an in-memory fake, so the accept path is testable without an
-  agent socket or an HTTP round-trip. `performOperationAwaitingResponse` — the
-  correlated-command half — went with the last verb that used it (STR-151).
+  agent socket or an HTTP round-trip.
 
 ## Desired state
 
@@ -214,14 +193,10 @@ use in code, tests, docs, and review. Architecture-level maps live in
   unconditional re-fetch is the backstop, so a lost doorbell is always safe, and
   over-ringing is free.
 - **ReplicaMessageBridge** — the module (`app.replicaBridge`) that owns the
-  cross-replica seam: the doorbell and the subscription lifecycle, composing
-  `CoordinationService` (the Valkey / in-memory `CoordinationStore` adapters).
-  It used to own two more things — a `agent:{name}:replica` **socket route**
-  naming the replica that held each agent's socket, and the correlated
-  **cross-replica RPC** forwarding that read it, for exchanges that were
-  *actions, not states*. Volumes left that list in STR-148, snapshot artifacts
-  in STR-150 and the last three (VM reboot, VM restore, sandbox restore) in
-  STR-151; with no sender left, both were deleted in STR-152.
+  cross-replica doorbell, socket route, one-way delivery, and subscription
+  lifecycle over `CoordinationService`. The TTL-bound
+  `agent:{name}:replica` route locates the replica holding an agent socket for
+  interactive guest execution and recorded command delivery.
 - **ReplicaBridgeDelegate** — the narrow seam the bridge depends on for the one
   operation that requires local state: turning a doorbell into a local
   desired-state sync. Production adapter: `AgentService`. Test adapter: an
@@ -270,12 +245,9 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Snapshot artifact** — the umbrella noun for all three families (volume
   snapshot, VM checkpoint, sandbox snapshot) as *desired state* (ADR 0001
   stage 8, STR-150). An artifact is a durable noun with an identity, a parent,
-  and a host, which an agent enumerates, diffs and converges on: capture and
-  delete are desired state, and each family is its own `ConvergingResource` and
-  `FinalizableResource`. What is *not* a state is a **restore** — "this VM
-  should be at checkpoint C" cannot be re-converged on, because the guest
-  starts writing the moment it resumes. STR-151 made it a state anyway, by
-  counting it — see **edge nonce** below.
+  and a host, which an agent enumerates, diffs and converges on. Capture and
+  delete are desired state, and each family is a `ConvergingResource` and
+  `FinalizableResource`. Restore is represented by an **edge nonce**.
 
 - **Capture strategy** — how an artifact that does not exist yet gets taken
   (`DesiredSnapshotCapture`): a sandbox's resume/stop mode, a volume's
@@ -296,35 +268,19 @@ use in code, tests, docs, and review. Architecture-level maps live in
   attributed to the `system` actor. Absolute rather than relative, because a
   TTL re-evaluated against "now" drifts with every restart.
 
-- **Edge nonce** — a monotonic count of *how many times a verb was asked for*,
-  carried on a workload's desired entry (ADR 0001 stage 9, STR-151;
-  `DesiredVMState.rebootGeneration`, `DesiredVMState.restore`,
-  `DesiredSandboxState.restore`). The `kubectl rollout restart` answer to a verb
-  that has no state delta: a reboot starts and ends `running`, and a restore
-  stops being true the moment the guest resumes, so neither can be a desired
-  *status* — but "asked 3 times" is as diffable as any other state. Separate
-  from `generation`, which guards ordering and is idempotent by design; an edge
-  re-applied is a second disruption, so it needs its own counter.
+- **Edge nonce** — a monotonic count of how many times a verb with no durable
+  state delta was requested (`DesiredVMState.rebootGeneration`,
+  `DesiredVMState.restore`, `DesiredSandboxState.restore`). It is separate from
+  the resource generation because replaying an edge is a second disruption.
 
-- **Applied-nonce record** — what the agent has already consumed, per workload,
-  in `VMManifestStore` beside the specs. **Nonce durability is stage 9's
-  correctness invariant**, and its sharpest edge is that *no record is not
-  zero*: an entry written by an older build, or a workload this agent has never
-  converged, is **adopted** — the desired nonces are written down without being
-  performed. Reading a missing record as zero would have a re-registered agent
-  replay every restore in a VM's history.
+- **Applied-nonce record** — the edges the agent has consumed for a workload,
+  stored durably in `VMManifestStore`. No record is not zero: the desired
+  nonces are **adopted** without execution so registration cannot replay old
+  disruptive actions.
 
-- **Superseded** — an edge consumed without being performed, because something
-  else made it moot: a stop (the user's later intent wins), or a boot (a guest
-  built from scratch is at least as restarted as a reboot would make it). The
-  nonce is recorded either way, or a stop-then-start weeks later would surprise
-  the guest with an ancient reboot.
-
-  **Only a reboot is ever superseded.** A restore is about *state*, not power,
-  which is why a boot cannot supersede one (a checkpoint needs a process to load
-  into) and, read the other way, why a stop cannot answer one either. An
-  unperformed restore is **deferred**: left outstanding, and applied as
-  `[.boot, .restore]` whenever the workload is next wanted running.
+- **Superseded** — a reboot edge consumed without execution because a later
+  stop or a boot made it moot. Restore edges are never superseded; they remain
+  deferred until the workload is next wanted running.
 
 ## Identity
 

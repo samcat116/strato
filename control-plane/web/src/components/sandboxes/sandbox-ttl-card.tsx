@@ -3,7 +3,7 @@
 import { Timer } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatCard } from "@/components/ui/detail-page-shell";
 
 import { formatDuration, formatRemaining } from "./format";
 
@@ -30,17 +30,9 @@ export function SandboxTtlCard({ ttlSeconds, expiresAt }: SandboxTtlCardProps) {
   }, [expiresAt]);
 
   return (
-    <Card className="bg-card border-border">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-          <Timer className="h-4 w-4" />
-          TTL
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <TtlValue ttlSeconds={ttlSeconds} expiresAt={expiresAt} now={now} />
-      </CardContent>
-    </Card>
+    <StatCard title="TTL" icon={<Timer className="h-4 w-4" />}>
+      <TtlValue ttlSeconds={ttlSeconds} expiresAt={expiresAt} now={now} />
+    </StatCard>
   );
 }
 

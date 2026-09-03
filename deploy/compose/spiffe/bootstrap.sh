@@ -14,8 +14,6 @@ TRUST_DOMAIN=strato.local
 HANDOFF=/handoff
 CP_NODE="spiffe://${TRUST_DOMAIN}/cp-node"
 CP_WORKLOAD="spiffe://${TRUST_DOMAIN}/control-plane"
-CP_GUEST_IDENTITY_DELEGATE="spiffe://${TRUST_DOMAIN}/control-plane/guest-identity-delegate"
-CONTROL_PLANE_UID="${CONTROL_PLANE_UID:-999}"
 # DNS SAN for Envoy's server SVID: the hostname agents dial for mTLS. Go TLS
 # clients (Grafana Alloy pushing telemetry) refuse a URI-SAN-only certificate,
 # so the entry must carry this. Passed in from .env via docker-compose.yml.
@@ -70,32 +68,6 @@ if ! entry_out=$(spire-server entry create \
 else
     printf '%s\n' "$entry_out" | sed 's/^/    /'
 fi
-
-# The delegated-identity grant is separate from Envoy's network-facing server
-# SVID. The control-plane image runs as uid 999, and only that container mounts
-# the dedicated admin-socket volume, so both the workload identity and socket
-# reachability must agree before a caller can use the API.
-case "${ENABLE_GUEST_IDENTITY:-false}" in
-  true|1)
-    log "Creating guest-identity delegate entry (${CP_GUEST_IDENTITY_DELEGATE}, unix:uid:${CONTROL_PLANE_UID})"
-    if ! entry_out=$(spire-server entry create \
-        -socketPath "$SOCK" \
-        -parentID "$CP_NODE" \
-        -spiffeID "$CP_GUEST_IDENTITY_DELEGATE" \
-        -selector "unix:uid:${CONTROL_PLANE_UID}" \
-        -x509SVIDTTL 3600 2>&1); then
-        printf '%s\n' "$entry_out" | sed 's/^/    /' >&2
-        if ! printf '%s' "$entry_out" | grep -qiE "already exists|similar entry"; then
-            die "failed to create control-plane guest-identity delegate entry"
-        fi
-        log "Guest-identity delegate entry already exists"
-    else
-        printf '%s\n' "$entry_out" | sed 's/^/    /'
-    fi
-    ;;
-  false|0|"") ;;
-  *) die "ENABLE_GUEST_IDENTITY must be true or false" ;;
-esac
 
 # 2. Single-use join token pinned to the control-plane node identity. The agent
 #    redeems it on first attestation and uses its own node SVID thereafter, so a

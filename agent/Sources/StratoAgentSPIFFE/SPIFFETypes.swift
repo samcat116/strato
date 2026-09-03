@@ -1,54 +1,5 @@
 import Foundation
 
-// MARK: - SPIFFE Identity
-
-/// A SPIFFE ID representing a workload identity
-/// Format: spiffe://trust-domain/path
-public struct SPIFFEIdentity: Sendable, Equatable, Hashable, CustomStringConvertible {
-    /// The trust domain (e.g., "strato.local")
-    public let trustDomain: String
-
-    /// The path identifying the workload (e.g., "/agent/agent-1")
-    public let path: String
-
-    /// Full SPIFFE ID URI
-    public var uri: String {
-        "spiffe://\(trustDomain)\(path)"
-    }
-
-    public var description: String {
-        uri
-    }
-
-    /// Initialize from trust domain and path
-    public init(trustDomain: String, path: String) {
-        self.trustDomain = trustDomain
-        self.path = path.hasPrefix("/") ? path : "/\(path)"
-    }
-
-    /// Parse a SPIFFE ID from URI string
-    /// - Parameter uri: The SPIFFE ID URI (e.g., "spiffe://strato.local/agent/agent-1")
-    /// - Returns: Parsed SPIFFEIdentity or nil if invalid
-    public init?(uri: String) {
-        guard uri.hasPrefix("spiffe://") else {
-            return nil
-        }
-
-        let withoutScheme = String(uri.dropFirst("spiffe://".count))
-
-        // Find first slash after trust domain
-        guard let slashIndex = withoutScheme.firstIndex(of: "/") else {
-            // No path specified
-            self.trustDomain = withoutScheme
-            self.path = "/"
-            return
-        }
-
-        self.trustDomain = String(withoutScheme[..<slashIndex])
-        self.path = String(withoutScheme[slashIndex...])
-    }
-}
-
 // MARK: - X.509 SVID
 
 /// An X.509 SPIFFE Verifiable Identity Document (SVID)
@@ -244,30 +195,6 @@ public struct JWTBundle: Sendable {
     public init(trustDomain: String, jwksJSON: Data) {
         self.trustDomain = trustDomain
         self.jwksJSON = jwksJSON
-    }
-}
-
-// MARK: - Trust Bundle
-
-/// A SPIFFE trust bundle for a trust domain
-public struct SPIFFETrustBundle: Sendable {
-    /// The trust domain this bundle is for
-    public let trustDomain: String
-
-    /// X.509 CA certificates (PEM-encoded)
-    public let x509Authorities: [String]
-
-    /// When this bundle was last refreshed
-    public let refreshedAt: Date
-
-    public init(
-        trustDomain: String,
-        x509Authorities: [String],
-        refreshedAt: Date = Date()
-    ) {
-        self.trustDomain = trustDomain
-        self.x509Authorities = x509Authorities
-        self.refreshedAt = refreshedAt
     }
 }
 

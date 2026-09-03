@@ -790,9 +790,6 @@ extension Application {
         get {
             lazyService(GuestExecSessionManagerKey.self) { GuestExecSessionManager(app: self) }
         }
-        set {
-            setStorageValue(GuestExecSessionManagerKey.self, to: newValue)
-        }
     }
 }
 

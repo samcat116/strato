@@ -159,7 +159,7 @@ caching, and vsock guest control (#420 grew SwiftFirecracker the vsock device
 support) are built natively in the agent instead.
 
 The driver is `FirecrackerSandboxRuntime`
-(`agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift`, #421), behind
+(`agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime.swift`, #421), behind
 the `SandboxRuntimeService` seam
 (`StratoAgentCore/SandboxRuntimeProtocol.swift`), registered in the agent's
 driver registry and manifest like any other backend, including orphan
@@ -608,9 +608,9 @@ edge rather than a state, so it became one by being counted:
 `DesiredSandboxState.restore` carries a monotonic generation and the snapshot to
 load, and the agent applies it once against the record it keeps in its own
 durable manifest — a dropped or replayed sync converges rather than rewinding
-the guest twice. It is refused with `409` when the sandbox's agent predates v34,
-since such an agent would ignore the field and report the bumped generation as
-converged. Restore pins to the snapshot's agent — until the snapshot is exported (see
+the guest twice. The exact-version registration handshake guarantees the owning
+agent understands the edge-nonce field. Restore pins to the snapshot's agent —
+until the snapshot is exported (see
 [Snapshot mobility](#snapshot-mobility)) — and flips desired state to
 `running` in the same transaction (IPAM allocations stay held while
 checkpointed, so the sandbox keeps its addresses). Snapshot storage draws

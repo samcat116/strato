@@ -465,7 +465,7 @@ externalDatabase:
 initContainers:
   waitForDB:
     enabled: true
-    image: busybox:1.35
+    image: busybox:1.36.1
 
 # Pod disruption budget for high availability
 podDisruptionBudget:
@@ -476,30 +476,10 @@ podDisruptionBudget:
 # Network policies for security
 networkPolicy:
   enabled: true
-  # Ingress rules - allow traffic from specific sources
-  ingress:
-    - from: []
-      ports:
-        - protocol: TCP
-          port: 8080
-  # Egress rules - allow traffic to specific destinations.
-  # When spire.enabled with in-cluster SPIRE, also add TCP 8081 (SPIRE server
-  # API for join-token provisioning).
-  egress:
-    - to: []
-      ports:
-        - protocol: TCP
-          port: 5432  # PostgreSQL
-        - protocol: TCP
-          port: 6379   # Valkey/Redis
-        - protocol: TCP
-          port: 4317   # OTLP export to the otel-collector
-        - protocol: TCP
-          port: 443    # OIDC discovery/JWKS, SSF transmitters, audit webhooks
-        - protocol: TCP
-          port: 53     # DNS
-        - protocol: UDP
-          port: 53     # DNS
+  # Leave these empty to use the topology-aware defaults in the template.
+  # Supply a non-empty list only to replace those defaults completely.
+  ingress: []
+  egress: []
 
 # OpenTelemetry configuration
 opentelemetry:
@@ -758,21 +738,6 @@ spire:
   # Logging level
   logLevel: "INFO"
 
-  agent:
-    guestIdentity:
-      # Exposes the Delegated Identity API to the chart's registered
-      # control-plane admin workload through a dedicated node-local directory.
-      # Enrolled hypervisor nodes remain off unless installed with
-      # --enable-guest-identity.
-      enabled: false
-      # Kept separate from the Workload API hostPath. The DaemonSet makes this
-      # root-owned and setgid to delegateGID; only the SPIRE agent and the
-      # control-plane container mount it.
-      socketHostPath: /var/run/spire/guest-identity
-      # The control-plane image's fixed vapor group. SPIRE creates admin.sock
-      # as 0770, inheriting this gid from the setgid directory.
-      delegateGID: 999
-
   # CA certificate TTL
   caTTL: "168h"  # 7 days
 
@@ -808,7 +773,6 @@ spire:
   service:
     type: ClusterIP
     grpcPort: 8081
-    federationPort: 8443
 
   # Persistence
   persistence:
@@ -825,23 +789,18 @@ spire:
       cpu: 100m
       memory: 128Mi
 
-  # RBAC
-  rbac:
-    create: true
-
   # Node attestors
   attestors:
     # Kubernetes Projected Service Account Token attestor.
     #
-    # On by default, and effectively required in-cluster: the agent DaemonSet
+    # Required in-cluster: the agent DaemonSet
     # attests with the projected service-account token mounted at
     # /var/run/secrets/tokens/spire-agent. Disabling this falls back to the
     # join_token attestor, which has no token to consume here — the agent then
     # cannot attest, the Envoy sidecar never receives an SVID, and every agent
     # mTLS connection is refused. Only turn it off if you are supplying node
-    # attestation some other way.
+    # attestation some other way. The chart therefore does not expose a toggle.
     k8sPsat:
-      enabled: true
       # Entries are "namespace:serviceaccount". Leave empty to allow the
       # chart's own agent DaemonSet service account (the only identity that
       # presents the projected token in this deployment).
@@ -861,7 +820,7 @@ spire:
   # the Envoy sidecar's server SVID entry. Without it, no registration
   # entries exist for the chart's own pods: Envoy never receives its server
   # certificate and the control plane cannot reach the admin API. Requires
-  # spire.attestors.k8sPsat.enabled.
+  # the chart's required k8s_psat attestor.
   entryBootstrap:
     enabled: true
     # Any image providing kubectl and a POSIX shell.

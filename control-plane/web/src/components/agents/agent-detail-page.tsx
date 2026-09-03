@@ -2,18 +2,22 @@
 
 import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
 
-import Link from "next/link";
 import {
-  ArrowLeft,
   Cpu,
   HardDrive,
   MemoryStick,
   Clock,
   Activity,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DetailGrid,
+  DetailPageHeader,
+  DetailPageLoading,
+  DetailPageMissing,
+  DetailPageShell,
+  StatCard,
+} from "@/components/ui/detail-page-shell";
 import { Badge } from "@/components/ui/badge";
 import { DetailQueryError } from "@/components/ui/detail-query-error";
 import { AgentUpdateAction } from "@/components/agents/agent-update-action";
@@ -60,27 +64,16 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
 
   if (!id) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center py-12">
-          <p className="text-muted-foreground mb-4">No Agent ID provided</p>
-          <Button asChild variant="outline" className="border-input">
-            <Link href="/agents">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Agents
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <DetailPageMissing
+        message="No Agent ID provided"
+        backHref="/agents"
+        backLabel="Back to Agents"
+      />
     );
   }
 
   if (isLoading) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-48 bg-muted" />
-        <Skeleton className="h-64 w-full bg-muted" />
-      </div>
-    );
+    return <DetailPageLoading />;
   }
 
   if (error || !agent) {
@@ -96,58 +89,37 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <Link
-            href="/agents"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center mb-2"
-          >
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back to Agents
-          </Link>
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-semibold text-foreground">{agent.name}</h2>
-            <Badge
+    <DetailPageShell>
+      <DetailPageHeader
+        backHref="/agents"
+        backLabel="Back to Agents"
+        title={agent.name}
+        badge={
+          <Badge
               variant={agent.isOnline ? "default" : "secondary"}
               className={agent.isOnline ? "bg-green-600" : "bg-muted"}
             >
               {agent.isOnline ? "Online" : "Offline"}
-            </Badge>
+          </Badge>
+        }
+        description={agent.hostname}
+        actions={
+          <div className="flex items-center gap-2">
+            <AgentForceOfflineAction agent={agent} />
+            <AgentUpdateAction agent={agent} />
           </div>
-          <p className="text-muted-foreground mt-1">{agent.hostname}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <AgentForceOfflineAction agent={agent} />
-          <AgentUpdateAction agent={agent} />
-        </div>
-      </div>
+        }
+      />
 
       {/* Resources */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Cpu className="h-4 w-4" />
-              CPU
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+      <DetailGrid>
+        <StatCard title="CPU" icon={<Cpu className="h-4 w-4" />}>
             <div className="text-xl font-bold text-foreground">
               {agent.resources.availableCPU} / {agent.resources.totalCPU}
             </div>
             <p className="text-sm text-muted-foreground">cores available</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <MemoryStick className="h-4 w-4" />
-              Memory
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        </StatCard>
+        <StatCard title="Memory" icon={<MemoryStick className="h-4 w-4" />}>
             <div className="text-xl font-bold text-foreground">
               {formatCapacity(agent.resources.availableMemory)}
             </div>
@@ -166,32 +138,16 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
                 {reportingVMs.length}/{agentVMs.length} VMs reporting)
               </p>
             )}
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <HardDrive className="h-4 w-4" />
-              Disk
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        </StatCard>
+        <StatCard title="Disk" icon={<HardDrive className="h-4 w-4" />}>
             <div className="text-xl font-bold text-foreground">
               {formatCapacity(agent.resources.availableDisk)}
             </div>
             <p className="text-sm text-muted-foreground">
               of {formatCapacity(agent.resources.totalDisk)} available
             </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Clock className="h-4 w-4" />
-              Last Heartbeat
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+        </StatCard>
+        <StatCard title="Last Heartbeat" icon={<Clock className="h-4 w-4" />}>
             <div className="text-sm font-medium text-foreground">
               {agent.lastHeartbeat
                 ? formatDate(agent.lastHeartbeat)
@@ -202,9 +158,8 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
                 ? formatTime(agent.lastHeartbeat)
                 : "-"}
             </p>
-          </CardContent>
-        </Card>
-      </div>
+        </StatCard>
+      </DetailGrid>
 
       {/* Details */}
       <Card className="bg-card border-border">
@@ -282,6 +237,6 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
           </CardContent>
         </Card>
       )}
-    </div>
+    </DetailPageShell>
   );
 }

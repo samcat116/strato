@@ -3,6 +3,7 @@ import StratoShared
 import Testing
 
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 /// The sizing a domain was *defined* with, which is what an online resize has
 /// to work against (STR-134).

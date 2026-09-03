@@ -35,21 +35,10 @@ spec:
             - sh
             - -c
             - |
-              {{- if .Values.spire.agent.guestIdentity.enabled }}
-              # Root owns the dedicated hostPath. The setgid bit makes SPIRE's
-              # 0770 admin socket inherit the registered delegate's group.
-              chown 0:{{ .Values.spire.agent.guestIdentity.delegateGID }} /var/run/spire
-              chmod 2750 /var/run/spire
-              {{- end }}
               until nc -w 1 -z {{ include "strato-control-plane.fullname" . }}-spire-server.{{ .Release.Namespace }}.svc.cluster.local {{ .Values.spire.service.grpcPort }}; do
                 echo "Waiting for SPIRE Server..."
                 sleep 2
               done
-          {{- if .Values.spire.agent.guestIdentity.enabled }}
-          volumeMounts:
-            - name: spire-agent-admin-socket-dir
-              mountPath: /var/run/spire
-          {{- end }}
       containers:
         - name: spire-agent
           image: "ghcr.io/spiffe/spire-agent:{{ .Values.spire.image.tag }}"
@@ -100,12 +89,6 @@ spec:
             - name: config
               mountPath: /etc/spire/agent
               readOnly: true
-            {{- if .Values.spire.agent.guestIdentity.enabled }}
-            # Dedicated node-local directory shared only with the registered
-            # control-plane delegate on this node.
-            - name: spire-agent-admin-socket-dir
-              mountPath: /var/run/spire
-            {{- end }}
             - name: spire-agent-socket-dir
               mountPath: /var/run/spire/sockets
             - name: spire-token
@@ -119,12 +102,6 @@ spec:
         - name: config
           configMap:
             name: {{ include "strato-control-plane.fullname" . }}-spire-agent
-        {{- if .Values.spire.agent.guestIdentity.enabled }}
-        - name: spire-agent-admin-socket-dir
-          hostPath:
-            path: {{ .Values.spire.agent.guestIdentity.socketHostPath }}
-            type: DirectoryOrCreate
-        {{- end }}
         {{- if .Values.spire.notifier.k8sbundle.enabled }}
         # Published by the server's k8sbundle notifier; the bundle.crt key
         # appears once the server CA activates. The wait-for-spire-server

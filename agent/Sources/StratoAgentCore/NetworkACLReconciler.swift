@@ -584,19 +584,11 @@ public enum NetworkACLReconciler {
         let observed = try await actuator.observeNetworkACLs()
         let observedBySwitch = Dictionary(uniqueKeysWithValues: observed.map { ($0.switchName, $0) })
         for plan in result.plans {
-            do {
+            await attempt(logger, "converge network ACL on \(plan.switchName)") {
                 try await converge(
                     plan: plan,
                     observed: observedBySwitch[plan.switchName],
                     actuator: actuator)
-            } catch {
-                logger.error(
-                    "Failed to converge network ACL",
-                    metadata: [
-                        "networkId": .string(plan.networkID.uuidString),
-                        "switch": .string(plan.switchName),
-                        "error": .string(error.localizedDescription),
-                    ])
             }
         }
 
@@ -604,15 +596,8 @@ public enum NetworkACLReconciler {
         let protected = result.protectedSwitchNames.union(extraProtection)
         for row in observed.sorted(by: { $0.switchName < $1.switchName })
         where !desiredSwitches.contains(row.switchName) && !protected.contains(row.switchName) {
-            do {
+            await attempt(logger, "tear down network ACL on \(row.switchName)") {
                 try await tearDown(observed: row, actuator: actuator)
-            } catch {
-                logger.error(
-                    "Failed to tear down network ACL",
-                    metadata: [
-                        "switch": .string(row.switchName),
-                        "error": .string(error.localizedDescription),
-                    ])
             }
         }
     }

@@ -564,10 +564,37 @@ struct NetworkController: RouteCollection {
                 if request.resolverEnabled != nil {
                     current.resolverEnabled = prepared.resolverEnabled
                 }
+                // Resolver allocation precedes any DNS-zone lock below. Both
+                // locks live until this transaction commits, and the global
+                // advisory-lock order is resolver_index -> dns_zone.
+                if current.resolverEnabled && current.resolverIndex == nil {
+                    _ = try await ResolverAddressAllocator.ensureIndex(for: current, on: db)
+                }
                 if request.clearPrimaryDnsZone == true || request.primaryDnsZoneId != nil {
                     let outgoing =
                         domainNameExplicit
                         ? nil : try await DNSZoneService.primaryZoneName(of: current, on: db)
+                    if let zoneID = request.primaryDnsZoneId {
+                        // Serialize against attachment removal, then repeat the
+                        // relationship-dependent checks on the transaction that
+                        // commits the pointer. The request-level checks above
+                        // provide authorization and good early errors only.
+                        try await DNSZoneService.lockZone(zoneID, on: db)
+                        guard let zone = try await DNSZone.find(zoneID, on: db) else {
+                            throw Abort(.badRequest, reason: "DNS zone \(zoneID) does not exist")
+                        }
+                        let attached = try await DNSZoneNetwork.query(on: db)
+                            .filter(\.$zone.$id == zoneID)
+                            .filter(\.$logicalNetwork.$id == networkID)
+                            .count()
+                        guard attached > 0 else {
+                            throw Abort(
+                                .conflict,
+                                reason: "DNS zone '\(zone.name)' is not attached to this network; attach it first")
+                        }
+                        try await DNSZoneService.assertPrimaryZoneAssignable(
+                            zone: zone, networkID: networkID, on: db)
+                    }
                     current.$primaryDNSZone.id = request.primaryDnsZoneId
                     current.domainName = Self.searchDomainAfterPrimaryZoneChange(
                         currentDomain: current.domainName, previousZoneName: outgoing,
@@ -600,9 +627,6 @@ struct NetworkController: RouteCollection {
                             .internalServerError,
                             reason: "Network generation did not advance")
                     }
-                }
-                if current.resolverEnabled && current.resolverIndex == nil {
-                    _ = try await ResolverAddressAllocator.ensureIndex(for: current, on: db)
                 }
                 try await current.save(on: db)
                 return (current, currentInterfaceCount)

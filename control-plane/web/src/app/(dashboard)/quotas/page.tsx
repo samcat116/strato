@@ -2,17 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Building2, FolderTree, Boxes, Plus, Loader2 } from "lucide-react";
+import { Building2, FolderTree, Boxes, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QuotaCard, QuotaDialog } from "@/components/quotas";
 import { organizationsApi } from "@/lib/api/organizations";
@@ -23,6 +15,7 @@ import {
   type QuotaCreateTarget,
 } from "@/lib/hooks";
 import { useOrganization } from "@/providers";
+import { confirmAction } from "@/providers/confirmation-provider";
 import type {
   OrganizationHierarchy,
   FolderNode,
@@ -117,7 +110,6 @@ export default function QuotasPage() {
   const [createTarget, setCreateTarget] = useState<QuotaCreateTarget>();
   const [dialogScopeLabel, setDialogScopeLabel] = useState("");
   const [dialogEnvironments, setDialogEnvironments] = useState<string[]>();
-  const [pendingDelete, setPendingDelete] = useState<HierarchyQuota>();
 
   const scopes = useMemo(
     () => (hierarchy && orgId ? collectScopes(hierarchy, orgId) : []),
@@ -142,12 +134,20 @@ export default function QuotasPage() {
     setDialogOpen(true);
   };
 
-  const confirmDelete = async () => {
-    if (!pendingDelete?.id) return;
+  const deleteConfirmedQuota = async (quota: HierarchyQuota) => {
+    if (
+      !quota.id ||
+      !(await confirmAction({
+        title: "Delete quota",
+        description: `Delete quota "${quota.name}"? This cannot be undone. Quotas with active reservations cannot be deleted.`,
+        confirmLabel: "Delete",
+      }))
+    ) {
+      return;
+    }
     try {
-      await deleteQuota.mutateAsync(pendingDelete.id);
-      toast.success(`Quota "${pendingDelete.name}" deleted`);
-      setPendingDelete(undefined);
+      await deleteQuota.mutateAsync(quota.id);
+      toast.success(`Quota "${quota.name}" deleted`);
     } catch (err) {
       toast.error(quotaErrorMessage(err, "Failed to delete quota"));
     }
@@ -230,7 +230,7 @@ export default function QuotasPage() {
                         quota={quota}
                         canManage={canManage}
                         onEdit={(q) => openEdit(scope, q)}
-                        onDelete={(q) => setPendingDelete(q)}
+                        onDelete={deleteConfirmedQuota}
                       />
                     ))}
                   </div>
@@ -251,48 +251,6 @@ export default function QuotasPage() {
         environments={dialogEnvironments}
       />
 
-      <Dialog
-        open={!!pendingDelete}
-        onOpenChange={(open) => !open && setPendingDelete(undefined)}
-      >
-        <DialogContent className="bg-card border-border text-foreground">
-          <DialogHeader>
-            <DialogTitle>Delete Quota</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              Delete quota{" "}
-              <span className="text-foreground">
-                &quot;{pendingDelete?.name}&quot;
-              </span>
-              ? This cannot be undone. Quotas with active reservations cannot be
-              deleted.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setPendingDelete(undefined)}
-              className="border-input text-foreground/80 hover:bg-accent"
-              disabled={deleteQuota.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="bg-red-600 hover:bg-red-700"
-              onClick={confirmDelete}
-              disabled={deleteQuota.isPending}
-            >
-              {deleteQuota.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Deleting...
-                </>
-              ) : (
-                "Delete"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

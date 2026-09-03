@@ -2,12 +2,11 @@
 
 import { api } from "./client";
 import type {
-  GrantWriteResponse,
   Organization,
   OrganizationMember,
   CreateOrganizationRequest,
   UpdateOrganizationRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const organizationsApi = {
   list(signal?: AbortSignal): Promise<Organization[]> {
@@ -40,23 +39,4 @@ export const organizationsApi = {
     return api.get<OrganizationMember[]>(`/api/organizations/${orgId}/members`, undefined, signal);
   },
 
-  addMember(
-    orgId: string,
-    userEmail: string,
-    role: string
-  ): Promise<GrantWriteResponse> {
-    return api.post(`/api/organizations/${orgId}/members`, { userEmail, role });
-  },
-
-  removeMember(orgId: string, userId: string): Promise<void> {
-    return api.delete(`/api/organizations/${orgId}/members/${userId}`);
-  },
-
-  updateMemberRole(
-    orgId: string,
-    userId: string,
-    role: string
-  ): Promise<GrantWriteResponse> {
-    return api.patch(`/api/organizations/${orgId}/members/${userId}`, { role });
-  },
 };

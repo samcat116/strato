@@ -126,13 +126,12 @@ socket durably commits and acknowledges it. A monotonic agent revision and a
 payload compare-and-write in PostgreSQL prevent a delayed replica from
 overwriting newer recorded state.
 
-v34 left the forwarding path with no sender at all, and STR-152 (ADR stage 11)
-deleted it: `AgentService.sendMessageToAgentWithResponse` and the
-pending-request continuations behind it, `ReplicaMessageBridge.call` and the
-`replica:{id}:rpc` / `rpc-replies` channels, and the `agent:{name}:replica`
-routing key that told a requester where to forward. The `success`/`error`
-frames survive, but only as uncorrelated control-plane → agent
-acknowledgements: nothing awaits a `requestId` on either side.
+STR-152 (ADR stage 11) deleted the operation-specific request/response path:
+`AgentService.sendMessageToAgentWithResponse`, its pending continuations, and
+`ReplicaMessageBridge.call`. The TTL-bound `agent:{name}:replica` directory
+and `replica:{id}:rpc` channel remain for one-way delivery when the API request
+lands on a replica other than the one holding the agent socket. Guest exec and
+recorded VM commands use that path; desired-state changes do not.
 
 What that buys is the point of the whole ADR. Every remaining Valkey key and
 channel is a latency optimization or a duplicate-work guard. A coordination
@@ -145,8 +144,8 @@ boundary.
 ## Failure and deploy behavior
 
 - **Replica crash**: its agents' sockets drop; agents reconnect (existing
-  backoff + jitter) to surviving replicas. There is nothing to take over — no
-  routing directory survives (STR-152), and presence expires within one TTL
+  backoff + jitter) to surviving replicas. The old socket route and presence
+  entries expire within one TTL
   (60s). The registration-triggered sync converges any drift; until reconnect
   the agent is effectively offline, and in-flight mutations settle via
   reconciliation or the stuck-convergence sweep. One cosmetic edge: a socket
@@ -195,9 +194,9 @@ wire protocol version ≥ 2 (desired-state sync, agent ≥ the phase-2 release);
 older agents are rejected at registration with the terminal
 `unsupported_protocol_version` code so their operators know to upgrade.
 
-Version ≥ 29 additionally enables the desired-state pull transport. It is a
-floor, not a requirement: a pre-v29 agent registers normally and keeps being
-pushed to, and a v29 agent against a pre-v29 control plane never starts polling.
+The current control plane requires an exact wire-version match at registration,
+so every accepted agent uses the desired-state pull transport. Mixed-version
+fleet transition behavior is not part of the live protocol.
 
 ## Scaling
 

@@ -1,15 +1,14 @@
 "use client";
 
+import { DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+
 import { errorMessage } from "@/lib/errors";
 
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -138,31 +137,12 @@ function EditSecurityGroupForm({
             />
           </div>
         </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="border-input text-foreground/80 hover:bg-accent"
-            disabled={isLoading}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            className="bg-primary hover:bg-primary/90"
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              "Save Changes"
-            )}
-          </Button>
-        </DialogFooter>
+        <DialogSubmitFooter
+          submitLabel="Save Changes"
+          pendingLabel="Saving..."
+          isPending={isLoading}
+          onCancel={() => onOpenChange(false)}
+        />
       </form>
     </>
   );

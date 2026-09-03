@@ -9,7 +9,7 @@ import type {
   CreateNetworkRequest,
   CreateNetworkACLRuleRequest,
   UpdateNetworkRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const networksApi = {
   list(projectId?: string, signal?: AbortSignal): Promise<Network[]> {
@@ -17,10 +17,6 @@ export const networksApi = {
       "/api/networks",
       projectId ? { project_id: projectId } : {}, signal
     );
-  },
-
-  get(id: string, signal?: AbortSignal): Promise<Network> {
-    return api.get<Network>(`/api/networks/${id}`, undefined, signal);
   },
 
   create(data: CreateNetworkRequest): Promise<Network> {

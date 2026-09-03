@@ -1,5 +1,6 @@
 import Testing
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 import StratoShared
 
 @Suite("Libvirt network device inventory")

@@ -55,7 +55,8 @@ export default defineConfig({
           { text: 'IAM', link: '/architecture/iam' },
           { text: 'Guest Identity (Proposal)', link: '/architecture/guest-identity' },
           { text: 'Webhooks', link: '/architecture/webhooks' },
-          { text: 'Agent Updates', link: '/architecture/agent-updates' }
+          { text: 'Agent Updates', link: '/architecture/agent-updates' },
+          { text: 'Agent Dependency Management', link: '/architecture/agent-dependency-management' }
         ]
       },
       {
@@ -74,6 +75,14 @@ export default defineConfig({
           {
             text: 'ADR 0008: Resolver in the Host Namespace',
             link: '/adr/0008-resolver-in-host-namespace',
+          },
+          {
+            text: 'ADR 0009: Current Schema Baseline',
+            link: '/adr/0009-current-schema-baseline',
+          },
+          {
+            text: 'ADR 0010: Layer Network ACLs with OVN Tiers',
+            link: '/adr/0010-layer-network-acls-with-ovn-tiers',
           },
           { text: 'Authorization Edge Audit (July 2026)', link: '/architecture/authorization-edge-audit' }
         ]
@@ -100,8 +109,6 @@ export default defineConfig({
           { text: 'Docker Compose', link: '/deployment/docker-compose' },
           { text: 'Kubernetes (Helm)', link: '/deployment/kubernetes' },
           { text: 'Agents', link: '/deployment/agents' },
-          { text: 'VM Manifest Cutover', link: '/deployment/vm-manifest-cutover' },
-          { text: 'OVN Stable ID Cutover', link: '/deployment/ovn-stable-id-cutover' },
           { text: 'IAM & Permissions', link: '/deployment/iam' },
           { text: 'Health Checks & Zero-Downtime Deploys', link: '/deployment/health-checks' },
           { text: 'Rate Limiting', link: '/deployment/rate-limiting' },

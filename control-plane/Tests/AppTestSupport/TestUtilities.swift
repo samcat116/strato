@@ -351,12 +351,18 @@ package struct PermissiveGuardrailAnalyzer: GuardrailAnalyzer {
     }
 }
 
-package func withTestApp(_ test: (Application) async throws -> Void) async throws {
+package func withTestApp(
+    analyzer: (any GuardrailAnalyzer)? = PermissiveGuardrailAnalyzer(),
+    configureApp: (Application) async throws -> Void = { try await configure($0) },
+    _ test: (Application) async throws -> Void
+) async throws {
     let app = try await Application.makeForTesting()
 
     do {
-        try await configure(app)
-        app.guardrailAnalyzer = PermissiveGuardrailAnalyzer()
+        try await configureApp(app)
+        if let analyzer {
+            app.guardrailAnalyzer = analyzer
+        }
         try await test(app)
     } catch {
         try? await app.shutdownForTesting()
@@ -393,10 +399,69 @@ extension User {
 
 // MARK: - Test Data Builders
 
+package struct ProjectFixture {
+    package let user: User
+    package let organization: Organization
+    package let project: Project
+    package let token: String
+}
+
+package func withProjectApp(
+    prefix: String = "test",
+    role: String = "admin",
+    systemAdmin: Bool = false,
+    environments: [String] = ["development", "staging", "production"],
+    defaultEnvironment: String = "development",
+    analyzer: (any GuardrailAnalyzer)? = PermissiveGuardrailAnalyzer(),
+    configureApp: (Application) async throws -> Void = { try await configure($0) },
+    _ test: (Application, TestDataBuilder, ProjectFixture) async throws -> Void
+) async throws {
+    try await withTestApp(analyzer: analyzer, configureApp: configureApp) { app in
+        let builder = TestDataBuilder(db: app.db)
+        let fixture = try await builder.createAuthenticatedProject(
+            prefix: prefix,
+            role: role,
+            systemAdmin: systemAdmin,
+            environments: environments,
+            defaultEnvironment: defaultEnvironment)
+        try await test(app, builder, fixture)
+    }
+}
+
 package struct TestDataBuilder {
     package let db: Database
 
     package init(db: Database) { self.db = db }
+
+    package func createAuthenticatedProject(
+        prefix: String = "test",
+        role: String = "admin",
+        systemAdmin: Bool = false,
+        environments: [String] = ["development", "staging", "production"],
+        defaultEnvironment: String = "development"
+    ) async throws -> ProjectFixture {
+        let user = try await createUser(
+            username: "\(prefix)-user",
+            email: "\(prefix)-user@example.com",
+            displayName: "\(prefix) User",
+            isSystemAdmin: systemAdmin)
+        let organization = try await createOrganization(name: "\(prefix) Organization")
+        try await addUserToOrganization(user: user, organization: organization, role: role)
+        user.currentOrganizationId = try organization.requireID()
+        try await user.save(on: db)
+        let project = try await createProject(
+            name: "\(prefix) Project",
+            description: "Project fixture for \(prefix)",
+            organization: organization,
+            environments: environments,
+            defaultEnvironment: defaultEnvironment)
+        let token = try await user.generateAPIKey(on: db)
+        return ProjectFixture(
+            user: user,
+            organization: organization,
+            project: project,
+            token: token)
+    }
 
     @discardableResult
     package func registerAgent(
@@ -630,6 +695,33 @@ package struct TestDataBuilder {
         return org
     }
 
+    package func createSite(
+        name: String = "Test Site",
+        description: String? = nil,
+        status: SiteStatus = .active,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        locationLabel: String? = nil,
+        regionCode: String? = nil,
+        labels: [String: String] = [:],
+        networkControllerAgentID: UUID? = nil,
+        organizationScope: OrganizationScope
+    ) async throws -> Site {
+        let site = Site(
+            name: name,
+            description: description,
+            status: status,
+            latitude: latitude,
+            longitude: longitude,
+            locationLabel: locationLabel,
+            regionCode: regionCode,
+            labels: labels,
+            networkControllerAgentID: networkControllerAgentID,
+            organizationScope: organizationScope)
+        try await site.save(on: db)
+        return site
+    }
+
     package func addUserToOrganization(
         user: User,
         organization: Organization,
@@ -789,7 +881,10 @@ package struct TestDataBuilder {
         maxMemoryGB: Double = 20.0,
         maxStorageGB: Double = 100.0,
         maxVMs: Int = 5,
+        maxSandboxes: Int? = nil,
+        maxVolumes: Int? = nil,
         maxNetworks: Int = 10,
+        maxLoadBalancers: Int? = nil,
         organization: Organization? = nil,
         ou: OrganizationalUnit? = nil,
         project: Project? = nil,
@@ -804,7 +899,10 @@ package struct TestDataBuilder {
             maxMemory: Int64(maxMemoryGB * 1024 * 1024 * 1024),
             maxStorage: Int64(maxStorageGB * 1024 * 1024 * 1024),
             maxVMs: maxVMs,
+            maxSandboxes: maxSandboxes,
+            maxVolumes: maxVolumes,
             maxNetworks: maxNetworks,
+            maxLoadBalancers: maxLoadBalancers,
             environment: environment
         )
         try await quota.save(on: db)
@@ -857,7 +955,18 @@ package struct TestDataBuilder {
         project: Project,
         environment: String = "development",
         sizeGB: Int = 10,
+        format: VolumeFormat = .qcow2,
+        volumeType: VolumeType = .data,
         status: VolumeStatus = .available,
+        desiredStatus: DesiredVolumeStatus = .present,
+        generation: Int64 = 0,
+        observedGeneration: Int64 = 0,
+        poolID: UUID? = nil,
+        vmID: UUID? = nil,
+        deviceName: String? = nil,
+        bootOrder: Int? = nil,
+        attachedAgentID: String? = nil,
+        sourceImageID: UUID? = nil,
         createdBy: User
     ) async throws -> Volume {
         let volume = Volume(
@@ -866,11 +975,68 @@ package struct TestDataBuilder {
             projectID: try project.requireID(),
             environment: environment,
             size: Int64(sizeGB) * 1024 * 1024 * 1024,
+            format: format,
+            volumeType: volumeType,
             status: status,
-            createdByID: try createdBy.requireID()
+            createdByID: try createdBy.requireID(),
+            poolID: poolID,
+            sourceImageID: sourceImageID
         )
+        volume.desiredStatus = desiredStatus
+        volume.generation = generation
+        volume.observedGeneration = observedGeneration
+        volume.$vm.id = vmID
+        volume.deviceName = deviceName
+        volume.bootOrder = bootOrder
+        volume.attachedAgentId = attachedAgentID
         try await volume.save(on: db)
         return volume
+    }
+
+    @discardableResult
+    package func attachNIC(
+        to vm: VM,
+        network: LogicalNetwork,
+        macAddress: String,
+        mtu: Int? = nil,
+        deviceName: String = "net0",
+        orderIndex: Int = 0,
+        attachGeneration: Int64? = nil,
+        detachGeneration: Int64? = nil,
+        ipv4: (address: String, prefixLength: Int, gateway: String?)? = nil,
+        ipv6: (address: String, prefixLength: Int, gateway: String?)? = nil
+    ) async throws -> VMNetworkInterface {
+        let interface = VMNetworkInterface(
+            vmID: try vm.requireID(),
+            logicalNetworkID: try network.requireID(),
+            macAddress: macAddress,
+            mtu: mtu,
+            deviceName: deviceName,
+            orderIndex: orderIndex)
+        interface.attachGeneration = attachGeneration
+        interface.detachGeneration = detachGeneration
+        try await interface.save(on: db)
+        if let ipv4 {
+            try await VMInterfaceAddress(
+                interfaceID: try interface.requireID(),
+                logicalNetworkID: try network.requireID(),
+                family: .ipv4,
+                address: ipv4.address,
+                prefixLength: ipv4.prefixLength,
+                gateway: ipv4.gateway
+            ).save(on: db)
+        }
+        if let ipv6 {
+            try await VMInterfaceAddress(
+                interfaceID: try interface.requireID(),
+                logicalNetworkID: try network.requireID(),
+                family: .ipv6,
+                address: ipv6.address,
+                prefixLength: ipv6.prefixLength,
+                gateway: ipv6.gateway
+            ).save(on: db)
+        }
+        return interface
     }
 
     package func createImage(
@@ -921,6 +1087,31 @@ package struct TestDataBuilder {
         }
         return image
     }
+}
+
+/// Polls an asynchronous observation without duplicating sleep and timeout
+/// loops throughout integration tests. Returning nil asks for another attempt;
+/// a non-nil value completes the poll and is returned to the caller.
+package func pollUntil<Value>(
+    attempts: Int = 100,
+    interval: Duration = .milliseconds(50),
+    _ observation: () async throws -> Value?
+) async throws -> Value {
+    let attemptCount = max(1, attempts)
+    for attempt in 0..<attemptCount {
+        if let value = try await observation() { return value }
+        if attempt + 1 < attemptCount { try await Task.sleep(for: interval) }
+    }
+    throw TestSetupError.message("Condition was not met after \(attemptCount) attempts")
+}
+
+/// Assigns a saved VM to an agent using the same persisted field production
+/// placement writes.
+@discardableResult
+package func placeVM(_ vm: VM, on agentID: String?, using db: any Database) async throws -> VM {
+    vm.hypervisorId = agentID
+    try await vm.save(on: db)
+    return vm
 }
 
 // MARK: - Mock Image Fetch Service

@@ -1,6 +1,6 @@
 # ADR 0008: The per-network resolver runs in the host namespace
 
-- **Status**: Accepted. **Supersedes ADR 0007**
+- **Status**: Accepted. **Supersedes [ADR 0007](./0007-coredns-per-chassis-namespace.md)**
 - **Date**: 2026-08-08
 - **Deciders**: Sam Schmitt
 - **Scope**: where a network's DNS resolver runs on a hypervisor host, what

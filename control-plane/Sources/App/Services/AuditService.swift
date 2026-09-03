@@ -810,17 +810,19 @@ final class AuditService: Sendable {
             return
         }
 
+        guard let db = app.liveDB else { return }
+
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         do {
             // Count first so the deletion is observable; the extra query is
             // cheap against the created_at index and a row slipping between
             // the two only misstates the log line, not the data.
-            let expired = try await AuditEvent.query(on: app.db)
+            let expired = try await AuditEvent.query(on: db)
                 .filter(\.$createdAt < cutoff)
                 .count()
             guard expired > 0 else { return }
 
-            try await AuditEvent.query(on: app.db)
+            try await AuditEvent.query(on: db)
                 .filter(\.$createdAt < cutoff)
                 .delete()
 
@@ -850,7 +852,7 @@ extension Application {
             }
         }
         set {
-            setStorageValue(AuditServiceKey.self, to: newValue)
+            setService(AuditServiceKey.self, to: newValue)
         }
     }
 

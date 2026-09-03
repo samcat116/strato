@@ -595,9 +595,6 @@ extension Application {
         get {
             lazyService(ConsoleSessionManagerKey.self) { ConsoleSessionManager(app: self) }
         }
-        set {
-            setStorageValue(ConsoleSessionManagerKey.self, to: newValue)
-        }
     }
 }
 

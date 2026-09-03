@@ -3,6 +3,7 @@ import StratoShared
 import Testing
 
 @testable import StratoAgentCore
+@testable import StratoAgentDomainXML
 
 /// The widening pass a boot runs over a stopped domain (STR-187).
 ///

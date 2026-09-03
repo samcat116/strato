@@ -7,6 +7,10 @@ let package = Package(
         // macOS 15+ required by grpc-swift-2 (the macOS agent is dev/test only)
         .macOS(.v15)
     ],
+    products: [
+        .executable(name: "StratoAgent", targets: ["StratoAgent"]),
+        .library(name: "StratoAgentRuntime", targets: ["StratoAgentRuntime"]),
+    ],
     dependencies: [
         // StratoShared for common models and protocols
         .package(path: "../shared"),
@@ -26,7 +30,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
         .package(url: "https://github.com/apple/swift-configuration.git", from: "1.2.0"),
-        .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
+        .package(
+            url: "https://github.com/samcat116/swift-toml.git",
+            revision: "10094db34a4eade03c0fc0b1a60ea90df76af93e"),
         // SPIFFE Workload API (gRPC over Unix domain socket)
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift-nio-transport.git", from: "2.0.0"),
@@ -72,10 +78,35 @@ let package = Package(
             url: "https://github.com/samcat116/swift-libvirt.git", .upToNextMinor(from: "0.1.1")),
     ],
     targets: [
+        // Small, dependency-light values shared by the agent's domain,
+        // networking, storage, and runtime layers.
+        .target(
+            name: "StratoAgentKit",
+            dependencies: [
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Sources/StratoAgentKit",
+            swiftSettings: swiftSettings
+        ),
+        // Pure libvirt domain planning and XML transformations. This is the
+        // first leaf extracted from Core's otherwise mostly acyclic clusters.
+        .target(
+            name: "StratoAgentDomainXML",
+            dependencies: [
+                "StratoAgentKit",
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Libvirt", package: "swift-libvirt"),
+            ],
+            path: "Sources/StratoAgentDomainXML",
+            swiftSettings: swiftSettings
+        ),
         // Core library with testable code (no native-library dependencies)
         .target(
             name: "StratoAgentCore",
             dependencies: [
+                "StratoAgentKit",
+                "StratoAgentDomainXML",
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Configuration", package: "swift-configuration"),
@@ -127,13 +158,18 @@ let package = Package(
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "X509", package: "swift-certificates"),
                 .product(name: "SPIFFEVerification", package: "shared"),
+                .product(name: "SPIFFEKit", package: "shared"),
+                .product(name: "StratoShared", package: "shared"),
             ],
             path: "Sources/StratoAgentSPIFFE",
             exclude: ["Generated/README.md", "Generated/proto"],
             swiftSettings: swiftSettings
         ),
-        .executableTarget(
-            name: "StratoAgent",
+        // Runtime library containing the agent actor and all platform drivers.
+        // Keeping process startup in a separate executable target makes this
+        // implementation directly importable by focused runtime tests.
+        .target(
+            name: "StratoAgentRuntime",
             dependencies: [
                 "StratoAgentCore",
                 "StratoAgentSPIFFE",
@@ -157,41 +193,98 @@ let package = Package(
                     name: "SwiftFirecracker", package: "SwiftFirecracker",
                     condition: .when(platforms: [.linux])),
             ],
+            path: "Sources/StratoAgentRuntime",
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "StratoAgent",
+            dependencies: [
+                "StratoAgentRuntime"
+            ],
+            path: "Sources/StratoAgent",
             swiftSettings: swiftSettings
         ),
         .testTarget(
-            name: "StratoAgentTests",
+            name: "StratoAgentSPIFFETests",
             dependencies: [
-                "StratoAgent",
-                "StratoAgentCore",
                 "StratoAgentSPIFFE",
-                .product(name: "StratoShared", package: "shared"),
-                .product(name: "InMemoryLogging", package: "swift-log"),
-                // A loopback HTTP origin for the artifact-downloader tests.
+                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "Logging", package: "swift-log"),
                 .product(name: "NIOCore", package: "swift-nio"),
-                .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "NIOWebSocket", package: "swift-nio"),
+                .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
                 .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "X509", package: "swift-certificates"),
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "StratoAgentTestSupport",
+            path: "Tests/StratoAgentTestSupport",
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "StratoAgentTests",
+            dependencies: [
+                "StratoAgentCore",
+                "StratoAgentDomainXML",
+                "StratoAgentTestSupport",
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "InMemoryLogging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                .product(name: "NIOWebSocket", package: "swift-nio"),
-                .product(name: "WebSocketKit", package: "websocket-kit"),
-                // Constructing the daemon errors and stat payloads the libvirt
-                // translation layer is asserted against.
                 .product(name: "Libvirt", package: "swift-libvirt"),
+            ],
+            // Golden documents are read from the source tree via #filePath,
+            // not from a resource bundle, so SwiftPM leaves them alone.
+            exclude: ["Goldens"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "StratoAgentStorageTests",
+            dependencies: [
+                "StratoAgentCore",
+                "StratoAgentTestSupport",
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "StratoAgentPlatformTests",
+            dependencies: [
+                "StratoAgentCore",
+                "StratoAgentTestSupport",
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "StratoAgentRuntimeTests",
+            dependencies: [
+                "StratoAgentRuntime",
+                "StratoAgentCore",
+                .product(name: "StratoShared", package: "shared"),
+                .product(name: "Logging", package: "swift-log"),
                 .product(
                     name: "SwiftFirecracker", package: "SwiftFirecracker",
                     condition: .when(platforms: [.linux])),
             ],
-            // Golden documents are read from the source tree via #filePath, not
-            // from a resource bundle, so SwiftPM should leave them alone.
-            exclude: ["Goldens"],
             swiftSettings: swiftSettings
-        )
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

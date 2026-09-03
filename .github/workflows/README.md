@@ -64,8 +64,8 @@ remaining image build (`main-build.yaml`, `release.yaml`) passes
 
 So a break in the in-image `swift build -c release`, either apt-dependency
 `RUN` block, or the `--show-bin-path` copy surfaces in no push- or PR-triggered
-workflow at all. That path is live — `deploy/compose/docker-compose.yml`
-documents commenting out `image:` and uncommenting `build:` to run from source.
+workflow at all. That path is live — the Compose deployment guide documents an
+untracked `docker-compose.override.yml` for running from source.
 Its only coverage is the opt-in `docker_source_build` input on
 `main-tests.yaml`; tick it after touching either Dockerfile.
 

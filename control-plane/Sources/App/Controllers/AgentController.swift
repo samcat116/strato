@@ -1044,32 +1044,37 @@ struct AgentController: RouteCollection {
             }
         }
 
-        // Remove from in-memory registry if present
-        await req.agentService.forceUnregisterAgent(agent.identity)
+        // Commit the database half atomically after the external revocation.
+        // A failed statement must not leave only some of the site designation,
+        // agent, workload-registry, and enrollment rows behind.
+        try await req.db.transaction { db in
+            // Give up the designations the guard above allowed — only sites this
+            // agent was the last member of get here — so none is left pointing at
+            // the row that is about to vanish.
+            for site in controlledSites {
+                site.$networkControllerAgent.id = nil
+                try await site.save(on: db)
+            }
 
-        // Give up the designations the guard above allowed — only sites this
-        // agent was the last member of get here — so none is left pointing at
-        // the row that is about to vanish.
-        for site in controlledSites {
-            site.$networkControllerAgent.id = nil
-            try await site.save(on: req.db)
+            // Delete from database, along with the workload-registry rows mapping
+            // the agent's SPIFFE identity to it (issue #491) — the SPIRE entries
+            // behind them were just deprovisioned.
+            try await agent.delete(on: db)
+            try await WorkloadRegistry.deregisterAgent(identity: agent.identity, on: db)
+
+            // Deregistration retires the node: delete its enrollment so the name can
+            // be enrolled again. Left behind, the row would block a fresh enrollment
+            // through the one-per-name guard and lock the name permanently. SPIRE
+            // entries for the name were already deprovisioned above, so the row
+            // carries no external grant.
+            try await AgentEnrollment.query(on: db)
+                .filter(\.$trustDomain == agent.trustDomain)
+                .filter(\.$agentName == agent.name)
+                .delete()
         }
 
-        // Delete from database, along with the workload-registry rows mapping
-        // the agent's SPIFFE identity to it (issue #491) — the SPIRE entries
-        // behind them were just deprovisioned.
-        try await agent.delete(on: req.db)
-        try await WorkloadRegistry.deregisterAgent(identity: agent.identity, on: req.db)
-
-        // Deregistration retires the node: delete its enrollment so the name can
-        // be enrolled again. Left behind, the row would block a fresh enrollment
-        // through the one-per-name guard and lock the name permanently. SPIRE
-        // entries for the name were already deprovisioned above, so the row
-        // carries no external grant.
-        try await AgentEnrollment.query(on: req.db)
-            .filter(\.$trustDomain == agent.trustDomain)
-            .filter(\.$agentName == agent.name)
-            .delete()
+        // Remove from the live registry only once durable state committed.
+        await req.agentService.forceUnregisterAgent(agent.identity)
 
         req.logger.info(
             "Deregistered agent",

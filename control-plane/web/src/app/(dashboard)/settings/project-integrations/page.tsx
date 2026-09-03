@@ -11,7 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
-import { usePermissions } from "@/lib/hooks";
+import { ProjectRequiredState } from "@/components/ui/project-required-state";
+import { usePermissions, useWorkMutation } from "@/lib/hooks";
 import {
   registryCredentialsApi,
   serviceAccountsApi,
@@ -121,17 +122,13 @@ export default function ProjectIntegrationsPage() {
     onSuccess: refresh,
     onError: (error) => toast.error(error.message),
   });
-  const manageAccount = useMutation({
-    mutationFn: (work: () => Promise<unknown>) => work(),
-    onSuccess: () => {
-      refresh();
-      toast.success("Service account updated");
-    },
-    onError: (error) => toast.error(error.message),
+  const manageAccount = useWorkMutation({
+    onSuccess: refresh,
+    successMessage: "Service account updated",
   });
 
   if (!currentProject) {
-    return <p className="py-12 text-center text-muted-foreground">Select a project first.</p>;
+    return <ProjectRequiredState resource="Project integrations" />;
   }
 
   return (

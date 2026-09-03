@@ -49,13 +49,6 @@ podDisruptionBudget:
 networkPolicy:
   enabled: true
 
-# Enable monitoring
-monitoring:
-  serviceMonitor:
-    enabled: false  # Would be true with Prometheus operator
-  metrics:
-    enabled: true
-
 # Disable problematic init containers for CI
 initContainers:
   waitForDB:

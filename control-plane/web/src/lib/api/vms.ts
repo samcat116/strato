@@ -13,9 +13,8 @@ import type {
   VMSnapshot,
   CreateVMSnapshotRequest,
   VNCSession,
-  VMNetworkInterface,
   CreateVMNetworkInterfaceRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 // Lifecycle mutations are asynchronous: the server responds 202 Accepted with
 // the VM, the generation it now has to converge on, and the id of the
@@ -41,10 +40,6 @@ export const vmsApi = {
 
   patchMetadata(id: string, data: PatchVMMetadataRequest): Promise<VM> {
     return api.patch<VM>(`/api/vms/${id}`, data);
-  },
-
-  listInterfaces(id: string): Promise<VMNetworkInterface[]> {
-    return api.get<VMNetworkInterface[]>(`/api/vms/${id}/interfaces`);
   },
 
   attachInterface(

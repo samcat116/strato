@@ -19,26 +19,14 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_SH="$SCRIPT_DIR/../install.sh"
+export FUNCTION_SOURCE="$INSTALL_SH"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 FAILURES=0
 CASES=0
-
-fail() {
-  echo "  FAIL: $*" >&2
-  FAILURES=$((FAILURES + 1))
-}
-
-# check <description> <expected> <actual>
-check() {
-  CASES=$((CASES + 1))
-  if [ "$2" = "$3" ]; then
-    echo "  ok: $1"
-  else
-    fail "$1 — expected '$2', got '$3'"
-  fi
-}
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../../tests/lib.sh"
 
 file_mode() {
   if stat -c %a "$1" >/dev/null 2>&1; then
@@ -46,21 +34,6 @@ file_mode() {
   else
     stat -f %Lp "$1"
   fi
-}
-
-extract_function() {
-  local name="$1" body
-  body="$(sed -n "/^${name}()/,/^}/p" "$INSTALL_SH")"
-  case "$body" in
-    "") echo "error: could not extract ${name}() from $INSTALL_SH" >&2; exit 1 ;;
-  esac
-  # A truncated extraction (function no longer ends with a lone brace) would
-  # otherwise produce a syntax error blamed on this harness.
-  case "$body" in
-    *$'\n}') ;;
-    *) echo "error: extraction of ${name}() from $INSTALL_SH is not brace-terminated" >&2; exit 1 ;;
-  esac
-  printf '%s\n' "$body"
 }
 
 # The functions under test, plus the log/warn stubs they call.

@@ -406,7 +406,7 @@ extension Application {
     /// scripted address validator; production never replaces it.
     var guardedHTTPClient: GuardedHTTPClient {
         get { lazyService(GuardedHTTPClientKey.self) { GuardedHTTPClient(app: self) } }
-        set { setStorageValue(GuardedHTTPClientKey.self, to: newValue) }
+        set { setService(GuardedHTTPClientKey.self, to: newValue) }
     }
 }
 

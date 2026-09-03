@@ -967,7 +967,7 @@ struct AgentConfigTests {
         // whatever config file the host operator happens to have installed.
         let config = try await loadDefaultConfig(searchPaths: [])
 
-        #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
+        #expect(config.controlPlaneURL == "wss://localhost:8443/agent/ws")
 
         #if os(Linux)
         #expect(config.networkMode == .ovn)

@@ -1,15 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import {
+  DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+
+import { useMemo,
+  useState } from "react";
 import Link from "next/link";
-import { Loader2, Plus, Unlink } from "lucide-react";
+import { Loader2,
+  Plus,
+  Unlink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card,
+  CardContent,
+  CardHeader,
+  CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -237,31 +245,13 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
                 )}
               </div>
             </div>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setAttachOpen(false)}
-                className="border-input text-foreground/80 hover:bg-accent"
-                disabled={isAttaching}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                className="bg-primary hover:bg-primary/90"
-                disabled={isAttaching || availableVolumes.length === 0}
-              >
-                {isAttaching ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Attaching...
-                  </>
-                ) : (
-                  "Attach"
-                )}
-              </Button>
-            </DialogFooter>
+            <DialogSubmitFooter
+              submitLabel="Attach"
+              pendingLabel="Attaching..."
+              isPending={isAttaching}
+              disabled={availableVolumes.length === 0}
+              onCancel={() => setAttachOpen(false)}
+            />
           </form>
         </DialogContent>
       </Dialog>

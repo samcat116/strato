@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import StratoShared
 import Testing
+import StratoAgentTestSupport
 
 @testable import StratoAgentCore
 

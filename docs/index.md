@@ -25,7 +25,7 @@ features:
     details: WebAuthn/Passkeys authentication and a built-in Cedar-based IAM system with roles, guardrails, and decision logs
   - icon: ⚡
     title: Hardware Accelerated
-    details: KVM on Linux and Hypervisor.framework on macOS for near-native VM performance
+    details: KVM acceleration on supported Linux hypervisor nodes
   - icon: 🌐
     title: Software-Defined Networking
     details: OVN/OVS integration on Linux for multi-tenant network isolation and advanced networking features
@@ -62,10 +62,10 @@ Strato uses a distributed **Control Plane** and **Agent** architecture:
 
 | Feature | Linux | macOS |
 |---------|-------|-------|
-| VM Management | ✅ Full | ✅ Full |
-| Hardware Acceleration | ✅ KVM | ✅ HVF |
-| Networking | ✅ OVN/OVS | ⚠️ User-mode |
-| Production Ready | ✅ Yes | ⚠️ Dev/Test |
+| VM Management | ✅ Full | ❌ No hypervisor driver |
+| Hardware Acceleration | ✅ KVM | ❌ Not available |
+| Networking | ✅ OVN/OVS | ⚠️ Development tooling only |
+| Production Ready | ✅ Yes | ❌ No |
 
 ## Learn More
 

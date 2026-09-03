@@ -4,8 +4,7 @@ import PackageDescription
 let package = Package(
     name: "StratoShared",
     platforms: [
-        .macOS(.v14),
-        .iOS(.v13)
+        .macOS(.v14)
     ],
     products: [
         .library(
@@ -15,6 +14,10 @@ let package = Package(
         .library(
             name: "SPIFFEVerification",
             targets: ["SPIFFEVerification"]
+        ),
+        .library(
+            name: "SPIFFEKit",
+            targets: ["SPIFFEKit"]
         ),
     ],
     dependencies: [
@@ -28,6 +31,7 @@ let package = Package(
         // SPIFFE SVID chains through this package.
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
+        .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
     ],
     targets: [
         .target(
@@ -54,6 +58,21 @@ let package = Package(
                 .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
             ]
         ),
+        // Protobuf messages shared by the agent's SPIRE clients and the
+        // control plane's SPIRE server client. Keeping these in one target
+        // removes two generated copies while StratoShared remains
+        // Foundation-only.
+        .target(
+            name: "SPIFFEKit",
+            dependencies: [
+                .product(name: "SwiftProtobuf", package: "swift-protobuf")
+            ],
+            exclude: ["Generated/README.md", "Generated/proto"],
+            swiftSettings: [
+                .enableUpcomingFeature("InferIsolatedConformances"),
+                .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+            ]
+        ),
         .testTarget(
             name: "StratoSharedTests",
             dependencies: ["StratoShared"],
@@ -61,7 +80,7 @@ let package = Package(
                 .enableUpcomingFeature("InferIsolatedConformances"),
                 .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
             ]
-        )
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

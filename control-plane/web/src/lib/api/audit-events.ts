@@ -1,7 +1,7 @@
 // Audit event API endpoints (read-only trail)
 
 import { api } from "./client";
-import type { AuditEventListResponse } from "@/types/api-contracts";
+import type { AuditEventListResponse } from "@/types/api";
 
 export interface AuditEventFilters {
   eventType?: string;

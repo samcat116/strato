@@ -5,6 +5,7 @@ export {
   useInvalidateVMs,
 } from "./use-vms";
 export { useSites } from "./use-sites";
+export { useWorkMutation } from "./use-work-mutation";
 export {
   useCephCluster,
   useRegisterCephCluster,
@@ -61,8 +62,8 @@ export {
 export { useConsole } from "./use-console";
 export { useVNC } from "./use-vnc";
 export { useSandboxExec } from "./use-sandbox-exec";
-export { useVMLogs, useInvalidateVMLogs } from "./use-vm-logs";
-export { useSandboxLogs, useInvalidateSandboxLogs } from "./use-sandbox-logs";
+export { useVMLogs } from "./use-vm-logs";
+export { useSandboxLogs } from "./use-sandbox-logs";
 export { useAPIKeys, useCreateAPIKey, useRevokeAPIKey } from "./use-api-keys";
 export {
   useCLISessions,
@@ -124,10 +125,6 @@ export {
 } from "./use-webhooks";
 export {
   useOrganizationMembers,
-  useAddMember,
-  useRemoveMember,
-  useUpdateMemberRole,
-  memberErrorMessage,
 } from "./use-organization-members";
 export {
   useGroups,
@@ -164,6 +161,7 @@ export type { QuotaCreateTarget } from "./use-quotas";
 export { useHierarchy } from "./use-hierarchy";
 export { usePermissions } from "./use-permissions";
 export { useCurrentOrgAccess } from "./use-current-org-access";
+export { useInvalidatingMutation } from "./use-invalidating-mutation";
 export {
   useProjectMembers,
   useProjectVMPrincipals,

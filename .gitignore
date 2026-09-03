@@ -13,7 +13,8 @@ db.sqlite
 .vscode
 node_modules/
 *.paw
-.claude/
+.claude/settings.local.json
+.claude/worktrees/
 charts
 /helm/strato-control-plane/Chart.lock
 .specify

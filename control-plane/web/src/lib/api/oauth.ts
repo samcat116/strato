@@ -5,7 +5,7 @@ import type {
   CLISession,
   CredentialRestriction,
   PendingDeviceAuthorization,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 export const oauthApi = {
   getPendingDevice(userCode: string, signal?: AbortSignal): Promise<PendingDeviceAuthorization> {

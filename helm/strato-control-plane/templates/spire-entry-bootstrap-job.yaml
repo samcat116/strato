@@ -32,7 +32,7 @@ compromised Envoy unable to reach the Server API.
 `spire-server entry create` reports AlreadyExists for an identical entry;
 the script treats that as success, so re-runs converge.
 */}}
-{{- if and .Values.spire.enabled .Values.spire.entryBootstrap.enabled .Values.spire.attestors.k8sPsat.enabled }}
+{{- if and .Values.spire.enabled .Values.spire.entryBootstrap.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

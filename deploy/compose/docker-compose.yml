@@ -142,10 +142,6 @@ services:
       # cannot verify a URI-SAN-only certificate, so the control-plane entry
       # carries the hostname agents dial as a DNS SAN.
       STRATO_HOSTNAME: ${STRATO_HOSTNAME:-localhost}
-      # Creates the separate uid:999 delegate entry only with the same opt-in
-      # that enables the SPIRE admin endpoint.
-      ENABLE_GUEST_IDENTITY: ${ENABLE_GUEST_IDENTITY:-false}
-      CONTROL_PLANE_UID: "999"
     volumes:
       - ./spiffe:/spiffe:ro
       - spire_server_api:/tmp/spire-server/private
@@ -210,17 +206,11 @@ services:
     image: strato-spire-helper:local
     command: ["bash", "/spiffe/agent-cp-entrypoint.sh"]
     pid: host
-    environment:
-      # Default-off trust grant for the embedded control-plane SPIRE agent.
-      # The admin socket is shared only with the registered uid:999 delegate.
-      ENABLE_GUEST_IDENTITY: ${ENABLE_GUEST_IDENTITY:-false}
-      GUEST_IDENTITY_DELEGATE_GID: "999"
     volumes:
       - ./spiffe:/spiffe:ro
       - spire_handoff:/handoff:ro
       - spire_agent_cp_data:/var/lib/spire/agent
       - spire_cp_sockets:/run/spire/agent/sockets
-      - spire_cp_admin:/var/run/spire
     depends_on:
       spire-bootstrap:
         condition: service_completed_successfully
@@ -260,14 +250,8 @@ services:
     # `main` is the moving tag CI publishes on every main-branch build; no
     # `latest` tag exists on GHCR until a versioned release is published.
     image: ghcr.io/samcat116/strato-control-plane:${STRATO_VERSION:-main}
-    # Matches the delegate registration in spiffe/bootstrap.sh and the group
-    # on the dedicated admin-socket volume.
+    # Match the non-root UID/GID baked into the control-plane image.
     user: "999:999"
-    # To run from source instead of the published image, comment out `image:`
-    # above and uncomment:
-    # build:
-    #   context: ../..
-    #   dockerfile: control-plane/Dockerfile
     environment: &control-plane-env
       # Report the exact tag the operator pinned on /health/* (see
       # BuildInfo.swift), overriding the image's baked default so the running
@@ -285,7 +269,7 @@ services:
       DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-300000}
       # Allow schema changes more time only while SchemaMigrator owns its pinned
       # connection, then restore the serving budget above.
-      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-900000}
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}
       # Postgres runs in this compose network and never leaves the host, so
       # plaintext is acceptable. Override with DATABASE_TLS=require (and
       # DATABASE_TLS_CA_CERT_PATH) if you point this at an external database.
@@ -326,8 +310,7 @@ services:
       # first account, which is always allowed so a fresh install can be set up.
       SELF_REGISTRATION_ENABLED: ${SELF_REGISTRATION_ENABLED:-true}
       # Agent-facing host:port — the Envoy mTLS listener, NOT the browser proxy.
-      # setup.sh sets this to <hostname>:<AGENT_MTLS_PORT>. The control plane
-      # derives the SPIRE node address from it as <hostname>:8085.
+      # setup.sh sets this to <hostname>:<AGENT_MTLS_PORT>.
       EXTERNAL_HOSTNAME: ${EXTERNAL_HOSTNAME:-${STRATO_HOSTNAME}}
       # Secure session cookie + HSTS; only when TLS is terminated in front of the
       # proxy (setup.sh sets this from the origin scheme). Defaults off so a
@@ -392,6 +375,11 @@ services:
       # The socat bridge shares this container's network namespace, so it is on
       # loopback (never exposed to the compose network).
       SPIRE_SERVER_API_ADDRESS: 127.0.0.1:8081
+      # Public node-attestation address. setup.sh keeps it aligned with the
+      # host port published by spire-server. Derive the default from the
+      # pre-existing Compose settings so installations with an older .env do
+      # not advertise localhost to remote agents after an upgrade.
+      SPIRE_SERVER_PUBLIC_ADDRESS: ${SPIRE_SERVER_PUBLIC_ADDRESS:-${STRATO_HOSTNAME:-localhost}:${SPIRE_NODE_PORT:-8085}}
       SPIRE_TRUST_BUNDLE_PATH: /handoff/bundle.pem
       # JWT-SVIDs as programmatic credentials (issue #495). Uncomment to let
       # registered service accounts and workloads authenticate to the HTTP API
@@ -425,9 +413,6 @@ services:
     volumes:
       - image_storage:/app/images
       - spire_handoff:/handoff:ro
-      # Named volume, not a host bind mount. It contains only admin.sock and is
-      # readable by the registered control-plane delegate group.
-      - spire_cp_admin:/var/run/spire:ro
     depends_on:
       db:
         condition: service_healthy
@@ -446,7 +431,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 120s
+      start_period: 300s
     # Drain window: on `docker compose down`/`up -d` the control plane reports
     # itself unready on SIGTERM and finishes in-flight requests and agent
     # WebSockets. Docker's 10s default would SIGKILL through that.
@@ -534,4 +519,3 @@ volumes:
   spire_handoff:
   spire_agent_cp_data:
   spire_cp_sockets:
-  spire_cp_admin:

@@ -88,9 +88,6 @@ extension Application {
         get {
             lazyService(DecoyKeyCacheKey.self) { DecoyKeyCache() }
         }
-        set {
-            setStorageValue(DecoyKeyCacheKey.self, to: newValue)
-        }
     }
 
     private struct DecoyKeyCacheKey: StorageKey, LockKey {

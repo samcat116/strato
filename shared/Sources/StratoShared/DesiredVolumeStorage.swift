@@ -21,9 +21,22 @@ public struct CephVolumeStorage: Codable, Equatable, Sendable {
     /// the reconciliation boundary use this helper so an observation cannot
     /// redirect a volume row to another image in the same project namespace.
     public static let imagePrefix = "strato-volume-"
+    public static let defaultClientRoot = "/var/lib/strato/ceph"
 
     public static func imageName(volumeId: UUID) -> String {
         imagePrefix + volumeId.uuidString.lowercased()
+    }
+
+    public static func clientDirectory(
+        root: String = defaultClientRoot, clusterId: UUID, credentialId: UUID
+    ) -> String {
+        "\(root)/\(clusterId.uuidString.lowercased())/\(credentialId.uuidString.lowercased())"
+    }
+
+    public static func configPath(
+        root: String = defaultClientRoot, clusterId: UUID, credentialId: UUID
+    ) -> String {
+        "\(clientDirectory(root: root, clusterId: clusterId, credentialId: credentialId))/ceph.conf"
     }
 
     /// Strato's stable identity for the external or managed Ceph cluster.

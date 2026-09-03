@@ -58,15 +58,9 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
         echo "Using prebuilt artifacts mode"; \
         if [ -d "/build/artifacts/control-plane" ]; then \
             echo "Found prebuilt artifacts"; \
-            # Copy binaries from bin/ subdirectory
-            if [ -d "/build/artifacts/control-plane/bin" ]; then \
-                cp /build/artifacts/control-plane/bin/* ./; \
-            else \
-                cp /build/artifacts/control-plane/App ./ 2>/dev/null || (echo "Error: App executable not found in artifacts"; exit 1); \
-            fi; \
+            cp /build/artifacts/control-plane/bin/* ./; \
             # Copy resources if they exist
-            ([ -d "/build/artifacts/control-plane/resources" ] && cp -R /build/artifacts/control-plane/resources/* ./ || true) && \
-            ([ -d "/build/artifacts/control-plane/Resources" ] && cp -R /build/artifacts/control-plane/Resources ./ || true); \
+            ([ -d "/build/artifacts/control-plane/resources" ] && cp -R /build/artifacts/control-plane/resources/* ./ || true); \
         else \
             echo "Error: PREBUILT_ARTIFACTS specified but no artifacts found"; \
             exit 1; \
@@ -75,13 +69,11 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
         echo "Building from source"; \
         cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
         (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
-        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \; && \
-        ([ -d /build/control-plane/Resources ] && cp -R /build/control-plane/Resources ./ || true); \
+        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ +; \
     fi
 
 # Ensure proper permissions
-RUN chmod +x ./App && \
-    chmod -R a-w ./Resources 2>/dev/null || true
+RUN chmod +x ./App
 
 # ================================
 # Run image
@@ -107,7 +99,6 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     tzdata \
     libcurl4 \
     curl \
-    unzip \
     && rm -r /var/lib/apt/lists/*
 # `curl` (the binary — libcurl4 above is the library the Swift runtime links)
 # exists so the container can probe its own /health/ready. Kubernetes probes are

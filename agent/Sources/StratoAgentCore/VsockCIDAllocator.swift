@@ -120,14 +120,14 @@ public struct VsockCIDAllocator: Sendable {
 
     /// CIDs 0–2 are reserved by the address family (0 hypervisor, 1 local,
     /// 2 host), so 3 is the first a guest may take.
-    public static let firstAssignable: UInt32 = 3
+    public static let firstAssignable = VsockCID.firstAssignable
     /// `UInt32.max` is `VMADDR_CID_ANY`, the wildcard used for binding, so the
     /// assignable range stops one short of it.
-    public static let lastAssignable: UInt32 = UInt32.max - 1
+    public static let lastAssignable = VsockCID.lastAssignable
 
     /// Whether `cid` may be assigned to a guest.
     public static func isAssignable(_ cid: UInt32) -> Bool {
-        cid >= firstAssignable && cid <= lastAssignable
+        VsockCID.isAssignable(cid)
     }
 
     /// The range this allocator hands out from. Always the host's full

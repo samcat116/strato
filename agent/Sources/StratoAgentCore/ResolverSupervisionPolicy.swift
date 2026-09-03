@@ -19,7 +19,6 @@ public struct ResolverDirectoryLayout: Equatable, Sendable {
     /// `CoreDNSZoneRenderer.zoneFilePath` — because two networks may attach
     /// zones with the same name and different contents.
     public var directory: String { root }
-    public var corefilePath: String { "\(root)/Corefile" }
     public var zonesDirectory: String { "\(root)/zones" }
     /// Where the supervisor records the pid it started, so a restarted agent
     /// adopts a running CoreDNS instead of starting a second one beside it.

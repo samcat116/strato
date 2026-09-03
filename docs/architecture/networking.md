@@ -1356,10 +1356,10 @@ verification on real multi-node hardware (recipe in
 
 ## References
 
-- Agent OVN driver: `agent/Sources/StratoAgent/NetworkServiceLinux.swift`
+- Agent OVN driver: `agent/Sources/StratoAgentRuntime/NetworkServiceLinux.swift`
 - Chassis bootstrap: `agent/Sources/StratoAgentCore/OVNChassisBootstrap.swift`,
   `AgentConfig.swift`
-- Network orchestration: `agent/Sources/StratoAgent/NetworkOrchestrator.swift`
+- Network orchestration: `agent/Sources/StratoAgentRuntime/NetworkOrchestrator.swift`
 - Control-plane model: `control-plane/Sources/App/Models/LogicalNetwork.swift`,
   `VMNetworkInterface.swift`
 - IPAM: `control-plane/Sources/App/Services/IPAMService.swift`

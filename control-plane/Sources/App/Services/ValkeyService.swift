@@ -288,12 +288,3 @@ struct ValkeyLifecycleHandler: LifecycleHandler {
         application.valkeyTasks.cancelAll()
     }
 }
-
-// MARK: - Request Extension
-
-extension Request {
-    /// Check if Valkey is available for this request
-    var valkeyEnabled: Bool {
-        application.valkeyEnabled
-    }
-}

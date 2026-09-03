@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import StratoAPITypes
 import Vapor
 
 /// The projects surface, served by the handlers swift-openapi-generator derives
@@ -154,6 +155,9 @@ struct ProjectsAPIService: APIProtocol {
                                 "Cannot remove environments that are in use by sandboxes: \(removed.joined(separator: ", "))"
                         )
                     }
+
+                    try await Self.requireNoDependentEnvironmentResources(
+                        projectID: projectID, environments: removed, on: db)
                 }
 
                 project.environments = environments
@@ -476,6 +480,9 @@ struct ProjectsAPIService: APIProtocol {
             throw Abort(.conflict, reason: "Cannot remove environment that is in use by sandboxes")
         }
 
+        try await Self.requireNoDependentEnvironmentResources(
+            projectID: projectID, environments: [environment], on: req.db)
+
         if !project.removeEnvironment(environment) {
             throw Abort(.badRequest, reason: "Cannot remove default environment or environment does not exist")
         }
@@ -772,6 +779,65 @@ struct ProjectsAPIService: APIProtocol {
             try await VM.query(on: db)
                 .filter(\.$project.$id == projectID)
                 .count())
+    }
+
+    /// Protects the environment labels denormalized onto storage and quota
+    /// rows. Removing one while any of these rows remains would strand it from
+    /// `Project.resolveEnvironment` and make the resource impossible to manage.
+    private static func requireNoDependentEnvironmentResources(
+        projectID: UUID,
+        environments: some Collection<String>,
+        on db: any Database
+    ) async throws {
+        let values = Array(environments)
+        guard !values.isEmpty else { return }
+
+        let dependencies: [(String, Int)] = [
+            (
+                "volumes",
+                try await Volume.query(on: db)
+                    .filter(\.$project.$id == projectID)
+                    .filter(\.$environment ~~ values)
+                    .count()
+            ),
+            (
+                "volume snapshots",
+                try await VolumeSnapshot.query(on: db)
+                    .filter(\.$project.$id == projectID)
+                    .filter(\.$environment ~~ values)
+                    .count()
+            ),
+            (
+                "VM snapshots",
+                try await VMSnapshot.query(on: db)
+                    .filter(\.$project.$id == projectID)
+                    .filter(\.$environment ~~ values)
+                    .count()
+            ),
+            (
+                "sandbox snapshots",
+                try await SandboxSnapshot.query(on: db)
+                    .filter(\.$project.$id == projectID)
+                    .filter(\.$environment ~~ values)
+                    .count()
+            ),
+            (
+                "resource quotas",
+                try await ResourceQuota.query(on: db)
+                    .filter(\.$project.$id == projectID)
+                    .filter(\.$environment ~~ values)
+                    .count()
+            ),
+        ]
+
+        let inUse = dependencies.compactMap { name, count in count > 0 ? name : nil }
+        guard inUse.isEmpty else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Cannot remove environments that are in use by \(inUse.joined(separator: ", ")): "
+                    + values.sorted().joined(separator: ", "))
+        }
     }
 
     /// The caller's environment list, normalized the way `name` is: every label

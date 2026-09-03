@@ -11,7 +11,7 @@ import type {
   ResizeVolumeRequest,
   CloneVolumeRequest,
   CreateVolumeSnapshotRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 // Volume lifecycle mutations are asynchronous since backend STR-148: the
 // server responds 202 Accepted with the volume, the generation it now has to

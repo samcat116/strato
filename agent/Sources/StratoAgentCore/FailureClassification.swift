@@ -46,18 +46,6 @@ public protocol ClassifiableError: Error {
     var failureClassification: FailureClassification { get }
 }
 
-/// A convergence blocker that is another component's pending work, not this
-/// host's fault (see `FailureClassification.waitingOnDependency`).
-public struct DependencyPendingError: ClassifiableError, LocalizedError {
-    public let reason: String
-    public var failureClassification: FailureClassification { .waitingOnDependency }
-    public var errorDescription: String? { reason }
-
-    public init(_ reason: String) {
-        self.reason = reason
-    }
-}
-
 extension StorageBackendError: ClassifiableError {
     public var failureClassification: FailureClassification {
         switch self {

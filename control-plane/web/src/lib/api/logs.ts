@@ -1,6 +1,6 @@
 // Shared query-string building for the resource log endpoints.
 
-import type { LogQueryParams } from "@/types/api-contracts";
+import type { LogQueryParams } from "@/types/api";
 
 // Returns the "?..." suffix to append to a logs endpoint, or "" when no params
 // are set — the endpoints treat an absent param as "server default", so a

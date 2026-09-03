@@ -1,13 +1,12 @@
 "use client";
 
+import { DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -169,31 +168,13 @@ export function AddGroupDialog({
             </div>
           </div>
 
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              className="border-input"
-              onClick={handleClose}
-              disabled={grant.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              className="bg-primary hover:bg-primary/90"
-              disabled={grant.isPending || !selectedRole}
-            >
-              {grant.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Granting...
-                </>
-              ) : (
-                "Grant access"
-              )}
-            </Button>
-          </DialogFooter>
+          <DialogSubmitFooter
+            submitLabel="Grant access"
+            pendingLabel="Granting..."
+            isPending={grant.isPending}
+            disabled={!selectedRole}
+            onCancel={handleClose}
+          />
         </form>
       </DialogContent>
     </Dialog>

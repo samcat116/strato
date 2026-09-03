@@ -1,4 +1,5 @@
 import Foundation
+import StratoAPITypes
 import Vapor
 import Fluent
 

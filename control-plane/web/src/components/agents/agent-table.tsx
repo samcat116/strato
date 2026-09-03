@@ -103,9 +103,7 @@ export function AgentTable({ agents, isLoading }: AgentTableProps) {
               </p>
             </TableCell>
             <TableCell>
-              <AgentStatusBadge
-                status={agent.isOnline ? "online" : "offline"}
-              />
+              <AgentStatusBadge status={agent.status} />
             </TableCell>
             <TableCell className="text-foreground/80">{ownerLabel(agent)}</TableCell>
             <TableCell className="text-foreground/80">{agent.hostname}</TableCell>

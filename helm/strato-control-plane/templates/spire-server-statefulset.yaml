@@ -54,9 +54,6 @@ spec:
             - name: health
               containerPort: 8080
               protocol: TCP
-            - name: federation
-              containerPort: 8443
-              protocol: TCP
             {{- if include "strato-control-plane.metricsExposed" . }}
             - name: metrics
               containerPort: 9988
@@ -91,10 +88,6 @@ spec:
               mountPath: /etc/spire/db-tls
               readOnly: true
             {{- end }}
-            {{- if .Values.spire.socketPath }}
-            - name: socket
-              mountPath: {{ dir .Values.spire.socketPath }}
-            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -103,10 +96,6 @@ spec:
         - name: db-tls-ca
           secret:
             secretName: {{ include "strato-control-plane.fullname" . }}-db-tls-ca
-        {{- end }}
-        {{- if .Values.spire.socketPath }}
-        - name: socket
-          emptyDir: {}
         {{- end }}
         {{- if not .Values.spire.persistence.enabled }}
         # Without persistence the data mount is a plain emptyDir. It must live

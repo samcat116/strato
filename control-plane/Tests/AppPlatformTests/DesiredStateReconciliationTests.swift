@@ -59,39 +59,10 @@ final class DesiredStateReconciliationTests {
     private func withVMTestApp(
         _ test: (Application, User, VM, String) async throws -> Void
     ) async throws {
-        let app = try await Application.makeForTesting()
-
-        do {
-            try await configure(app)
-
-            let builder = TestDataBuilder(db: app.db)
-            let user = try await builder.createUser(
-                username: "reconuser",
-                email: "recon@example.com",
-                displayName: "Recon User",
-                isSystemAdmin: false
-            )
-            let org = try await builder.createOrganization(name: "Recon Org")
-            try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
-            user.currentOrganizationId = org.id
-            try await user.save(on: app.db)
-
-            let project = try await builder.createProject(
-                name: "Recon Project",
-                description: "Project for reconciliation tests",
-                organization: org
-            )
-            let vm = try await builder.createVM(name: "recon-vm", project: project)
-            let token = try await user.generateAPIKey(on: app.db)
-
-            try await test(app, user, vm, token)
-
-        } catch {
-            try await app.shutdownForTesting()
-            throw error
+        try await withProjectApp(prefix: "recon") { app, builder, fixture in
+            let vm = try await builder.createVM(name: "recon-vm", project: fixture.project)
+            try await test(app, fixture.user, vm, fixture.token)
         }
-
-        try await app.shutdownForTesting()
     }
 
     /// Registers an in-memory agent with the given protocol version and maps

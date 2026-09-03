@@ -6,7 +6,12 @@ import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ShieldAlert, Trash2, Wrench } from "lucide-react";
+import {
+  Activity,
+  ShieldAlert,
+  Trash2,
+  Wrench,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
 import { platformOperationsApi } from "@/lib/api/platform-services";
+import { useWorkMutation } from "@/lib/hooks";
 import { useAuth, useProjectContext } from "@/providers";
 
 export default function GovernancePage() {
@@ -58,13 +64,9 @@ export default function GovernancePage() {
       void queryClient.invalidateQueries({ queryKey: [key] });
     }
   };
-  const mutation = useMutation({
-    mutationFn: (work: () => Promise<unknown>) => work(),
-    onSuccess: () => {
-      refresh();
-      toast.success("Governance configuration updated");
-    },
-    onError: (error) => toast.error(error.message),
+  const mutation = useWorkMutation({
+    onSuccess: refresh,
+    successMessage: "Governance configuration updated",
   });
   const whoCan = useMutation({
     mutationFn: () =>

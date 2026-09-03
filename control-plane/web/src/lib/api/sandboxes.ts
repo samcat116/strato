@@ -13,7 +13,7 @@ import type {
   AcceptedMutation,
   SandboxSnapshot,
   CreateSandboxSnapshotRequest,
-} from "@/types/api-contracts";
+} from "@/types/api";
 
 // Like VMs, sandbox lifecycle mutations are asynchronous: the server responds
 // 202 Accepted with the sandbox, the generation it has to converge on, and the

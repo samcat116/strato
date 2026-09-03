@@ -1,6 +1,6 @@
 import { api } from "./client";
-import type { Page } from "@/types/api-contracts";
-import { LIST_PAGE_LIMIT } from "@/types/api-contracts";
+import type { Page } from "@/types/api";
+import { LIST_PAGE_LIMIT } from "@/types/api";
 
 /**
  * Fetches every page for views that still render a complete client-side list.

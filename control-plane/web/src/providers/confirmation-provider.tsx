@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,7 +19,6 @@ interface ConfirmationOptions {
 
 type Confirm = (options: ConfirmationOptions | string) => Promise<boolean>;
 
-const ConfirmationContext = createContext<Confirm | null>(null);
 let mountedConfirm: Confirm | null = null;
 
 /** Use from event handlers that cannot conveniently consume provider context. */
@@ -57,7 +56,7 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
   }, [confirm]);
 
   return (
-    <ConfirmationContext.Provider value={confirm}>
+    <>
       {children}
       <Dialog
         open={options !== null}
@@ -80,14 +79,6 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </ConfirmationContext.Provider>
+    </>
   );
-}
-
-export function useConfirmation(): Confirm {
-  const confirm = useContext(ConfirmationContext);
-  if (!confirm) {
-    throw new Error("useConfirmation must be used within ConfirmationProvider");
-  }
-  return confirm;
 }

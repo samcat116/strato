@@ -66,9 +66,6 @@ public struct SandboxGuestImage: Sendable, Equatable {
         public static let network = "network"
     }
 
-    /// Whether the installed guest brings up a NIC from the config drive.
-    public var supportsNetworking: Bool { capabilities.contains(GuestCapability.network) }
-
     /// The one manifest schema this build understands.
     ///
     /// Schema v2 includes the top-level `capabilities` list (STR-103). Older

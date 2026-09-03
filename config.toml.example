@@ -82,15 +82,16 @@ log_level = "info"
 # backstop, not capacity or quota. Valid range: 128-4096 MiB (default: 512).
 # qemu_memory_overhead_mb = 512
 
+# Select the network and hypervisor drivers advertised by this Linux agent.
+# network_mode = "ovn"          # "ovn" or "user"; default: "user"
+# hypervisor_type = "qemu"      # "qemu" or "firecracker"; default: "qemu"
+
 # Hardware acceleration for QEMU VMs
-# When enabled (the default), VMs are backed by the platform accelerator;
-# when disabled, QEMU falls back to TCG emulation (much slower, but useful for
-# dev/test on hosts without hardware virtualization). Each option applies to a
-# single platform and is ignored on the other.
-#   enable_kvm - KVM on Linux   (default: true)
-#   enable_hvf - Hypervisor.framework on macOS (default: true)
+# When enabled (the default), VMs use KVM. When disabled, QEMU falls back to
+# TCG emulation (much slower, but useful for development on Linux hosts without
+# hardware virtualization).
+#   enable_kvm - KVM on Linux (default: true)
 # enable_kvm = true
-# enable_hvf = true
 
 # UEFI firmware paths for disk-based VM boot
 # These are used when VMs boot from disk images rather than direct kernel boot.
@@ -346,17 +347,14 @@ log_level = "info"
 
 # Per-network DNS resolver (Linux, network_mode = "ovn" only)
 #
-# Each network with the resolver enabled gets a CoreDNS on this host, listening
-# on a link-local address inside the network's chassis namespace — the same
-# namespace and the same OVN localport the instance metadata service already
-# uses. It serves the DNS zones attached to the network (including the CNAME,
+# Each network with the resolver enabled gets a host-network CoreDNS listener
+# on a link-local address reached through the network's OVN localport. It
+# serves the DNS zones attached to the network (including the CNAME,
 # TXT and SRV records the OVN DNS table cannot express) and forwards everything
 # else to the network's configured DNS servers.
 #
-# This is what makes external name resolution work on a network *without*
-# external access: OVN intercepts DNS but does not forward it, so without a
-# local resolver those guests have no path to the public servers they were
-# handed.
+# This gives the resolver host egress for forwarding without granting that
+# egress to the tenant network itself.
 #
 # The resolver is an opt-out on the network, not on the host, so there is
 # normally nothing to configure here. What this section does control is whether

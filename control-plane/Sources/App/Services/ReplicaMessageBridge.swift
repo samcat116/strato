@@ -399,9 +399,6 @@ extension Application {
         get {
             lazyService(ReplicaMessageBridgeKey.self) { ReplicaMessageBridge(app: self) }
         }
-        set {
-            setStorageValue(ReplicaMessageBridgeKey.self, to: newValue)
-        }
     }
 
     /// The bridge only if one already exists, without lazily creating it —

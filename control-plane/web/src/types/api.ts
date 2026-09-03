@@ -53,7 +53,7 @@ export type GrantWriteResponse = OpenAPISchemas["IAMGrantWriteResponse"];
 
 
 /** Canonical `iam_roles` UUID used by project grant endpoints. */
-export type ProjectRole = string;
+export type ProjectRole = OpenAPISchemas["ProjectMemberRoleInput"];
 export type ProjectMember = WithRequired<OpenAPISchemas["ProjectMember"], "userId">;
 export type ProjectGroupGrant = WithRequired<OpenAPISchemas["ProjectGroupGrant"], "groupId">;
 export type ProjectWorkloadGrant = OpenAPISchemas["ProjectWorkloadGrant"];
@@ -98,12 +98,6 @@ export type AgentStatus = OpenAPISchemas["AgentStatus"];
 export type AgentResources = OpenAPISchemas["AgentResources"];
 export type HypervisorType = OpenAPISchemas["HypervisorType"];
 export type CPUArchitecture = OpenAPISchemas["CPUArchitecture"];
-
-export type NetworkCapability = OpenAPISchemas["AgentNetworkCapability"];
-export type HypervisorCapabilities = OpenAPISchemas["AgentHypervisorCapabilities"];
-export type HypervisorSupport = OpenAPISchemas["AgentHypervisorSupport"];
-export type HostInfo = OpenAPISchemas["AgentHostInfo"];
-
 
 export type Agent = OpenAPISchemas["AgentDetail"];
 export type NodeDependencyObservation = OpenAPISchemas["NodeDependencyObservation"];
@@ -221,41 +215,14 @@ export interface VNCSession {
 // short-lived pending session, then the browser attaches over a WebSocket at
 // `websocketPath` (binary frames = stdin/stdout bytes, text frames = JSON
 // control messages).
-export interface SandboxExecRequest {
-  command: string[];
-  env?: Record<string, string>;
-  workingDir?: string;
-  tty?: boolean;
-  rows?: number;
-  cols?: number;
-  /** Omitted keeps the browser-compatible raw binary framing. */
-  outputMode?: "raw" | "multiplexed";
-}
-
-export interface SandboxExecSession {
-  sessionId: string;
-  /** Same-origin WebSocket path, e.g. `/api/sandboxes/<id>/exec/<sessionId>/attach`. */
-  websocketPath: string;
-  /** When the pending (unattached) session expires. */
-  expiresAt: string;
-  /** Echoes the selected framing; absent only when talking to an older server. */
-  outputMode?: "raw" | "multiplexed";
-}
+export type SandboxExecRequest = OpenAPISchemas["GuestExecRequest"];
+export type SandboxExecSession = OpenAPISchemas["GuestExecSession"];
 
 // Sandbox workload logs (stdout/stderr shipped to Loki). Same envelope as VM
 // logs, but labeled with `stream` instead of level/event_type.
 export type SandboxLogStream = "stdout" | "stderr";
 
-export interface SandboxLogEntry {
-  timestamp: string;
-  message: string;
-  labels: {
-    sandbox_id?: string;
-    stream?: SandboxLogStream;
-    source?: string;
-    [key: string]: string | undefined;
-  };
-}
+export type SandboxLogEntry = OpenAPISchemas["LogEntry"];
 
 /**
  * The window/paging params every resource's log endpoint accepts. One shape,
@@ -290,11 +257,7 @@ export type VolumeType = OpenAPISchemas["VolumeType"];
 export type VolumeIOLimits = OpenAPISchemas["VolumeIOLimits"];
 export type Volume = OpenAPISchemas["Volume"];
 
-export type SnapshotStatus =
-  | "creating"
-  | "available"
-  | "deleting"
-  | "error";
+export type SnapshotStatus = OpenAPISchemas["VolumeSnapshotStatus"];
 export type VolumeSnapshot = OpenAPISchemas["VolumeSnapshot"];
 export type CreateVolumeRequest = OpenAPISchemas["CreateVolumeRequest"];
 export type AttachVolumeRequest = OpenAPISchemas["AttachVolumeRequest"];
@@ -307,7 +270,6 @@ export type CreateVolumeSnapshotRequest = OpenAPISchemas["CreateVolumeSnapshotRe
 // tolerantly into that case (a newer agent may emit vocabulary this build
 // doesn't know) and forwards it, so the UI must render it, not crash on it.
 export type VMLogLevel = "debug" | "info" | "warning" | "error" | "unknown";
-export type VMLogSource = "agent" | "control_plane" | "unknown";
 export type VMEventType =
   | "status_change"
   | "operation"
@@ -315,34 +277,17 @@ export type VMEventType =
   | "info"
   | "unknown";
 
-export interface VMLogEntry {
-  timestamp: string;
-  message: string;
-  labels: {
-    vm_id?: string;
-    level?: VMLogLevel;
-    source?: VMLogSource;
-    event_type?: VMEventType;
-    operation?: string;
-    [key: string]: string | undefined;
-  };
-}
+export type VMLogEntry = OpenAPISchemas["LogEntry"];
 
 export type VMLogsQueryParams = LogQueryParams;
 
 // Resource Quotas
-export type QuotaEntityType = "organization" | "ou" | "project";
-
-export type QuotaLimits = OpenAPISchemas["ResourceQuotaLimits"];
-export type QuotaReservedUsage = OpenAPISchemas["ResourceQuotaUsage"];
-export type QuotaUtilization = OpenAPISchemas["ResourceQuotaUtilization"];
 export type ResourceQuota = WithRequired<OpenAPISchemas["ResourceQuota"], "id">;
 export type HierarchyQuota = OpenAPISchemas["HierarchyQuota"];
 export type CreateQuotaRequest = OpenAPISchemas["CreateResourceQuotaRequest"];
 export type UpdateQuotaRequest = OpenAPISchemas["UpdateResourceQuotaRequest"];
 
 
-export type VMSummaryNode = OpenAPISchemas["HierarchyVMSummary"];
 export type ProjectNode = OpenAPISchemas["HierarchyProjectNode"];
 export type FolderNode = OpenAPISchemas["HierarchyFolderNode"];
 export type OrganizationNode = OpenAPISchemas["HierarchyOrganizationNode"];
@@ -366,7 +311,7 @@ export type NetworkACL = OpenAPISchemas["NetworkACL"];
 export const MAX_NETWORK_ACL_RULES = 100;
 
 export type SecurityGroupRuleDirection = OpenAPISchemas["SecurityGroupRuleDirection"];
-export type Ethertype = "ipv4" | "ipv6";
+export type Ethertype = OpenAPISchemas["SecurityGroupRuleEthertype"];
 
 /** Server-enforced cap (SecurityGroup.maxGroupsPerNIC in the control plane). */
 export const MAX_SECURITY_GROUPS_PER_NIC = 5;
@@ -382,7 +327,6 @@ export type AuditEventListResponse = OpenAPISchemas["AuditEventListResponse"];
 export type WorkloadRegistrationEntry = OpenAPISchemas["SPIRERegistrationEntry"];
 export type NodeAttestationGroup = OpenAPISchemas["SPIRENodeAttestationGroup"];
 export type TrustBundleInfo = OpenAPISchemas["SPIRETrustBundle"];
-export type FederatedDomain = OpenAPISchemas["SPIREFederatedDomain"];
 export type FederationInfo = OpenAPISchemas["SPIREFederation"];
 export type IssuanceInfo = OpenAPISchemas["SPIREIssuance"];
 export type WorkloadIdentityOverview = OpenAPISchemas["WorkloadIdentityOverview"];

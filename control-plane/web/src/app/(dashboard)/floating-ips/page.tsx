@@ -3,17 +3,17 @@
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe2, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 import { SelectField } from "@/components/networking/select-field";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
+import { ProjectRequiredState } from "@/components/ui/project-required-state";
 import { floatingIPsApi } from "@/lib/api/platform-services";
-import { usePermissions, useSites, useVMs } from "@/lib/hooks";
+import { usePermissions, useSites, useVMs, useWorkMutation } from "@/lib/hooks";
 import { useAuth, useOrganization, useProjectContext } from "@/providers";
 
 export default function FloatingIPsPage() {
@@ -76,24 +76,16 @@ export default function FloatingIPsPage() {
     void queryClient.invalidateQueries({ queryKey: ["floating-ip-pools"] });
     void queryClient.invalidateQueries({ queryKey: ["floating-ips"] });
   };
-  const mutation = useMutation({
-    mutationFn: (work: () => Promise<unknown>) => work(),
-    onSuccess: () => {
-      refresh();
-      toast.success("Floating IP updated");
-    },
-    onError: (error) => toast.error(error.message),
+  const mutation = useWorkMutation({
+    onSuccess: refresh,
+    successMessage: "Floating IP updated",
   });
   const confirmMutation = async (message: string, work: () => Promise<unknown>) => {
     if (await confirmAction(message)) mutation.mutate(work);
   };
 
   if (!currentProject) {
-    return (
-      <p className="py-12 text-center text-muted-foreground">
-        Select a project first.
-      </p>
-    );
+    return <ProjectRequiredState resource="Floating IPs" />;
   }
 
   const floatingIPs = floatingIPsQuery.data ?? [];

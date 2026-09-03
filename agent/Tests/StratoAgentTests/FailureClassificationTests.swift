@@ -40,7 +40,7 @@ struct FailureClassificationTests {
     /// (like a dependency wait, which is reported to nobody). See STR-199.
     @Test("A blocked failure is neither permanent nor a silent dependency wait")
     func blockedIsItsOwnClassification() {
-        let blocked: VolumeConvergenceError = .blocked("the guest holding this image is running")
+        let blocked: ConvergenceError = .blocked("the guest holding this image is running")
         #expect(blocked.failureClassification == .blocked)
         #expect(blocked.failureClassification != .permanent)
         #expect(blocked.failureClassification != .waitingOnDependency)

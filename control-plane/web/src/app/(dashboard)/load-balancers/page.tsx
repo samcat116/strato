@@ -3,17 +3,17 @@
 import { confirmAction } from "@/providers/confirmation-provider";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Scale, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 import { SelectField } from "@/components/networking/select-field";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { QueryErrorNotice } from "@/components/ui/query-error-notice";
+import { ProjectRequiredState } from "@/components/ui/project-required-state";
 import { loadBalancersApi } from "@/lib/api/platform-services";
-import { useNetworks, usePermissions } from "@/lib/hooks";
+import { useNetworks, usePermissions, useWorkMutation } from "@/lib/hooks";
 import { useProjectContext } from "@/providers";
 
 export default function LoadBalancersPage() {
@@ -64,24 +64,16 @@ export default function LoadBalancersPage() {
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["load-balancers"] });
   };
-  const mutation = useMutation({
-    mutationFn: (work: () => Promise<unknown>) => work(),
-    onSuccess: () => {
-      refresh();
-      toast.success("Load balancer updated");
-    },
-    onError: (error) => toast.error(error.message),
+  const mutation = useWorkMutation({
+    onSuccess: refresh,
+    successMessage: "Load balancer updated",
   });
   const confirmMutation = async (message: string, work: () => Promise<unknown>) => {
     if (await confirmAction(message)) mutation.mutate(work);
   };
 
   if (!currentProject) {
-    return (
-      <p className="py-12 text-center text-muted-foreground">
-        Select a project first.
-      </p>
-    );
+    return <ProjectRequiredState resource="Load balancers" />;
   }
 
   const loadBalancers = loadBalancersQuery.data ?? [];

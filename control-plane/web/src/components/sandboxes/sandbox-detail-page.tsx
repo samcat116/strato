@@ -5,7 +5,6 @@ import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
-  ArrowLeft,
   Cpu,
   MemoryStick,
   Clock,
@@ -14,9 +13,15 @@ import {
   GitFork,
   Network,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DetailGrid,
+  DetailPageHeader,
+  DetailPageLoading,
+  DetailPageMissing,
+  DetailPageShell,
+  StatCard,
+} from "@/components/ui/detail-page-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DetailQueryError } from "@/components/ui/detail-query-error";
 import {
@@ -53,27 +58,16 @@ export function SandboxDetailPage({ id }: { id: string }) {
 
   if (!id) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center py-12">
-          <p className="text-muted-foreground mb-4">No sandbox ID provided</p>
-          <Button asChild variant="outline" className="border-input">
-            <Link href="/sandboxes">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Sandboxes
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <DetailPageMissing
+        message="No sandbox ID provided"
+        backHref="/sandboxes"
+        backLabel="Back to Sandboxes"
+      />
     );
   }
 
   if (isLoading) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        <Skeleton className="h-8 w-48 bg-muted" />
-        <Skeleton className="h-64 w-full bg-muted" />
-      </div>
-    );
+    return <DetailPageLoading />;
   }
 
   if (error || !sandbox) {
@@ -94,36 +88,24 @@ export function SandboxDetailPage({ id }: { id: string }) {
   const isRunning = sandbox.status === "Running";
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <Link
-            href="/sandboxes"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center mb-2"
-          >
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back to Sandboxes
-          </Link>
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-semibold text-foreground">
-              {sandbox.name}
-            </h2>
-            <SandboxStatusBadge
+    <DetailPageShell>
+      <DetailPageHeader
+        backHref="/sandboxes"
+        backLabel="Back to Sandboxes"
+        title={sandbox.name}
+        badge={
+          <SandboxStatusBadge
               status={sandbox.status}
               sandboxId={sandbox.id}
               exitCode={sandbox.exitCode}
-            />
-          </div>
-          <p className="text-muted-foreground mt-1 font-mono text-sm">
-            {sandbox.image}
-          </p>
-        </div>
-        <SandboxActions
-          sandbox={sandbox}
-          onActionComplete={invalidateSandboxes}
-        />
-      </div>
+          />
+        }
+        description={sandbox.image}
+        descriptionClassName="text-muted-foreground mt-1 font-mono text-sm"
+        actions={
+          <SandboxActions sandbox={sandbox} onActionComplete={invalidateSandboxes} />
+        }
+      />
 
       <ConvergenceFailureAlert conditions={sandbox.conditions} />
 
@@ -168,54 +150,30 @@ export function SandboxDetailPage({ id }: { id: string }) {
 
         <TabsContent value="overview" className="space-y-6 mt-6">
           {/* Resources */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Cpu className="h-4 w-4" />
-                  vCPUs
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+          <DetailGrid>
+            <StatCard title="vCPUs" icon={<Cpu className="h-4 w-4" />}>
                 <div className="text-xl font-bold text-foreground">
                   {sandbox.cpus}
                 </div>
-              </CardContent>
-            </Card>
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <MemoryStick className="h-4 w-4" />
-                  Memory
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+            </StatCard>
+            <StatCard title="Memory" icon={<MemoryStick className="h-4 w-4" />}>
                 <div className="text-xl font-bold text-foreground">
                   {formatMemory(sandbox.memory)}
                 </div>
-              </CardContent>
-            </Card>
+            </StatCard>
             <SandboxTtlCard
               ttlSeconds={sandbox.ttlSeconds}
               expiresAt={sandbox.expiresAt}
             />
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  Created
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
+            <StatCard title="Created" icon={<Clock className="h-4 w-4" />}>
                 <div className="text-sm font-medium text-foreground">
                   {formatDate(sandbox.createdAt)}
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {formatTime(sandbox.createdAt)}
                 </p>
-              </CardContent>
-            </Card>
-          </div>
+            </StatCard>
+          </DetailGrid>
 
           {/* Details */}
           <Card className="bg-card border-border">
@@ -382,6 +340,6 @@ export function SandboxDetailPage({ id }: { id: string }) {
           <SandboxSnapshotsCard sandbox={sandbox} />
         </TabsContent>
       </Tabs>
-    </div>
+    </DetailPageShell>
   );
 }

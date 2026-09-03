@@ -160,7 +160,8 @@ expected.
 Three host ports are published: the proxy on `${HTTP_PORT:-80}`, the Envoy
 agent-mTLS listener on `${AGENT_MTLS_PORT:-8443}` (published on the
 `control-plane` service, whose network namespace Envoy shares), and the
-SPIRE node API on `${SPIRE_NODE_PORT:-8085}`. `:8443` and `:8085` must be
+SPIRE node API on `${SPIRE_NODE_PORT:-8085}`. `setup.sh` also writes the matching
+`SPIRE_SERVER_PUBLIC_ADDRESS`; if you edit one later, update both. `:8443` and `:8085` must be
 reachable from your hypervisor nodes, and TLS must **not** be terminated in
 front of `:8443` — agent mTLS is end-to-end. Everything else stays on the
 internal network.
@@ -239,7 +240,7 @@ add those to `.env` (or an override file) to change them:
 | `IMAGE_STORAGE_BACKEND` / `IMAGE_S3_*` | `filesystem` | Keep image bytes in an S3-compatible bucket instead of the `image_storage` volume (not written by `setup.sh`); see [Storage](/architecture/storage). |
 | `DATABASE_TLS` | `disable` | Postgres TLS mode — set `require` if you point the stack at an external database (not written by `setup.sh`). |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | `300000` | Maximum duration of any control-plane Postgres statement, in milliseconds. Must be an integer from 1 through 2147483647; invalid values stop startup instead of leaving queries unbounded. |
-| `DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS` | `900000` | Longer timeout used only while SchemaMigrator owns its pinned connection; the serving value is restored afterward. Uses the same validation range. |
+| `DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS` | `300000` | Timeout used only while SchemaMigrator owns its pinned connection; the serving value is restored afterward. Uses the same validation range. |
 | `WEBHOOK_DELIVERY_ENABLED` | `true` | Arm user-managed webhook delivery. Disabling it leaves pending outbox rows durable until delivery is re-enabled. |
 | `WEBHOOK_DELIVERY_INTERVAL_SECONDS` | `15` | Delay after no due, unleased work is claimable or a sweep error occurs. It is not a throughput limit while a healthy due backlog remains. |
 | `WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS` | `30` | Soft wall-clock budget for one replica's drain pass, checked between claimed batches. Must be from 1 through 3600. |
@@ -301,8 +302,9 @@ STRATO_VERSION=main-abc123def456
 Once versioned releases are published, a release tag (e.g. `v0.5.0`) works the
 same way.
 
-To build from source instead (e.g. before a release is published), comment
-out `image:` and uncomment the `build:` block in `docker-compose.yml`.
+To build from source instead (for example before a release is published), put
+the `build:` settings in an untracked `docker-compose.override.yml`. Keep the
+published-image defaults in the tracked Compose file unchanged.
 
 ## Operations
 

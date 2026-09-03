@@ -158,10 +158,7 @@ public enum ProcessRunner {
                 try? await Task.sleep(for: budget)
                 guard !Task.isCancelled, !exited.isSignaled else { return }
                 expired.trip()
-                kill(pid, SIGTERM)
-                try? await Task.sleep(for: signalEscalationGrace)
-                guard !exited.isSignaled else { return }
-                kill(pid, SIGKILL)
+                await terminateProcess(pid: pid) { !exited.isSignaled }
             }
         }
         defer { watchdog?.cancel() }
@@ -274,13 +271,10 @@ public enum ProcessRunner {
                     // bridging cast that returns nil would silently disable the
                     // ceiling instead of failing loudly.
                     if let size = fileSize(atPath: outputPath), size > Int64(limit) {
-                        process.terminate()
-                        // A decompressor that ignores SIGTERM would keep
-                        // filling the disk, so give it a moment and escalate.
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        if process.isRunning {
-                            kill(process.processIdentifier, SIGKILL)
-                        }
+                        await terminateProcess(
+                            pid: process.processIdentifier,
+                            grace: .milliseconds(500)
+                        ) { process.isRunning }
                         return true
                     }
                     try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
@@ -354,13 +348,12 @@ public enum ProcessRunner {
         public func terminate(grace: Duration = ProcessRunner.signalEscalationGrace) async {
             let pid = lifecycle.process.withLock { process -> Int32? in
                 guard process.isRunning else { return nil }
-                process.terminate()
                 return process.processIdentifier
             }
             guard let pid else { return }
-            try? await Task.sleep(for: grace)
-            let stillRunning = lifecycle.process.withLock(\.isRunning)
-            if stillRunning { kill(pid, SIGKILL) }
+            await ProcessRunner.terminateProcess(pid: pid, grace: grace) {
+                self.lifecycle.process.withLock(\.isRunning)
+            }
         }
     }
 
@@ -441,6 +434,21 @@ public enum ProcessRunner {
     /// binary they expect.
     public static func isAlive(pid: Int32) -> Bool {
         pid > 0 && kill(pid, 0) == 0
+    }
+
+    /// Sends SIGTERM and escalates to SIGKILL when the process is still alive
+    /// after the grace period. The liveness closure prevents signaling a
+    /// recycled pid when a caller has a stronger exit latch than `kill(pid, 0)`.
+    public static func terminateProcess(
+        pid: Int32,
+        grace: Duration = signalEscalationGrace,
+        isStillRunning: @escaping @Sendable () -> Bool
+    ) async {
+        guard isStillRunning() else { return }
+        kill(pid, SIGTERM)
+        try? await Task.sleep(for: grace)
+        guard isStillRunning() else { return }
+        kill(pid, SIGKILL)
     }
 
     /// Current size of `path` via `stat(2)`, or nil if it cannot be read.

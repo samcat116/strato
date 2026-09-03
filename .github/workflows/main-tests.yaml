@@ -58,36 +58,11 @@ jobs:
       # would have each run churning the other's incremental state in both
       # directions; and build.yaml's prune deletes the `shared`/`firecracker`
       # subdirectories outright, which are exactly the trees this job builds.
-      - name: Claim build scratch slot
-        run: bash .github/scripts/claim-build-scratch.sh packages-tests
-
-      - name: Prune build scratch dirs if oversized
-        run: |
-          for scratch in "$BUILD_SCRATCH_ROOT/shared" "$BUILD_SCRATCH_ROOT/agent" "$BUILD_SCRATCH_ROOT/cli" "$BUILD_SCRATCH_ROOT/api-client" "$BUILD_SCRATCH_ROOT/firecracker"; do
-            if [ -d "$scratch" ]; then
-              size_kb=$(du -sk "$scratch" | cut -f1)
-              if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
-                echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
-                rm -rf "$scratch"
-              fi
-            fi
-          done
-
-      # SwiftPM will not create a missing cache root itself — an unwritable
-      # /cache/swiftpm makes every `swift build` fail with "invalid access" — so
-      # a missing mount degrades to a pod-local (cold) directory.
-      - name: Resolve SwiftPM shared cache path
-        run: |
-          shared=/cache/swiftpm
-          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
-            echo "using shared SwiftPM cache at $shared"
-            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
-          else
-            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
-            mkdir -p "$fallback"
-            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
-            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
-          fi
+      - name: Prepare Swift build environment
+        uses: ./.github/actions/swift-build-env
+        with:
+          pool: packages-tests
+          scratch-dirs: shared agent cli api-client firecracker
 
       # Every package builds and tests even when an earlier one failed
       # (`!cancelled()`): a manual run is asking for the whole picture, not the
@@ -178,19 +153,11 @@ jobs:
       # Own pool, separate from build.yaml's `control-plane` — see the claim
       # step in test-packages for why the compile jobs and the test jobs must
       # not share slots.
-      - name: Claim build scratch slot
-        run: bash .github/scripts/claim-build-scratch.sh control-plane-tests
-
-      - name: Prune build scratch dir if oversized
-        run: |
-          scratch="$BUILD_SCRATCH_ROOT/control-plane"
-          if [ -d "$scratch" ]; then
-            size_kb=$(du -sk "$scratch" | cut -f1)
-            if [ "$size_kb" -gt $((10 * 1024 * 1024)) ]; then
-              echo "$scratch is $((size_kb / 1024 / 1024))GB (>10GB); wiping for a cold rebuild"
-              rm -rf "$scratch"
-            fi
-          fi
+      - name: Prepare Swift build environment
+        uses: ./.github/actions/swift-build-env
+        with:
+          pool: control-plane-tests
+          scratch-dirs: control-plane
 
       # Kick off the pull+boot and move on: by the time "Wait for Postgres" runs
       # the server has long been up. nohup + & detaches it from this step's
@@ -227,19 +194,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           ./scripts/install-cvc5.sh "$RUNNER_TEMP/bin"
           echo "IAM_SYMCC_SOLVER_PATH=$RUNNER_TEMP/bin/cvc5" >> "$GITHUB_ENV"
-
-      - name: Resolve SwiftPM shared cache path
-        run: |
-          shared=/cache/swiftpm
-          if mkdir -p "$shared" 2>/dev/null && [ -w "$shared" ]; then
-            echo "using shared SwiftPM cache at $shared"
-            echo "SWIFTPM_CACHE_PATH=$shared" >> "$GITHUB_ENV"
-          else
-            fallback="$RUNNER_TOOL_CACHE/swiftpm-cache"
-            mkdir -p "$fallback"
-            echo "shared cache $shared unavailable; falling back to pod-local $fallback (cold)"
-            echo "SWIFTPM_CACHE_PATH=$fallback" >> "$GITHUB_ENV"
-          fi
 
       - name: Build Control Plane
         working-directory: control-plane
@@ -328,9 +282,8 @@ jobs:
   # agent/Dockerfile:13,43,57,76). Nothing else in CI reaches it: main-build
   # and release both pass PREBUILT_ARTIFACTS and take the copy-a-binary branch
   # instead, and the PR image checks that did exercise it were deleted for
-  # costing an hour apiece. The path is live, not vestigial —
-  # deploy/compose/docker-compose.yml documents commenting out `image:` and
-  # uncommenting `build:` to run the stack from source.
+  # costing an hour apiece. The path is live, not vestigial — the deployment
+  # docs show an untracked docker-compose.override.yml for source builds.
   #
   # Opt-in (see the workflow input): a routine "run the tests" dispatch should
   # not turn into an hour. Both images build in parallel, so the job's wall

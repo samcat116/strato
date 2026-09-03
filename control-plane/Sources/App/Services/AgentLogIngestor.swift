@@ -181,9 +181,6 @@ extension Application {
                 )
             }
         }
-        set {
-            setStorageValue(SandboxLogIngestorKey.self, to: newValue)
-        }
     }
 
     var vmLogIngestor: VMLogIngestor {
@@ -201,9 +198,6 @@ extension Application {
                     }
                 )
             }
-        }
-        set {
-            setStorageValue(VMLogIngestorKey.self, to: newValue)
         }
     }
 }
