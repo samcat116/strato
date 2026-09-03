@@ -2,7 +2,7 @@
 //! Kept outside the Linux vsock module so path behavior is unit-testable on
 //! every development host.
 
-use std::path::Path;
+use std::{fmt::Write as _, path::Path};
 
 /// Rotate existing machine-id files without manufacturing them in images that
 /// intentionally omit machine identity (scratch/distroless images). Missing
@@ -16,10 +16,10 @@ pub fn reset_machine_id_files(
     let identity_entropy = entropy
         .get(..16)
         .ok_or_else(|| "at least 16 bytes are required to rotate machine-id".to_string())?;
-    let machine_id = identity_entropy
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let mut machine_id = String::with_capacity(identity_entropy.len() * 2);
+    for byte in identity_entropy {
+        write!(&mut machine_id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
     let contents = format!("{machine_id}\n");
 
     if machine_id_path.exists() {

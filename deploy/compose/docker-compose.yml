@@ -376,8 +376,10 @@ services:
       # loopback (never exposed to the compose network).
       SPIRE_SERVER_API_ADDRESS: 127.0.0.1:8081
       # Public node-attestation address. setup.sh keeps it aligned with the
-      # host port published by spire-server.
-      SPIRE_SERVER_PUBLIC_ADDRESS: ${SPIRE_SERVER_PUBLIC_ADDRESS:-localhost:8085}
+      # host port published by spire-server. Derive the default from the
+      # pre-existing Compose settings so installations with an older .env do
+      # not advertise localhost to remote agents after an upgrade.
+      SPIRE_SERVER_PUBLIC_ADDRESS: ${SPIRE_SERVER_PUBLIC_ADDRESS:-${STRATO_HOSTNAME:-localhost}:${SPIRE_NODE_PORT:-8085}}
       SPIRE_TRUST_BUNDLE_PATH: /handoff/bundle.pem
       # JWT-SVIDs as programmatic credentials (issue #495). Uncomment to let
       # registered service accounts and workloads authenticate to the HTTP API
