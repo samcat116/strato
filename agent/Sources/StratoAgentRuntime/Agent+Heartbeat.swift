@@ -438,21 +438,18 @@ extension Agent {
         // volumes as well as VM boot/data volumes. Legacy VM manifests with no
         // managed-volume identities retain their historical disk reservation;
         // current manifests do not, or their boot volume would be charged twice.
-        var managedDiskAllocated = HostReservation()
+        var managedDiskPaths: Set<String> = []
         if let storageBackends {
             do {
                 let inventory = try await storageBackends.localInventory()
                 for (volumeId, attachment) in inventory {
                     if simulation?.enabled != true {
-                        if case .file(let path, _) = attachment,
-                            let allocated = SnapshotFootprint.allocatedBytes(at: path)
-                        {
-                            managedDiskAllocated = managedDiskAllocated.addingSaturating(
-                                HostReservation(diskBytes: allocated))
+                        if case .file(let path, _) = attachment {
+                            managedDiskPaths.insert(path)
                         } else {
                             diskInventoryKnown = false
                             logger.warning(
-                                "Unable to measure managed local volume footprint",
+                                "Managed local volume has no measurable filesystem path",
                                 metadata: ["volumeId": .string(volumeId)])
                         }
                     }
@@ -502,43 +499,71 @@ extension Agent {
                     ?? 0
                 reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
                 if simulation?.enabled != true {
-                    if let path = record.facts.storagePath,
-                        let allocated = SnapshotFootprint.allocatedBytes(at: path)
-                    {
-                        managedDiskAllocated = managedDiskAllocated.addingSaturating(
-                            HostReservation(diskBytes: allocated))
+                    if let path = record.facts.storagePath {
+                        managedDiskPaths.insert(path)
                     } else {
                         diskInventoryKnown = false
                         logger.warning(
-                            "Unable to measure managed local snapshot footprint",
+                            "Managed local snapshot has no measurable filesystem path",
                             metadata: ["snapshotId": .string(record.snapshotId.uuidString)])
                     }
                 }
             }
         }
 
-        // Bracket every managed-footprint scan with filesystem samples. Guest
-        // writes and TRIM can both race this inventory, in opposite directions;
-        // retaining the larger unmanaged-use estimate keeps either race from
-        // manufacturing committed availability.
+        // Measure every managed path twice, in opposite orders, and bracket
+        // both sweeps with filesystem samples. A sequential sum is not a real
+        // point-in-time value: one volume can trim before a later volume grows
+        // by the same amount, making the sum larger than managed allocation was
+        // at either endpoint. Only subtract an allocation map that is stable
+        // across both sweeps and physically possible. Otherwise charge all
+        // observed filesystem use as unmanaged for this snapshot; that can
+        // temporarily under-admit, but it cannot manufacture free capacity.
         let totalDisk: Int64
         let diskCapacitySamples: [(total: Int64, free: Int64)]
+        let managedDiskAllocated: Int64
         if let simulatedDiskBytes {
             totalDisk = simulatedDiskBytes
             diskCapacitySamples = []
+            managedDiskAllocated = 0
         } else {
+            let orderedPaths = managedDiskPaths.sorted()
+            let firstAllocations = HostResources.managedDiskAllocations(
+                paths: orderedPaths, measure: SnapshotFootprint.allocatedBytes(at:))
+            let diskCapacityBetween = HostResources.diskCapacity(forPath: volumeStoragePath)
+            let secondAllocations = HostResources.managedDiskAllocations(
+                paths: Array(orderedPaths.reversed()), measure: SnapshotFootprint.allocatedBytes(at:))
             let diskCapacityAfter = HostResources.diskCapacity(forPath: volumeStoragePath)
             var samples: [(total: Int64, free: Int64)] = []
             if let diskCapacityBefore { samples.append(diskCapacityBefore) }
+            if let diskCapacityBetween { samples.append(diskCapacityBetween) }
             if let diskCapacityAfter { samples.append(diskCapacityAfter) }
             diskCapacitySamples = samples
-            if diskCapacityBefore == nil || diskCapacityAfter == nil {
+            if diskCapacityBefore == nil || diskCapacityBetween == nil || diskCapacityAfter == nil {
                 logger.warning(
                     "Unable to determine disk capacity for managed volume storage path",
                     metadata: ["path": .string(volumeStoragePath)])
                 diskInventoryKnown = false
             }
             totalDisk = samples.map { $0.total }.min() ?? 0
+            if let firstAllocations, let secondAllocations,
+                let validated = HostResources.validatedManagedDiskAllocation(
+                    first: firstAllocations,
+                    second: secondAllocations,
+                    capacitySamples: samples)
+            {
+                managedDiskAllocated = validated
+            } else {
+                managedDiskAllocated = 0
+                if firstAllocations == nil || secondAllocations == nil {
+                    diskInventoryKnown = false
+                    logger.warning("Unable to measure every managed local disk footprint")
+                } else {
+                    logger.warning(
+                        "Managed local disk allocation changed during capacity sampling; charging all physical use as unmanaged for this snapshot"
+                    )
+                }
+            }
         }
 
         // Filesystem total includes bytes already occupied by the OS, logs,
@@ -550,7 +575,7 @@ extension Agent {
                 HostReservation(
                     diskBytes: HostResources.conservativeUnmanagedDiskUsage(
                         capacitySamples: diskCapacitySamples,
-                        managedAllocated: managedDiskAllocated.diskBytes)))
+                        managedAllocated: managedDiskAllocated)))
         }
 
         // An unreadable manifest means this host's contents are unknown, and

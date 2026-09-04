@@ -68,4 +68,53 @@ struct HostResourcesTests {
 
         #expect(unmanaged == 30 * gib)
     }
+
+    @Test("time-skewed per-volume allocations are not subtracted")
+    func timeSkewedAllocationSweepIsRejected() {
+        let first = ["volume-a": 70 * gib, "volume-b": 40 * gib]
+        let second = ["volume-a": 30 * gib, "volume-b": 40 * gib]
+        let samples = [
+            (total: 150 * gib, free: 50 * gib),
+            (total: 150 * gib, free: 50 * gib),
+            (total: 150 * gib, free: 50 * gib),
+        ]
+
+        let managed = HostResources.validatedManagedDiskAllocation(
+            first: first, second: second, capacitySamples: samples)
+        let unmanaged = HostResources.conservativeUnmanagedDiskUsage(
+            capacitySamples: samples, managedAllocated: managed ?? 0)
+
+        #expect(managed == nil)
+        #expect(unmanaged == 100 * gib)
+    }
+
+    @Test("an impossible stable allocation sum is not subtracted")
+    func impossibleStableAllocationSweepIsRejected() {
+        let allocations = ["volume-a": 70 * gib, "volume-b": 40 * gib]
+        let samples = [
+            (total: 150 * gib, free: 50 * gib),
+            (total: 150 * gib, free: 50 * gib),
+            (total: 150 * gib, free: 50 * gib),
+        ]
+
+        #expect(
+            HostResources.validatedManagedDiskAllocation(
+                first: allocations, second: allocations,
+                capacitySamples: samples) == nil)
+    }
+
+    @Test("a stable physically possible allocation sum is subtracted")
+    func stableAllocationSweepIsAccepted() {
+        let allocations = ["volume-a": 20 * gib, "volume-b": 20 * gib]
+        let samples = [
+            (total: 100 * gib, free: 30 * gib),
+            (total: 100 * gib, free: 30 * gib),
+            (total: 100 * gib, free: 30 * gib),
+        ]
+
+        #expect(
+            HostResources.validatedManagedDiskAllocation(
+                first: allocations, second: allocations,
+                capacitySamples: samples) == 40 * gib)
+    }
 }

@@ -59,6 +59,41 @@ enum HostResources {
         return physicallyUsed - managed
     }
 
+    /// Measures each managed path independently. A nil result invalidates the
+    /// whole sweep: treating one unreadable sparse file as zero would charge
+    /// its virtual commitment but could also misclassify the shared filesystem
+    /// baseline used by every other volume.
+    static func managedDiskAllocations(
+        paths: [String], measure: (String) -> Int64?
+    ) -> [String: Int64]? {
+        var allocations: [String: Int64] = [:]
+        for path in paths {
+            guard let allocated = measure(path) else { return nil }
+            allocations[path] = max(0, allocated)
+        }
+        return allocations
+    }
+
+    /// Accepts a sequential managed-allocation sweep only when an opposite-
+    /// order validation sweep sees the same per-path values and their sum fits
+    /// within every bracketed filesystem-use sample. A rejected value must not
+    /// be subtracted from physical use; callers conservatively use zero.
+    static func validatedManagedDiskAllocation(
+        first: [String: Int64], second: [String: Int64],
+        capacitySamples: [(total: Int64, free: Int64)]
+    ) -> Int64? {
+        guard first == second, !capacitySamples.isEmpty else { return nil }
+        let allocated = first.values.reduce(Int64(0)) { result, bytes in
+            let (sum, overflow) = result.addingReportingOverflow(max(0, bytes))
+            return overflow ? Int64.max : sum
+        }
+        let minimumPhysicalUse =
+            capacitySamples.map {
+                unmanagedDiskUsage(total: $0.total, free: $0.free, managedAllocated: 0)
+            }.min() ?? 0
+        return allocated <= minimumPhysicalUse ? allocated : nil
+    }
+
     /// Retains the most conservative unmanaged-use estimate from samples that
     /// bracket managed-footprint collection. Allocation and discard move free
     /// space in opposite directions, so neither endpoint alone is safe.

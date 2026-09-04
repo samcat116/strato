@@ -365,6 +365,24 @@ extension Agent {
         return try await storageBackends.backend(for: storage)
     }
 
+    private func rejectMaterializedVolume(
+        volumeId: String, backend: any StorageBackend, cause: any Error
+    ) async {
+        do {
+            try await backend.rejectVolume(volumeId: volumeId)
+            volumeSizes.removeValue(forKey: volumeId)
+            volumeCommittedSizes.removeValue(forKey: volumeId)
+        } catch let rejectionError {
+            logger.error(
+                "Failed to durably reject a volume after materialization",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "cause": .string(cause.localizedDescription),
+                    "rejectionError": .string(rejectionError.localizedDescription),
+                ])
+        }
+    }
+
     func volumeReconcileCreate(_ item: ReconcileWorkItem) async throws {
         guard let desired = item.desiredVolume else {
             throw ConvergenceError.unsupported("volume create requires a desired entry")
@@ -454,8 +472,17 @@ extension Agent {
         // smaller than what was asked for (the next sync plans the grow), or it
         // may be larger. Retain at least the inherited promise before releasing
         // the provisional create claim.
-        let materializedSize = max(
-            0, try await backend.volumeInfo(attachment: attachment).virtualSize)
+        let materializedSize: Int64
+        do {
+            materializedSize = max(
+                0, try await backend.volumeInfo(attachment: attachment).virtualSize)
+        } catch {
+            if desired.storage == .local {
+                await rejectMaterializedVolume(
+                    volumeId: item.id, backend: backend, cause: error)
+            }
+            throw error
+        }
         volumeSizes[item.id] = materializedSize
         if desired.storage == .local {
             let retainedSize = max(desired.sizeBytes, materializedSize)
@@ -485,19 +512,8 @@ extension Agent {
                     // until after materialization. Do not leave that published
                     // artifact for the next sync to mistake for a converged
                     // volume that no longer needs admission.
-                    do {
-                        try await backend.rejectVolume(volumeId: item.id)
-                        volumeSizes.removeValue(forKey: item.id)
-                        volumeCommittedSizes.removeValue(forKey: item.id)
-                    } catch let rollbackError {
-                        logger.error(
-                            "Failed to durably reject a volume after materialization",
-                            metadata: [
-                                "volumeId": .string(item.id),
-                                "admissionError": .string(admissionError.localizedDescription),
-                                "rollbackError": .string(rollbackError.localizedDescription),
-                            ])
-                    }
+                    await rejectMaterializedVolume(
+                        volumeId: item.id, backend: backend, cause: admissionError)
                     throw admissionError
                 }
             }
