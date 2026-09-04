@@ -1,5 +1,6 @@
 import Fluent
 import Logging
+import MetricsTestKit
 import NIOConcurrencyHelpers
 import Testing
 import Vapor
@@ -439,7 +440,7 @@ final class AuditLoggingTests {
         let argvJSON = #"["/bin/echo","hello world"]"#
         let producedAt = Date(timeIntervalSince1970: 1_000.25)
 
-        await backend.write(
+        _ = await backend.write(
             AuditRecord(
                 eventType: AuditEventType.vmCommandRequested.rawValue,
                 timestamp: producedAt,
@@ -475,9 +476,9 @@ final class AuditLoggingTests {
         let timeoutAt = Date(timeIntervalSince1970: 2_000)
         let correctionAt = Date(timeIntervalSince1970: 2_001)
 
-        await backend.write(
+        _ = await backend.write(
             AuditRecord(eventType: "vm.command.completed", timestamp: correctionAt))
-        await backend.write(
+        _ = await backend.write(
             AuditRecord(eventType: "vm.command.completed", timestamp: timeoutAt))
 
         let timestamps = entries.withLockedValue {
@@ -495,6 +496,7 @@ final class AuditLoggingTests {
     /// used to be paid on the request path.
     private final class RecordingAuditBackend: AuditBackend, Sendable {
         let name = "recording"
+        let metricDestination = Telemetry.SecurityRecordDestination.database
         private let delay: Duration?
         private let state = NIOLockedValueBox<[[AuditRecord]]>([])
 
@@ -506,13 +508,14 @@ final class AuditLoggingTests {
         var batches: [[AuditRecord]] { state.withLockedValue { $0 } }
         var records: [AuditRecord] { batches.flatMap { $0 } }
 
-        func write(_ record: AuditRecord) async {
-            await write([record])
+        func write(_ record: AuditRecord) async -> Bool {
+            await write([record]).isEmpty
         }
 
-        func write(_ records: [AuditRecord]) async {
+        func write(_ records: [AuditRecord]) async -> [AuditRecord] {
             if let delay { try? await Task.sleep(for: delay) }
             state.withLockedValue { $0.append(records) }
+            return []
         }
     }
 
@@ -535,14 +538,57 @@ final class AuditLoggingTests {
 
     private final class GatedAuditBackend: AuditBackend, Sendable {
         let name = "gated"
+        let metricDestination = Telemetry.SecurityRecordDestination.webhook
         private let gate: AuditDeliveryGate
 
         init(gate: AuditDeliveryGate) {
             self.gate = gate
         }
 
-        func write(_ record: AuditRecord) async {
+        func write(_ record: AuditRecord) async -> Bool {
             await gate.wait()
+            return true
+        }
+    }
+
+    private final class FlakyAuditBackend: AuditBackend, Sendable {
+        struct State {
+            var failuresRemaining: Int
+            var attempts = 0
+            var delivered: [AuditRecord] = []
+        }
+
+        let name: String
+        let metricDestination: Telemetry.SecurityRecordDestination
+        private let state: NIOLockedValueBox<State>
+
+        init(
+            name: String,
+            destination: Telemetry.SecurityRecordDestination = .database,
+            failures: Int
+        ) {
+            self.name = name
+            self.metricDestination = destination
+            self.state = NIOLockedValueBox(State(failuresRemaining: failures))
+        }
+
+        var attempts: Int { state.withLockedValue { $0.attempts } }
+        var records: [AuditRecord] { state.withLockedValue { $0.delivered } }
+
+        func write(_ record: AuditRecord) async -> Bool {
+            (await write([record])).isEmpty
+        }
+
+        func write(_ records: [AuditRecord]) async -> [AuditRecord] {
+            state.withLockedValue { current in
+                current.attempts += 1
+                if current.failuresRemaining > 0 {
+                    current.failuresRemaining -= 1
+                    return records
+                }
+                current.delivered.append(contentsOf: records)
+                return []
+            }
         }
     }
 
@@ -573,6 +619,87 @@ final class AuditLoggingTests {
 
             await audit.flush()
             #expect(slow.records.map(\.eventType) == ["test.background"])
+        }
+    }
+
+    @Test("A failed audit destination retries without duplicating healthy destinations")
+    func auditRetriesOnlyTheFailedDestination() async throws {
+        try await withApp { app, _, _, _ in
+            let healthy = RecordingAuditBackend()
+            let flaky = FlakyAuditBackend(name: "flaky", failures: 1)
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.synchronousWrites = false
+            let audit = AuditService(
+                app: app,
+                config: config,
+                backends: [healthy, flaky],
+                retryPolicy: SecurityRecordRetryPolicy(delays: [.zero]))
+
+            _ = await audit.queue.enqueue(AuditRecord(eventType: "test.retry-a"))
+            _ = await audit.queue.enqueue(AuditRecord(eventType: "test.retry-b"))
+            await audit.flush()
+
+            #expect(healthy.batches.count == 1)
+            #expect(healthy.records.map(\.eventType) == ["test.retry-a", "test.retry-b"])
+            #expect(flaky.attempts == 2)
+            #expect(flaky.records.map(\.eventType) == ["test.retry-a", "test.retry-b"])
+        }
+    }
+
+    @Test("Exhausted audit delivery records the observable gap")
+    func exhaustedAuditDeliveryIsCounted() async throws {
+        try await withApp { app, _, _, _ in
+            let metrics = TestMetrics()
+            let failing = FlakyAuditBackend(name: "database", failures: 10)
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.synchronousWrites = false
+            let audit = AuditService(
+                app: app,
+                config: config,
+                backends: [failing],
+                retryPolicy: SecurityRecordRetryPolicy(delays: [.zero]),
+                metricsFactory: metrics)
+
+            _ = await audit.queue.enqueue(AuditRecord(eventType: "test.lost"))
+            await audit.flush()
+
+            #expect(failing.attempts == 2)
+            let losses = try metrics.expectCounter(
+                "strato_security_records_lost_total",
+                [
+                    ("stream", "audit"),
+                    ("cause", "delivery_failure"),
+                    ("destination", "database"),
+                ])
+            #expect(losses.totalValue == 1)
+        }
+    }
+
+    @Test("An incomplete audit shutdown flush counts queued records")
+    func incompleteAuditShutdownIsCounted() async throws {
+        try await withApp { app, _, _, _ in
+            let metrics = TestMetrics()
+            let audit = AuditService(
+                app: app,
+                config: AuditConfig.fromConfiguration(app.controlPlaneConfiguration),
+                backends: [RecordingAuditBackend()],
+                metricsFactory: metrics)
+
+            _ = await audit.queue.enqueue(AuditRecord(eventType: "test.shutdown-a"))
+            _ = await audit.queue.enqueue(AuditRecord(eventType: "test.shutdown-b"))
+            await audit.flush(
+                waitingUpTo: .zero, recordIncompleteShutdownLoss: true)
+
+            let losses = try metrics.expectCounter(
+                "strato_security_records_lost_total",
+                [
+                    ("stream", "audit"),
+                    ("cause", "incomplete_shutdown"),
+                    ("destination", "all"),
+                ])
+            #expect(losses.totalValue == 2)
+
+            await audit.flush()
         }
     }
 
@@ -692,12 +819,12 @@ final class AuditLoggingTests {
             // Model a later correction reaching the backend first because a
             // live drain and a flush claimed different batches. Insert order
             // must not replace the causal timestamps captured by producers.
-            await backend.write(
+            _ = await backend.write(
                 AuditRecord(
                     eventType: "vm.command.completed",
                     timestamp: correctionAt,
                     metadata: ["outcome": "exited", "correctsOutcome": "timed_out"]))
-            await backend.write(
+            _ = await backend.write(
                 AuditRecord(
                     eventType: "vm.command.completed",
                     timestamp: timeoutAt,
@@ -799,10 +926,10 @@ final class AuditLoggingTests {
 
         let firstBatch = await queue.nextBatch()
         #expect(firstBatch?.count == 1)
-        await queue.finishBatch()
+        await queue.finishBatch(recordCount: firstBatch?.count ?? 0)
         let secondBatch = await queue.nextBatch()
         #expect(secondBatch?.count == 1)
-        await queue.finishBatch()
+        await queue.finishBatch(recordCount: secondBatch?.count ?? 0)
 
         let oversized = AuditEventQueue(
             maxQueueDepth: 10,

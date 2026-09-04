@@ -14,6 +14,49 @@ import StratoShared
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
 
+    enum SecurityRecordStream: String, CaseIterable, Sendable {
+        case audit
+        case iamDecision = "iam_decision"
+    }
+
+    enum SecurityRecordLossCause: String, CaseIterable, Sendable {
+        case queueCountLimit = "queue_count_limit"
+        case queueByteLimit = "queue_byte_limit"
+        case recordTooLarge = "record_too_large"
+        case deliveryFailure = "delivery_failure"
+        case incompleteShutdown = "incomplete_shutdown"
+    }
+
+    enum SecurityRecordDestination: String, CaseIterable, Sendable {
+        case all
+        case database
+        case log
+        case loki
+        case webhook
+    }
+
+    /// Count security records dropped from at least one configured destination,
+    /// or whose delivery could not be confirmed before shutdown. Every
+    /// dimension is a bounded enum: event types, request paths, subjects, and
+    /// backend URLs never become metric labels.
+    static func securityRecordsLost(
+        stream: SecurityRecordStream,
+        cause: SecurityRecordLossCause,
+        destination: SecurityRecordDestination,
+        count: Int = 1,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        incrementCounter(
+            label: "strato_security_records_lost_total",
+            dimensions: [
+                ("stream", stream.rawValue),
+                ("cause", cause.rawValue),
+                ("destination", destination.rawValue),
+            ],
+            count: count,
+            factory: factory)
+    }
+
     /// Bounded durable outcomes from processing a claimed delivery. A retryable
     /// endpoint or transport failure is `failed`; `dead` means either the final
     /// attempt failed or the subscription was disabled before a POST began.

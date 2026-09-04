@@ -142,6 +142,46 @@ struct TelemetrySupportTests {
             ).totalValue == 1)
     }
 
+    // MARK: - Security-record delivery
+
+    @Test("security-record loss dimensions are bounded")
+    func securityRecordLossDimensions() {
+        #expect(
+            Set(Telemetry.SecurityRecordStream.allCases.map(\.rawValue))
+                == ["audit", "iam_decision"])
+        #expect(
+            Set(Telemetry.SecurityRecordLossCause.allCases.map(\.rawValue))
+                == [
+                    "queue_count_limit", "queue_byte_limit", "record_too_large",
+                    "delivery_failure", "incomplete_shutdown",
+                ])
+        #expect(
+            Set(Telemetry.SecurityRecordDestination.allCases.map(\.rawValue))
+                == ["all", "database", "log", "loki", "webhook"])
+    }
+
+    @Test("security-record losses carry stream, cause, and destination")
+    func securityRecordLossCounter() throws {
+        let metrics = TestMetrics()
+
+        Telemetry.securityRecordsLost(
+            stream: .audit,
+            cause: .deliveryFailure,
+            destination: .database,
+            count: 3,
+            factory: metrics)
+
+        #expect(
+            try metrics.expectCounter(
+                "strato_security_records_lost_total",
+                [
+                    ("stream", "audit"),
+                    ("cause", "delivery_failure"),
+                    ("destination", "database"),
+                ]
+            ).totalValue == 3)
+    }
+
     // MARK: - SchedulerService.placementOutcome
 
     @Test("scheduler errors classify as no_candidate")
