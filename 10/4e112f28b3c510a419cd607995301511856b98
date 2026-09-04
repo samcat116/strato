@@ -1,0 +1,22 @@
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_0a6f49dab719ee::t_e993ecc7d98603 628,631-634,637
+  s_0a6f49dab719ee::t_3647e170280c63 614,619-620,624-625,629-630,635-636
+control-plane/web/src/types/openapi.ts
+  s_0a6f49dab719ee::t_4c6f396bbd079d 6090-6098,6234-6242,6774,7044
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "104e112f28b3c510a419cd607995301511856b98",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
