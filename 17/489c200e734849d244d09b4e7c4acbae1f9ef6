@@ -1,0 +1,30 @@
+control-plane/Sources/App/Services/SecurityGroupSiteConvergence.swift
+  s_0a6f49dab719ee::t_d016c8233352a4 213-215,222-224
+  s_0a6f49dab719ee::t_e2bead97e97b4e 217-221,225-232
+control-plane/Tests/AppNetworkTests/SecurityGroupControllerTests.swift
+  s_0a6f49dab719ee::t_f3f390c11dea90 868-887
+control-plane/Sources/App/Services/NetworkCarrierAssembler.swift
+  s_0a6f49dab719ee::t_7539fc0184f6ff 301,303-312
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_0a6f49dab719ee::t_f3f390c11dea90 649-667,752,755-756,770-801
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_0a6f49dab719ee::t_d016c8233352a4 561-573
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_0a6f49dab719ee::t_7539fc0184f6ff 442-443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "17489c200e734849d244d09b4e7c4acbae1f9ef6",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
