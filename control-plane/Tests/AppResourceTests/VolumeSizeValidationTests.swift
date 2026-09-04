@@ -157,6 +157,7 @@ final class VolumeSizeValidationTests {
     @Test("POST /api/volumes refuses committed host-disk exhaustion before returning 202")
     func createRejectsInsufficientCommittedHostDisk() async throws {
         try await withVolumeTestApp { app, builder, _, project, token in
+            let key = UUID().uuidString
             _ = try await builder.registerAgent(
                 on: app,
                 named: "disk-full-host",
@@ -171,6 +172,7 @@ final class VolumeSizeValidationTests {
 
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
                 try req.content.encode(self.createBody(project: project, sizeGB: 10))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
@@ -179,6 +181,40 @@ final class VolumeSizeValidationTests {
             }
 
             #expect(try await Volume.query(on: app.db).count() == 0)
+            #expect(try await IdempotencyKey.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("An idempotent volume-create replay bypasses exhausted host capacity")
+    func createReplayBypassesHostAdmission() async throws {
+        try await withVolumeTestApp { app, builder, _, project, token in
+            let agentId = try await builder.registerAgent(
+                on: app,
+                named: "idempotent-create-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 10.gbToBytes!,
+                    availableDisk: 10.gbToBytes!))
+            let key = UUID().uuidString
+            let body = self.createBody(project: project, sizeGB: 10)
+
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/volumes") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                    try req.content.encode(body)
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                }
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 1)
+            #expect(
+                await app.coordination.activeReservations(agentIds: [agentId])[agentId]?.disk
+                    == 10.gbToBytes!)
         }
     }
 

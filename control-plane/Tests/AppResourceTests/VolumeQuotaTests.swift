@@ -519,6 +519,7 @@ final class VolumeQuotaTests {
     @Test("A clone is admitted like a create, for the source's whole size")
     func cloneIsAdmittedLikeACreate() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, token in
+            let key = UUID().uuidString
             _ = try await builder.createResourceQuota(
                 name: "one-copy", maxStorageGB: 60, project: project)
             let agentId = try await registerAgent(app: app, named: "clone-host")
@@ -529,12 +530,14 @@ final class VolumeQuotaTests {
 
             try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
                 try req.content.encode(CloneVolumeRequest(name: "copy", description: nil))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
             #expect(try await Volume.query(on: app.db).count() == 1)
+            #expect(try await IdempotencyKey.query(on: app.db).count() == 0)
             let reservations = await app.coordination.activeReservations(agentIds: [agentId])
             #expect(reservations[agentId] == .zero)
         }
@@ -549,16 +552,30 @@ final class VolumeQuotaTests {
                 app: app, user: user, project: project, name: "clone-capacity-source",
                 sizeGB: 30, agentId: agentId)
             let volumeID = try source.requireID()
+            let key = UUID().uuidString
+            let firstBody = CloneVolumeRequest(name: "first-copy", description: nil)
 
             try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(CloneVolumeRequest(name: "first-copy", description: nil))
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(firstBody)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
             }
 
             let reservations = await app.coordination.activeReservations(agentIds: [agentId])
             #expect(reservations[agentId]?.disk == gb(30))
+
+            // The original reservation leaves only 20 GiB. A retry of the
+            // accepted request must replay instead of attempting a second
+            // 30 GiB reservation.
+            try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(firstBody)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
 
             try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
