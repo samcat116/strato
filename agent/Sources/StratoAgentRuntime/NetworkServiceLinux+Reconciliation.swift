@@ -149,7 +149,15 @@ extension NetworkServiceLinux {
         // nil `dhcpEnabled`.
         if let dnsZones {
             do {
-                try await DNSZoneReconciler.reconcile(zones: dnsZones, actuator: self, logger: logger)
+                let failures = try await DNSZoneReconciler.reconcile(
+                    zones: dnsZones,
+                    networkIDsBySwitchName: Dictionary(
+                        uniqueKeysWithValues: current.map {
+                            (OVNNaming.switchName(networkId: $0.networkId), $0.networkId)
+                        }),
+                    actuator: self,
+                    logger: logger)
+                networkFailures.append(contentsOf: failures)
             } catch {
                 // The row snapshot couldn't be read, so teardown can't be
                 // computed safely; the next full desired-state payload retries.

@@ -1047,6 +1047,23 @@ CREATE TABLE public.security_groups (
 
 
 --
+-- Name: security_group_site_observations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.security_group_site_observations (
+    id uuid NOT NULL,
+    security_group_id uuid NOT NULL,
+    site_id uuid NOT NULL,
+    observed_generation bigint DEFAULT 0 NOT NULL,
+    status text,
+    last_error text,
+    failed_generation bigint,
+    failure_classification text,
+    last_error_at timestamp with time zone
+);
+
+
+--
 -- Name: service_accounts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1973,6 +1990,14 @@ ALTER TABLE ONLY public.security_group_rules
 
 
 --
+-- Name: security_group_site_observations security_group_site_observations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT security_group_site_observations_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: security_groups security_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2330,6 +2355,14 @@ ALTER TABLE ONLY public.scim_tokens
 
 ALTER TABLE ONLY public.security_groups
     ADD CONSTRAINT "uq:security_groups.project_id+security_groups.name" UNIQUE (project_id, name);
+
+
+--
+-- Name: security_group_site_observations uq_security_group_site_observations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT uq_security_group_site_observations UNIQUE (security_group_id, site_id);
 
 
 --
@@ -3070,6 +3103,13 @@ CREATE INDEX ix_security_group_rules_remote_group ON public.security_group_rules
 
 
 --
+-- Name: ix_security_group_site_observations_site; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_security_group_site_observations_site ON public.security_group_site_observations USING btree (site_id);
+
+
+--
 -- Name: ix_vm_interface_security_groups_group; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3636,6 +3676,22 @@ ALTER TABLE ONLY public.security_group_rules
 
 ALTER TABLE ONLY public.security_group_rules
     ADD CONSTRAINT security_group_rules_security_group_id_fkey FOREIGN KEY (security_group_id) REFERENCES public.security_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: security_group_site_observations security_group_site_observations_security_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT security_group_site_observations_security_group_id_fkey FOREIGN KEY (security_group_id) REFERENCES public.security_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: security_group_site_observations security_group_site_observations_site_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT security_group_site_observations_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id) ON DELETE CASCADE;
 
 
 --

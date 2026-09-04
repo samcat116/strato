@@ -538,32 +538,14 @@ struct ObservedStateApplier {
         // claim. Non-authority agents send nil, but this guard also closes the
         // stale/malicious-report path at persistence.
         guard
-            try await Site.query(on: db)
+            let site = try await Site.query(on: db)
                 .filter(\.$networkControllerAgent.$id == reporterID)
-                .first() != nil
+                .first(),
+            let siteID = site.id
         else { return }
 
         for observed in observations {
-            try await db.transaction { tx in
-                guard let group = try await SecurityGroup.find(observed.id, on: tx) else { return }
-                guard observed.observedGeneration <= group.generation else { return }
-                if observed.status == .active {
-                    guard observed.observedGeneration >= group.observedGeneration else { return }
-                } else {
-                    guard
-                        observed.failedGeneration == group.generation
-                            || observed.observedGeneration >= group.observedGeneration
-                    else { return }
-                }
-                applyFabricObservation(
-                    observedGeneration: observed.observedGeneration,
-                    status: observed.status,
-                    lastError: observed.lastError,
-                    failedGeneration: observed.failedGeneration,
-                    failureClassification: observed.failureClassification,
-                    to: group)
-                try await group.save(on: tx)
-            }
+            try await SecurityGroupSiteConvergence.apply(observed, siteID: siteID, on: db)
         }
     }
 
@@ -609,36 +591,46 @@ struct ObservedStateApplier {
         on db: any Database
     ) async throws {
         for observed in observations {
-            if let nic = try await VMNetworkInterface.query(on: db)
-                .filter(\.$id == observed.interfaceId)
-                .with(\.$vm)
-                .first()
-            {
-                guard nic.vm.hypervisorId == agentId else { continue }
-                let current = try await VMInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id == observed.interfaceId)
-                    .all()
-                    .map { $0.$securityGroup.id }
-                    .sorted { $0.uuidString < $1.uuidString }
-                guard current == observed.securityGroupIds else { continue }
-                recordMembership(observed, on: nic)
-                try await nic.save(on: db)
-                continue
-            }
-            if let nic = try await SandboxNetworkInterface.query(on: db)
-                .filter(\.$id == observed.interfaceId)
-                .with(\.$sandbox)
-                .first()
-            {
-                guard nic.sandbox.hypervisorId == agentId else { continue }
-                let current = try await SandboxInterfaceSecurityGroup.query(on: db)
-                    .filter(\.$interface.$id == observed.interfaceId)
-                    .all()
-                    .map { $0.$securityGroup.id }
-                    .sorted { $0.uuidString < $1.uuidString }
-                guard current == observed.securityGroupIds else { continue }
-                recordMembership(observed, on: nic)
-                try await nic.save(on: db)
+            try await db.transaction { tx in
+                if let nic = try await VMNetworkInterface.query(on: tx)
+                    .filter(\.$id == observed.interfaceId)
+                    .with(\.$vm)
+                    .first()
+                {
+                    guard nic.vm.hypervisorId == agentId else { return }
+                    // The attach/detach handlers take this same transaction-
+                    // scoped lock before changing the join rows and
+                    // invalidating status. Whichever side commits last has
+                    // therefore validated the membership it persists.
+                    try await SecurityGroupService.lockMembership(
+                        interfaceID: observed.interfaceId, on: tx)
+                    let current = try await VMInterfaceSecurityGroup.query(on: tx)
+                        .filter(\.$interface.$id == observed.interfaceId)
+                        .all()
+                        .map { $0.$securityGroup.id }
+                        .sorted { $0.uuidString < $1.uuidString }
+                    guard current == observed.securityGroupIds else { return }
+                    recordMembership(observed, on: nic)
+                    try await nic.save(on: tx)
+                    return
+                }
+                if let nic = try await SandboxNetworkInterface.query(on: tx)
+                    .filter(\.$id == observed.interfaceId)
+                    .with(\.$sandbox)
+                    .first()
+                {
+                    guard nic.sandbox.hypervisorId == agentId else { return }
+                    try await SecurityGroupService.lockMembership(
+                        interfaceID: observed.interfaceId, on: tx)
+                    let current = try await SandboxInterfaceSecurityGroup.query(on: tx)
+                        .filter(\.$interface.$id == observed.interfaceId)
+                        .all()
+                        .map { $0.$securityGroup.id }
+                        .sorted { $0.uuidString < $1.uuidString }
+                    guard current == observed.securityGroupIds else { return }
+                    recordMembership(observed, on: nic)
+                    try await nic.save(on: tx)
+                }
             }
         }
     }

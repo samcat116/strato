@@ -509,6 +509,9 @@ final class DesiredStateReconciliationTests {
             let membership = VMInterfaceSecurityGroup(
                 interfaceID: try nic.requireID(), securityGroupID: try group.requireID())
             try await membership.save(on: app.db)
+            try await SecurityGroupSiteObservation(
+                securityGroupID: try group.requireID(), siteID: network.$site.id
+            ).save(on: app.db)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -589,6 +592,75 @@ final class DesiredStateReconciliationTests {
             #expect(recoveredNIC.securityGroupStatus == ObservedNetworkFabricStatus.active.rawValue)
             #expect(recoveredNIC.securityGroupLastError == nil)
             #expect(recoveredNIC.securityGroupLastErrorAt == nil)
+        }
+    }
+
+    @Test("Every relevant site must acknowledge a security-group generation")
+    func securityGroupConvergenceAggregatesSites() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let firstAgentID = try await self.registerAgent(
+                app: app, vm: vm, named: "recon-site-a",
+                protocolVersion: WireProtocol.currentVersion)
+            let firstAgentUUID = try #require(UUID(uuidString: firstAgentID))
+            let firstAgent = try #require(try await Agent.find(firstAgentUUID, on: app.db))
+
+            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let organizationID = try #require(project.$organization.id)
+            let builder = TestDataBuilder(db: app.db)
+            let secondSite = try await builder.createSite(
+                name: "recon-site-b",
+                organizationScope: .organization(organizationID))
+            let secondAgentID = try await builder.registerAgent(
+                on: app,
+                named: "recon-site-b-agent",
+                dependencyObservations: [Self.healthyOverlayObservation()],
+                siteID: try secondSite.requireID())
+            let secondAgentUUID = try #require(UUID(uuidString: secondAgentID))
+            secondSite.$networkControllerAgent.id = secondAgentUUID
+            try await secondSite.save(on: app.db)
+
+            let group = SecurityGroup(projectID: vm.$project.id, name: "multi-site")
+            group.convergenceDeadline = Date().addingTimeInterval(300)
+            try await group.save(on: app.db)
+            let groupID = try group.requireID()
+            try await SecurityGroupSiteObservation(
+                securityGroupID: groupID, siteID: firstAgent.$site.id
+            ).save(on: app.db)
+            try await SecurityGroupSiteObservation(
+                securityGroupID: groupID, siteID: try secondSite.requireID()
+            ).save(on: app.db)
+
+            let firstReport = try self.report(
+                agentId: firstAgentID,
+                vms: [],
+                securityGroups: [
+                    ObservedSecurityGroupState(
+                        id: groupID, observedGeneration: 1, status: .active)
+                ])
+            await app.agentService.applyObservedStateReport(
+                firstReport, fromAgentKey: agentKey("recon-site-a"))
+
+            let awaitingSecond = try #require(
+                try await SecurityGroup.find(groupID, on: app.db))
+            #expect(awaitingSecond.observedGeneration == 0)
+            #expect(!awaitingSecond.conditions.converged)
+            #expect(awaitingSecond.convergenceDeadline != nil)
+
+            let secondReport = try self.report(
+                agentId: secondAgentID,
+                vms: [],
+                securityGroups: [
+                    ObservedSecurityGroupState(
+                        id: groupID, observedGeneration: 1, status: .active)
+                ])
+            await app.agentService.applyObservedStateReport(
+                secondReport, fromAgentKey: agentKey("recon-site-b-agent"))
+
+            let converged = try #require(
+                try await SecurityGroup.find(groupID, on: app.db))
+            #expect(converged.observedGeneration == 1)
+            #expect(converged.conditions.converged)
+            #expect(converged.convergenceDeadline == nil)
         }
     }
 
@@ -680,6 +752,8 @@ final class DesiredStateReconciliationTests {
     @Test("The network fabric migration backfills only authority-addressable deadlines")
     func networkFabricMigrationBackfillsDeadlines() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            _ = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let network = try await self.network(app: app, vm: vm, named: "fabric-upgrade")
             network.generation = 3
             network.observedGeneration = 0
@@ -692,6 +766,18 @@ final class DesiredStateReconciliationTests {
             group.observedGeneration = 0
             group.convergenceDeadline = nil
             try await group.save(on: app.db)
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "52:54:00:29:40:02")
+            try await nic.save(on: app.db)
+            try await VMInterfaceSecurityGroup(
+                interfaceID: try nic.requireID(), securityGroupID: try group.requireID()
+            ).save(on: app.db)
+
+            let unattachedGroup = SecurityGroup(
+                projectID: vm.$project.id, name: "fabric-upgrade-unused")
+            unattachedGroup.generation = 0
+            try await unattachedGroup.save(on: app.db)
 
             try await AddNetworkFabricObservations().prepare(on: app.db)
 
@@ -702,7 +788,15 @@ final class DesiredStateReconciliationTests {
                 try await SecurityGroup.find(group.id, on: app.db))
             #expect(upgradedGroup.generation == 1)
             #expect(upgradedGroup.observedGeneration == 0)
-            #expect(upgradedGroup.convergenceDeadline == nil)
+            #expect(upgradedGroup.convergenceDeadline != nil)
+            #expect(
+                try await SecurityGroupSiteObservation.query(on: app.db)
+                    .filter(\.$securityGroup.$id == group.id!)
+                    .count() == 1)
+            let upgradedUnattachedGroup = try #require(
+                try await SecurityGroup.find(unattachedGroup.id, on: app.db))
+            #expect(upgradedUnattachedGroup.generation == 1)
+            #expect(upgradedUnattachedGroup.convergenceDeadline == nil)
         }
     }
 

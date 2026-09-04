@@ -853,7 +853,16 @@ final class SecurityGroupControllerTests {
             let afterAssembly = try await SecurityGroup.query(on: app.db)
                 .filter(\.$id ~~ [web.id, db_.id])
                 .all()
-            #expect(afterAssembly.allSatisfy { $0.convergenceDeadline != nil })
+            let siteObservations = try await SecurityGroupSiteObservation.query(on: app.db)
+                .filter(\.$securityGroup.$id ~~ [web.id, db_.id])
+                .all()
+            #expect(siteObservations.count == 2, "Created \(siteObservations.count) site observations")
+            let afterAssemblyByID = Dictionary(
+                uniqueKeysWithValues: afterAssembly.compactMap { group in
+                    group.id.map { ($0, group) }
+                })
+            #expect(afterAssemblyByID[web.id]?.convergenceDeadline != nil)
+            #expect(afterAssemblyByID[db_.id]?.convergenceDeadline != nil)
             let nicSpec = try #require(message.vms.first?.spec.networks.first)
             #expect(nicSpec.securityGroupIds == [web.id])
         }

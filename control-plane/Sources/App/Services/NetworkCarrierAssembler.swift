@@ -300,6 +300,9 @@ extension DesiredStateAssembler {
     func desiredSecurityGroups(
         forVMs vms: [VM], sandboxes: [Sandbox], on db: any Database
     ) async throws -> [DesiredSecurityGroup] {
+        let projectIDs = Set(vms.map { $0.$project.id } + sandboxes.map { $0.$project.id })
+        try await SecurityGroupSiteConvergence.reconcileScopes(projectIDs: projectIDs, on: db)
+
         let vmInterfaceIDs = vms.flatMap { $0.networkInterfaces.compactMap(\.id) }
         let sandboxInterfaceIDs = sandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) }
         // Both seeds, not just the VM one: an agent (or a whole site) hosting
@@ -343,32 +346,6 @@ extension DesiredStateAssembler {
             .filter(\.$id ~~ Array(groupIDs))
             .with(\.$rules)
             .all()
-
-        // This is the first point that proves an authority will receive each
-        // group. Start the silence deadline here rather than at create or rule
-        // mutation time: an unattached, unreferenced group belongs in no
-        // agent's desired closure and therefore cannot report an observation.
-        let outstandingIDs = groups.compactMap { group -> UUID? in
-            guard group.observedGeneration < group.generation,
-                group.convergenceDeadline == nil
-            else { return nil }
-            return group.id
-        }
-        if !outstandingIDs.isEmpty {
-            guard let sql = db as? any SQLDatabase else {
-                throw DesiredStateGenerationWriter.Error.unsupportedDatabase
-            }
-            let convergenceDeadline = Date().addingTimeInterval(180)
-            try await sql.raw(
-                """
-                UPDATE security_groups
-                SET convergence_deadline = \(bind: convergenceDeadline)
-                WHERE id IN (\(binds: outstandingIDs))
-                  AND observed_generation < generation
-                  AND convergence_deadline IS NULL
-                """
-            ).run()
-        }
         return
             groups
             .compactMap { group -> DesiredSecurityGroup? in

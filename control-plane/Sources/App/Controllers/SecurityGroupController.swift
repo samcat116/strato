@@ -279,6 +279,7 @@ struct SecurityGroupController: RouteCollection {
             try await rule.save(on: db)
             try await Self.bumpGeneration(of: groupId, on: db)
         }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         await req.application.agentService.syncDesiredStateToFleet()
         return try SecurityGroupRuleResponse(from: rule)
@@ -305,6 +306,7 @@ struct SecurityGroupController: RouteCollection {
             try await rule.delete(on: db)
             try await Self.bumpGeneration(of: groupId, on: db)
         }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
@@ -375,6 +377,7 @@ struct SecurityGroupController: RouteCollection {
             return .noContent
         }
         guard changed else { return .noContent }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         // Only on a real change, and for both workloads: since STR-102 a
         // sandbox attach changes the group closure the topology authority
@@ -425,6 +428,7 @@ struct SecurityGroupController: RouteCollection {
             return true
         }
         guard changed else { return .noContent }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         // Both workloads, for the same reason as the attach path: a detach can
         // drop the last NIC referencing a group, which retires its port group.
@@ -441,6 +445,23 @@ struct SecurityGroupController: RouteCollection {
     }
 
     // MARK: - Helpers
+
+    /// Scope bookkeeping is derived state. A failed refresh must not turn a
+    /// committed rule or membership mutation into an apparent request failure;
+    /// the immediately requested and periodic desired-state assemblies retry it.
+    private static func refreshConvergenceScope(projectID: UUID, req: Request) async {
+        do {
+            try await SecurityGroupSiteConvergence.reconcileScopes(
+                projectIDs: [projectID], on: req.db)
+        } catch {
+            req.logger.error(
+                "Could not refresh per-site security-group convergence scope",
+                metadata: [
+                    "projectId": .string(projectID.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
 
     /// A resolved attach/detach target: the NIC and the workload that owns it.
     /// The two workloads keep separate join tables, so membership reads and
