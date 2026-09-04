@@ -646,6 +646,25 @@ final class DesiredStateReconciliationTests {
             #expect(!awaitingSecond.conditions.converged)
             #expect(awaitingSecond.convergenceDeadline != nil)
 
+            awaitingSecond.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await awaitingSecond.save(on: app.db)
+            await app.agentMaintenance.sweepStuckConvergence()
+            let timedOut = try #require(
+                try await SecurityGroup.find(groupID, on: app.db))
+            let timeoutReason = try #require(timedOut.lastError)
+            let timeoutAt = try #require(timedOut.lastErrorAt)
+            #expect(timedOut.conditions.degraded?.sinceGeneration == 1)
+
+            // Site A's routine healthy report cannot erase site B's timeout.
+            await app.agentService.applyObservedStateReport(
+                firstReport, fromAgentKey: agentKey("recon-site-a"))
+            let stillTimedOut = try #require(
+                try await SecurityGroup.find(groupID, on: app.db))
+            #expect(stillTimedOut.lastError == timeoutReason)
+            #expect(stillTimedOut.lastErrorAt == timeoutAt)
+            #expect(stillTimedOut.conditions.degraded?.sinceGeneration == 1)
+            #expect(stillTimedOut.convergenceDeadline == nil)
+
             let secondReport = try self.report(
                 agentId: secondAgentID,
                 vms: [],
@@ -730,9 +749,11 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("An unanswered network generation degrades after its deadline")
+    @Test("A network timeout survives stale active reports until the current generation lands")
     func networkFabricDeadlineSweep() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            let agentID = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let network = try await self.network(app: app, vm: vm, named: "fabric-timeout")
             network.generation = 4
             network.observedGeneration = 3
@@ -746,6 +767,38 @@ final class DesiredStateReconciliationTests {
             #expect(stored.conditions.degraded?.sinceGeneration == 4)
             #expect(stored.conditions.degraded?.reason.contains("did not report convergence") == true)
             #expect(stored.convergenceDeadline == nil)
+
+            let timeoutReason = try #require(stored.lastError)
+            let timeoutAt = try #require(stored.lastErrorAt)
+            let stale = try self.report(
+                agentId: agentID,
+                vms: [],
+                networks: [
+                    ObservedNetworkState(
+                        id: try network.requireID(), observedGeneration: 3, status: .active)
+                ])
+            await app.agentService.applyObservedStateReport(
+                stale, fromAgentKey: agentKey("recon-agent"))
+
+            let afterStale = try #require(
+                try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(afterStale.lastError == timeoutReason)
+            #expect(afterStale.lastErrorAt == timeoutAt)
+            #expect(afterStale.conditions.degraded?.sinceGeneration == 4)
+
+            let current = try self.report(
+                agentId: agentID,
+                vms: [],
+                networks: [
+                    ObservedNetworkState(
+                        id: try network.requireID(), observedGeneration: 4, status: .active)
+                ])
+            await app.agentService.applyObservedStateReport(
+                current, fromAgentKey: agentKey("recon-agent"))
+            let converged = try #require(
+                try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(converged.conditions.converged)
+            #expect(converged.lastError == nil)
         }
     }
 

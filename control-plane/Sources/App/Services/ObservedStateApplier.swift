@@ -558,6 +558,19 @@ struct ObservedStateApplier {
         to resource: R
     ) {
         resource.observedGeneration = max(resource.observedGeneration, observedGeneration)
+        let activeAtCurrentGeneration =
+            status == .active && resource.observedGeneration >= resource.generation
+        let preservesCurrentFailure =
+            status != .error
+            && resource.failedGeneration == resource.generation
+            && resource.lastError != nil
+            && !activeAtCurrentGeneration
+        if preservesCurrentFailure {
+            // A stale healthy/pending report is not recovery from a timeout or
+            // explicit failure at the current desired generation. Keep the
+            // resource degraded until this authority actually acknowledges it.
+            return
+        }
         let error = status == .error ? lastError : nil
         let failed = status == .error ? failedGeneration : nil
         let previousError = resource.lastError

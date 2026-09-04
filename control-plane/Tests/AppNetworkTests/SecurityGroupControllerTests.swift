@@ -865,6 +865,26 @@ final class SecurityGroupControllerTests {
             #expect(afterAssemblyByID[db_.id]?.convergenceDeadline != nil)
             let nicSpec = try #require(message.vms.first?.spec.networks.first)
             #expect(nicSpec.securityGroupIds == [web.id])
+
+            // Once this site's last workload for the project disappears, the
+            // persisted scope itself must pull the project into one final
+            // reconciliation pass so both the direct and referenced rows retire.
+            try await VMInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == nic.id!)
+                .delete()
+            let authorityID = try #require(UUID(uuidString: vm.hypervisorId!))
+            let authority = try #require(try await Agent.find(authorityID, on: app.db))
+            let emptyGroups = try await app.desiredStateAssembler.desiredSecurityGroups(
+                forVMs: [], sandboxes: [], siteID: authority.$site.id, on: app.db)
+            #expect(emptyGroups.isEmpty)
+            #expect(
+                try await SecurityGroupSiteObservation.query(on: app.db)
+                    .filter(\.$securityGroup.$id ~~ [web.id, db_.id])
+                    .count() == 0)
+            let retiredGroups = try await SecurityGroup.query(on: app.db)
+                .filter(\.$id ~~ [web.id, db_.id])
+                .all()
+            #expect(retiredGroups.allSatisfy { $0.convergenceDeadline == nil })
         }
     }
 

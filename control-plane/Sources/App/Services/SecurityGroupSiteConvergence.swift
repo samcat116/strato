@@ -203,21 +203,33 @@ enum SecurityGroupSiteConvergence {
             group.lastErrorAt = failure.lastErrorAt
             if failure.observedFailureClassification != .blocked {
                 group.convergenceDeadline = nil
-            } else if group.convergenceDeadline == nil {
-                group.convergenceDeadline = Date().addingTimeInterval(180)
             }
         } else {
-            group.lastError = nil
-            group.failedGeneration = nil
-            group.lastErrorAt = nil
             let allActive = observations.allSatisfy {
                 $0.observedStatus == .active
                     && $0.observedGeneration >= group.generation
             }
             if allActive {
+                group.lastError = nil
+                group.failedGeneration = nil
+                group.lastErrorAt = nil
                 group.convergenceDeadline = nil
-            } else if group.convergenceDeadline == nil {
-                group.convergenceDeadline = Date().addingTimeInterval(180)
+            } else {
+                let preservesCurrentFailure =
+                    group.failedGeneration == group.generation
+                    && group.lastError != nil
+                    && group.convergenceDeadline == nil
+                // A timeout or prior authority response already degraded this
+                // generation. One healthy site cannot turn it back to pending
+                // while another required site still has not acknowledged it.
+                if !preservesCurrentFailure {
+                    group.lastError = nil
+                    group.failedGeneration = nil
+                    group.lastErrorAt = nil
+                    if group.convergenceDeadline == nil {
+                        group.convergenceDeadline = Date().addingTimeInterval(180)
+                    }
+                }
             }
         }
         if aggregateChanged(
