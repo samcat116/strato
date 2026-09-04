@@ -1,0 +1,27 @@
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+Lifecycle.swift
+  s_59723017fddc2a::t_72fd2f5dc8f2a3 818
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_59723017fddc2a::t_72fd2f5dc8f2a3 98-100,103-104
+agent/Sources/StratoAgentCore/WarmSandboxSnapshotCache.swift
+  s_59723017fddc2a::t_72fd2f5dc8f2a3 249-251
+agent/Tests/StratoAgentStorageTests/OCIRootfsCacheTests.swift
+  s_59723017fddc2a::t_72fd2f5dc8f2a3 131-145
+agent/Tests/StratoAgentStorageTests/WarmSandboxSnapshotCacheTests.swift
+  s_59723017fddc2a::t_72fd2f5dc8f2a3 202-215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "312431da5db58749a968f8a53eb324ba260cbfbc",
+  "prompts": {},
+  "sessions": {
+    "s_59723017fddc2a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-6732-74c0-8607-f3e1c9124e78",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
