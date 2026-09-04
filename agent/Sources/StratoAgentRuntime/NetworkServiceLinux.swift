@@ -138,6 +138,21 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         externalIDs?[managedKey] == managedValue
     }
 
+    /// A router port has one intended parent. Treat a missing, stale, or
+    /// multiply-attached relationship as drift so reconciliation repairs it
+    /// before reporting the network generation as observed.
+    static func routerPortNeedsReparent(
+        portUUID: String,
+        desiredRouter: String,
+        routerPortUUIDsByRouter: [String: Set<String>]
+    ) -> Bool {
+        let parents = Set(
+            routerPortUUIDsByRouter.compactMap { routerName, portUUIDs in
+                portUUIDs.contains(portUUID) ? routerName : nil
+            })
+        return parents != [desiredRouter]
+    }
+
     /// OVN logical switch port name for one NIC of any workload. Sandbox NICs
     /// take the disjoint `sbx-` namespace so the two kinds of port are
     /// distinguishable in OVN and OVS (issue STR-100).
