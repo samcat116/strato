@@ -472,6 +472,26 @@ struct NetworkReconcilerTests {
         #expect(!calls.contains(where: { $0.hasPrefix("ensureSNAT") }))
     }
 
+    @Test("An uplink failure affects only networks that contribute NAT")
+    func reconcileScopesUplinkFailureToEgressNetworks() async throws {
+        let egress = network(
+            name: "egress", subnet: "192.168.1.0/24", gateway: "192.168.1.1",
+            routerKey: "p", externalAccess: true)
+        let isolated = network(
+            name: "isolated", subnet: "10.0.5.0/24", gateway: "10.0.5.1",
+            routerKey: "p", externalAccess: false)
+        let actuator = RecordingNetworkActuator(
+            observed: ObservedNetworkTopology(), uplinkAvailable: false)
+
+        let failures = try await NetworkReconciler.reconcile(
+            networks: [egress, isolated], actuator: actuator, logger: Logger(label: "test"))
+
+        let failure = try #require(
+            failures.first { $0.message.contains("No detectable host uplink") })
+        #expect(failure.affectedNetworkIds == [egress.networkId])
+        #expect(failure.affectedNetworkIds?.contains(isolated.networkId) == false)
+    }
+
     @Test("A per-network reconcile failure identifies only its network")
     func reconcileAttributesPerNetworkFailure() async throws {
         let failed = network(

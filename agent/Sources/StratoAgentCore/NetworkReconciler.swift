@@ -864,6 +864,22 @@ public enum NetworkReconciler {
             }.map(\.networkId))
     }
 
+    /// An uplink exists only for the networks that contributed NAT to this
+    /// router. Gatewayed siblings that requested no external access still own
+    /// router ports and east-west routing, but not this egress dependency.
+    private static func uplinkOwners(
+        _ router: DesiredRouter, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        var owners = Set<UUID>()
+        for subnet in router.snatSubnets {
+            owners.formUnion(snatOwners(router: router.name, logicalIP: subnet, in: networks))
+        }
+        for rule in router.dnatRules {
+            owners.formUnion(dnatOwners(router: router.name, externalIP: rule.externalIP, in: networks))
+        }
+        return owners
+    }
+
     private static func teardownOwners(
         _ action: NetworkTeardownAction, in networks: [DesiredNetworkState]
     ) -> Set<UUID> {
@@ -992,6 +1008,7 @@ extension NetworkReconciler {
 
         for router in topology.routers {
             let affectedRouterIDs = routerOwners(router.name, in: networks)
+            let affectedUplinkIDs = uplinkOwners(router, in: networks)
             if let failure = await observeAttempt(
                 logger, "ensure router \(router.name)",
                 affectedNetworkIds: affectedRouterIDs,
@@ -1030,7 +1047,7 @@ extension NetworkReconciler {
             var uplinkReady = false
             if let failure = await observeAttempt(
                 logger, "ensure uplink for \(router.name)",
-                affectedNetworkIds: affectedRouterIDs,
+                affectedNetworkIds: affectedUplinkIDs,
                 {
                     uplinkReady = try await actuator.ensureUplink(for: router)
                 })
@@ -1045,10 +1062,10 @@ extension NetworkReconciler {
                     ReconcileStepFailure(
                         message: "No detectable host uplink for \(router.name); SNAT is not realized",
                         classification: .blocked,
-                        affectedNetworkIds: affectedRouterIDs))
+                        affectedNetworkIds: affectedUplinkIDs))
                 if let failure = await observeAttempt(
                     logger, "ensure dynamic routing on \(router.name)",
-                    affectedNetworkIds: affectedRouterIDs,
+                    affectedNetworkIds: affectedUplinkIDs,
                     {
                         try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
                     })
@@ -1081,7 +1098,7 @@ extension NetworkReconciler {
             }
             if let failure = await observeAttempt(
                 logger, "ensure dynamic routing on \(router.name)",
-                affectedNetworkIds: affectedRouterIDs,
+                affectedNetworkIds: affectedUplinkIDs,
                 {
                     try await actuator.ensureDynamicRouting(for: router, uplinkReady: true)
                 })
