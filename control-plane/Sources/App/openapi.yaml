@@ -10362,6 +10362,12 @@ components:
           description: >-
             What the balloon has actually reached. Sits above `balloonTarget`
             while a newly set target is still being applied.
+        resourceTelemetry:
+          $ref: "#/components/schemas/WorkloadResourceTelemetry"
+        resourceTelemetryReceivedAt:
+          type: string
+          format: date-time
+          description: Control-plane receipt time for the latest workload resource sample.
         securityGroupsEnforced:
           type: boolean
           description: >-
@@ -10744,6 +10750,12 @@ components:
           $ref: "#/components/schemas/SandboxStatus"
         exitCode:
           type: integer
+        resourceTelemetry:
+          $ref: "#/components/schemas/WorkloadResourceTelemetry"
+        resourceTelemetryReceivedAt:
+          type: string
+          format: date-time
+          description: Control-plane receipt time for the latest workload resource sample.
         securityGroupIds:
           type: array
           description: >-
@@ -15317,6 +15329,14 @@ components:
           description: >-
             Control-plane time when the latest dependency snapshot arrived.
             Placement freshness uses this value instead of the agent's clock.
+        resourceTelemetry:
+          $ref: "#/components/schemas/HostResourceTelemetry"
+        resourceTelemetryReceivedAt:
+          type: string
+          format: date-time
+          description: >-
+            Control-plane receipt time for the latest host resource sample.
+            Placement freshness must use this value instead of the agent clock.
         hostInfo:
           $ref: "#/components/schemas/AgentHostInfo"
         siteId:
@@ -15524,6 +15544,180 @@ components:
         availableDisk:
           type: integer
           format: int64
+
+    ResourceTelemetryAvailability:
+      type: string
+      enum: [available, unavailable]
+      description: >-
+        Whether the latest sampling pass measured the signal. Unavailable is
+        distinct from an available signal whose value is zero.
+
+    ResourcePressureHealth:
+      type: string
+      enum: [unknown, healthy, pressured, critical]
+      description: Bounded operator summary derived from PSI average10 values.
+
+    ResourceTelemetryValue:
+      type: object
+      additionalProperties: false
+      required: [availability]
+      properties:
+        availability:
+          $ref: "#/components/schemas/ResourceTelemetryAvailability"
+        value:
+          type: integer
+          format: int64
+          nullable: true
+
+    ResourceTelemetryFlag:
+      type: object
+      additionalProperties: false
+      required: [availability]
+      properties:
+        availability:
+          $ref: "#/components/schemas/ResourceTelemetryAvailability"
+        value:
+          type: boolean
+          nullable: true
+
+    PressureStallSample:
+      type: object
+      additionalProperties: false
+      required: [average10, average60, average300, totalMicroseconds]
+      properties:
+        average10:
+          type: number
+          format: double
+        average60:
+          type: number
+          format: double
+        average300:
+          type: number
+          format: double
+        totalMicroseconds:
+          type: integer
+          format: int64
+
+    PressureStallTelemetry:
+      type: object
+      additionalProperties: false
+      required: [availability]
+      properties:
+        availability:
+          $ref: "#/components/schemas/ResourceTelemetryAvailability"
+        some:
+          $ref: "#/components/schemas/PressureStallSample"
+        full:
+          $ref: "#/components/schemas/PressureStallSample"
+
+    HostResourceTelemetry:
+      type: object
+      additionalProperties: false
+      required:
+        - sampledAt
+        - health
+        - cpuPressure
+        - memoryPressure
+        - ioPressure
+        - swapTotalBytes
+        - swapUsedBytes
+        - zswapStoredBytes
+        - zswapPoolBytes
+        - zramUsedBytes
+        - majorFaultsTotal
+        - reclaimScannedPagesTotal
+        - reclaimReclaimedPagesTotal
+        - oomKillsTotal
+        - mglruEnabled
+      properties:
+        sampledAt:
+          type: string
+          format: date-time
+        health:
+          $ref: "#/components/schemas/ResourcePressureHealth"
+        cpuPressure:
+          $ref: "#/components/schemas/PressureStallTelemetry"
+        memoryPressure:
+          $ref: "#/components/schemas/PressureStallTelemetry"
+        ioPressure:
+          $ref: "#/components/schemas/PressureStallTelemetry"
+        swapTotalBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        swapUsedBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        zswapStoredBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        zswapPoolBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        zramUsedBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        majorFaultsTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        reclaimScannedPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        reclaimReclaimedPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        oomKillsTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        mglruEnabled:
+          $ref: "#/components/schemas/ResourceTelemetryFlag"
+
+    WorkloadMemoryEventsTelemetry:
+      type: object
+      additionalProperties: false
+      required: [availability]
+      properties:
+        availability:
+          $ref: "#/components/schemas/ResourceTelemetryAvailability"
+        low: { type: integer, format: int64, nullable: true }
+        high: { type: integer, format: int64, nullable: true }
+        max: { type: integer, format: int64, nullable: true }
+        oom: { type: integer, format: int64, nullable: true }
+        oomKill: { type: integer, format: int64, nullable: true }
+        oomGroupKill: { type: integer, format: int64, nullable: true }
+
+    WorkloadResourceTelemetry:
+      type: object
+      additionalProperties: false
+      required:
+        - sampledAt
+        - health
+        - cgroupV2
+        - memoryCurrentBytes
+        - memoryEvents
+        - memoryPressure
+        - cpuPressure
+        - ioPressure
+        - cpuUsageMicroseconds
+        - cpuThrottledMicroseconds
+        - cpuThrottledPeriodsTotal
+        - guestStealMicroseconds
+      properties:
+        sampledAt:
+          type: string
+          format: date-time
+        health:
+          $ref: "#/components/schemas/ResourcePressureHealth"
+        cgroupV2:
+          $ref: "#/components/schemas/ResourceTelemetryAvailability"
+        memoryCurrentBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        memoryEvents:
+          $ref: "#/components/schemas/WorkloadMemoryEventsTelemetry"
+        memoryPressure:
+          $ref: "#/components/schemas/PressureStallTelemetry"
+        cpuPressure:
+          $ref: "#/components/schemas/PressureStallTelemetry"
+        ioPressure:
+          $ref: "#/components/schemas/PressureStallTelemetry"
+        cpuUsageMicroseconds:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        cpuThrottledMicroseconds:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        cpuThrottledPeriodsTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        guestStealMicroseconds:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
 
     AgentCPUArchitecture:
       type: string

@@ -568,6 +568,7 @@ extension AgentService {
         if applyPeriodicAgentState(
             message.resources,
             dependencyObservations: message.dependencyObservations,
+            hostResourceTelemetry: message.hostResourceTelemetry,
             to: agent)
         {
             try await agent.save(on: db)
@@ -586,6 +587,7 @@ extension AgentService {
     func applyPeriodicAgentState(
         _ resources: AgentResources,
         dependencyObservations: [NodeDependencyObservation]?,
+        hostResourceTelemetry: HostResourceTelemetry? = nil,
         to agent: Agent
     ) -> Bool {
         var changed = agent.updateAvailableResources(resources)
@@ -619,6 +621,18 @@ extension AgentService {
                             "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
                         ])
                 }
+            }
+        }
+        if let hostResourceTelemetry {
+            if let agentID = agent.id?.uuidString {
+                Telemetry.recordHostResourceTelemetry(
+                    agentID: agentID,
+                    telemetry: hostResourceTelemetry)
+            }
+            if agent.resourceTelemetry != hostResourceTelemetry {
+                agent.resourceTelemetry = hostResourceTelemetry
+                agent.resourceTelemetryReceivedAt = now
+                changed = true
             }
         }
         if agent.status != .online {

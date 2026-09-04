@@ -11,8 +11,9 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 59 adds the
-    /// explicit QEMU volume-I/O-limit capability and observed I/O rate used by
+    /// The only wire/schema version this build accepts. Version 59 adds
+    /// explicitly available host and per-workload resource telemetry together
+    /// with the QEMU volume-I/O-limit capability and observed I/O rate used by
     /// enforcement telemetry (STR-270). Version 58 removes
     /// obsolete fallbacks and makes the current coordinated schema explicit.
     /// Version 57 adds the failure classification that distinguishes blocked

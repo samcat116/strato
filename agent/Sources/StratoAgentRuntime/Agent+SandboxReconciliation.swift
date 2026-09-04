@@ -433,6 +433,7 @@ extension Agent {
                     // sees a responsive qga / reporting balloon on this VM.
                     guestInfo: guestInfoCache[vmId],
                     memoryStats: memoryStatsCache[vmId],
+                    resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
                         in: entry.spec.networks)
                 ))
@@ -456,6 +457,7 @@ extension Agent {
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
                     failureClassification: facts.failureClassification,
+                    resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
                         in: entry.spec.networks)
                 ))
@@ -529,6 +531,7 @@ extension Agent {
             vms: observed,
             sandboxes: await observedSandboxStates(reconciler: reconciler),
             resources: await getAgentResources(),
+            hostResourceTelemetry: hostResourceTelemetry,
             agentUpdateStatus: autoUpdateStatus,
             // Workloads this host holds that no sync accounted for (STR-98).
             // They also appear above — the agent is genuinely running them —
@@ -646,7 +649,8 @@ extension Agent {
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
                     failureClassification: facts.failureClassification,
-                    exitCode: exitCode
+                    exitCode: exitCode,
+                    resourceTelemetry: workloadResourceTelemetry[sandboxId]
                 ))
             reported.insert(sandboxId)
         }
@@ -665,7 +669,8 @@ extension Agent {
                     convergencePhase: facts.phase,
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
-                    failureClassification: facts.failureClassification
+                    failureClassification: facts.failureClassification,
+                    resourceTelemetry: workloadResourceTelemetry[sandboxId]
                 ))
             reported.insert(sandboxId)
         }

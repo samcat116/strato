@@ -1315,6 +1315,10 @@ public struct ObservedVMState: Codable, Sendable {
     /// `Optional` contract as `guestInfo`. Purely informational: it never
     /// participates in convergence.
     public let memoryStats: VMMemoryStats?
+    /// Last host-side contention sample for this VM. Every scalar carries
+    /// explicit availability so a backend without a per-workload cgroup or a
+    /// guest without a steal-time source never reports a synthetic zero.
+    public let resourceTelemetry: WorkloadResourceTelemetry?
     /// Interface ids present in the agent's durable VM manifest (wire v40).
     /// Nil means the reporting agent predates per-NIC reconciliation; an empty
     /// array is an authoritative networkless VM.
@@ -1330,6 +1334,7 @@ public struct ObservedVMState: Codable, Sendable {
         failureClassification: ObservedFailureClassification? = nil,
         guestInfo: GuestInfo? = nil,
         memoryStats: VMMemoryStats? = nil,
+        resourceTelemetry: WorkloadResourceTelemetry? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
     ) {
         self.vmId = vmId
@@ -1341,6 +1346,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.failureClassification = failureClassification
         self.guestInfo = guestInfo
         self.memoryStats = memoryStats
+        self.resourceTelemetry = resourceTelemetry
         self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds
     }
 }
@@ -1371,6 +1377,8 @@ public struct ObservedSandboxState: Codable, Sendable {
     /// sandbox was stopped by request rather than by the workload ending, or
     /// when the guest could not report one.
     public let exitCode: Int?
+    /// Last host-side contention sample for this sandbox.
+    public let resourceTelemetry: WorkloadResourceTelemetry?
 
     public init(
         sandboxId: UUID,
@@ -1380,7 +1388,8 @@ public struct ObservedSandboxState: Codable, Sendable {
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
-        exitCode: Int? = nil
+        exitCode: Int? = nil,
+        resourceTelemetry: WorkloadResourceTelemetry? = nil
     ) {
         self.sandboxId = sandboxId
         self.status = status
@@ -1390,6 +1399,7 @@ public struct ObservedSandboxState: Codable, Sendable {
         self.failedGeneration = failedGeneration
         self.failureClassification = failureClassification
         self.exitCode = exitCode
+        self.resourceTelemetry = resourceTelemetry
     }
 }
 
@@ -1714,6 +1724,10 @@ public struct ObservedStateReport: WebSocketMessage {
     /// empty.
     public let sandboxes: [ObservedSandboxState]
     public let resources: AgentResources
+    /// Same independently sampled host-resource snapshot carried by the
+    /// heartbeat. It is duplicated here so either periodic path refreshes the
+    /// operator view without doing any probe work itself.
+    public let hostResourceTelemetry: HostResourceTelemetry?
     /// Why the agent is not converging on its `DesiredAgentUpdate`, when one
     /// is desired and something is in the way (issue #434). Nil when no update
     /// is desired or convergence is proceeding (the agent restarts into the new
@@ -1767,6 +1781,7 @@ public struct ObservedStateReport: WebSocketMessage {
         vms: [ObservedVMState],
         sandboxes: [ObservedSandboxState] = [],
         resources: AgentResources,
+        hostResourceTelemetry: HostResourceTelemetry? = nil,
         agentUpdateStatus: ObservedAgentUpdateStatus? = nil,
         unrecognized: [UnrecognizedWorkload] = [],
         teardownRefusal: ObservedTeardownRefusal? = nil,
@@ -1782,6 +1797,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.vms = vms
         self.sandboxes = sandboxes
         self.resources = resources
+        self.hostResourceTelemetry = hostResourceTelemetry
         self.agentUpdateStatus = agentUpdateStatus
         self.unrecognized = unrecognized
         self.teardownRefusal = teardownRefusal
