@@ -611,20 +611,30 @@ struct NetworkController: RouteCollection {
                         domainNameExplicit: domainNameExplicit)
                 }
 
-                let fabricChanged =
+                let addressingChanged =
                     current.subnet != oldSubnet
                     || current.gateway != oldGateway
                     || current.subnet6 != oldSubnet6
                     || current.gateway6 != oldGateway6
-                    || current.externalAccess != oldExternalAccess
-                    || current.dhcpEnabled != oldDHCPEnabled
+                let dhcpChanged =
+                    current.dhcpEnabled != oldDHCPEnabled
                     || current.dnsServersRaw != oldDNSServersRaw
                     || current.domainName != oldDomainName
                     || current.leaseTime != oldLeaseTime
-                    || current.metadataEnabled != oldMetadataEnabled
+                let localServicesChanged =
+                    current.metadataEnabled != oldMetadataEnabled
                     || current.resolverEnabled != oldResolverEnabled
                     || current.resolverIndex != oldResolverIndex
-                    || current.$primaryDNSZone.id != oldPrimaryDNSZoneID
+                let routingChanged =
+                    addressingChanged
+                    || current.externalAccess != oldExternalAccess
+                let primaryDNSZoneChanged =
+                    current.$primaryDNSZone.id != oldPrimaryDNSZoneID
+                let fabricChanged =
+                    routingChanged
+                    || dhcpChanged
+                    || localServicesChanged
+                    || primaryDNSZoneChanged
                 if fabricChanged {
                     switch try await DesiredStateGenerationWriter.advance(
                         schema: LogicalNetwork.schema, id: networkID,
