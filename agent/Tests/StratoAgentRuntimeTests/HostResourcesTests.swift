@@ -44,4 +44,28 @@ struct HostResourcesTests {
 
         #expect(unmanaged == 0)
     }
+
+    @Test("managed allocation growth retains the later conservative sample")
+    func allocationRaceIsConservative() {
+        let unmanaged = HostResources.conservativeUnmanagedDiskUsage(
+            capacitySamples: [
+                (total: 100 * gib, free: 30 * gib),
+                (total: 100 * gib, free: 0),
+            ],
+            managedAllocated: 40 * gib)
+
+        #expect(unmanaged == 60 * gib)
+    }
+
+    @Test("managed discard retains the earlier conservative sample")
+    func discardRaceIsConservative() {
+        let unmanaged = HostResources.conservativeUnmanagedDiskUsage(
+            capacitySamples: [
+                (total: 100 * gib, free: 30 * gib),
+                (total: 100 * gib, free: 60 * gib),
+            ],
+            managedAllocated: 40 * gib)
+
+        #expect(unmanaged == 30 * gib)
+    }
 }

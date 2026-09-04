@@ -58,4 +58,19 @@ enum HostResources {
         let managed = min(physicallyUsed, max(0, managedAllocated))
         return physicallyUsed - managed
     }
+
+    /// Retains the most conservative unmanaged-use estimate from samples that
+    /// bracket managed-footprint collection. Allocation and discard move free
+    /// space in opposite directions, so neither endpoint alone is safe.
+    static func conservativeUnmanagedDiskUsage(
+        capacitySamples: [(total: Int64, free: Int64)], managedAllocated: Int64
+    ) -> Int64 {
+        capacitySamples.reduce(0) { result, sample in
+            max(
+                result,
+                unmanagedDiskUsage(
+                    total: sample.total, free: sample.free,
+                    managedAllocated: managedAllocated))
+        }
+    }
 }

@@ -76,6 +76,7 @@ extension Agent {
         let parentId = desired.parentId.uuidString
 
         let facts: ObservedSnapshotFacts
+        let reservedDiskBytes: Int64?
         switch desired.kind {
         case .volumeSnapshot:
             // The backend's snapshot is a qcow2 overlay backed by the volume,
@@ -108,7 +109,10 @@ extension Agent {
                 desiredStorage: desired.volumeStorage,
                 recordedStorage: nil,
                 currentParentStorage: parentDesired?.storage)
-            let reservedDiskBytes = snapshotStorage == .local ? parentDesired?.sizeBytes : nil
+            reservedDiskBytes =
+                snapshotStorage == .local
+                ? max(0, try await backend.volumeInfo(attachment: disk).virtualSize)
+                : nil
             let claim: HostCapacityClaim?
             if let reservedDiskBytes {
                 let reservation = HostReservation(diskBytes: reservedDiskBytes)
@@ -130,6 +134,7 @@ extension Agent {
                 architecture: CPUArchitecture.current)
 
         case .vmCheckpoint:
+            reservedDiskBytes = nil
             guard let service = getHypervisorServiceForVM(vmId: parentId) else {
                 throw ConvergenceError.sourceNotReady(
                     "VM \(parentId) is not present on this host yet")
@@ -145,6 +150,7 @@ extension Agent {
                 qemuVersion: report.hypervisorVersion)
 
         case .sandboxSnapshot:
+            reservedDiskBytes = nil
             guard let runtime = sandboxRuntime else {
                 throw ConvergenceError.unsupported("this agent has no sandbox runtime")
             }
@@ -164,10 +170,7 @@ extension Agent {
         snapshotRecords[desired.snapshotId] = SnapshotRecord(
             snapshotId: desired.snapshotId, kind: desired.kind, parentId: desired.parentId,
             volumeStorage: desired.kind == .volumeSnapshot ? desired.volumeStorage : nil,
-            reservedDiskBytes: desired.kind == .volumeSnapshot
-                ? (desiredVolumeStates[desired.parentId.uuidString]?.storage == .local
-                    ? desiredVolumeStates[desired.parentId.uuidString]?.sizeBytes : nil)
-                : nil,
+            reservedDiskBytes: reservedDiskBytes,
             facts: facts)
         persistSnapshotRecords()
         logger.info(

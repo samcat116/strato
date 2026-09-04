@@ -337,17 +337,20 @@ extension Agent {
         let totalCPU: Int
         let totalMemory: Int64
         let simulatedDiskBytes: Int64?
+        let diskCapacityBefore: (total: Int64, free: Int64)?
         var diskInventoryKnown = true
         if let simulation, simulation.enabled {
             totalCPU = simulation.resolvedCPUCores
             totalMemory = simulation.resolvedMemoryBytes
             simulatedDiskBytes = simulation.resolvedDiskBytes
+            diskCapacityBefore = nil
             // Mock volumes write no physical bytes; this figure is the
             // operational media signal, not commitment availability.
         } else {
             totalCPU = HostResources.logicalCoreCount
             totalMemory = HostResources.physicalMemoryBytes
             simulatedDiskBytes = nil
+            diskCapacityBefore = HostResources.diskCapacity(forPath: volumeStoragePath)
         }
 
         // Resources committed to VMs currently managed on this host. We report
@@ -513,37 +516,39 @@ extension Agent {
             }
         }
 
-        // Sample the filesystem only after every managed footprint. Guest
-        // writes can race this inventory; this order makes a newer increase in
-        // physical use visible rather than subtracting it as managed use from
-        // an older sample.
+        // Bracket every managed-footprint scan with filesystem samples. Guest
+        // writes and TRIM can both race this inventory, in opposite directions;
+        // retaining the larger unmanaged-use estimate keeps either race from
+        // manufacturing committed availability.
         let totalDisk: Int64
-        let diskCapacity: (total: Int64, free: Int64)?
+        let diskCapacitySamples: [(total: Int64, free: Int64)]
         if let simulatedDiskBytes {
             totalDisk = simulatedDiskBytes
-            diskCapacity = nil
+            diskCapacitySamples = []
         } else {
-            let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
-            diskCapacity = disk
-            if disk == nil {
+            let diskCapacityAfter = HostResources.diskCapacity(forPath: volumeStoragePath)
+            var samples: [(total: Int64, free: Int64)] = []
+            if let diskCapacityBefore { samples.append(diskCapacityBefore) }
+            if let diskCapacityAfter { samples.append(diskCapacityAfter) }
+            diskCapacitySamples = samples
+            if diskCapacityBefore == nil || diskCapacityAfter == nil {
                 logger.warning(
                     "Unable to determine disk capacity for managed volume storage path",
                     metadata: ["path": .string(volumeStoragePath)])
                 diskInventoryKnown = false
             }
-            totalDisk = disk?.total ?? 0
+            totalDisk = samples.map { $0.total }.min() ?? 0
         }
 
         // Filesystem total includes bytes already occupied by the OS, logs,
         // image caches, and other unmanaged data. Charge those bytes as a
         // baseline reservation. Managed volume and snapshot allocations are
         // excluded because their full virtual sizes are already reserved.
-        if let diskCapacity {
+        if !diskCapacitySamples.isEmpty {
             reserved = reserved.addingSaturating(
                 HostReservation(
-                    diskBytes: HostResources.unmanagedDiskUsage(
-                        total: diskCapacity.total,
-                        free: diskCapacity.free,
+                    diskBytes: HostResources.conservativeUnmanagedDiskUsage(
+                        capacitySamples: diskCapacitySamples,
                         managedAllocated: managedDiskAllocated.diskBytes)))
         }
 
