@@ -1,5 +1,6 @@
 import Foundation
 import MetricsTestKit
+import StratoShared
 import Testing
 
 @testable import App
@@ -140,6 +141,125 @@ struct TelemetrySupportTests {
             try metrics.expectCounter(
                 "strato_webhook_delivery_results_total", [("result", "dead")]
             ).totalValue == 1)
+    }
+
+    // MARK: - Resource pressure and contention
+
+    @Test("host metrics preserve availability and measured zero")
+    func hostResourceTelemetryAvailability() throws {
+        let metrics = TestMetrics()
+        let some = PressureStallSample(
+            average10: 17.5, average60: 8, average300: 3,
+            totalMicroseconds: 2_500_000)
+        let telemetry = HostResourceTelemetry(
+            sampledAt: Date(timeIntervalSince1970: 1),
+            health: .pressured,
+            cpuPressure: .available(some: some, full: nil),
+            memoryPressure: .unavailable,
+            ioPressure: .unavailable,
+            swapTotalBytes: .available(0),
+            swapUsedBytes: .available(0),
+            zswapStoredBytes: .unavailable,
+            zswapPoolBytes: .unavailable,
+            zramUsedBytes: .unavailable,
+            majorFaultsTotal: .available(12),
+            reclaimScannedPagesTotal: .available(8),
+            reclaimReclaimedPagesTotal: .available(4),
+            oomKillsTotal: .available(0),
+            mglruEnabled: .available(false))
+
+        Telemetry.recordHostResourceTelemetry(
+            agentID: "agent-1", telemetry: telemetry, factory: metrics)
+
+        let base = [("agent_id", "agent-1")]
+        #expect(try metrics.expectGauge("strato_agent_resource_health", base).lastValue == 2)
+        #expect(
+            try metrics.expectGauge(
+                "strato_agent_pressure_average10_percent",
+                base + [("resource", "cpu"), ("stall", "some")]
+            ).lastValue == 17.5)
+        #expect(
+            try metrics.expectGauge(
+                "strato_agent_pressure_total_seconds",
+                base + [("resource", "cpu"), ("stall", "some")]
+            ).lastValue == 2.5)
+        #expect(try metrics.expectGauge("strato_agent_swap_used_bytes", base).lastValue == 0)
+        #expect(
+            try metrics.expectGauge(
+                "strato_agent_resource_signal_available",
+                base + [("signal", "swap_used_bytes")]
+            ).lastValue == 1)
+        #expect(
+            try metrics.expectGauge(
+                "strato_agent_resource_signal_available",
+                base + [("signal", "zswap_stored_bytes")]
+            ).lastValue == 0)
+        #expect(throws: (any Error).self) {
+            try metrics.expectGauge("strato_agent_zswap_stored_bytes", base)
+        }
+    }
+
+    @Test("workload metrics scale CPU time, export balloon stats, and remove finalized UUIDs")
+    func workloadResourceTelemetryAndCleanup() throws {
+        let metrics = TestMetrics()
+        let telemetry = WorkloadResourceTelemetry(
+            sampledAt: Date(timeIntervalSince1970: 2),
+            health: .healthy,
+            cgroupV2: .available,
+            memoryCurrentBytes: .available(1_024),
+            memoryEvents: WorkloadMemoryEventsTelemetry(
+                availability: .available, low: 0, high: 3, max: 0,
+                oom: 0, oomKill: 0, oomGroupKill: 0),
+            memoryPressure: .available(
+                some: PressureStallSample(
+                    average10: 0.5, average60: 0.25, average300: 0.1,
+                    totalMicroseconds: 1_000_000),
+                full: nil),
+            cpuPressure: .unavailable,
+            ioPressure: .unavailable,
+            cpuUsageMicroseconds: .available(2_500_000),
+            cpuThrottledMicroseconds: .available(750_000),
+            cpuThrottledPeriodsTotal: .available(9),
+            guestStealMicroseconds: .unavailable)
+        let balloon = VMMemoryStats(
+            totalBytes: 8_192, availableBytes: 4_096, balloonActualBytes: 7_168)
+
+        Telemetry.recordWorkloadResourceTelemetry(
+            agentID: "agent-1", workloadID: "workload-1", kind: .vm,
+            telemetry: telemetry, balloon: balloon, factory: metrics)
+
+        let base = [
+            ("agent_id", "agent-1"),
+            ("workload_id", "workload-1"),
+            ("kind", "vm"),
+        ]
+        #expect(
+            try metrics.expectGauge("strato_workload_cpu_usage_seconds_total", base).lastValue
+                == 2.5)
+        #expect(
+            try metrics.expectGauge("strato_workload_balloon_actual_bytes", base).lastValue
+                == 7_168)
+        #expect(
+            try metrics.expectGauge(
+                "strato_workload_resource_signal_available",
+                base + [("signal", "guest_steal_microseconds_total")]
+            ).lastValue == 0)
+        #expect(throws: (any Error).self) {
+            try metrics.expectGauge("strato_workload_guest_steal_seconds_total", base)
+        }
+
+        Telemetry.removeWorkloadResourceTelemetry(
+            agentID: "agent-1", workloadID: "workload-1", kind: .vm,
+            factory: metrics)
+
+        #expect(throws: (any Error).self) {
+            try metrics.expectGauge("strato_workload_cpu_usage_seconds_total", base)
+        }
+        #expect(throws: (any Error).self) {
+            try metrics.expectGauge(
+                "strato_workload_resource_signal_available",
+                base + [("signal", "cpu_usage_microseconds_total")])
+        }
     }
 
     // MARK: - SchedulerService.placementOutcome

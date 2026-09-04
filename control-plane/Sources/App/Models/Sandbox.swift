@@ -103,6 +103,13 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "exit_code")
     var exitCode: Int?
 
+    /// Latest jailed-cgroup contention snapshot (STR-266).
+    @OptionalField(key: "resource_telemetry")
+    var resourceTelemetry: WorkloadResourceTelemetry?
+
+    @OptionalField(key: "resource_telemetry_received_at")
+    var resourceTelemetryReceivedAt: Date?
+
     // Desired state, written by API mutations. Same contract as VM:
     // `generation` bumps on every desired change and `observedGeneration`
     // records the last generation the owning agent confirmed converging to.
@@ -428,6 +435,9 @@ struct SandboxDetailResponse: Content {
     let cpuTemplate: String?
     let status: SandboxStatus
     let exitCode: Int?
+    /// Latest cgroup pressure, memory-event, CPU-use and throttling snapshot.
+    let resourceTelemetry: WorkloadResourceTelemetry?
+    let resourceTelemetryReceivedAt: Date?
     /// The security groups attached to the sandbox's NIC (STR-34), flat
     /// because v1 gives a sandbox at most one interface. Nil when the NIC
     /// relation wasn't eager-loaded *or* the sandbox has no NIC at all —
@@ -484,6 +494,8 @@ struct SandboxDetailResponse: Content {
         self.cpuTemplate = sandbox.cpuTemplate
         self.status = sandbox.status
         self.exitCode = sandbox.exitCode
+        self.resourceTelemetry = sandbox.resourceTelemetry
+        self.resourceTelemetryReceivedAt = sandbox.resourceTelemetryReceivedAt
         // One ordering for both fields, so "the sandbox's NIC" means the same
         // interface in each. Deriving the flat field from insertion order and
         // the list from `deviceName` agrees only while v1 is single-NIC, and

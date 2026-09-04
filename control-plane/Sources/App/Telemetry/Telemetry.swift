@@ -592,6 +592,331 @@ enum Telemetry {
         ).record(date.timeIntervalSince1970)
     }
 
+    // MARK: - Resource pressure and contention (STR-266)
+
+    /// Publish a host snapshot as remote gauges. Kernel counters are gauges
+    /// here because monotonicity belongs to the agent/host and may reset when
+    /// either restarts. `agent_id` is a control-plane-issued UUID; signal,
+    /// resource, stall, and event are closed vocabularies.
+    static func recordHostResourceTelemetry(
+        agentID: String,
+        telemetry: HostResourceTelemetry,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let base = [("agent_id", agentID)]
+        recordGauge(
+            label: "strato_agent_resource_health",
+            dimensions: base,
+            value: telemetry.health.metricValue,
+            factory: factory)
+        recordPressure(
+            prefix: "strato_agent", base: base, resource: "cpu",
+            pressure: telemetry.cpuPressure, factory: factory)
+        recordPressure(
+            prefix: "strato_agent", base: base, resource: "memory",
+            pressure: telemetry.memoryPressure, factory: factory)
+        recordPressure(
+            prefix: "strato_agent", base: base, resource: "io",
+            pressure: telemetry.ioPressure, factory: factory)
+
+        for (signal, label, value) in [
+            ("swap_total_bytes", "strato_agent_swap_total_bytes", telemetry.swapTotalBytes),
+            ("swap_used_bytes", "strato_agent_swap_used_bytes", telemetry.swapUsedBytes),
+            ("zswap_stored_bytes", "strato_agent_zswap_stored_bytes", telemetry.zswapStoredBytes),
+            ("zswap_pool_bytes", "strato_agent_zswap_pool_bytes", telemetry.zswapPoolBytes),
+            ("zram_used_bytes", "strato_agent_zram_used_bytes", telemetry.zramUsedBytes),
+            ("major_faults_total", "strato_agent_major_faults_total", telemetry.majorFaultsTotal),
+            (
+                "reclaim_scanned_pages_total", "strato_agent_reclaim_scanned_pages_total",
+                telemetry.reclaimScannedPagesTotal
+            ),
+            (
+                "reclaim_reclaimed_pages_total", "strato_agent_reclaim_reclaimed_pages_total",
+                telemetry.reclaimReclaimedPagesTotal
+            ),
+            ("oom_kills_total", "strato_agent_oom_kills_total", telemetry.oomKillsTotal),
+        ] {
+            recordRemoteValue(
+                prefix: "strato_agent", base: base, signal: signal,
+                label: label, value: value, factory: factory)
+        }
+        let mglru = telemetry.mglruEnabled
+        recordRemoteValue(
+            prefix: "strato_agent", base: base, signal: "mglru_enabled",
+            label: "strato_agent_mglru_enabled",
+            value: ResourceTelemetryValue(
+                availability: mglru.availability,
+                value: mglru.value.map { $0 ? 1 : 0 }),
+            factory: factory)
+    }
+
+    /// Publish one workload snapshot and the existing QEMU balloon values.
+    /// Only server-issued agent/workload UUIDs and bounded enums become labels;
+    /// names, projects, tenants, tags, errors, and cgroup paths never do.
+    static func recordWorkloadResourceTelemetry(
+        agentID: String,
+        workloadID: String,
+        kind: WorkloadKind,
+        telemetry: WorkloadResourceTelemetry?,
+        balloon: VMMemoryStats? = nil,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let base = [
+            ("agent_id", agentID),
+            ("workload_id", workloadID),
+            ("kind", kind.rawValue),
+        ]
+
+        if let telemetry {
+            recordGauge(
+                label: "strato_workload_resource_health", dimensions: base,
+                value: telemetry.health.metricValue, factory: factory)
+            recordAvailability(
+                prefix: "strato_workload", base: base, signal: "cgroup_v2",
+                available: telemetry.cgroupV2 == .available, factory: factory)
+            recordPressure(
+                prefix: "strato_workload", base: base, resource: "cpu",
+                pressure: telemetry.cpuPressure, factory: factory)
+            recordPressure(
+                prefix: "strato_workload", base: base, resource: "memory",
+                pressure: telemetry.memoryPressure, factory: factory)
+            recordPressure(
+                prefix: "strato_workload", base: base, resource: "io",
+                pressure: telemetry.ioPressure, factory: factory)
+
+            for (signal, label, value, scale) in [
+                (
+                    "memory_current_bytes", "strato_workload_memory_current_bytes",
+                    telemetry.memoryCurrentBytes, 1.0
+                ),
+                (
+                    "cpu_usage_microseconds_total", "strato_workload_cpu_usage_seconds_total",
+                    telemetry.cpuUsageMicroseconds, 0.000_001
+                ),
+                (
+                    "cpu_throttled_microseconds_total", "strato_workload_cpu_throttled_seconds_total",
+                    telemetry.cpuThrottledMicroseconds, 0.000_001
+                ),
+                (
+                    "cpu_throttled_periods_total", "strato_workload_cpu_throttled_periods_total",
+                    telemetry.cpuThrottledPeriodsTotal, 1.0
+                ),
+                (
+                    "guest_steal_microseconds_total", "strato_workload_guest_steal_seconds_total",
+                    telemetry.guestStealMicroseconds, 0.000_001
+                ),
+            ] {
+                recordRemoteValue(
+                    prefix: "strato_workload", base: base, signal: signal,
+                    label: label, value: value, scale: scale, factory: factory)
+            }
+
+            let events = telemetry.memoryEvents
+            for (event, value) in [
+                ("low", events.low), ("high", events.high), ("max", events.max),
+                ("oom", events.oom), ("oom_kill", events.oomKill),
+                ("oom_group_kill", events.oomGroupKill),
+            ] {
+                let signal = "memory_events_\(event)"
+                recordRemoteValue(
+                    prefix: "strato_workload", base: base, signal: signal,
+                    label: "strato_workload_memory_events_total",
+                    value: ResourceTelemetryValue(
+                        availability: events.availability,
+                        value: value),
+                    extraDimensions: [("event", event)],
+                    factory: factory)
+            }
+        } else {
+            destroyGauge(
+                label: "strato_workload_resource_health",
+                dimensions: base, factory: factory)
+            recordAvailability(
+                prefix: "strato_workload", base: base, signal: "cgroup_v2",
+                available: false, factory: factory)
+            for resource in ["cpu", "memory", "io"] {
+                recordPressure(
+                    prefix: "strato_workload", base: base, resource: resource,
+                    pressure: .unavailable, factory: factory)
+            }
+            for (signal, label) in [
+                ("memory_current_bytes", "strato_workload_memory_current_bytes"),
+                ("cpu_usage_microseconds_total", "strato_workload_cpu_usage_seconds_total"),
+                (
+                    "cpu_throttled_microseconds_total",
+                    "strato_workload_cpu_throttled_seconds_total"
+                ),
+                (
+                    "cpu_throttled_periods_total",
+                    "strato_workload_cpu_throttled_periods_total"
+                ),
+                (
+                    "guest_steal_microseconds_total",
+                    "strato_workload_guest_steal_seconds_total"
+                ),
+            ] {
+                recordRemoteValue(
+                    prefix: "strato_workload", base: base, signal: signal,
+                    label: label, value: .unavailable, factory: factory)
+            }
+            for event in ["low", "high", "max", "oom", "oom_kill", "oom_group_kill"] {
+                recordRemoteValue(
+                    prefix: "strato_workload", base: base,
+                    signal: "memory_events_\(event)",
+                    label: "strato_workload_memory_events_total",
+                    value: .unavailable,
+                    extraDimensions: [("event", event)],
+                    factory: factory)
+            }
+        }
+
+        for (signal, label, value) in [
+            (
+                "balloon_total_bytes", "strato_workload_balloon_total_bytes",
+                balloon.map { ResourceTelemetryValue.available($0.totalBytes) } ?? .unavailable
+            ),
+            (
+                "balloon_available_bytes", "strato_workload_balloon_available_bytes",
+                balloon.map { ResourceTelemetryValue.available($0.availableBytes) } ?? .unavailable
+            ),
+            (
+                "balloon_actual_bytes", "strato_workload_balloon_actual_bytes",
+                balloon.flatMap(\.balloonActualBytes).map(ResourceTelemetryValue.available)
+                    ?? .unavailable
+            ),
+        ] {
+            recordRemoteValue(
+                prefix: "strato_workload", base: base, signal: signal,
+                label: label, value: value, factory: factory)
+        }
+    }
+
+    /// Remove every series belonging to a finalized workload. UUID identity is
+    /// required for attribution while a workload exists, but finalized UUIDs
+    /// must not accumulate forever in a long-lived collector process.
+    static func removeWorkloadResourceTelemetry(
+        agentID: String,
+        workloadID: String,
+        kind: WorkloadKind,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let base = [
+            ("agent_id", agentID),
+            ("workload_id", workloadID),
+            ("kind", kind.rawValue),
+        ]
+        recordWorkloadResourceTelemetry(
+            agentID: agentID, workloadID: workloadID, kind: kind,
+            telemetry: nil, balloon: nil, factory: factory)
+
+        let availabilitySignals = [
+            "cgroup_v2",
+            "psi_cpu_some", "psi_cpu_full",
+            "psi_memory_some", "psi_memory_full",
+            "psi_io_some", "psi_io_full",
+            "memory_current_bytes",
+            "cpu_usage_microseconds_total",
+            "cpu_throttled_microseconds_total",
+            "cpu_throttled_periods_total",
+            "guest_steal_microseconds_total",
+            "memory_events_low", "memory_events_high", "memory_events_max",
+            "memory_events_oom", "memory_events_oom_kill", "memory_events_oom_group_kill",
+            "balloon_total_bytes", "balloon_available_bytes", "balloon_actual_bytes",
+        ]
+        for signal in availabilitySignals {
+            destroyGauge(
+                label: "strato_workload_resource_signal_available",
+                dimensions: base + [("signal", signal)],
+                factory: factory)
+        }
+    }
+
+    private static func recordPressure(
+        prefix: String,
+        base: [(String, String)],
+        resource: String,
+        pressure: PressureStallTelemetry,
+        factory: (any MetricsFactory)?
+    ) {
+        for (stall, sample) in [("some", pressure.some), ("full", pressure.full)] {
+            let dimensions = base + [("resource", resource), ("stall", stall)]
+            let available = pressure.availability == .available && sample != nil
+            recordAvailability(
+                prefix: prefix, base: base,
+                signal: "psi_\(resource)_\(stall)", available: available,
+                factory: factory)
+            guard let sample, available else {
+                destroyGauge(
+                    label: "\(prefix)_pressure_average10_percent",
+                    dimensions: dimensions, factory: factory)
+                destroyGauge(
+                    label: "\(prefix)_pressure_total_seconds",
+                    dimensions: dimensions, factory: factory)
+                continue
+            }
+            recordGauge(
+                label: "\(prefix)_pressure_average10_percent",
+                dimensions: dimensions, value: sample.average10, factory: factory)
+            recordGauge(
+                label: "\(prefix)_pressure_total_seconds",
+                dimensions: dimensions,
+                value: Double(sample.totalMicroseconds) / 1_000_000,
+                factory: factory)
+        }
+    }
+
+    private static func recordRemoteValue(
+        prefix: String,
+        base: [(String, String)],
+        signal: String,
+        label: String,
+        value: ResourceTelemetryValue,
+        extraDimensions: [(String, String)] = [],
+        scale: Double = 1,
+        factory: (any MetricsFactory)?
+    ) {
+        let available = value.availability == .available && value.value != nil
+        recordAvailability(
+            prefix: prefix, base: base, signal: signal,
+            available: available, factory: factory)
+        let dimensions = base + extraDimensions
+        guard let raw = value.value, available else {
+            destroyGauge(label: label, dimensions: dimensions, factory: factory)
+            return
+        }
+        recordGauge(
+            label: label, dimensions: dimensions,
+            value: Double(raw) * scale, factory: factory)
+    }
+
+    private static func recordAvailability(
+        prefix: String,
+        base: [(String, String)],
+        signal: String,
+        available: Bool,
+        factory: (any MetricsFactory)?
+    ) {
+        recordGauge(
+            label: "\(prefix)_resource_signal_available",
+            dimensions: base + [("signal", signal)],
+            value: available ? 1 : 0,
+            factory: factory)
+    }
+
+    private static func destroyGauge(
+        label: String,
+        dimensions: [(String, String)],
+        factory: (any MetricsFactory)?
+    ) {
+        let gauge =
+            if let factory {
+                Gauge(label: label, dimensions: dimensions, factory: factory)
+            } else {
+                Gauge(label: label, dimensions: dimensions)
+            }
+        gauge.destroy()
+    }
+
     static func recordGuestIdentityMint(outcome: String) {
         Counter(
             label: "strato_guest_identity_mints_total",
@@ -630,5 +955,16 @@ enum Telemetry {
                 Counter(label: label, dimensions: dimensions)
             }
         counter.increment(by: Int64(count))
+    }
+}
+
+private extension ResourcePressureHealth {
+    var metricValue: Double {
+        switch self {
+        case .unknown: 0
+        case .healthy: 1
+        case .pressured: 2
+        case .critical: 3
+        }
     }
 }
