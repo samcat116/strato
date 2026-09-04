@@ -185,6 +185,46 @@ struct WarmSandboxSnapshotCacheTests {
         #expect(cache.lookup(key) == nil, "a partially deleted entry must not be restorable")
     }
 
+    @Test("a rootfs truncated after publication is invalidated on lookup")
+    func truncatedRootfsMisses() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+        let key = makeKey()
+
+        let entry = try publishEntry(cache, key: key, fill: "complete")
+        try Data("bad".utf8).write(to: URL(fileURLWithPath: entry.rootfsPath))
+
+        #expect(cache.lookup(key) == nil)
+        #expect(!FileManager.default.fileExists(atPath: entry.directory))
+    }
+
+    @Test("a pre-durability entry without artifact integrity is never served")
+    func entryWithoutArtifactIntegrityMisses() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+        let key = makeKey()
+        let entryDirectory = cache.entryDirectory(for: key)
+        try FileManager.default.createDirectory(atPath: entryDirectory, withIntermediateDirectories: true)
+        for file in [
+            WarmSandboxSnapshotCache.memoryFile,
+            WarmSandboxSnapshotCache.vmstateFile,
+            WarmSandboxSnapshotCache.rootfsFile,
+        ] {
+            try Data("payload".utf8).write(to: URL(fileURLWithPath: entryDirectory + "/" + file))
+        }
+        let oldMeta = WarmSandboxSnapshotCache.Meta(
+            templateId: "old-template", templateNonce: "old-nonce",
+            imageDigest: key.imageDigest, guestVersion: key.guestVersion,
+            firecrackerVersion: "1.10.0", createdAtUnixSeconds: 1_752_700_000)
+        try JSONEncoder().encode(oldMeta).write(
+            to: URL(fileURLWithPath: entryDirectory + "/" + WarmSandboxSnapshotCache.metaFile))
+
+        #expect(cache.lookup(key) == nil)
+        #expect(!FileManager.default.fileExists(atPath: entryDirectory))
+    }
+
     @Test("publish is atomic-rename and losing the race is success")
     func publishToleratesExistingEntry() throws {
         let root = try makeTempRoot()
@@ -217,6 +257,12 @@ struct WarmSandboxSnapshotCacheTests {
         let meta = try #require(cache.loadMeta(key))
         #expect(meta.templateId == "warm-template-test")
         #expect(meta.templateNonce == "n-tpl")
+        #expect(meta.artifactIntegrity?.memorySizeBytes == 1)
+        #expect(meta.artifactIntegrity?.vmstateSizeBytes == 1)
+        #expect(meta.artifactIntegrity?.rootfsSizeBytes == 1)
+        let expectedRootfsHash = try FileHashing.sha256Hex(
+            ofFileAt: cache.entryDirectory(for: key) + "/" + WarmSandboxSnapshotCache.rootfsFile)
+        #expect(meta.artifactIntegrity?.rootfsSHA256 == expectedRootfsHash)
     }
 
     @Test("an entry without its meta sidecar is a miss")

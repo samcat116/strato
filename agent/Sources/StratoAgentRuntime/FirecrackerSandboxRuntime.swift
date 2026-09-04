@@ -164,6 +164,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let rootfsPath: String
         /// The staged config block image.
         let configPath: String
+        /// The cache artifact that supplied an as-yet-unverified cold boot.
+        /// Cleared after either the first boot failure invalidates it or the
+        /// guest proves healthy, bounding invalidation to once per sandbox
+        /// incarnation. Warm/checkpoint/adopted guests never set it.
+        var unverifiedRootfsCacheDigest: String? = nil
         /// Host UDS backing the vsock device for host→guest control traffic.
         let vsockUdsPath: String
         /// The boot nonce stamped into the config drive, echoed by the guest.

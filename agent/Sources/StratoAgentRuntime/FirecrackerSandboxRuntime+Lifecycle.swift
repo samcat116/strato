@@ -297,6 +297,7 @@ extension FirecrackerSandboxRuntime {
             configData: configData, guestImage: guestImage, networkAttachments: networkAttachments)
         sandboxes[sandboxId] = Managed(
             spec: spec, rootfsPath: vm.rootfsPath, configPath: vm.configPath,
+            unverifiedRootfsCacheDigest: materialized.manifestDigest,
             vsockUdsPath: vm.vsockUdsPath, identityNonce: nonce, jail: vm.jail,
             registryCredential: credential, networkAttachments: networkAttachments,
             manager: vm.manager, lastExitCode: nil)
@@ -815,7 +816,23 @@ extension FirecrackerSandboxRuntime {
     }
 
     func bootSandbox(sandboxId: String) async throws {
-        try await bootSandbox(sandboxId: sandboxId, allowWarmLaunch: true)
+        do {
+            try await bootSandbox(sandboxId: sandboxId, allowWarmLaunch: true)
+        } catch {
+            if let digest = sandboxes[sandboxId]?.unverifiedRootfsCacheDigest {
+                // Clear before awaiting the cache actor: later retries of a
+                // genuinely broken image must not turn into a pull loop.
+                sandboxes[sandboxId]?.unverifiedRootfsCacheDigest = nil
+                logger.warning(
+                    "Cold sandbox boot failed; invalidating its source rootfs cache entry once",
+                    metadata: [
+                        "strato.sandbox.id": .string(sandboxId),
+                        "digest": .string(digest),
+                    ])
+                await imageService.invalidateCachedRootfs(manifestDigest: digest)
+            }
+            throw error
+        }
     }
 
     /// `allowWarmLaunch: false` is the post-demotion retry: the freshly
@@ -929,6 +946,10 @@ extension FirecrackerSandboxRuntime {
         }
         sandboxes[sandboxId]?.guestControlProtocolVersion =
             capability.controlProtocolVersion
+        // This sandbox has now proved that the cache-derived rootfs boots.
+        // A later runtime/control failure must not evict that known-good
+        // shared artifact.
+        sandboxes[sandboxId]?.unverifiedRootfsCacheDigest = nil
 
         logger.info(
             "Sandbox guest agent healthy",
