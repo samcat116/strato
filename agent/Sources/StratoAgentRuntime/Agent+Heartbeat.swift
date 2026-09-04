@@ -449,16 +449,18 @@ extension Agent {
             do {
                 let inventory = try await storageBackends.localInventory()
                 for (volumeId, attachment) in inventory {
-                    if case .file(let path, _) = attachment,
-                        let allocated = SnapshotFootprint.allocatedBytes(at: path)
-                    {
-                        managedDiskAllocated = managedDiskAllocated.addingSaturating(
-                            HostReservation(diskBytes: allocated))
-                    } else {
-                        diskInventoryKnown = false
-                        logger.warning(
-                            "Unable to measure managed local volume footprint",
-                            metadata: ["volumeId": .string(volumeId)])
+                    if simulation?.enabled != true {
+                        if case .file(let path, _) = attachment,
+                            let allocated = SnapshotFootprint.allocatedBytes(at: path)
+                        {
+                            managedDiskAllocated = managedDiskAllocated.addingSaturating(
+                                HostReservation(diskBytes: allocated))
+                        } else {
+                            diskInventoryKnown = false
+                            logger.warning(
+                                "Unable to measure managed local volume footprint",
+                                metadata: ["volumeId": .string(volumeId)])
+                        }
                     }
                     if volumeCommittedSizes[volumeId] == nil {
                         let info = try await storageBackends.localVolumeInfo(attachment: attachment)
@@ -509,16 +511,18 @@ extension Agent {
                 ?? desiredVolumeStates[record.parentId.uuidString]?.sizeBytes
                 ?? 0
             reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
-            if let path = record.facts.storagePath,
-                let allocated = SnapshotFootprint.allocatedBytes(at: path)
-            {
-                managedDiskAllocated = managedDiskAllocated.addingSaturating(
-                    HostReservation(diskBytes: allocated))
-            } else {
-                diskInventoryKnown = false
-                logger.warning(
-                    "Unable to measure managed local snapshot footprint",
-                    metadata: ["snapshotId": .string(record.snapshotId.uuidString)])
+            if simulation?.enabled != true {
+                if let path = record.facts.storagePath,
+                    let allocated = SnapshotFootprint.allocatedBytes(at: path)
+                {
+                    managedDiskAllocated = managedDiskAllocated.addingSaturating(
+                        HostReservation(diskBytes: allocated))
+                } else {
+                    diskInventoryKnown = false
+                    logger.warning(
+                        "Unable to measure managed local snapshot footprint",
+                        metadata: ["snapshotId": .string(record.snapshotId.uuidString)])
+                }
             }
         }
 

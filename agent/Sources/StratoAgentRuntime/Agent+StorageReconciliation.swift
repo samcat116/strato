@@ -469,13 +469,34 @@ extension Agent {
                     reserved: raw.reserved.subtractingSaturating(retained),
                     inventoryKnown: raw.inventoryKnown,
                     diskInventoryKnown: raw.diskInventoryKnown)
-                supplementalClaim = try capacityAdmissionLedger.claim(
-                    .positiveDelta(
-                        from: HostReservation(diskBytes: desired.sizeBytes),
-                        to: retained),
-                    desiredWorkloadReservation: retained,
-                    snapshot: excludingMaterializedVolume,
-                    agentName: initialAgentID)
+                do {
+                    supplementalClaim = try capacityAdmissionLedger.claim(
+                        .positiveDelta(
+                            from: HostReservation(diskBytes: desired.sizeBytes),
+                            to: retained),
+                        desiredWorkloadReservation: retained,
+                        snapshot: excludingMaterializedVolume,
+                        agentName: initialAgentID)
+                } catch let admissionError {
+                    // The backend could not expose the inherited virtual size
+                    // until after materialization. Do not leave that published
+                    // artifact for the next sync to mistake for a converged
+                    // volume that no longer needs admission.
+                    do {
+                        try await backend.deleteVolume(volumeId: item.id)
+                        volumeSizes.removeValue(forKey: item.id)
+                        volumeCommittedSizes.removeValue(forKey: item.id)
+                    } catch let rollbackError {
+                        logger.error(
+                            "Failed to roll back a volume rejected after materialization",
+                            metadata: [
+                                "volumeId": .string(item.id),
+                                "admissionError": .string(admissionError.localizedDescription),
+                                "rollbackError": .string(rollbackError.localizedDescription),
+                            ])
+                    }
+                    throw admissionError
+                }
             }
         }
         logger.info(
