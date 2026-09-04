@@ -1,0 +1,21 @@
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_d5e22336a13eea::t_d0b34508529ca8 739,774,790,808,817
+control-plane/Tests/AppResourceTests/VMCommandExecutionTests.swift
+  s_d5e22336a13eea::t_d0b34508529ca8 166-207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e896fc232f939f91ce723203698e46e051aef7ae",
+  "prompts": {},
+  "sessions": {
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
