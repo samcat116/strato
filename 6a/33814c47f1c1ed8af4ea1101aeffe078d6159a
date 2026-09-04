@@ -1,0 +1,36 @@
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_532b37be23fdb2::t_34278d61e7b129 412-414,418-419,459-461
+control-plane/Sources/App/Services/SecurityRecordDelivery.swift
+  s_532b37be23fdb2::t_34278d61e7b129 37,44,48-50,59-62,64
+  s_532b37be23fdb2::t_e8c8e31e239a3b 32-33
+control-plane/Tests/AppIAMTests/AuditLoggingTests.swift
+  s_532b37be23fdb2::t_63a6356dcf12fc 587
+  s_532b37be23fdb2::t_34278d61e7b129 563,569-570,574,586,627-648
+  s_3af79fd703f9fa::t_1cb5231b6df1b8 649
+control-plane/Sources/App/Services/AuditService.swift
+  s_532b37be23fdb2::t_34278d61e7b129 753-757,764,807-809
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6a33814c47f1c1ed8af4ea1101aeffe078d6159a",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
