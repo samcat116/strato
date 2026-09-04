@@ -198,11 +198,10 @@ public actor OCIRootfsCache {
         try DurableFileWriter().publishDirectory(
             stagingPath: staging, to: directory,
             completionFileName: Self.completionFileName)
-        guard let published = lookup(manifestDigest: manifestDigest) else {
-            throw OCIError.layerUnpackFailed(
-                detail: "published cache entry for \(manifestDigest) is incomplete")
-        }
-        return published
+        return CachedSandboxRootfs(
+            manifestDigest: manifestDigest,
+            rootfsPath: directory + "/" + Self.rootfsFileName,
+            configPath: directory + "/" + Self.configFileName)
     }
 
     // MARK: - Space and cleanup

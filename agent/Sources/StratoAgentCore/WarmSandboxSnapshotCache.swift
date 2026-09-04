@@ -310,16 +310,16 @@ public struct WarmSandboxSnapshotCache: Sendable {
             // A concurrent publish can land between the check and the move;
             // losing that rename race is fine. A later durability failure
             // must still surface even though our renamed target is visible.
-            if error.operation == "rename", lookup(key, fileManager: fileManager) != nil {
+            if error.operation == "rename",
+                let published = lookup(key, fileManager: fileManager)
+            {
                 try fileManager.removeItem(atPath: stagingDirectory)
+                return published
             } else {
                 throw error
             }
         }
-        guard let published = lookup(key, fileManager: fileManager) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        return published
+        return WarmSnapshotEntry(directory: target)
     }
 
     /// Drop the entry for `key` (e.g. its restore failed — stale Firecracker
