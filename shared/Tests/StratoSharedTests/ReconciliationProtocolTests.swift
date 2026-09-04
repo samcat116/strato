@@ -376,6 +376,39 @@ struct ReconciliationProtocolTests {
         #expect(decoded.appliedNetworkInterfaceIds == [])
     }
 
+    @Test("Observed workload resource telemetry preserves zero and unavailable signals")
+    func observedStateResourceTelemetryRoundTrip() throws {
+        let resourceTelemetry = WorkloadResourceTelemetry(
+            sampledAt: Date(timeIntervalSince1970: 1_000),
+            health: .healthy,
+            cgroupV2: .available,
+            memoryCurrentBytes: .available(0),
+            memoryEvents: WorkloadMemoryEventsTelemetry(
+                availability: .available, low: 0, high: 0, max: 0,
+                oom: 0, oomKill: 0, oomGroupKill: 0),
+            memoryPressure: .unavailable,
+            cpuPressure: .unavailable,
+            ioPressure: .unavailable,
+            cpuUsageMicroseconds: .available(0),
+            cpuThrottledMicroseconds: .available(0),
+            cpuThrottledPeriodsTotal: .available(0),
+            guestStealMicroseconds: .unavailable)
+        let original = ObservedVMState(
+            vmId: UUID(), status: .running, observedGeneration: 1,
+            resourceTelemetry: resourceTelemetry)
+        let decoded = try roundTrip(original)
+
+        #expect(decoded.resourceTelemetry == resourceTelemetry)
+        #expect(decoded.resourceTelemetry?.memoryCurrentBytes.value == 0)
+        #expect(decoded.resourceTelemetry?.guestStealMicroseconds.availability == .unavailable)
+
+        let legacy = """
+            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2,
+             "appliedNetworkInterfaceIds":[]}
+            """
+        #expect(try decodeJSON(ObservedVMState.self, from: legacy).resourceTelemetry == nil)
+    }
+
     @Test("ObservedVMState carries applied interface ids and preserves an authoritative empty list")
     func observedStateAppliedInterfaceIDsRoundTrip() throws {
         let first = UUID()

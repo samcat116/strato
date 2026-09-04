@@ -162,16 +162,25 @@ struct DNSController: RouteCollection {
         if let description = request.description {
             zone.zoneDescription = description.trimmingCharacters(in: .whitespacesAndNewlines).nilWhenEmpty
         }
+        let renamed = zone.name != originalName
+        let affectedNetworkIDs =
+            renamed ? try await DNSZoneService.attachedNetworkIDs(try zone.requireID(), on: req.db) : []
 
         do {
             try await req.db.transaction { db in
+                if renamed {
+                    try await DNSZoneService.lockNetworks(affectedNetworkIDs, on: db)
+                    try await DNSZoneService.lockZone(try zone.requireID(), on: db)
+                    try await DNSZoneService.assertAttachedNetworksUnchanged(
+                        affectedNetworkIDs, zoneID: try zone.requireID(), on: db)
+                }
                 try await zone.save(on: db)
 
                 // A search domain that still spells this primary zone is
                 // following it, so a rename has to move both columns together.
                 // Otherwise the stale spelling can no longer be distinguished
                 // from one the operator chose and will never follow again.
-                guard zone.name != originalName else { return }
+                guard renamed else { return }
                 let primaryNetworks = try await LogicalNetwork.query(on: db)
                     .filter(\.$primaryDNSZone.$id == zone.requireID())
                     .all()
@@ -183,19 +192,15 @@ struct DNSController: RouteCollection {
                     guard next != network.domainName else { continue }
                     network.domainName = next
                     try await network.save(on: db)
-                    try await DesiredStateGenerationWriter.advanceOrThrow(
-                        schema: LogicalNetwork.schema,
-                        id: try network.requireID(),
-                        resource: "Network",
-                        on: db)
                 }
+                try await DNSZoneService.advanceNetworkGenerations(affectedNetworkIDs, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A DNS zone named '\(zone.name)' already exists in this project")
         }
         // A rename moves every name in the zone; a description edit realizes
         // nothing, so only the former is worth a fleet-wide re-assembly.
-        if zone.name != originalName {
+        if renamed {
             await req.application.agentService.syncDesiredStateToFleet()
         }
         return try await Self.responses(for: [zone], on: req.db)[0]
@@ -281,6 +286,7 @@ struct DNSController: RouteCollection {
             view: request.view ?? .both,
             createdByID: try user.requireID()
         )
+        let affectedNetworkIDs = try await DNSZoneService.attachedNetworkIDs(zoneID, on: req.db)
         do {
             // Every check here is read-then-write, and none of them is backed
             // by an index: the unique index is `(zone, name, type, value)`,
@@ -292,7 +298,10 @@ struct DNSController: RouteCollection {
             // on an advisory lock costs nothing — record writes are rare — and
             // makes the checks mean what they say.
             try await req.db.transaction { db in
+                try await DNSZoneService.lockNetworks(affectedNetworkIDs, on: db)
                 try await DNSZoneService.lockZone(zoneID, on: db)
+                try await DNSZoneService.assertAttachedNetworksUnchanged(
+                    affectedNetworkIDs, zoneID: zoneID, on: db)
 
                 let count = try await DNSRecord.query(on: db).filter(\.$zone.$id == zoneID).count()
                 guard count < DNSZone.maxRecordsPerZone else {
@@ -306,6 +315,7 @@ struct DNSController: RouteCollection {
                     zone: zone, name: name, type: request.type, ttl: record.ttl, view: record.view, on: db)
 
                 try await record.save(on: db)
+                try await DNSZoneService.advanceNetworkGenerations(affectedNetworkIDs, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
@@ -349,16 +359,21 @@ struct DNSController: RouteCollection {
             record.view = view
         }
         let ttlOrViewChanged = request.ttl != nil || request.view != nil
+        let affectedNetworkIDs = try await DNSZoneService.attachedNetworkIDs(zoneID, on: req.db)
 
         do {
             try await req.db.transaction { db in
+                try await DNSZoneService.lockNetworks(affectedNetworkIDs, on: db)
                 try await DNSZoneService.lockZone(zoneID, on: db)
+                try await DNSZoneService.assertAttachedNetworksUnchanged(
+                    affectedNetworkIDs, zoneID: zoneID, on: db)
                 try await record.save(on: db)
                 if ttlOrViewChanged {
                     try await DNSZoneService.applyRRsetSettings(
                         zoneID: zoneID, name: record.name, type: record.type,
                         ttl: record.ttl, view: record.view, on: db)
                 }
+                try await DNSZoneService.advanceNetworkGenerations(affectedNetworkIDs, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(
@@ -373,8 +388,17 @@ struct DNSController: RouteCollection {
     /// DELETE /api/dns-zones/:zoneId/records/:recordId
     @Sendable
     func deleteRecord(req: Request) async throws -> HTTPStatus {
-        let (_, record) = try await fetchRecord(req: req, action: "dns:delete")
-        try await record.delete(on: req.db)
+        let (zone, record) = try await fetchRecord(req: req, action: "dns:delete")
+        let zoneID = try zone.requireID()
+        let affectedNetworkIDs = try await DNSZoneService.attachedNetworkIDs(zoneID, on: req.db)
+        try await req.db.transaction { db in
+            try await DNSZoneService.lockNetworks(affectedNetworkIDs, on: db)
+            try await DNSZoneService.lockZone(zoneID, on: db)
+            try await DNSZoneService.assertAttachedNetworksUnchanged(
+                affectedNetworkIDs, zoneID: zoneID, on: db)
+            try await record.delete(on: db)
+            try await DNSZoneService.advanceNetworkGenerations(affectedNetworkIDs, on: db)
+        }
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
@@ -389,61 +413,47 @@ struct DNSController: RouteCollection {
         let zoneID = try zone.requireID()
         let request = try req.content.decode(AttachDNSZoneRequest.self)
 
-        let network = try await Self.authorizedNetwork(req: req, id: request.networkId, zone: zone)
-        let networkID = try network.requireID()
+        _ = try await Self.authorizedNetwork(req: req, id: request.networkId, zone: zone)
+        let networkID = request.networkId
 
-        // Checked before anything is written, so a request that asks for
-        // `primary` and cannot have it changes nothing at all rather than
-        // leaving a half-applied attachment behind.
-        let promoting = request.primary == true && network.$primaryDNSZone.id != zoneID
-        var promotedDomainName: String?
-        if promoting {
-            try await DNSZoneService.assertPrimaryZoneAssignable(
-                zone: zone, networkID: networkID, on: req.db)
-            let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
-            // Zone names are stored through `normalizedZoneName`, whose rules
-            // are stricter than a search domain's. Derive this before writing
-            // the attachment so promotion still has no later validation path
-            // that can leave a half-applied row behind.
-            promotedDomainName = DNSZoneService.searchDomainFollowingPrimaryZone(
-                current: network.domainName,
-                previousZoneName: outgoing,
-                nextZoneName: zone.name)
-        }
-
-        // Deliberately not one transaction: the duplicate-attach catch below is
-        // the idempotency path, and inside a Postgres transaction a constraint
-        // violation aborts the whole thing — the recovery would poison the
-        // `network.save` that follows it. Pre-validating the promotion is what
-        // makes the two writes safe to do separately.
-        let alreadyAttached = try await DNSZoneNetwork.query(on: req.db)
-            .filter(\.$zone.$id == zoneID)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .count()
-        if alreadyAttached == 0 {
-            do {
-                try await DNSZoneNetwork(zoneID: zoneID, logicalNetworkID: networkID).save(on: req.db)
-            } catch let error as any DatabaseError where error.isConstraintFailure {
-                // Lost the race with a concurrent attach; the unique pair index
-                // makes that a no-op rather than an error.
+        try await req.db.transaction { db in
+            try await DNSZoneService.lockNetworks([networkID], on: db)
+            // Network rows are always locked before the zone advisory lock so
+            // record writes and detach cannot deadlock with attachment changes.
+            try await DNSZoneService.lockZone(zoneID, on: db)
+            guard let network = try await LogicalNetwork.find(networkID, on: db) else {
+                throw Abort(.notFound, reason: "Network not found")
             }
-        }
-        if promoting {
-            // The search domain follows the zone unless an operator has set one
-            // of their own (STR-201). Without it a guest resolves
-            // `alpha.<zone>` and not `alpha`, which is the half of "attaching a
-            // primary zone points guests at it" that the resolver cannot supply
-            // — a search list is guest-side config, not something a resolver
-            // answers with.
-            network.domainName = promotedDomainName
-            network.$primaryDNSZone.id = zoneID
-            try await req.db.transaction { db in
+
+            let promoting = request.primary == true && network.$primaryDNSZone.id != zoneID
+            var promotedDomainName: String?
+            if promoting {
+                try await DNSZoneService.assertPrimaryZoneAssignable(
+                    zone: zone, networkID: networkID, on: db)
+                let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: db)
+                promotedDomainName = DNSZoneService.searchDomainFollowingPrimaryZone(
+                    current: network.domainName,
+                    previousZoneName: outgoing,
+                    nextZoneName: zone.name)
+            }
+
+            let alreadyAttached =
+                try await DNSZoneNetwork.query(on: db)
+                .filter(\.$zone.$id == zoneID)
+                .filter(\.$logicalNetwork.$id == networkID)
+                .count() > 0
+            if !alreadyAttached {
+                try await DNSZoneNetwork(zoneID: zoneID, logicalNetworkID: networkID).save(on: db)
+            }
+            if promoting {
+                // The search domain follows the zone unless an operator has
+                // set one of their own (STR-201).
+                network.domainName = promotedDomainName
+                network.$primaryDNSZone.id = zoneID
                 try await network.save(on: db)
-                try await DesiredStateGenerationWriter.advanceOrThrow(
-                    schema: LogicalNetwork.schema,
-                    id: networkID,
-                    resource: "Network",
-                    on: db)
+            }
+            if !alreadyAttached || promoting {
+                try await DNSZoneService.advanceNetworkGenerations([networkID], on: db)
             }
         }
 
@@ -502,6 +512,7 @@ struct DNSController: RouteCollection {
                 return
             }
             try await attachment.delete(on: db)
+            try await DNSZoneService.advanceNetworkGenerations([networkID], on: db)
         }
         await req.application.agentService.syncDesiredStateToFleet()
 

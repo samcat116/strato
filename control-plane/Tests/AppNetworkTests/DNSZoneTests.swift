@@ -362,8 +362,8 @@ final class DNSZoneTests {
             let initialGeneration = network.generation
             let zone = try await createZone(app: app, token: token, project: project)
 
-            // Attaching without promoting is not a statement about resolution
-            // through the zone, so it leaves the search domain alone.
+            // Attaching without promoting leaves the search domain alone, but
+            // it still changes the OVN DNS references realized for the network.
             try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachDNSZoneRequest(networkId: networkID))
@@ -372,7 +372,8 @@ final class DNSZoneTests {
             }
             var reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
             #expect(reloaded.domainName == nil)
-            #expect(reloaded.generation == initialGeneration)
+            #expect(reloaded.generation == initialGeneration + 1)
+            #expect(reloaded.convergenceDeadline != nil)
 
             try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -382,8 +383,94 @@ final class DNSZoneTests {
             }
             reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
             #expect(reloaded.domainName == "acme.internal")
-            #expect(reloaded.generation == initialGeneration + 1)
+            #expect(reloaded.generation == initialGeneration + 2)
             #expect(reloaded.convergenceDeadline != nil)
+        }
+    }
+
+    @Test("DNS record and attachment mutations version every affected network")
+    func dnsMutationsAdvanceAttachedNetworks() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let first = try await builder.createNetwork(name: "dns-version-a", project: project)
+            let second = try await builder.createNetwork(name: "dns-version-b", project: project)
+            let firstID = try first.requireID()
+            let secondID = try second.requireID()
+            let zone = try await createZone(app: app, token: token, project: project)
+
+            for networkID in [firstID, secondID] {
+                try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(AttachDNSZoneRequest(networkId: networkID))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+            let afterAttachFirst = try #require(
+                try await LogicalNetwork.find(firstID, on: app.db))
+            let afterAttachSecond = try #require(
+                try await LogicalNetwork.find(secondID, on: app.db))
+            #expect(afterAttachFirst.generation == first.generation + 1)
+            #expect(afterAttachSecond.generation == second.generation + 1)
+
+            var recordID: UUID?
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/records") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateDNSRecordRequest(name: "www", type: .a, value: "192.0.2.10"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                recordID = try res.content.decode(DNSRecordResponse.self).id
+            }
+            let afterCreateFirst = try #require(
+                try await LogicalNetwork.find(firstID, on: app.db))
+            let afterCreateSecond = try #require(
+                try await LogicalNetwork.find(secondID, on: app.db))
+            #expect(afterCreateFirst.generation == afterAttachFirst.generation + 1)
+            #expect(afterCreateSecond.generation == afterAttachSecond.generation + 1)
+            #expect(afterCreateFirst.convergenceDeadline != nil)
+            #expect(afterCreateSecond.convergenceDeadline != nil)
+
+            try await app.test(
+                .PUT, "/api/dns-zones/\(zone.id)/records/\(try #require(recordID))"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateDNSRecordRequest(value: "192.0.2.11"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            let afterUpdateFirst = try #require(
+                try await LogicalNetwork.find(firstID, on: app.db))
+            let afterUpdateSecond = try #require(
+                try await LogicalNetwork.find(secondID, on: app.db))
+            #expect(afterUpdateFirst.generation == afterCreateFirst.generation + 1)
+            #expect(afterUpdateSecond.generation == afterCreateSecond.generation + 1)
+
+            try await app.test(
+                .DELETE, "/api/dns-zones/\(zone.id)/records/\(try #require(recordID))"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            let afterDeleteFirst = try #require(
+                try await LogicalNetwork.find(firstID, on: app.db))
+            let afterDeleteSecond = try #require(
+                try await LogicalNetwork.find(secondID, on: app.db))
+            #expect(afterDeleteFirst.generation == afterUpdateFirst.generation + 1)
+            #expect(afterDeleteSecond.generation == afterUpdateSecond.generation + 1)
+
+            try await app.test(.DELETE, "/api/dns-zones/\(zone.id)/networks/\(secondID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            let afterDetachFirst = try #require(
+                try await LogicalNetwork.find(firstID, on: app.db))
+            let afterDetachSecond = try #require(
+                try await LogicalNetwork.find(secondID, on: app.db))
+            #expect(afterDetachFirst.generation == afterDeleteFirst.generation)
+            #expect(afterDetachSecond.generation == afterDeleteSecond.generation + 1)
         }
     }
 
@@ -514,7 +601,8 @@ final class DNSZoneTests {
             #expect(untouched.domainName == "chosen.example")
             #expect(moved.generation == followingGenerationBeforeRename + 1)
             #expect(moved.convergenceDeadline != nil)
-            #expect(untouched.generation == chosenGenerationBeforeRename)
+            #expect(untouched.generation == chosenGenerationBeforeRename + 1)
+            #expect(untouched.convergenceDeadline != nil)
 
             // The new spelling still follows: demotion recognizes and clears
             // it instead of treating a stale old name as operator-authored.

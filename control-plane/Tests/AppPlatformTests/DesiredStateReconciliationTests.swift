@@ -103,7 +103,8 @@ final class DesiredStateReconciliationTests {
         networks: [ObservedNetworkState]? = nil,
         securityGroups: [ObservedSecurityGroupState]? = nil,
         portMemberships: [ObservedPortMembershipState]? = nil,
-        manifestStatus: ObservedManifestStatus? = nil
+        manifestStatus: ObservedManifestStatus? = nil,
+        hostResourceTelemetry: HostResourceTelemetry? = nil
     ) throws -> MessageEnvelope {
         let report = ObservedStateReport(
             agentId: agentId,
@@ -113,6 +114,7 @@ final class DesiredStateReconciliationTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 33,
                 totalDisk: 1 << 40, availableDisk: 1 << 39
             ),
+            hostResourceTelemetry: hostResourceTelemetry,
             manifestStatus: manifestStatus,
             networks: networks,
             securityGroups: securityGroups,
@@ -1408,6 +1410,75 @@ final class DesiredStateReconciliationTests {
             let rows = try await VMInterfaceObservedAddress.query(on: app.db)
                 .filter(\.$interface.$id == nic.id!).all()
             #expect(rows.isEmpty)
+        }
+    }
+
+    // MARK: - Resource telemetry (STR-266)
+
+    @Test("A report persists host and VM contention snapshots with control-plane receipt times")
+    func resourceTelemetryPersisted() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            let sampledAt = Date(timeIntervalSince1970: 1_800_000_000)
+            let host = HostResourceTelemetry(
+                sampledAt: sampledAt,
+                health: .pressured,
+                cpuPressure: .available(
+                    some: PressureStallSample(
+                        average10: 12, average60: 8, average300: 2,
+                        totalMicroseconds: 4_000_000),
+                    full: nil),
+                memoryPressure: .unavailable,
+                ioPressure: .unavailable,
+                swapTotalBytes: .available(0),
+                swapUsedBytes: .available(0),
+                zswapStoredBytes: .unavailable,
+                zswapPoolBytes: .unavailable,
+                zramUsedBytes: .unavailable,
+                majorFaultsTotal: .available(3),
+                reclaimScannedPagesTotal: .available(2),
+                reclaimReclaimedPagesTotal: .available(1),
+                oomKillsTotal: .available(0),
+                mglruEnabled: .available(true))
+            let workload = WorkloadResourceTelemetry(
+                sampledAt: sampledAt,
+                health: .healthy,
+                cgroupV2: .available,
+                memoryCurrentBytes: .available(4_096),
+                memoryEvents: WorkloadMemoryEventsTelemetry(
+                    availability: .available, low: 0, high: 1, max: 0,
+                    oom: 0, oomKill: 0, oomGroupKill: 0),
+                memoryPressure: .unavailable,
+                cpuPressure: .unavailable,
+                ioPressure: .unavailable,
+                cpuUsageMicroseconds: .available(500_000),
+                cpuThrottledMicroseconds: .available(0),
+                cpuThrottledPeriodsTotal: .available(0),
+                guestStealMicroseconds: .unavailable)
+
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: 1,
+                        convergencePhase: "applying-resource-limits",
+                        resourceTelemetry: workload)
+                ],
+                hostResourceTelemetry: host)
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("recon-agent"))
+
+            let agentUUID = try #require(UUID(uuidString: agentId))
+            let refreshedAgent = try #require(try await Agent.find(agentUUID, on: app.db))
+            let refreshedVM = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshedAgent.resourceTelemetry == host)
+            #expect(refreshedAgent.resourceTelemetryReceivedAt != nil)
+            #expect(refreshedAgent.resourceTelemetryReceivedAt != sampledAt)
+            #expect(refreshedVM.resourceTelemetry == workload)
+            #expect(refreshedVM.resourceTelemetryReceivedAt != nil)
+            #expect(refreshedVM.resourceTelemetryReceivedAt != sampledAt)
+            #expect(refreshedVM.convergencePhase == "applying-resource-limits")
         }
     }
 

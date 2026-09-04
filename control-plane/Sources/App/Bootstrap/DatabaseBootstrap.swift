@@ -198,5 +198,9 @@ extension Application {
         // STR-294: close the desired/observed loop for network topology,
         // security-group ACLs, and per-port membership.
         migrations.add(AddNetworkFabricObservations())
+
+        // STR-266: explicit host PSI/reclaim/swap and per-workload cgroup
+        // contention snapshots, sampled outside the heartbeat path.
+        migrations.add(AddResourceContentionTelemetry())
     }
 }

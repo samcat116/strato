@@ -109,6 +109,59 @@ enum DNSZoneService {
             .object(.dnsZone, id: zoneID), on: db)
     }
 
+    /// Return every network whose OVN DNS references include this zone.
+    static func attachedNetworkIDs(_ zoneID: UUID, on db: any Database) async throws -> [UUID] {
+        try await DNSZoneNetwork.query(on: db)
+            .filter(\.$zone.$id == zoneID)
+            .all()
+            .map { $0.$logicalNetwork.id }
+            .sorted { $0.uuidString < $1.uuidString }
+    }
+
+    /// Lock affected network rows in a stable order before taking the zone
+    /// advisory lock. Detach follows the same network-then-zone order.
+    static func lockNetworks(_ networkIDs: [UUID], on db: any Database) async throws {
+        for networkID in Array(Set(networkIDs)).sorted(by: { $0.uuidString < $1.uuidString }) {
+            switch try await DesiredStateGenerationWriter.lockCurrent(
+                schema: LogicalNetwork.schema, id: networkID, on: db)
+            {
+            case .applied:
+                continue
+            case .missing:
+                throw Abort(.notFound, reason: "Network no longer exists")
+            case .superseded:
+                throw Abort(.internalServerError, reason: "Network could not be locked")
+            }
+        }
+    }
+
+    /// Confirm that the pre-lock attachment snapshot is still complete. A
+    /// concurrent attach or detach may finish while the network locks are being
+    /// acquired; aborting keeps the zone mutation from committing without
+    /// versioning exactly the networks it affects.
+    static func assertAttachedNetworksUnchanged(
+        _ expectedNetworkIDs: [UUID], zoneID: UUID, on db: any Database
+    ) async throws {
+        let expected = Array(Set(expectedNetworkIDs)).sorted { $0.uuidString < $1.uuidString }
+        guard try await attachedNetworkIDs(zoneID, on: db) == expected else {
+            throw Abort(.conflict, reason: "DNS zone attachments changed; retry the request")
+        }
+    }
+
+    /// A zone mutation changes desired DNS on every attached network. Advance
+    /// each network once so its authority gets a fresh convergence deadline.
+    static func advanceNetworkGenerations(
+        _ networkIDs: [UUID], on db: any Database
+    ) async throws {
+        for networkID in Array(Set(networkIDs)).sorted(by: { $0.uuidString < $1.uuidString }) {
+            try await DesiredStateGenerationWriter.advanceOrThrow(
+                schema: LogicalNetwork.schema,
+                id: networkID,
+                resource: "Network",
+                on: db)
+        }
+    }
+
     /// Apply one TTL/view to every record in an RRset — see the type doc on
     /// `assertRRsetSettingsAgree` for why the set, not the record, owns them.
     static func applyRRsetSettings(

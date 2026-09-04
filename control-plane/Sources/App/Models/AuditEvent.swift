@@ -71,6 +71,7 @@ final class AuditEvent: Model, @unchecked Sendable {
     init() {}
 
     init(from record: AuditRecord) {
+        self.id = record.id
         self.eventType = record.eventType
         // Preserve when the fact was produced, not when an asynchronous audit
         // backend happened to insert it. A drain racing a shutdown flush may

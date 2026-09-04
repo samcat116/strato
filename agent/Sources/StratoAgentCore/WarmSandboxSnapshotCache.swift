@@ -1,6 +1,18 @@
 import Foundation
 import Logging
 
+/// Shared by every copy of a cache value so detached eviction cannot unlink
+/// an entry while lookup is verifying and refreshing it.
+private final class WarmSnapshotCacheEntryAccess: @unchecked Sendable {
+    private let lock = NSLock()
+
+    func withLock<Result>(_ operation: () throws -> Result) rethrows -> Result {
+        lock.lock()
+        defer { lock.unlock() }
+        return try operation()
+    }
+}
+
 /// A warm-start snapshot's identity (issue #426): everything that must match
 /// for a template snapshot to be safely restored into a new sandbox.
 ///
@@ -126,7 +138,7 @@ public struct WarmSnapshotEntry: Sendable, Equatable {
 ///     rootfs.ext4      # the template's rootfs AS OF the snapshot (mounted
 ///                      # once by the template guest — restores must clone
 ///                      # exactly these bytes, not the pristine image)
-///     meta.json        # diagnostics (Firecracker version, sizes, source)
+///     meta.json        # diagnostics + durable artifact integrity proof
 ///   .staging-<uuid>/   # in-progress builds, atomically renamed into place
 /// ```
 ///
@@ -146,9 +158,18 @@ public struct WarmSandboxSnapshotCache: Sendable {
     public static let metaFile = "meta.json"
 
     public let rootPath: String
+    private let entryAccess = WarmSnapshotCacheEntryAccess()
+    private let rootfsHasher: @Sendable (String) throws -> String
 
     public init(rootPath: String) {
+        self.init(
+            rootPath: rootPath,
+            rootfsHasher: { try FileHashing.sha256Hex(ofFileAt: $0) })
+    }
+
+    init(rootPath: String, rootfsHasher: @escaping @Sendable (String) throws -> String) {
         self.rootPath = rootPath
+        self.rootfsHasher = rootfsHasher
     }
 
     /// Sidecar written next to the artifacts. `templateId`/`templateNonce`
@@ -156,6 +177,23 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// restore path requires a held guest to echo exactly this identity
     /// before launching a workload into it. The rest is diagnostics.
     public struct Meta: Codable, Sendable, Equatable {
+        public struct ArtifactIntegrity: Codable, Sendable, Equatable {
+            public let memorySizeBytes: Int64
+            public let vmstateSizeBytes: Int64
+            public let rootfsSizeBytes: Int64
+            public let rootfsSHA256: String
+
+            init(
+                memorySizeBytes: Int64, vmstateSizeBytes: Int64,
+                rootfsSizeBytes: Int64, rootfsSHA256: String
+            ) {
+                self.memorySizeBytes = memorySizeBytes
+                self.vmstateSizeBytes = vmstateSizeBytes
+                self.rootfsSizeBytes = rootfsSizeBytes
+                self.rootfsSHA256 = rootfsSHA256
+            }
+        }
+
         /// The throwaway template microVM's id, echoed by the held guest.
         public let templateId: String
         /// The template's boot nonce, echoed by the held guest.
@@ -166,6 +204,9 @@ public struct WarmSandboxSnapshotCache: Sendable {
         /// surfaces it as `vmlinuxVersion`).
         public let firecrackerVersion: String
         public let createdAtUnixSeconds: Int64
+        /// Nil only for a staged or pre-STR-311 sidecar. Published entries
+        /// require this proof and therefore treat older entries as misses.
+        public let artifactIntegrity: ArtifactIntegrity?
 
         public init(
             templateId: String, templateNonce: String, imageDigest: String,
@@ -177,6 +218,17 @@ public struct WarmSandboxSnapshotCache: Sendable {
             self.guestVersion = guestVersion
             self.firecrackerVersion = firecrackerVersion
             self.createdAtUnixSeconds = createdAtUnixSeconds
+            self.artifactIntegrity = nil
+        }
+
+        fileprivate init(copying meta: Meta, artifactIntegrity: ArtifactIntegrity) {
+            self.templateId = meta.templateId
+            self.templateNonce = meta.templateNonce
+            self.imageDigest = meta.imageDigest
+            self.guestVersion = meta.guestVersion
+            self.firecrackerVersion = meta.firecrackerVersion
+            self.createdAtUnixSeconds = meta.createdAtUnixSeconds
+            self.artifactIntegrity = artifactIntegrity
         }
     }
 
@@ -198,13 +250,34 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// required because restores verify the template identity it carries).
     /// A hit refreshes the entry's LRU timestamp.
     public func lookup(_ key: WarmSnapshotKey, fileManager: FileManager = .default) -> WarmSnapshotEntry? {
-        let entry = WarmSnapshotEntry(directory: entryDirectory(for: key))
-        let metaPath = entry.directory + "/" + Self.metaFile
-        for required in [entry.memoryPath, entry.vmstatePath, entry.rootfsPath, metaPath] {
-            guard fileManager.fileExists(atPath: required) else { return nil }
+        entryAccess.withLock {
+            let entry = WarmSnapshotEntry(directory: entryDirectory(for: key))
+            let metaPath = entry.directory + "/" + Self.metaFile
+            for required in [entry.memoryPath, entry.vmstatePath, entry.rootfsPath, metaPath] {
+                guard fileManager.fileExists(atPath: required) else {
+                    try? fileManager.removeItem(atPath: entry.directory)
+                    return nil
+                }
+            }
+            guard let meta = loadMeta(key, fileManager: fileManager),
+                let integrity = meta.artifactIntegrity,
+                integrity.memorySizeBytes >= 0,
+                integrity.vmstateSizeBytes >= 0,
+                integrity.rootfsSizeBytes >= 0,
+                integrity.rootfsSHA256.count == 64,
+                integrity.rootfsSHA256.allSatisfy({ $0.isHexDigit }),
+                fileSize(at: entry.memoryPath, fileManager: fileManager) == integrity.memorySizeBytes,
+                fileSize(at: entry.vmstatePath, fileManager: fileManager) == integrity.vmstateSizeBytes,
+                fileSize(at: entry.rootfsPath, fileManager: fileManager) == integrity.rootfsSizeBytes,
+                let rootfsSHA256 = try? rootfsHasher(entry.rootfsPath),
+                rootfsSHA256 == integrity.rootfsSHA256
+            else {
+                try? fileManager.removeItem(atPath: entry.directory)
+                return nil
+            }
+            DiskCacheLRU.touch(entryDirectory: entry.directory)
+            return entry
         }
-        DiskCacheLRU.touch(entryDirectory: entry.directory)
-        return entry
     }
 
     /// A fresh staging directory under the cache root (same filesystem as the
@@ -225,17 +298,46 @@ public struct WarmSandboxSnapshotCache: Sendable {
     ) throws -> WarmSnapshotEntry {
         try fileManager.createDirectory(atPath: rootPath, withIntermediateDirectories: true)
         let target = entryDirectory(for: key)
-        if fileManager.fileExists(atPath: target) {
+        if lookup(key, fileManager: fileManager) != nil {
             try fileManager.removeItem(atPath: stagingDirectory)
             return WarmSnapshotEntry(directory: target)
         }
+
+        let stagedEntry = WarmSnapshotEntry(directory: stagingDirectory)
+        let stagedMetaPath = stagingDirectory + "/" + Self.metaFile
+        let stagedMetaData = try Data(contentsOf: URL(fileURLWithPath: stagedMetaPath))
+        let stagedMeta = try JSONDecoder().decode(Meta.self, from: stagedMetaData)
+        guard
+            let memorySizeBytes = fileSize(at: stagedEntry.memoryPath, fileManager: fileManager),
+            let vmstateSizeBytes = fileSize(at: stagedEntry.vmstatePath, fileManager: fileManager),
+            let rootfsSizeBytes = fileSize(at: stagedEntry.rootfsPath, fileManager: fileManager)
+        else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let completedMeta = Meta(
+            copying: stagedMeta,
+            artifactIntegrity: Meta.ArtifactIntegrity(
+                memorySizeBytes: memorySizeBytes,
+                vmstateSizeBytes: vmstateSizeBytes,
+                rootfsSizeBytes: rootfsSizeBytes,
+                rootfsSHA256: try rootfsHasher(stagedEntry.rootfsPath)))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(completedMeta).write(to: URL(fileURLWithPath: stagedMetaPath))
+
         do {
-            try fileManager.moveItem(atPath: stagingDirectory, toPath: target)
-        } catch {
+            try DurableFileWriter().publishDirectory(
+                stagingPath: stagingDirectory, to: target,
+                completionFileName: Self.metaFile)
+        } catch let error as DurableFileWriteError {
             // A concurrent publish can land between the check and the move;
-            // losing that race is fine, anything else is a real failure.
-            if fileManager.fileExists(atPath: target) {
+            // losing that rename race is fine. A later durability failure
+            // must still surface even though our renamed target is visible.
+            if error.operation == "rename",
+                let published = lookup(key, fileManager: fileManager)
+            {
                 try fileManager.removeItem(atPath: stagingDirectory)
+                return published
             } else {
                 throw error
             }
@@ -288,7 +390,16 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// honoring ``DiskCacheLRU``'s recent-use grace window.
     @discardableResult
     public func sweep(budgetBytes: Int64, now: Date = Date(), logger: Logger) -> DiskCacheLRU.SweepResult {
-        DiskCacheLRU.sweep(
-            entryDirectories: entryDirectories(), budgetBytes: budgetBytes, now: now, logger: logger)
+        entryAccess.withLock {
+            DiskCacheLRU.sweep(
+                entryDirectories: entryDirectories(), budgetBytes: budgetBytes, now: now, logger: logger)
+        }
+    }
+
+    private func fileSize(at path: String, fileManager: FileManager) -> Int64? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: path),
+            let size = attributes[.size] as? NSNumber
+        else { return nil }
+        return size.int64Value
     }
 }

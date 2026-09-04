@@ -253,6 +253,36 @@ struct AgentMessageTests {
         #expect(decoded.dependencyObservations == [dependency])
     }
 
+    @Test func agentHeartbeatCarriesAvailabilityBearingHostTelemetry() throws {
+        let host = HostResourceTelemetry(
+            sampledAt: Fixtures.timestamp,
+            health: .unknown,
+            cpuPressure: .unavailable,
+            memoryPressure: .unavailable,
+            ioPressure: .unavailable,
+            swapTotalBytes: .available(0),
+            swapUsedBytes: .available(0),
+            zswapStoredBytes: .unavailable,
+            zswapPoolBytes: .unavailable,
+            zramUsedBytes: .unavailable,
+            majorFaultsTotal: .available(0),
+            reclaimScannedPagesTotal: .available(0),
+            reclaimReclaimedPagesTotal: .available(0),
+            oomKillsTotal: .available(0),
+            mglruEnabled: .unavailable)
+        let decoded = try throughEnvelope(
+            AgentHeartbeatMessage(
+                requestId: Fixtures.requestId,
+                timestamp: Fixtures.timestamp,
+                agentId: "agent-1",
+                resources: Fixtures.resources,
+                hostResourceTelemetry: host))
+
+        #expect(decoded.hostResourceTelemetry == host)
+        #expect(decoded.hostResourceTelemetry?.swapUsedBytes.value == 0)
+        #expect(decoded.hostResourceTelemetry?.zswapStoredBytes.availability == .unavailable)
+    }
+
     @Test func agentUnregisterRoundTrip() throws {
         let message = AgentUnregisterMessage(
             requestId: Fixtures.requestId,
