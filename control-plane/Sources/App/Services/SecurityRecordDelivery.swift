@@ -29,19 +29,25 @@ struct SecurityRecordRetryOutcome<Record: Sendable>: Sendable {
 /// batch inserts return the whole batch on failure (the statement is atomic),
 /// while per-record HTTP backends can return only their failed subset. This
 /// prevents a healthy destination from receiving duplicates because another
-/// destination was unavailable.
+/// destination was unavailable. A deadline stops a bounded flush from
+/// scheduling retries outside its caller's wall-clock budget.
 func retrySecurityRecordDelivery<Record: Sendable>(
     _ records: [Record],
     policy: SecurityRecordRetryPolicy,
+    deadline: ContinuousClock.Instant? = nil,
     write: @escaping @Sendable ([Record]) async -> [Record]
 ) async -> SecurityRecordRetryOutcome<Record> {
     guard !records.isEmpty else {
         return SecurityRecordRetryOutcome(undelivered: [], attempts: 0)
     }
 
+    let clock = ContinuousClock()
     var undelivered = records
     var attempts = 0
     while true {
+        if let deadline, clock.now >= deadline {
+            return SecurityRecordRetryOutcome(undelivered: undelivered, attempts: attempts)
+        }
         attempts += 1
         undelivered = await write(undelivered)
         guard !undelivered.isEmpty else {
@@ -50,8 +56,12 @@ func retrySecurityRecordDelivery<Record: Sendable>(
         guard attempts <= policy.delays.count, !Task.isCancelled else {
             return SecurityRecordRetryOutcome(undelivered: undelivered, attempts: attempts)
         }
+        let delay = policy.delays[attempts - 1]
+        if let deadline, clock.now.advanced(by: delay) >= deadline {
+            return SecurityRecordRetryOutcome(undelivered: undelivered, attempts: attempts)
+        }
         do {
-            try await Task.sleep(for: policy.delays[attempts - 1])
+            try await Task.sleep(for: delay)
         } catch {
             return SecurityRecordRetryOutcome(undelivered: undelivered, attempts: attempts)
         }

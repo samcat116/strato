@@ -750,14 +750,18 @@ final class AuditService: Sendable {
     /// Write one batch to every configured backend, concurrently: the
     /// destinations are independent, and the database insert must not queue
     /// behind a five-second HTTP timeout.
-    private func deliver(_ records: [AuditRecord], retryFailures: Bool) async {
+    private func deliver(
+        _ records: [AuditRecord],
+        retryFailures: Bool,
+        deadline: ContinuousClock.Instant? = nil
+    ) async {
         guard !records.isEmpty else { return }
         let policy = retryFailures ? retryPolicy : SecurityRecordRetryPolicy(delays: [])
         await withTaskGroup(of: Void.self) { group in
             for backend in backends {
                 group.addTask { [logger, metricsFactory] in
                     let outcome = await retrySecurityRecordDelivery(
-                        records, policy: policy, write: backend.write)
+                        records, policy: policy, deadline: deadline, write: backend.write)
                     guard !outcome.undelivered.isEmpty else { return }
                     logger.error(
                         "Audit backend exhausted delivery retries; records were lost",
@@ -800,7 +804,9 @@ final class AuditService: Sendable {
                 // claimed here gets one final attempt so the flush cannot
                 // stretch five seconds into the retry policy's whole budget.
                 await deliver(
-                    batch, retryFailures: !recordIncompleteShutdownLoss)
+                    batch,
+                    retryFailures: !recordIncompleteShutdownLoss,
+                    deadline: deadline)
                 await queue.finishBatch(recordCount: batch.count)
                 continue
             }

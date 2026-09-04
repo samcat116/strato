@@ -409,11 +409,14 @@ final class IAMDecisionRecorder: Sendable {
     }
 
     private func deliverWithRetry(
-        _ decisions: [PendingIAMDecision], retryFailures: Bool = true
+        _ decisions: [PendingIAMDecision],
+        retryFailures: Bool = true,
+        deadline: ContinuousClock.Instant? = nil
     ) async {
         let outcome = await retrySecurityRecordDelivery(
             decisions,
-            policy: retryFailures ? retryPolicy : SecurityRecordRetryPolicy(delays: [])
+            policy: retryFailures ? retryPolicy : SecurityRecordRetryPolicy(delays: []),
+            deadline: deadline
         ) { [self] pending in
             await write(pending) ? [] : pending
         }
@@ -453,7 +456,9 @@ final class IAMDecisionRecorder: Sendable {
                 // its five-second budget cannot expand into the full retry
                 // schedule. Ordinary drains retain all eight attempts.
                 await deliverWithRetry(
-                    batch, retryFailures: !recordIncompleteShutdownLoss)
+                    batch,
+                    retryFailures: !recordIncompleteShutdownLoss,
+                    deadline: deadline)
                 await queue.finishBatch(recordCount: batch.count)
                 continue
             }

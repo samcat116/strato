@@ -560,15 +560,18 @@ final class AuditLoggingTests {
 
         let name: String
         let metricDestination: Telemetry.SecurityRecordDestination
+        private let delay: Duration?
         private let state: NIOLockedValueBox<State>
 
         init(
             name: String,
             destination: Telemetry.SecurityRecordDestination = .database,
-            failures: Int
+            failures: Int,
+            delay: Duration? = nil
         ) {
             self.name = name
             self.metricDestination = destination
+            self.delay = delay
             self.state = NIOLockedValueBox(State(failuresRemaining: failures))
         }
 
@@ -580,7 +583,8 @@ final class AuditLoggingTests {
         }
 
         func write(_ records: [AuditRecord]) async -> [AuditRecord] {
-            state.withLockedValue { current in
+            if let delay { try? await Task.sleep(for: delay) }
+            return state.withLockedValue { current in
                 current.attempts += 1
                 if current.failuresRemaining > 0 {
                     current.failuresRemaining -= 1
@@ -619,6 +623,29 @@ final class AuditLoggingTests {
 
             await audit.flush()
             #expect(slow.records.map(\.eventType) == ["test.background"])
+        }
+    }
+
+    @Test("Audit flush does not retry a claimed batch beyond its deadline")
+    func auditFlushDeadlineBoundsRetries() async throws {
+        try await withApp { app, _, _, _ in
+            let failing = FlakyAuditBackend(
+                name: "slow-failure", failures: 10, delay: .milliseconds(40))
+            var config = AuditConfig.fromConfiguration(app.controlPlaneConfiguration)
+            config.synchronousWrites = false
+            let audit = AuditService(
+                app: app,
+                config: config,
+                backends: [failing],
+                retryPolicy: SecurityRecordRetryPolicy(delays: Array(repeating: .zero, count: 7)))
+
+            _ = await audit.queue.enqueue(AuditRecord(eventType: "test.flush-deadline"))
+            let elapsed = await ContinuousClock().measure {
+                await audit.flush(waitingUpTo: .milliseconds(25))
+            }
+
+            #expect(failing.attempts == 1)
+            #expect(elapsed < .milliseconds(100))
         }
     }
 
