@@ -1,0 +1,65 @@
+control-plane/Sources/App/Migrations/AddNetworkFabricObservations.swift
+  s_0a6f49dab719ee::t_da2daff6f1dc04 26-46
+  s_0a6f49dab719ee::t_ae96e091a87085 2
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_0a6f49dab719ee::t_39e57dad89555a 592-595,598-601
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_0a6f49dab719ee::t_6f9cb23296edbd 186-190,440-447
+agent/Sources/StratoAgentCore/BestEffort.swift
+  s_0a6f49dab719ee::t_19be62042b912e 1,31-33,35-39,42,51,66-67
+agent/Tests/StratoAgentPlatformTests/NetworkReconcilerTests.swift
+  s_0a6f49dab719ee::t_8d36c58794cda7 456-473,880,882-886,889,893-896,934-936
+  s_532b37be23fdb2::t_3060afa2527ebf 937
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_0a6f49dab719ee::t_59705b1b71a271 367,424,502-524
+  s_532b37be23fdb2::t_be1c13a147cc6e 525-526
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+Reconciliation.swift
+  s_0a6f49dab719ee::t_046478a9efd7a1 134-138,234-240
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_0a6f49dab719ee::t_ad97bffd5460b8 625
+  s_0a6f49dab719ee::t_4e023e742fb306 680-708
+  s_0a6f49dab719ee::t_a5d5138f6469a3 595-622,626-628
+  s_0a6f49dab719ee::t_bc41cd4842e034 623-624
+control-plane/Tests/AppNetworkTests/DNSZoneTests.swift
+  s_0a6f49dab719ee::t_0a41a2e0be78ef 375,385-386
+  s_0a6f49dab719ee::t_8f44294253d2b8 362
+  s_0a6f49dab719ee::t_6eb7aca53f8abb 495,498,515-517
+  s_0a6f49dab719ee::t_39beac0aa503c8 496-497,499-500
+control-plane/Sources/App/Models/SecurityGroup.swift
+  s_0a6f49dab719ee::t_093bdb7cb9bcf9 103-106,112
+control-plane/Tests/AppNetworkTests/SecurityGroupControllerTests.swift
+  s_0a6f49dab719ee::t_bc41cd4842e034 369
+  s_0a6f49dab719ee::t_831546a0d744b8 453-457,471-474,491-492,499-500,965-969,998-1003,1028-1029,1041-1043
+  s_0a6f49dab719ee::t_883a8d60c7bcc9 229,243-245,845
+  s_0a6f49dab719ee::t_9f8f2cbbf7db0d 174-176
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_0a6f49dab719ee::t_87c227800bbc7a 950,953,964,974,999,1037,1053-1054,1065-1066,1087
+  s_0a6f49dab719ee::t_2b369774a214d4 984,987,1011,1023,1038,1041,1074
+  s_0a6f49dab719ee::t_2a8afb81d6dff6 797-798,804-805
+  s_0a6f49dab719ee::t_dfbe4671410cf7 787-796,806-875
+  s_0a6f49dab719ee::t_dcc38465f24d33 799-803
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "cf5071767b78a702e9a2053e639e17ef7a811b0b",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
