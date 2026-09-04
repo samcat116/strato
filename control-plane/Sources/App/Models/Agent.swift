@@ -465,10 +465,11 @@ extension Agent {
         AgentIdentity(trustDomain: trustDomain, name: name)
     }
 
-    /// Check if agent is considered online based on heartbeat
-    var isOnline: Bool {
+    /// Check whether the agent is considered online using the same cluster
+    /// clock that stamped its heartbeat.
+    func isOnline(at instant: ClusterInstant) -> Bool {
         guard let lastHeartbeat = lastHeartbeat else { return false }
-        return Date().timeIntervalSince(lastHeartbeat) < 60  // 60 seconds timeout
+        return instant.date.timeIntervalSince(lastHeartbeat) < 60
     }
 
     /// Host CPU architecture as a typed value; nil for agents that registered
@@ -573,10 +574,10 @@ extension Agent {
     /// This is deliberately non-mutating: GET endpoints use it when building
     /// response DTOs, while registration/heartbeat handling and the stale-agent
     /// monitor own durable status transitions.
-    var statusBasedOnHeartbeat: AgentStatus {
-        if isOnline && status == .offline {
+    func statusBasedOnHeartbeat(at instant: ClusterInstant) -> AgentStatus {
+        if isOnline(at: instant) && status == .offline {
             return .online
-        } else if !isOnline && status == .online {
+        } else if !isOnline(at: instant) && status == .online {
             return .offline
         }
         return status
@@ -753,7 +754,8 @@ struct AgentResponse: Content {
     init(
         from agent: Agent,
         targetVersion: String?,
-        heldWorkloads: [HeldWorkloadSummary]? = nil
+        heldWorkloads: [HeldWorkloadSummary]? = nil,
+        at instant: ClusterInstant
     ) throws {
         guard let id = agent.id else {
             throw Abort(.internalServerError, reason: "Agent missing ID")
@@ -763,7 +765,7 @@ struct AgentResponse: Content {
         self.name = agent.name
         self.hostname = agent.hostname
         self.version = agent.version
-        self.status = agent.statusBasedOnHeartbeat
+        self.status = agent.statusBasedOnHeartbeat(at: instant)
         self.resources = agent.resources
         self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
         self.operatingSystem = agent.hostOperatingSystem
@@ -782,7 +784,7 @@ struct AgentResponse: Content {
         self.organizationalUnitId = agent.$organizationalUnit.id
         self.lastHeartbeat = agent.lastHeartbeat
         self.createdAt = agent.createdAt
-        self.isOnline = agent.isOnline
+        self.isOnline = agent.isOnline(at: instant)
         self.targetVersion = targetVersion
         self.updateAvailable = AgentVersionTarget.updateAvailable(
             agentVersion: agent.version,

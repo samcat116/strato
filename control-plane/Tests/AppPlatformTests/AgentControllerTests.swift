@@ -85,6 +85,24 @@ struct AgentControllerTests {
         }
     }
 
+    @Test("heartbeat-derived status uses the cluster clock")
+    func heartbeatStatusUsesClusterClock() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Clock Agent Org")
+            let instant = ClusterInstant.testing(Date(timeIntervalSince1970: 1_000))
+            let agent = try await makeAgent(
+                name: "clock-agent",
+                status: .offline,
+                lastHeartbeat: instant.date.addingTimeInterval(-1),
+                organization: organization,
+                on: app.db)
+
+            #expect(agent.isOnline(at: instant))
+            #expect(agent.statusBasedOnHeartbeat(at: instant) == .online)
+        }
+    }
+
     private func makeAgent(
         name: String,
         status: AgentStatus,

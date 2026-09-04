@@ -60,9 +60,12 @@ final class AgentAutoUpdateTests {
 
     /// The sweep lock's TTL outlives back-to-back test sweeps; give each
     /// sweep call a fresh in-memory coordination store so none is skipped.
-    private func sweep(_ app: Application) async {
+    private func sweep(
+        _ app: Application,
+        at instant: ClusterInstant = .testing(Date())
+    ) async {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
-        await app.agentMaintenance.sweepAgentAutoUpdates(at: .testing(Date()))
+        await app.agentMaintenance.sweepAgentAutoUpdates(at: instant)
     }
 
     @discardableResult
@@ -100,6 +103,23 @@ final class AgentAutoUpdateTests {
     }
 
     // MARK: - Rollout sweep
+
+    @Test("the sweep judges heartbeat freshness with the cluster clock")
+    func heartbeatFreshnessUsesClusterClock() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let instant = ClusterInstant.testing(Date(timeIntervalSince1970: 1_000))
+            let agent = try await self.makeAgent(
+                app: app, org: org, name: "clock-agent")
+            agent.lastHeartbeat = instant.date.addingTimeInterval(-1)
+            try await agent.save(on: app.db)
+
+            await self.sweep(app, at: instant)
+
+            let stored = try await self.reload(agent, on: app)
+            #expect(stored.updateDesiredVersion == Self.target)
+            #expect(stored.updateAttemptedAt == instant.date)
+        }
+    }
 
     @Test("the sweep assigns exactly one agent at a time, in name order")
     func assignsOneAgentAtATime() async throws {

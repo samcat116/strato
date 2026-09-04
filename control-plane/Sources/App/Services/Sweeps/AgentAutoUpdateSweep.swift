@@ -190,7 +190,7 @@ extension AgentMaintenanceLoop {
                 agent.autoUpdate
                     && agent.updateDesiredVersion == nil
                     && AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target)
-                    && agent.isOnline
+                    && agent.isOnline(at: instant)
                     && agent.hostOperatingSystem != nil
                     && agent.cpuArchitecture != nil
             }

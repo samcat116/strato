@@ -170,15 +170,21 @@ struct SiteController: RouteCollection {
             ? []
             : try await Agent.query(on: req.db).filter(\.$id ~~ Array(controllerIDs)).all()
         let byID = Dictionary(uniqueKeysWithValues: controllers.compactMap { agent in agent.id.map { ($0, agent) } })
+        let instant = try await ClusterClock.read(on: req.db)
         return try visible.map { site in
-            try SiteResponse(from: site, controller: site.$networkControllerAgent.id.flatMap { byID[$0] })
+            try SiteResponse(
+                from: site,
+                controller: site.$networkControllerAgent.id.flatMap { byID[$0] },
+                at: instant)
         }
     }
 
     func getSite(req: Request) async throws -> SiteResponse {
         let site = try await findSite(req)
         try await requireSiteAction(req, site: site, action: "site:read")
-        return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
+        let controller = try await Self.controller(of: site, on: req.db)
+        let instant = try await ClusterClock.read(on: req.db)
+        return try SiteResponse(from: site, controller: controller, at: instant)
     }
 
     /// The designated controller's row, for the health fields `SiteResponse`
@@ -225,7 +231,8 @@ struct SiteController: RouteCollection {
         }
 
         // A freshly created site designates nobody yet.
-        return try SiteResponse(from: site, controller: nil)
+        return try SiteResponse(
+            from: site, controller: nil, at: try await ClusterClock.read(on: req.db))
     }
 
     func updateSite(req: Request) async throws -> SiteResponse {
@@ -282,7 +289,9 @@ struct SiteController: RouteCollection {
         // handover safe in either order.
         await req.application.agentService.syncDesiredStateToFleet()
 
-        return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
+        let controller = try await Self.controller(of: site, on: req.db)
+        let instant = try await ClusterClock.read(on: req.db)
+        return try SiteResponse(from: site, controller: controller, at: instant)
     }
 
     func deleteSite(req: Request) async throws -> HTTPStatus {
@@ -397,7 +406,8 @@ struct SiteController: RouteCollection {
         await req.application.agentService.syncDesiredStateToFleet()
         return try AgentResponse(
             from: agent,
-            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
+            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration),
+            at: try await ClusterClock.read(on: req.db))
     }
 
 }

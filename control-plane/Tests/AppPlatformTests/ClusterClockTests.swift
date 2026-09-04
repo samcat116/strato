@@ -91,5 +91,16 @@ struct ClusterClockTests {
         let agentSource = try String(
             contentsOf: sources.appendingPathComponent("Models/Agent.swift"), encoding: .utf8)
         #expect(!agentSource.contains("receivedAt: Date = Date()"))
+        #expect(!agentSource.contains("Date().timeIntervalSince(lastHeartbeat)"))
+        #expect(!agentSource.contains("var isOnline: Bool"))
+
+        for file in [
+            "Controllers/StorageDeviceController.swift",
+            "Services/SiteNetworkAuthority.swift",
+        ] {
+            let source = try String(
+                contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
+            #expect(!source.contains("now: Date = Date()"))
+        }
     }
 }
