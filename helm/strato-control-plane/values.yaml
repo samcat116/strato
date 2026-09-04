@@ -9,6 +9,10 @@
 # advisory locks into PostgreSQL's disjoint two-int keyspace, so a legacy and a
 # current binary must never serve the same database together. Valkey is required
 # either way; see docs/architecture/multi-replica.md.
+#
+# Every eligible node must run NTP or an equivalent time-sync service. The
+# control plane measures its clock against PostgreSQL, warns beyond 1s, and
+# refuses destructive maintenance beyond 30s.
 replicaCount: 1
 
 image:

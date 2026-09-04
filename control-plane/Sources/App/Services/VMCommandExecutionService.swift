@@ -731,7 +731,8 @@ actor VMCommandExecutionService {
     /// Every replica may run this pass. The conditional UPDATE is the claim,
     /// so a command crosses pending -> failed exactly once without a Valkey
     /// sweep lock.
-    func sweepStuck(now: Date = Date()) async {
+    func sweepStuck(at instant: ClusterInstant) async {
+        let now = instant.date
         let expiredCaptures = captures.filter { $0.value.deadline <= now }
         guard app.db is any SQLDatabase else { return }
         do {
@@ -745,7 +746,7 @@ actor VMCommandExecutionService {
                     SET status = 'failed',
                         error = \(bind: Self.timeoutReason),
                         timed_out_by_sweeper = TRUE,
-                        completed_at = clock_timestamp()
+                        completed_at = \(bind: now)
                     WHERE status = 'pending' AND deadline <= \(bind: now)
                     RETURNING id, agent_key, completed_at
                     """

@@ -360,12 +360,12 @@ extension Agent {
         version: String,
         source: AgentUpdateAssignmentSource,
         artifact: ResolvedAgentArtifact? = nil,
-        at now: Date = Date()
+        at now: ClusterInstant
     ) {
         updateDesiredVersion = version
         updateAssignmentSource = source
         updateArtifactOverride = artifact
-        updateAttemptedAt = now
+        updateAttemptedAt = now.date
         updateBlockedReason = nil
         updateFailureReason = nil
     }
@@ -438,9 +438,10 @@ extension Agent {
         name: String,
         siteID: UUID,
         dependencyObservations: [NodeDependencyObservation] = [],
-        receivedAt: Date = Date(),
+        at instant: ClusterInstant,
         trustDomain: String = PlatformTrustDomain.current
     ) -> Agent {
+        let receivedAt = instant.date
         let agent = Agent(
             name: name,
             trustDomain: trustDomain,

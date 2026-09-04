@@ -219,12 +219,6 @@ struct VolumeController: RouteCollection {
         // immutable copy rather than the mutable `sourceImage` var.
         let poolID = try pool.requireID()
 
-        // How long the create has to converge before the stuck-convergence
-        // sweep marks the volume degraded, stamped with the insert so a
-        // control-plane crash between here and placement still leaves a
-        // resource the sweep can judge.
-        volume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         volume.setDesiredStatus(.present)
         volume.generation = 1
 
@@ -235,10 +229,16 @@ struct VolumeController: RouteCollection {
         let accepted: ResourceMutation.Accepted
         do {
             accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+                let acceptedAt = try await ClusterClock.read(on: db)
                 try await IdempotencyService.reserve(
                     req.idempotencyContext, actor: .user(userID), on: db)
                 try await QuotaEnforcementService.reserveVolume(
                     for: project, environment: environment, size: sizeBytes, on: db)
+                // Stamp from PostgreSQL in the accepting transaction so the
+                // insert and its convergence budget share one clock.
+                volume.extendConvergenceDeadline(
+                    by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
+                    from: acceptedAt)
                 try await volume.save(on: db)
                 let volumeID = try volume.requireID()
                 try await RoleBindingService.grant(
@@ -740,11 +740,12 @@ struct VolumeController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .detach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
             // Every attachment column at once, through the one function that
             // owns the transition, so the row can never come to rest describing
             // half an attachment (STR-129).
-            VolumeAttachmentService.clearAttachment(volume)
+            VolumeAttachmentService.clearAttachment(
+                volume, at: try await ClusterClock.read(on: db))
         }
 
         req.logger.info(
@@ -996,13 +997,9 @@ struct VolumeController: RouteCollection {
             environment: volume.environment,
             size: volume.size,
             agentId: agentId,
-            expiresAt: try SnapshotRetention.expiry(
-                requested: request.ttlSeconds,
-                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(.snapshotDefaultTTLSeconds)),
+            expiresAt: nil,
             createdByID: userID
         )
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create))
 
         let project = try await volume.project(on: req.db)
 
@@ -1012,10 +1009,19 @@ struct VolumeController: RouteCollection {
         // (STR-181): an overlay grows toward it with no API call to refuse along
         // the way, so the pool has to be able to absorb it fully grown.
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: volume.environment, size: volume.size, on: db)
+            snapshot.expiresAt = try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
+                    .snapshotDefaultTTLSeconds),
+                from: acceptedAt)
+            snapshot.extendConvergenceDeadline(
+                by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
             try await snapshot.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
@@ -1095,8 +1101,6 @@ struct VolumeController: RouteCollection {
             poolID: sourceVolume.$pool.id,
             sourceVolumeID: sourceVolume.id
         )
-        newVolume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         newVolume.setDesiredStatus(.present)
         newVolume.generation = 1
         if sourceIsCeph {
@@ -1109,11 +1113,15 @@ struct VolumeController: RouteCollection {
         // attribution, and creator access visible together.
         let sourceProject = try await sourceVolume.project(on: req.db)
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             try await QuotaEnforcementService.reserveVolume(
                 for: sourceProject, environment: sourceVolume.environment,
                 size: sourceVolume.size, on: db)
+            newVolume.extendConvergenceDeadline(
+                by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
             try await newVolume.save(on: db)
             let newVolumeID = try newVolume.requireID()
             try await RoleBindingService.grant(

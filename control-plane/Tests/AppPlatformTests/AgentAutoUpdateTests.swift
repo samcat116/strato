@@ -62,7 +62,7 @@ final class AgentAutoUpdateTests {
     /// sweep call a fresh in-memory coordination store so none is skipped.
     private func sweep(_ app: Application) async {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
-        await app.agentMaintenance.sweepAgentAutoUpdates()
+        await app.agentMaintenance.sweepAgentAutoUpdates(at: .testing(Date()))
     }
 
     @discardableResult
@@ -255,7 +255,8 @@ final class AgentAutoUpdateTests {
             // as "stale" would cancel the operator's update.
             let manual = try await self.makeAgent(
                 app: app, org: org, name: "aa-manual", autoUpdate: false)
-            manual.assignUpdate(version: "1.9.0-rc1", source: .manual)
+            manual.assignUpdate(
+                version: "1.9.0-rc1", source: .manual, at: .testing(Date()))
             try await manual.save(on: app.db)
 
             await self.sweep(app)
@@ -285,7 +286,8 @@ final class AgentAutoUpdateTests {
             await app.agentMaintenance.setAutoUpdateTargetForTesting(nil)
             let agent = try await self.makeAgent(
                 app: app, org: org, name: "aa-manual", autoUpdate: false)
-            agent.assignUpdate(version: "1.9.0-rc1", source: .manual)
+            agent.assignUpdate(
+                version: "1.9.0-rc1", source: .manual, at: .testing(Date()))
             try await agent.save(on: app.db)
 
             await self.sweep(app)
@@ -304,7 +306,8 @@ final class AgentAutoUpdateTests {
         try await withAutoUpdateApp { app, _, org, _ in
             let manual = try await self.makeAgent(
                 app: app, org: org, name: "aa-manual", autoUpdate: false)
-            manual.assignUpdate(version: Self.target, source: .manual)
+            manual.assignUpdate(
+                version: Self.target, source: .manual, at: .testing(Date()))
             try await manual.save(on: app.db)
             let enrolled = try await self.makeAgent(app: app, org: org, name: "bb-enrolled")
 
@@ -329,7 +332,8 @@ final class AgentAutoUpdateTests {
                 version: "1.9.0-rc1",
                 source: .manual,
                 artifact: Self.stubArtifact,
-                at: Date(timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60)))
+                at: .testing(
+                    Date(timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60))))
             try await manual.save(on: app.db)
             let enrolled = try await self.makeAgent(app: app, org: org, name: "bb-enrolled")
 
@@ -374,7 +378,9 @@ final class AgentAutoUpdateTests {
             // agent in, and the one in which re-issuing the update is refused.
             let agent = try await self.makeAgent(
                 app: app, org: org, name: "aa-agent", autoUpdate: false, online: false)
-            agent.assignUpdate(version: "1.9.0-rc1", source: .manual, artifact: Self.stubArtifact)
+            agent.assignUpdate(
+                version: "1.9.0-rc1", source: .manual, artifact: Self.stubArtifact,
+                at: .testing(Date()))
             agent.recordUpdateFailure("did not re-register at 1.9.0-rc1")
             try await agent.save(on: app.db)
 
@@ -406,7 +412,8 @@ final class AgentAutoUpdateTests {
     func withdrawalKeepsManualAssignment() async throws {
         try await withAutoUpdateApp { app, _, org, token in
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
-            agent.assignUpdate(version: "1.9.0-rc1", source: .manual)
+            agent.assignUpdate(
+                version: "1.9.0-rc1", source: .manual, at: .testing(Date()))
             try await agent.save(on: app.db)
 
             try await app.test(.PATCH, "/api/agents/\(agent.id!)") { req in
@@ -659,7 +666,8 @@ final class AgentAutoUpdateTests {
             // the next sweep tick re-records the same failure immediately.
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent", autoUpdate: false)
             let staleClock = Date(timeIntervalSinceNow: -(AgentMaintenanceLoop.autoUpdateHealthBudgetSeconds + 60))
-            agent.assignUpdate(version: Self.target, source: .rollout, at: staleClock)
+            agent.assignUpdate(
+                version: Self.target, source: .rollout, at: .testing(staleClock))
             agent.recordUpdateFailure("did not re-register at \(Self.target)")
             try await agent.save(on: app.db)
 
@@ -684,7 +692,9 @@ final class AgentAutoUpdateTests {
     func reportedFailureDropsTheArtifact() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
             let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
-            agent.assignUpdate(version: Self.target, source: .manual, artifact: Self.stubArtifact)
+            agent.assignUpdate(
+                version: Self.target, source: .manual, artifact: Self.stubArtifact,
+                at: .testing(Date()))
             try await agent.save(on: app.db)
 
             let failed = ObservedAgentUpdateStatus(

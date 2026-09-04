@@ -46,7 +46,7 @@ extension AgentMaintenanceLoop {
     /// Only when nothing is failed or waiting does the sweep assign the next
     /// eligible *enrolled* agent (deterministic name order), after proving the
     /// release actually publishes an artifact for that agent's platform.
-    func sweepAgentAutoUpdates() async {
+    func sweepAgentAutoUpdates(at instant: ClusterInstant) async {
         guard !isShutDown, !app.didShutdown else { return }
         guard await app.coordination.acquireSweepLock("agent_auto_update") else {
             app.logger.debug("Skipping auto-update sweep; lock held by another control-plane instance")
@@ -54,7 +54,7 @@ extension AgentMaintenanceLoop {
         }
 
         let db = app.db
-        let now = Date()
+        let now = instant.date
         // Nil on a dev build with no configured target: no *rollout* can run,
         // but assignments an operator made by hand (which supply their own
         // artifact, precisely for builds a release does not serve) still need
@@ -216,7 +216,7 @@ extension AgentMaintenanceLoop {
                 return
             }
 
-            next.assignUpdate(version: target, source: .rollout, at: now)
+            next.assignUpdate(version: target, source: .rollout, at: instant)
             try await next.save(on: db)
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(

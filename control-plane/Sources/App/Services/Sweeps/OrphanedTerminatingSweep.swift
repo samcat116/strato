@@ -22,15 +22,25 @@ extension AgentMaintenanceLoop {
     /// one inventing its own retry.
     ///
     /// Internal rather than private so tests can drive a pass directly.
-    func sweepOrphanedTerminatingResources() async {
+    func sweepOrphanedTerminatingResources(at instant: ClusterInstant) async {
         guard !isShutDown, !app.didShutdown else { return }
+        guard instant.permitsDestructiveSweeps else {
+            app.logger.error(
+                "Skipping orphaned-resource reap because this replica's clock is too far from PostgreSQL",
+                metadata: [
+                    "offsetSeconds": .stringConvertible(instant.localClockOffsetSeconds),
+                    "limitSeconds": .stringConvertible(
+                        ClusterClock.destructiveSweepOffsetLimitSeconds),
+                ])
+            return
+        }
         // Cluster-singleton like the other sweeps: the reap claim would make
         // concurrent passes safe anyway, but there is no reason to pay for
         // every replica scanning.
         guard await app.coordination.acquireSweepLock("orphaned_terminating") else { return }
 
         let db = app.db
-        let cutoff = Date().addingTimeInterval(-Self.orphanedTerminatingBudgetSeconds)
+        let cutoff = instant.date.addingTimeInterval(-Self.orphanedTerminatingBudgetSeconds)
 
         do {
             // `finalizers` is filtered in Swift, not SQL: Fluent cannot express

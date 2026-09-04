@@ -86,9 +86,7 @@ extension VMController {
             projectID: vm.$project.id,
             environment: vm.environment,
             agentId: agentId,
-            expiresAt: try SnapshotRetention.expiry(
-                requested: request.ttlSeconds,
-                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(.snapshotDefaultTTLSeconds)),
+            expiresAt: nil,
             createdByID: userID)
         // Admission estimate: the machine state is bounded by the memory the
         // guest was granted. Replaced by the agent's actual figure once its
@@ -97,18 +95,24 @@ extension VMController {
         // The capture has a budget to converge in; past it the stuck-convergence
         // sweep marks the artifact degraded rather than leaving a client polling
         // a checkpoint that will never appear.
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.vmCheckpoint.completionBudgetSeconds(for: .create))
-
         let environment = vm.environment
         let memory = vm.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             // Checkpoint state draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: environment, size: memory, on: db)
+            snapshot.expiresAt = try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
+                    .snapshotDefaultTTLSeconds),
+                from: acceptedAt)
+            snapshot.extendConvergenceDeadline(
+                by: OperationResourceKind.vmCheckpoint.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
             try await snapshot.save(on: db)
             // The creator's binding on the checkpoint, in the create
             // transaction (the volume-snapshot path, issue #477).

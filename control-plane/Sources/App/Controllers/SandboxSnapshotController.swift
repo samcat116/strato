@@ -80,9 +80,7 @@ extension SandboxController {
             environment: sandbox.environment,
             agentId: agentId,
             captureMode: stopAfterSnapshot ? .stop : .resume,
-            expiresAt: try SnapshotRetention.expiry(
-                requested: request.ttlSeconds,
-                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(.snapshotDefaultTTLSeconds)),
+            expiresAt: nil,
             createdByID: userID)
         // Admission estimate: the memory file dominates and is bounded by
         // guest RAM. Replaced by the agent's actual sizes once its observed
@@ -95,18 +93,24 @@ extension SandboxController {
         snapshot.sourceCPUModel =
             (await req.application.agentService.getAgentInfo(agentId))?
             .hostInfo?.cpuModel
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create))
-
         let environment = sandbox.environment
         let memory = sandbox.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: environment, size: memory, on: db)
+            snapshot.expiresAt = try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
+                    .snapshotDefaultTTLSeconds),
+                from: acceptedAt)
+            snapshot.extendConvergenceDeadline(
+                by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
             try await snapshot.save(on: db)
             // The creator's binding on the snapshot, in the create
             // transaction (the volume-snapshot path, issue #477).

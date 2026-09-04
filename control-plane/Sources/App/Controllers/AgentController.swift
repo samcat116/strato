@@ -1314,7 +1314,11 @@ struct AgentController: RouteCollection {
         // deliberate — re-issuing the update is how an operator retries past a
         // recorded failure, and it restarts the health budget with a freshly
         // supplied artifact.
-        agent.assignUpdate(version: targetVersion, source: .manual, artifact: artifactOverride)
+        agent.assignUpdate(
+            version: targetVersion,
+            source: .manual,
+            artifact: artifactOverride,
+            at: try await ClusterClock.read(on: req.db))
         try await agent.save(on: req.db)
 
         req.logger.notice(
@@ -1427,7 +1431,7 @@ struct AgentController: RouteCollection {
                 // which is a retry that never had a chance.
                 agent.updateFailureReason = nil
                 if agent.updateDesiredVersion != nil {
-                    agent.updateAttemptedAt = Date()
+                    agent.updateAttemptedAt = try await ClusterClock.read(on: req.db).date
                 }
             } else if agent.updateAssignmentSource != .manual {
                 // Withdrawing clears the rollout's assignment: the next sync

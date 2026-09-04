@@ -379,6 +379,7 @@ enum SandboxCreationWorkflow {
                 sandbox.$id.exists = false
                 sandbox.generation = initialGeneration
                 return try await req.db.transaction { db -> ResourceMutation.Accepted in
+                    let acceptedAt = try await ClusterClock.read(on: db)
                     try await IdempotencyService.reserve(
                         req.idempotencyContext, actor: .user(userID), on: db)
                     if let restoreSnapshotID {
@@ -415,7 +416,12 @@ enum SandboxCreationWorkflow {
                     // (STR-147), stamped with the insert for the reason the VM
                     // create path stamps its own.
                     sandbox.extendConvergenceDeadline(
-                        by: OperationResourceKind.sandbox.completionBudgetSeconds(for: .create))
+                        by: OperationResourceKind.sandbox.completionBudgetSeconds(for: .create),
+                        from: acceptedAt)
+                    // Fluent stamps `created_at` from the process clock on
+                    // insert. Rewrite it in the same transaction so the
+                    // sandbox TTL derives from PostgreSQL time as well.
+                    sandbox.createdAt = acceptedAt.date
                     try await sandbox.update(on: db)
 
                     // One NIC on the requested logical network, IPAM-allocated by

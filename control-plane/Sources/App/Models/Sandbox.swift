@@ -259,17 +259,17 @@ extension Sandbox {
 
     /// Whether the lifetime budget has run out. Always false for a sandbox
     /// with no TTL.
-    func isExpired(at date: Date = Date()) -> Bool {
+    func isExpired(at instant: ClusterInstant) -> Bool {
         guard let expiresAt else { return false }
-        return expiresAt <= date
+        return expiresAt <= instant.date
     }
 
     /// Updates the observed status, starts a fresh divergence episode, and
     /// stamps the change time for reconciliation sweeps. Does not persist —
     /// call `save(on:)` afterwards.
-    func setStatus(_ newStatus: SandboxStatus, at date: Date = Date()) {
+    func setStatus(_ newStatus: SandboxStatus, at instant: ClusterInstant) {
         status = newStatus
-        statusChangedAt = date
+        statusChangedAt = instant.date
         divergenceDetectedAt = nil
     }
 
@@ -335,9 +335,11 @@ extension Sandbox {
     /// counterpart to `Telemetry.vmEnteredError` yet, and the parameter is here
     /// so both workload kinds present one signature to `ConvergingResource`.
     @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
+    func resolveForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String, at instant: ClusterInstant
+    ) -> Bool {
         if status.isTransitional || (mutation == .create && observedGeneration == 0) {
-            setStatus(.error)
+            setStatus(.error, at: instant)
         }
         return revertDesiredToObserved()
     }

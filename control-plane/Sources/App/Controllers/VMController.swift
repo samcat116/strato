@@ -1170,18 +1170,20 @@ struct VMController: RouteCollection {
             correlationID: executionID.uuidString,
             argv: run.command,
             on: req)
-        let execution = VMCommandExecution(
-            id: executionID,
-            vmID: vmID,
-            actorID: try user.requireID(),
-            agentKey: agent.identity.key,
-            deadline: Date().addingTimeInterval(VMCommandExecutionService.completionBudget),
-            actorUsername: auditContext.username,
-            apiKeyID: auditContext.apiKeyID,
-            organizationID: auditContext.organizationID,
-            sourceIP: auditContext.sourceIP,
-            adminBypass: auditContext.adminBypass)
         try await req.db.transaction { db in
+            let acceptedAt = try await ClusterClock.read(on: db)
+            let execution = VMCommandExecution(
+                id: executionID,
+                vmID: vmID,
+                actorID: try user.requireID(),
+                agentKey: agent.identity.key,
+                deadline: acceptedAt.date.addingTimeInterval(
+                    VMCommandExecutionService.completionBudget),
+                actorUsername: auditContext.username,
+                apiKeyID: auditContext.apiKeyID,
+                organizationID: auditContext.organizationID,
+                sourceIP: auditContext.sourceIP,
+                adminBypass: auditContext.adminBypass)
             try await execution.create(command: run.command, on: db)
         }
         let requestedAuditRecord = VMGuestExecutionAudit.makeCommandRequestedRecord(auditContext)

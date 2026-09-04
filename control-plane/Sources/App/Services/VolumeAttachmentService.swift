@@ -153,14 +153,15 @@ enum VolumeAttachmentService {
     ///
     /// `status` is left alone. It is what the agent last observed, and the
     /// detach it will observe is what moves it.
-    static func clearAttachment(_ volume: Volume) {
+    static func clearAttachment(_ volume: Volume, at instant: ClusterInstant) {
         volume.$vm.id = nil
         volume.deviceName = nil
         volume.bootOrder = nil
         volume.readonly = false
         volume.attachedAgentId = nil
         volume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
+            by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach),
+            from: instant)
     }
 
     /// Releases every data volume attached to `vmID`, and returns their ids.
@@ -173,6 +174,7 @@ enum VolumeAttachmentService {
     /// not make its VM undeletable" outranks every other consideration here.
     @discardableResult
     static func releaseDataVolumes(fromVM vmID: UUID, on db: any Database) async throws -> [UUID] {
+        let instant = try await ClusterClock.read(on: db)
         let attached = try await Volume.query(on: db)
             .filter(\.$vm.$id == vmID)
             .filter(\.$volumeType == .data)
@@ -186,7 +188,7 @@ enum VolumeAttachmentService {
             // release the attachment the query selected, never a newer one.
             guard volume.$vm.id == vmID else { continue }
             let expectedGeneration = volume.generation
-            clearAttachment(volume)
+            clearAttachment(volume, at: instant)
             guard
                 case .applied = try await volume.advanceDesiredStateGeneration(
                     expectedGeneration: expectedGeneration, on: db)

@@ -6,7 +6,7 @@ import StratoShared
 import Vapor
 
 extension AgentMaintenanceLoop {
-    func sweepStrandedVolumeAttachments() async {
+    func sweepStrandedVolumeAttachments(at instant: ClusterInstant) async {
         // Never touch app.db (a fatal error, not a throw, after core
         // teardown) once shutdown has begun — this was the crashing frame of
         // the recurring "Core not configured" CI crash.
@@ -43,7 +43,7 @@ extension AgentMaintenanceLoop {
                             || volume.attachedAgentId != nil || volume.readonly
                     else { return false }
                     let expectedGeneration = volume.generation
-                    VolumeAttachmentService.clearAttachment(volume)
+                    VolumeAttachmentService.clearAttachment(volume, at: instant)
                     guard
                         case .applied = try await volume.advanceDesiredStateGeneration(
                             expectedGeneration: expectedGeneration, on: tx)

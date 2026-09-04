@@ -64,56 +64,7 @@ actor AgentMaintenanceLoop {
                     // app.db or app storage, which is a process-killing fatal
                     // error (not a throw) after core teardown.
                     try self.checkTickPreconditions()
-
-                    await checkStaleAgents()
-
-                    try self.checkTickPreconditions()
-
-                    await app.replicaBridge.verifySubscriptions()
-
-                    try self.checkTickPreconditions()
-
-                    await sweepStuckConvergence()
-
-                    try self.checkTickPreconditions()
-
-                    await sweepSteadyStateDivergence()
-
-                    try self.checkTickPreconditions()
-
-                    await sweepStrandedVolumeAttachments()
-
-                    try self.checkTickPreconditions()
-
-                    await sweepOrphanedTerminatingResources()
-
-                    try self.checkTickPreconditions()
-
-                    await sweepExpiredSandboxes()
-
-                    try self.checkTickPreconditions()
-
-                    await SnapshotRetentionSweep.run(app: app)
-
-                    try self.checkTickPreconditions()
-
-                    // Prune expired idempotency keys every 120 ticks.
-                    if tick % 120 == 0 {
-                        do {
-                            let deleted = try await IdempotencyService.sweepExpired(on: app.db)
-                            if deleted > 0 {
-                                app.logger.info(
-                                    "Idempotency retention sweep pruned expired keys",
-                                    metadata: ["deleted": .stringConvertible(deleted)])
-                            }
-                        } catch {
-                            app.logger.error("Idempotency retention sweep failed: \(error)")
-                        }
-                    }
-
-                    try self.checkTickPreconditions()
-
-                    await sweepAgentAutoUpdates()
+                    try await runTick(number: tick)
                 } catch {
                     if !Task.isCancelled {
                         app.logger.error("Error in heartbeat monitoring task: \(error)")
@@ -126,6 +77,64 @@ actor AgentMaintenanceLoop {
         }
     }
 
+    /// Runs one maintenance pass against one PostgreSQL-sourced instant. The
+    /// database query is deliberately above every sweep so another replica's
+    /// wall clock can neither fail a healthy mutation nor expire data early.
+    func runTick(
+        number tick: Int,
+        metricsFactory: (any MetricsFactory)? = nil,
+        localTime: @Sendable () -> Date = { Date() }
+    ) async throws {
+        let instant = try await ClusterClock.read(on: app.db, localTime: localTime)
+        Telemetry.recordControlPlaneClockOffset(
+            seconds: instant.localClockOffsetSeconds,
+            factory: metricsFactory)
+        if abs(instant.localClockOffsetSeconds) > ClusterClock.warningOffsetSeconds {
+            app.logger.warning(
+                "Control-plane wall clock differs from PostgreSQL",
+                metadata: [
+                    "offsetSeconds": .stringConvertible(instant.localClockOffsetSeconds),
+                    "destructiveSweepLimitSeconds": .stringConvertible(
+                        ClusterClock.destructiveSweepOffsetLimitSeconds),
+                ])
+        }
+
+        await checkStaleAgents(at: instant)
+        try checkTickPreconditions()
+        await app.replicaBridge.verifySubscriptions()
+        try checkTickPreconditions()
+        await sweepStuckConvergence(at: instant)
+        try checkTickPreconditions()
+        await sweepSteadyStateDivergence(at: instant)
+        try checkTickPreconditions()
+        await sweepStrandedVolumeAttachments(at: instant)
+        try checkTickPreconditions()
+        await sweepOrphanedTerminatingResources(at: instant)
+        try checkTickPreconditions()
+        await sweepExpiredSandboxes(at: instant)
+        try checkTickPreconditions()
+        await SnapshotRetentionSweep.run(app: app, at: instant)
+        try checkTickPreconditions()
+
+        // Prune expired idempotency keys every 120 ticks. Its predicate uses
+        // PostgreSQL `now()` directly, so it needs no bound tick instant.
+        if tick % 120 == 0 {
+            do {
+                let deleted = try await IdempotencyService.sweepExpired(on: app.db)
+                if deleted > 0 {
+                    app.logger.info(
+                        "Idempotency retention sweep pruned expired keys",
+                        metadata: ["deleted": .stringConvertible(deleted)])
+                }
+            } catch {
+                app.logger.error("Idempotency retention sweep failed: \(error)")
+            }
+        }
+
+        try checkTickPreconditions()
+        await sweepAgentAutoUpdates(at: instant)
+    }
+
     /// Throws when the current tick must stop: the task was cancelled, the
     /// service shut down, or the application itself has been torn down.
     func checkTickPreconditions() throws {
@@ -136,7 +145,10 @@ actor AgentMaintenanceLoop {
     }
 
     /// Internal so tests can drive one monitor pass without waiting for the timer.
-    func checkStaleAgents(dependencyMetricsFactory: (any MetricsFactory)? = nil) async {
+    func checkStaleAgents(
+        at instant: ClusterInstant,
+        dependencyMetricsFactory: (any MetricsFactory)? = nil
+    ) async {
         // Shutdown sets this before cancelling the loop; a tick that already
         // slipped past its sleep must not start a database sweep it doesn't
         // need to finish. The app-level check is a backstop for loops armed
@@ -144,7 +156,7 @@ actor AgentMaintenanceLoop {
         // core teardown is a process-killing fatal error, not a throw.
         guard !isShutDown, !app.didShutdown else { return }
 
-        let now = Date()
+        let now = instant.date
         let staleThreshold: TimeInterval = 60  // 60 seconds
 
         do {
@@ -232,23 +244,21 @@ actor AgentMaintenanceLoop {
 
     /// Marks overdue, unconverged resources as degraded. The claim is
     /// idempotent, so every replica may run this without a singleton lock.
-    func sweepStuckConvergence() async {
+    func sweepStuckConvergence(at instant: ClusterInstant) async {
         guard !isShutDown, !app.didShutdown else { return }
 
         let db = app.db
-        let now = Date()
-
         do {
-            try await degradeOverdue(VM.self, now: now, on: db)
-            try await degradeOverdue(Sandbox.self, now: now, on: db)
-            try await degradeOverdue(Volume.self, now: now, on: db)
-            try await degradeOverdue(VolumeSnapshot.self, now: now, on: db)
-            try await degradeOverdue(VMSnapshot.self, now: now, on: db)
-            try await degradeOverdue(SandboxSnapshot.self, now: now, on: db)
+            try await degradeOverdue(VM.self, at: instant, on: db)
+            try await degradeOverdue(Sandbox.self, at: instant, on: db)
+            try await degradeOverdue(Volume.self, at: instant, on: db)
+            try await degradeOverdue(VolumeSnapshot.self, at: instant, on: db)
+            try await degradeOverdue(VMSnapshot.self, at: instant, on: db)
+            try await degradeOverdue(SandboxSnapshot.self, at: instant, on: db)
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
-        await app.vmCommandExecutionService.sweepStuck(now: now)
+        await app.vmCommandExecutionService.sweepStuck(at: instant)
     }
 
     /// Grace before a resting desired/observed mismatch becomes divergent.
@@ -265,13 +275,16 @@ actor AgentMaintenanceLoop {
     /// by `divergence_detected_at`, claimed atomically so every replica may run
     /// this sweep without duplicating one episode's warning.
     @discardableResult
-    func sweepSteadyStateDivergence(now: Date = Date()) async -> SteadyStateDivergenceCounts {
+    func sweepSteadyStateDivergence(
+        at instant: ClusterInstant
+    ) async -> SteadyStateDivergenceCounts {
         guard !isShutDown, !app.didShutdown else { return SteadyStateDivergenceCounts() }
         guard let sql = app.db as? any SQLDatabase else {
             app.logger.error("Steady-state divergence sweep requires an SQL database")
             return SteadyStateDivergenceCounts()
         }
 
+        let now = instant.date
         let cutoff = now.addingTimeInterval(-Self.steadyStateDivergenceGrace)
         do {
             let vms = try await divergentVMRows(before: cutoff, on: sql)
@@ -417,9 +430,9 @@ actor AgentMaintenanceLoop {
     }
 
     private func degradeOverdue<R: ConvergingResource>(
-        _ type: R.Type, now: Date, on db: any Database
+        _ type: R.Type, at instant: ClusterInstant, on db: any Database
     ) async throws {
-        let overdue = try await R.overdueForConvergence(at: now, on: db)
+        let overdue = try await R.overdueForConvergence(at: instant, on: db)
 
         for resource in overdue {
             guard let id = resource.id else { continue }
@@ -440,7 +453,7 @@ actor AgentMaintenanceLoop {
                 + "\(resource.generation) before the deadline"
             let outcome = try await ResourceConvergence.recordExpiredDeadline(
                 resource, mutation: mutation,
-                now: now, timeoutReason: timeoutReason, on: db)
+                at: instant, timeoutReason: timeoutReason, on: db)
             if case .superseded(let actualGeneration) = outcome {
                 Telemetry.desiredStateWriteConflict(
                     resourceKind: R.operationResourceKind.rawValue, writer: "stuck_convergence")

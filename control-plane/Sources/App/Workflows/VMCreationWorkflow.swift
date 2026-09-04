@@ -376,6 +376,7 @@ enum VMCreationWorkflow {
                 vm.$id.exists = false
                 vm.generation = initialGeneration
                 return try await req.db.transaction { db in
+                    let acceptedAt = try await ClusterClock.read(on: db)
                     try await IdempotencyService.reserve(
                         req.idempotencyContext, actor: .user(userID), on: db)
                     // Enforce and reserve applicable project/OU/org quotas before the VM row
@@ -395,7 +396,8 @@ enum VMCreationWorkflow {
                     // here and placement still leaves a resource the sweep can
                     // judge.
                     vm.extendConvergenceDeadline(
-                        by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create))
+                        by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create),
+                        from: acceptedAt)
 
                     // Save VM to database first to generate ID
                     try await vm.save(on: db)
@@ -519,7 +521,8 @@ enum VMCreationWorkflow {
                     bootVolume.readonly = false
                     bootVolume.generation = 1
                     bootVolume.extendConvergenceDeadline(
-                        by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
+                        by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
+                        from: acceptedAt)
                     try await bootVolume.save(on: db)
                     let bootVolumeID = try bootVolume.requireID()
 

@@ -11,6 +11,7 @@ extension ObservedStateApplier {
         observed: ObservedVMState,
         interfaces: [VMNetworkInterface],
         bootVolumes: [BootVolumeDependency]?,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws {
         let vmID = try vm.requireID()
@@ -50,7 +51,7 @@ extension ObservedStateApplier {
         // guestInfo, independently: a guest can report balloon stats without
         // qga (and vice versa), so their presence is tracked separately.
         if let memoryStats = observed.memoryStats {
-            try await persistMemoryStats(vm: vm, stats: memoryStats, on: db)
+            try await persistMemoryStats(vm: vm, stats: memoryStats, at: instant, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
             try await clearMemoryStats(vm: vm, on: db)
         }
@@ -71,7 +72,8 @@ extension ObservedStateApplier {
         var changed = vm.recordTimestampedConvergence(
             phase: effectivePhase,
             lastError: observed.lastError,
-            failedGeneration: observed.failedGeneration
+            failedGeneration: observed.failedGeneration,
+            at: instant
         )
 
         // Still converging: progress only. The status is not settled, so it
@@ -114,7 +116,7 @@ extension ObservedStateApplier {
         var statusTransition: (previous: VMStatus, current: VMStatus)?
         if vm.status != observed.status, observed.status != .unknown || vm.status.isTransitional {
             let previous = vm.status
-            vm.setStatus(observed.status)
+            vm.setStatus(observed.status, at: instant)
             changed = true
             statusTransition = (previous, observed.status)
 
@@ -169,12 +171,13 @@ extension ObservedStateApplier {
             reportedFailedGeneration: observed.failedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .boot,
+            at: instant,
             prepareFailure: { vm in
                 guard failedBefore != vm.generation,
                     observed.status == .unknown,
                     vm.status != .error
                 else { return }
-                vm.setStatus(.error)
+                vm.setStatus(.error, at: instant)
                 enteredError = true
                 Telemetry.vmEnteredError(reason: "convergence_failed")
             },
@@ -310,7 +313,9 @@ extension ObservedStateApplier {
     /// steady state for an idle guest) so the report stream doesn't churn the
     /// row — which means `guestMemoryStatsAt` records when the values last
     /// *changed*, a freshness signal that survives unchanged reports.
-    func persistMemoryStats(vm: VM, stats: VMMemoryStats, on db: Database) async throws {
+    func persistMemoryStats(
+        vm: VM, stats: VMMemoryStats, at instant: ClusterInstant, on db: Database
+    ) async throws {
         guard
             vm.guestMemoryTotalBytes != stats.totalBytes
                 || vm.guestMemoryAvailableBytes != stats.availableBytes
@@ -319,7 +324,7 @@ extension ObservedStateApplier {
         vm.guestMemoryTotalBytes = stats.totalBytes
         vm.guestMemoryAvailableBytes = stats.availableBytes
         vm.guestMemoryBalloonActualBytes = stats.balloonActualBytes
-        vm.guestMemoryStatsAt = Date()
+        vm.guestMemoryStatsAt = instant.date
         try await vm.save(on: db)
     }
 
@@ -373,6 +378,7 @@ extension ObservedStateApplier {
     func handleReportedAbsence(
         vm: VM,
         agentId: String,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws {
         let vmID = try vm.requireID()
@@ -396,7 +402,7 @@ extension ObservedStateApplier {
         // whatever it last said, rather than leave `conditions` claiming a
         // download that nothing is doing (STR-142).
         let convergenceCleared = vm.recordTimestampedConvergence(
-            phase: nil, lastError: nil, failedGeneration: nil)
+            phase: nil, lastError: nil, failedGeneration: nil, at: instant)
 
         // Same established-state rule as the heartbeat reconciliation: only
         // states that assert live agent presence are safe to escalate on
@@ -411,7 +417,7 @@ extension ObservedStateApplier {
         }
 
         let previous = vm.status
-        vm.setStatus(.error)
+        vm.setStatus(.error, at: instant)
         try await vm.save(on: db)
         Telemetry.vmEnteredError(reason: "reconciliation")
         await WebhookEvents.emitVMStateChanged(
@@ -430,6 +436,7 @@ extension ObservedStateApplier {
     func applyObservedSandboxState(
         sandbox: Sandbox,
         observed: ObservedSandboxState,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws {
         let sandboxID = try sandbox.requireID()
@@ -442,7 +449,8 @@ extension ObservedStateApplier {
         var changed = sandbox.recordTimestampedConvergence(
             phase: observed.convergencePhase,
             lastError: observed.lastError,
-            failedGeneration: observed.failedGeneration
+            failedGeneration: observed.failedGeneration,
+            at: instant
         )
 
         // Still converging: progress only, never a settled status.
@@ -467,7 +475,7 @@ extension ObservedStateApplier {
 
         if sandbox.status != observed.status, observed.status != .unknown || sandbox.status.isTransitional {
             let previous = sandbox.status
-            sandbox.setStatus(observed.status)
+            sandbox.setStatus(observed.status, at: instant)
             changed = true
 
             // A workload finishing on its own (`.exited`) is the normal end
@@ -513,9 +521,10 @@ extension ObservedStateApplier {
             reportedFailedGeneration: observed.failedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .boot,
+            at: instant,
             prepareFailure: { sandbox in
                 if failedBefore != sandbox.generation, observed.status == .unknown {
-                    sandbox.setStatus(.error)
+                    sandbox.setStatus(.error, at: instant)
                 }
             },
             on: db)
@@ -526,6 +535,7 @@ extension ObservedStateApplier {
     func handleReportedSandboxAbsence(
         sandbox: Sandbox,
         agentId: String,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws {
         let sandboxID = try sandbox.requireID()
@@ -546,7 +556,7 @@ extension ObservedStateApplier {
         // Nothing to report means no progress to report — same rationale as
         // the VM path (STR-142).
         let convergenceCleared = sandbox.recordTimestampedConvergence(
-            phase: nil, lastError: nil, failedGeneration: nil)
+            phase: nil, lastError: nil, failedGeneration: nil, at: instant)
 
         // Only escalate established sandboxes: a never-confirmed row
         // (observedGeneration 0) may be mid-create on an agent that hasn't
@@ -560,7 +570,7 @@ extension ObservedStateApplier {
         }
 
         let previous = sandbox.status
-        sandbox.setStatus(.error)
+        sandbox.setStatus(.error, at: instant)
         try await sandbox.save(on: db)
         app.logger.warning(
             "Sandbox missing from agent observed-state report; marking as error until re-converged",

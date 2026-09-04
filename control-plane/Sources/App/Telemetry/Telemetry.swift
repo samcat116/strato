@@ -258,6 +258,19 @@ enum Telemetry {
         Gauge(label: "strato_agent_heartbeat_staleness_seconds", dimensions: [("agent", agentName)]).record(seconds)
     }
 
+    /// Signed PostgreSQL-minus-replica wall-clock offset. Positive means the
+    /// database is ahead. Every replica records its own series through the
+    /// telemetry resource's process/instance attributes.
+    static func recordControlPlaneClockOffset(
+        seconds: Double,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        recordGauge(
+            label: "control_plane_clock_offset_seconds",
+            value: seconds,
+            factory: factory)
+    }
+
     /// Latest feature dependency state. Counters are reported as gauges because
     /// the agent owns their monotonicity across control-plane replicas.
     static func recordDependency(

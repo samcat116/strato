@@ -58,7 +58,8 @@ final class AgentServiceLifecycleTests {
                 [("agent", agent.name), ("dependency", NodeDependencyID.libvirt.rawValue)])
             #expect(availability.lastValue == 1)
 
-            await app.agentMaintenance.checkStaleAgents(dependencyMetricsFactory: metrics)
+            await app.agentMaintenance.checkStaleAgents(
+                at: .testing(Date()), dependencyMetricsFactory: metrics)
 
             let persisted = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(persisted.status == .offline)
