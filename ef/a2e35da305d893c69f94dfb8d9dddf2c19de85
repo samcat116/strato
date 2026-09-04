@@ -1,0 +1,24 @@
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+TopologySupport.swift
+  s_0a6f49dab719ee::t_9fe888d781d74d 31-49,51-53,62-63,67
+  s_0a6f49dab719ee::t_85c73b4a5fc93f 54-61,64-66
+agent/Tests/StratoAgentRuntimeTests/NetworkServiceLinuxTopologyTests.swift
+  s_0a6f49dab719ee::t_9fe888d781d74d 1-35
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux.swift
+  s_0a6f49dab719ee::t_9fe888d781d74d 141-155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "efa2e35da305d893c69f94dfb8d9dddf2c19de85",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
