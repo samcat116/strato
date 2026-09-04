@@ -246,9 +246,15 @@ actor IAMDecisionQueue {
     }
 
     /// Snapshot for tests and diagnostics.
-    var stats: (
-        queued: Int, inFlight: Int, inFlightRecords: Int, draining: Bool, shed: Int
-    ) {
+    var stats:
+        (
+            queued: Int,
+            inFlight: Int,
+            inFlightRecords: Int,
+            draining: Bool,
+            shed: Int
+        )
+    {
         (pending.count, inFlight, inFlightRecords, draining, shedTotal)
     }
 }

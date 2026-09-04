@@ -544,10 +544,16 @@ actor AuditEventQueue {
     }
 
     /// Snapshot for tests and diagnostics.
-    var stats: (
-        queued: Int, queuedBytes: Int, inFlight: Int, inFlightRecords: Int,
-        draining: Bool, shed: Int
-    ) {
+    var stats:
+        (
+            queued: Int,
+            queuedBytes: Int,
+            inFlight: Int,
+            inFlightRecords: Int,
+            draining: Bool,
+            shed: Int
+        )
+    {
         (pending.count, pendingBytes, inFlight, inFlightRecords, draining, shedTotal)
     }
 }
