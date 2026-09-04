@@ -86,9 +86,11 @@ public struct VolumeIOCounters: Equatable, Sendable {
             writeBytes >= previous.writeBytes
         else { return nil }
 
-        let operations = Double(readOperations - previous.readOperations)
+        let operations =
+            Double(readOperations - previous.readOperations)
             + Double(writeOperations - previous.writeOperations)
-        let bytes = Double(readBytes - previous.readBytes)
+        let bytes =
+            Double(readBytes - previous.readBytes)
             + Double(writeBytes - previous.writeBytes)
         let iops = operations / elapsedSeconds
         let bytesPerSecond = bytes / elapsedSeconds

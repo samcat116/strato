@@ -182,7 +182,7 @@ extension Agent {
         var hostPreflightReport: HostPreflight.Report? = nil
         var tpmAvailable = isSimulationMode
         if isSimulationMode {
-            hypervisors = simulatedHypervisorSupport()
+            hypervisors = Agent.simulatedHypervisorSupport()
         } else {
             // One `virsh` call answers reachability and version together; the
             // vTPM question is a second one, and it is only worth asking of a
@@ -576,18 +576,21 @@ extension Agent {
 
     /// The hypervisor support to advertise in simulation mode: the mock
     /// backends this agent actually registered, reported as available and
-    /// hardware-accelerated so the scheduler treats the dummy as a fully capable
-    /// host. Derived from `HypervisorType.allCases`, exactly like the mock
-    /// registration in `start()`, so the two cannot drift apart and a new
-    /// backend is simulated the moment it has an enum case.
-    func simulatedHypervisorSupport() -> [HypervisorSupport] {
+    /// hardware-accelerated so the scheduler can place workloads whose behavior
+    /// the mock faithfully simulates. Per-volume I/O limits are deliberately not
+    /// advertised: the mock has no live domain, so hot-attached limits cannot be
+    /// applied or observed consistently.
+    ///
+    /// Derived from `HypervisorType.allCases`, exactly like the mock registration
+    /// in `start()`, so the two cannot drift apart and a new backend is simulated
+    /// the moment it has an enum case.
+    static func simulatedHypervisorSupport() -> [HypervisorSupport] {
         HypervisorType.allCases.map { type in
             HypervisorSupport(
                 type: type,
                 available: true,
                 accelerated: true,
-                supportsVsock: type == .qemu ? true : nil,
-                supportsVolumeIOLimits: type == .qemu ? true : nil
+                supportsVsock: type == .qemu ? true : nil
             )
         }
     }
