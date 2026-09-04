@@ -244,9 +244,10 @@ public protocol HypervisorService: Actor, Sendable {
     /// callers never turn silence into an applied echo.
     func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits
 
-    /// Cumulative live-domain I/O counters for operator rate telemetry. Nil is
-    /// normal for a stopped domain or a backend without observable counters.
-    func diskIOCounters(vmId: String, volumeId: String) async -> VolumeIOCounters?
+    /// Cumulative live-domain I/O counters and the domain incarnation that
+    /// produced them. Nil is normal for a stopped domain or a backend without
+    /// observable counters.
+    func diskIOCounterSample(vmId: String, volumeId: String) async -> VolumeIOCounterSample?
 
     /// Detaches a disk from a running VM (hot-unplug)
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
@@ -423,7 +424,7 @@ public extension HypervisorService {
             "\(hypervisorType.displayName) does not report per-volume I/O limits")
     }
 
-    func diskIOCounters(vmId: String, volumeId: String) async -> VolumeIOCounters? { nil }
+    func diskIOCounterSample(vmId: String, volumeId: String) async -> VolumeIOCounterSample? { nil }
 
     /// Backends must opt in to running resize. The default refuses rather than
     /// implying any online resize support.

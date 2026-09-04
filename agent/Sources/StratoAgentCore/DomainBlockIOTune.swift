@@ -98,3 +98,22 @@ public struct VolumeIOCounters: Equatable, Sendable {
         return VolumeIOObservedRate(iops: iops, bytesPerSecond: bytesPerSecond)
     }
 }
+
+/// One cumulative counter reading tied to the live hypervisor incarnation that
+/// produced it. A domain restart can create larger counters than the previous
+/// process, so counter magnitude alone cannot identify a reset.
+public struct VolumeIOCounterSample: Equatable, Sendable {
+    public let counters: VolumeIOCounters
+    public let incarnation: Int32
+
+    public init(counters: VolumeIOCounters, incarnation: Int32) {
+        self.counters = counters
+        self.incarnation = incarnation
+    }
+
+    /// Rates are meaningful only between readings from the same live domain.
+    public func rate(since previous: Self, elapsedSeconds: Double) -> VolumeIOObservedRate? {
+        guard incarnation == previous.incarnation else { return nil }
+        return counters.rate(since: previous.counters, elapsedSeconds: elapsedSeconds)
+    }
+}

@@ -414,7 +414,7 @@ actor Agent {
     /// Previous live libvirt counter sample per volume. Kept only long enough
     /// to turn monotonic counters into the rate sent with observed state; it is
     /// not convergence state and deliberately does not survive a restart.
-    var volumeIOCounterSamples: [String: (counters: VolumeIOCounters, sampledAt: ContinuousClock.Instant)] = [:]
+    var volumeIOCounterSamples: [String: (sample: VolumeIOCounterSample, sampledAt: ContinuousClock.Instant)] = [:]
 
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real

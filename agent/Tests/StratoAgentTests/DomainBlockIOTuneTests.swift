@@ -59,4 +59,20 @@ struct DomainBlockIOTuneTests {
 
         #expect(reset.rate(since: previous, elapsedSeconds: 1) == nil)
     }
+
+    @Test("counters from a replacement QEMU process do not produce a rate")
+    func processReplacement() {
+        let previous = VolumeIOCounterSample(
+            counters: VolumeIOCounters(
+                readOperations: 100, writeOperations: 200,
+                readBytes: 1_000, writeBytes: 2_000),
+            incarnation: 41)
+        let replacement = VolumeIOCounterSample(
+            counters: VolumeIOCounters(
+                readOperations: 1_000, writeOperations: 2_000,
+                readBytes: 10_000, writeBytes: 20_000),
+            incarnation: 42)
+
+        #expect(replacement.rate(since: previous, elapsedSeconds: 1) == nil)
+    }
 }

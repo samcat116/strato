@@ -1557,7 +1557,7 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    func diskIOCounters(vmId: String, volumeId: String) async -> VolumeIOCounters? {
+    func diskIOCounterSample(vmId: String, volumeId: String) async -> VolumeIOCounterSample? {
         do {
             let dom = try await domain(vmId)
             guard LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
@@ -1569,7 +1569,8 @@ actor LibvirtService: HypervisorService {
                 try await client.domainBlockStats(
                     dom: dom, path: disk.target, deadline: deadline)
             }
-            return VolumeIOCounters(stats)
+            guard dom.id >= 0, let counters = VolumeIOCounters(stats) else { return nil }
+            return VolumeIOCounterSample(counters: counters, incarnation: dom.id)
         } catch {
             logger.debug(
                 "Could not sample live disk I/O counters",

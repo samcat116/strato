@@ -391,7 +391,7 @@ extension Agent: ReconcileActuator {
                 appliedLimits = try? await service.diskIOLimits(
                     vmId: attachment.vmId, volumeId: volumeId)
 
-                if let counters = await service.diskIOCounters(
+                if let sample = await service.diskIOCounterSample(
                     vmId: attachment.vmId, volumeId: volumeId)
                 {
                     let now = ContinuousClock.now
@@ -399,10 +399,10 @@ extension Agent: ReconcileActuator {
                         let elapsed = previous.sampledAt.duration(to: now).components
                         let elapsedSeconds =
                             Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
-                        observedRate = counters.rate(
-                            since: previous.counters, elapsedSeconds: elapsedSeconds)
+                        observedRate = sample.rate(
+                            since: previous.sample, elapsedSeconds: elapsedSeconds)
                     }
-                    volumeIOCounterSamples[volumeId] = (counters, now)
+                    volumeIOCounterSamples[volumeId] = (sample, now)
                 } else {
                     // Do not average across a stopped interval or a QEMU
                     // counter reset. The next live read establishes a new
