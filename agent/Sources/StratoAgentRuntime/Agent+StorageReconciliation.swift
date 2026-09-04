@@ -386,7 +386,11 @@ extension Agent {
         } else {
             claim = nil
         }
-        defer { capacityAdmissionLedger.release(claim) }
+        var supplementalClaim: HostCapacityClaim?
+        defer {
+            capacityAdmissionLedger.release(supplementalClaim)
+            capacityAdmissionLedger.release(claim)
+        }
 
         // The create strategy is read only here, when the volume does not yet
         // exist. A present volume never re-runs it, which is what makes a
@@ -443,11 +447,36 @@ extension Agent {
                 volumeId: item.id, sizeBytes: desired.sizeBytes, format: format)
         }
 
-        // A cloned or image-backed volume inherits the source's size, which may
-        // be smaller than what was asked for; the next sync plans the grow.
-        volumeSizes[item.id] = try? await backend.volumeInfo(attachment: attachment).virtualSize
+        // A cloned or image-backed volume inherits the source's size. It may be
+        // smaller than what was asked for (the next sync plans the grow), or it
+        // may be larger. Retain at least the inherited promise before releasing
+        // the provisional create claim.
+        let materializedSize = max(
+            0, try await backend.volumeInfo(attachment: attachment).virtualSize)
+        volumeSizes[item.id] = materializedSize
         if desired.storage == .local {
-            volumeCommittedSizes[item.id] = desired.sizeBytes
+            let retainedSize = max(desired.sizeBytes, materializedSize)
+            volumeCommittedSizes[item.id] = retainedSize
+            if retainedSize > desired.sizeBytes {
+                // The raw snapshot now sees the new volume in local inventory.
+                // Exclude its retained commitment here because the create claim
+                // still represents it; otherwise upgrading that claim would
+                // charge the same volume twice during admission.
+                let raw = await rawHostCapacitySnapshot()
+                let retained = HostReservation(diskBytes: retainedSize)
+                let excludingMaterializedVolume = HostCapacitySnapshot(
+                    total: raw.total,
+                    reserved: raw.reserved.subtractingSaturating(retained),
+                    inventoryKnown: raw.inventoryKnown,
+                    diskInventoryKnown: raw.diskInventoryKnown)
+                supplementalClaim = try capacityAdmissionLedger.claim(
+                    .positiveDelta(
+                        from: HostReservation(diskBytes: desired.sizeBytes),
+                        to: retained),
+                    desiredWorkloadReservation: retained,
+                    snapshot: excludingMaterializedVolume,
+                    agentName: initialAgentID)
+            }
         }
         logger.info(
             "Volume converged into existence",

@@ -31,6 +31,13 @@ public struct HostReservation: Sendable, Equatable, Hashable {
             memoryBytes: memoryOverflow ? Int64.max : memory,
             diskBytes: diskOverflow ? Int64.max : disk)
     }
+
+    public func subtractingSaturating(_ other: HostReservation) -> HostReservation {
+        HostReservation(
+            cpus: other.cpus >= cpus ? 0 : cpus - other.cpus,
+            memoryBytes: other.memoryBytes >= memoryBytes ? 0 : memoryBytes - other.memoryBytes,
+            diskBytes: other.diskBytes >= diskBytes ? 0 : diskBytes - other.diskBytes)
+    }
 }
 
 /// A backend's committed reservation and, when it can say, the exact workload

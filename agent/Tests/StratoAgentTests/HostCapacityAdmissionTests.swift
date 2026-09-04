@@ -8,6 +8,51 @@ import Testing
 struct HostCapacityAdmissionTests {
     private let gib: Int64 = 1024 * 1024 * 1024
 
+    @Test("a materialized volume can extend its provisional create claim")
+    func materializedVolumeExtendsCreateClaim() throws {
+        var ledger = HostCapacityAdmissionLedger()
+        let beforeMaterialization = HostCapacitySnapshot(
+            total: HostReservation(diskBytes: 100 * gib),
+            reserved: HostReservation(diskBytes: 40 * gib))
+        let createClaim = try #require(
+            try ledger.claim(
+                HostReservation(diskBytes: 10 * gib),
+                desiredWorkloadReservation: HostReservation(diskBytes: 10 * gib),
+                snapshot: beforeMaterialization,
+                agentName: "hv-03"))
+
+        // Inventory now includes the inherited 40 GiB virtual size. Excluding
+        // that newly retained commitment lets the still-live 10 GiB claim grow
+        // by exactly the 30 GiB difference, without double-counting the volume.
+        let afterMaterialization = HostCapacitySnapshot(
+            total: HostReservation(diskBytes: 100 * gib),
+            reserved: HostReservation(diskBytes: 80 * gib))
+        let retained = HostReservation(diskBytes: 40 * gib)
+        let excludingMaterializedVolume = HostCapacitySnapshot(
+            total: afterMaterialization.total,
+            reserved: afterMaterialization.reserved.subtractingSaturating(retained))
+        let supplementalClaim = try #require(
+            try ledger.claim(
+                .positiveDelta(
+                    from: HostReservation(diskBytes: 10 * gib),
+                    to: retained),
+                desiredWorkloadReservation: retained,
+                snapshot: excludingMaterializedVolume,
+                agentName: "hv-03"))
+
+        #expect(ledger.provisionalReservation.diskBytes == 40 * gib)
+        #expect(throws: HostCapacityAdmissionError.self) {
+            try ledger.claim(
+                HostReservation(diskBytes: 21 * gib),
+                desiredWorkloadReservation: HostReservation(diskBytes: 21 * gib),
+                snapshot: excludingMaterializedVolume,
+                agentName: "hv-03")
+        }
+
+        ledger.release(supplementalClaim)
+        ledger.release(createClaim)
+    }
+
     @Test("an exact fit is claimed and a larger request is refused")
     func exactFitAndRefusal() throws {
         var ledger = HostCapacityAdmissionLedger()
