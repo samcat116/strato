@@ -1,5 +1,7 @@
 import Fluent
 import Foundation
+import MetricsTestKit
+import NIOConcurrencyHelpers
 import Testing
 import Vapor
 import VaporTesting
@@ -12,6 +14,35 @@ import AppTestSupport
 /// assert on both the enforced verdict and the recorded row.
 @Suite("IAM Authorizer Tests", .serialized)
 final class IAMAuthorizerTests {
+
+    private final class FlakyIAMDecisionBackend: IAMDecisionBackend, Sendable {
+        struct State {
+            var failuresRemaining: Int
+            var attempts = 0
+            var delivered = 0
+        }
+
+        private let state: NIOLockedValueBox<State>
+
+        init(failures: Int) {
+            state = NIOLockedValueBox(State(failuresRemaining: failures))
+        }
+
+        var attempts: Int { state.withLockedValue { $0.attempts } }
+        var delivered: Int { state.withLockedValue { $0.delivered } }
+
+        func write(_ entries: [IAMDecisionLog]) async -> Bool {
+            state.withLockedValue { current in
+                current.attempts += 1
+                if current.failuresRemaining > 0 {
+                    current.failuresRemaining -= 1
+                    return false
+                }
+                current.delivered += entries.count
+                return true
+            }
+        }
+    }
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
@@ -330,9 +361,74 @@ final class IAMAuthorizerTests {
         #expect(batch.count == 3)
         // The claimed batch is still in the air until it is reported written.
         #expect(await queue.isIdle == false)
-        await queue.finishBatch()
+        await queue.finishBatch(recordCount: batch.count)
         #expect(await queue.isIdle)
         #expect(await queue.stats.shed == 2)
+    }
+
+    @Test("IAM decision batches retry transient database failures")
+    func decisionBatchRetriesTransientFailure() async throws {
+        try await withApp { app in
+            let backend = FlakyIAMDecisionBackend(failures: 1)
+            var config = app.iamDecisionLogConfig
+            config.recordDecisions = true
+            let recorder = IAMDecisionRecorder(
+                app: app,
+                config: config,
+                backend: backend,
+                retryPolicy: SecurityRecordRetryPolicy(delays: [.zero]))
+
+            _ = await recorder.queue.enqueue([sample(path: "/api/vms")])
+            await recorder.flush()
+
+            #expect(backend.attempts == 2)
+            #expect(backend.delivered == 1)
+        }
+    }
+
+    @Test("Exhausted IAM decision delivery records the observable gap")
+    func exhaustedDecisionDeliveryIsCounted() async throws {
+        try await withApp { app in
+            let metrics = TestMetrics()
+            let backend = FlakyIAMDecisionBackend(failures: 10)
+            var config = app.iamDecisionLogConfig
+            config.recordDecisions = true
+            let recorder = IAMDecisionRecorder(
+                app: app,
+                config: config,
+                backend: backend,
+                retryPolicy: SecurityRecordRetryPolicy(delays: [.zero]),
+                metricsFactory: metrics)
+
+            _ = await recorder.queue.enqueue([sample(path: "/api/vms")])
+            await recorder.flush()
+
+            #expect(backend.attempts == 2)
+            let losses = try metrics.expectCounter(
+                "strato_security_records_lost_total",
+                [
+                    ("stream", "iam_decision"),
+                    ("cause", "delivery_failure"),
+                    ("destination", "database"),
+                ])
+            #expect(losses.totalValue == 1)
+        }
+    }
+
+    @Test("IAM decision retries are idempotent")
+    func decisionRetryIsIdempotent() async throws {
+        try await withApp { app in
+            let pending = sample(path: "/api/idempotent-decision")
+
+            _ = await app.iamDecisionRecorder.queue.enqueue([pending, pending])
+            await app.iamDecisionRecorder.flush()
+
+            let rows = try await IAMDecisionLog.query(on: app.db)
+                .filter(\.$path == "/api/idempotent-decision")
+                .all()
+            #expect(rows.count == 1)
+            #expect(rows.first?.id == pending.id)
+        }
     }
 
     /// The create-shaped request — three checks, three decisions — still

@@ -43,6 +43,15 @@ struct OCIRootfsCacheTests {
         let hit = await cache.lookup(manifestDigest: digest)
         #expect(hit?.rootfsPath == published.rootfsPath)
         #expect(hit?.configPath == published.configPath)
+        let completionData = try Data(
+            contentsOf: URL(
+                fileURLWithPath: (published.rootfsPath as NSString).deletingLastPathComponent
+                    + "/" + OCIRootfsCache.completionFileName))
+        let completion = try #require(
+            JSONSerialization.jsonObject(with: completionData) as? [String: Any])
+        #expect((completion["rootfsSizeBytes"] as? NSNumber)?.int64Value == 5)
+        let expectedRootfsHash = try FileHashing.sha256Hex(ofFileAt: published.rootfsPath)
+        #expect(completion["rootfsSHA256"] as? String == expectedRootfsHash)
     }
 
     @Test("a concurrent publish keeps the existing entry")
@@ -81,6 +90,56 @@ struct OCIRootfsCacheTests {
 
         let result = await cache.lookup(manifestDigest: digest)
         #expect(result == nil)
+        #expect(!FileManager.default.fileExists(atPath: entryDir))
+    }
+
+    @Test("a pre-durability entry without a completion sidecar is never served")
+    func entryWithoutCompletionSidecar() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root)
+
+        let hex = String(digest.dropFirst("sha256:".count))
+        let entryDir = root + "/images/" + hex
+        try FileManager.default.createDirectory(atPath: entryDir, withIntermediateDirectories: true)
+        try Data("image".utf8).write(
+            to: URL(fileURLWithPath: entryDir + "/" + OCIRootfsCache.rootfsFileName))
+        try Data("{}".utf8).write(
+            to: URL(fileURLWithPath: entryDir + "/" + OCIRootfsCache.configFileName))
+
+        let result = await cache.lookup(manifestDigest: digest)
+
+        #expect(result == nil)
+        #expect(!FileManager.default.fileExists(atPath: entryDir))
+    }
+
+    @Test("a rootfs truncated after publication is invalidated on lookup")
+    func truncatedRootfsMisses() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root)
+        let published = try await stageAndPublish(cache, digest: digest)
+
+        try Data("bad".utf8).write(to: URL(fileURLWithPath: published.rootfsPath))
+        let result = await cache.lookup(manifestDigest: digest)
+
+        #expect(result == nil)
+        let entryDir = (published.rootfsPath as NSString).deletingLastPathComponent
+        #expect(!FileManager.default.fileExists(atPath: entryDir))
+    }
+
+    @Test("a same-size rootfs overwrite is invalidated on lookup")
+    func sameSizeRootfsDamageMisses() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root)
+        let published = try await stageAndPublish(cache, digest: digest)
+
+        try Data("wrong".utf8).write(to: URL(fileURLWithPath: published.rootfsPath))
+        let result = await cache.lookup(manifestDigest: digest)
+
+        #expect(result == nil)
+        let entryDir = (published.rootfsPath as NSString).deletingLastPathComponent
         #expect(!FileManager.default.fileExists(atPath: entryDir))
     }
 
@@ -150,8 +209,8 @@ struct OCIRootfsCacheTests {
     func sizeBudgetCleanup() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
-        // Each published entry is ~7 bytes ("image" + "{}"); a 10-byte budget
-        // holds exactly one.
+        // The budget is below one completed entry, so only the recent-use
+        // grace window protects the newer publication.
         let cache = makeCache(root, maxSizeBytes: 10)
 
         let older = try await stageAndPublish(cache, digest: digest)
