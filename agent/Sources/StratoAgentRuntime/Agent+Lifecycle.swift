@@ -479,6 +479,9 @@ extension Agent {
             )
         }
 
+        // This starts with an immediate sample but never awaits it: registration,
+        // heartbeats, and reconciliation consume only the last completed cache.
+        startResourceTelemetryObservation()
         try await startDependencyObservation()
 
         // Begin draining inbound frames before the connection opens so the registration
@@ -592,6 +595,9 @@ extension Agent {
         dependencyObservationTask?.cancel()
         dependencyObservationTask = nil
         dependencyManager = nil
+
+        resourceTelemetryTask?.cancel()
+        resourceTelemetryTask = nil
 
         // Stop the per-network resolvers (STR-40). A draining host must not keep
         // a CoreDNS answering for networks whose guests have moved elsewhere:
