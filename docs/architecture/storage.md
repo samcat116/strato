@@ -612,19 +612,34 @@ difference is "this tenant is capped" versus "this tenant is not".
 
 The ceilings travel on `DesiredVolumeState.ioLimits` (wire v35) and come back on
 `ObservedVolumeState.ioLimits` as an **echo of what the agent actually applied**,
-recorded separately from what was requested. The echo exists because STR-19
-ships no capability gate: an agent that has never heard of ceilings drops the
-field and still advances its `observedGeneration`, so the generation pair alone
-would call an ignored mutation converged. Its nil rule is the load-bearing part
-— nil means *"this agent does not report applied limits"*, never *"the caps were
-removed"*, and an agent reporting an explicitly uncapped disk sends a
-present-but-empty value instead.
+recorded separately from what was requested. A QEMU agent advertises the
+additive `supportsVolumeIOLimits` capability (wire v59); absence is fail-closed.
+Creating, attaching, or adding a cap is rejected before it can target an agent
+that did not advertise support. Firecracker does not advertise the capability.
 
-**Nothing enforces these yet.** No agent applies ceilings, so `appliedIOLimits`
-is null for every volume and a set `ioLimits` alongside a null `appliedIOLimits`
-is the expected reading rather than a fault. Enforcement arrives with the
-agent-side work; the desired state, the API and the receiving end are what
-exists today.
+The QEMU path writes `<iotune>` into the libvirt domain definition at cold boot
+and hot attach. A later change uses `virDomainSetBlockIoTune` with both live and
+config flags when the domain is running, so raising, lowering, or clearing a
+ceiling takes effect without a reboot and also survives the next one. The agent
+then reads the values back with `virDomainGetBlockIoTune`; only that readback is
+echoed as `ObservedVolumeState.ioLimits`. The VM manifest also stores the desired
+limits, which preserves them through agent restart and adoption. Reattachment
+and placement on another compatible QEMU agent rebuild the same domain XML.
+
+The echo's nil rule is load-bearing: nil means *"this agent does not report
+applied limits"*, never *"the caps were removed"*. An agent reporting an
+explicitly uncapped disk sends a present-but-empty value instead. The control
+plane preserves the last applied columns for operator history but refuses to
+advance a capped volume's observed generation without a current echo. Therefore
+`conditions.converged` cannot report success from desired state alone.
+
+For an end-to-end enforcement check, run `fio` against the attached volume for
+at least 60 seconds after a 10-second ramp (`direct=1`, one job, and a working
+set larger than guest memory). Test IOPS and bandwidth separately. The measured
+steady-state total must not exceed the configured ceiling by more than 10%; no
+minimum is asserted because the backing store may be slower than the ceiling.
+Repeat after raising and lowering each limit while the VM remains running, then
+after an agent restart and a VM reboot.
 
 ### Volume placement across agents
 

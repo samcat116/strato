@@ -1,5 +1,6 @@
 import Foundation
 import MetricsTestKit
+import StratoShared
 import Testing
 
 @testable import App
@@ -140,6 +141,53 @@ struct TelemetrySupportTests {
             try metrics.expectCounter(
                 "strato_webhook_delivery_results_total", [("result", "dead")]
             ).totalValue == 1)
+    }
+
+    // MARK: - Volume I/O limits
+
+    @Test("volume I/O metrics aggregate bounded configured, applied, and observed values")
+    func volumeIOMetrics() throws {
+        let metrics = TestMetrics()
+        Telemetry.recordVolumeIO(
+            agentName: "compute-1",
+            samples: [
+                Telemetry.VolumeIOSample(
+                    configured: VolumeIOLimits(iopsTotal: 1_000, bpsTotal: 10_000_000),
+                    applied: VolumeIOLimits(iopsTotal: 1_000, bpsTotal: 10_000_000),
+                    observedRate: VolumeIOObservedRate(
+                        iops: 950, bytesPerSecond: 4_000_000)),
+                Telemetry.VolumeIOSample(
+                    configured: VolumeIOLimits(iopsTotal: 500),
+                    applied: nil,
+                    observedRate: nil),
+            ],
+            factory: metrics)
+
+        let iops = [("agent", "compute-1"), ("dimension", "iops")]
+        let bytes = [("agent", "compute-1"), ("dimension", "bytes_per_second")]
+        #expect(
+            try metrics.expectGauge("strato_volume_io_configured_limit_total", iops).lastValue
+                == 1_500)
+        #expect(
+            try metrics.expectGauge("strato_volume_io_applied_limit_total", iops).lastValue
+                == 1_000)
+        #expect(
+            try metrics.expectGauge("strato_volume_io_observed_rate_total", bytes).lastValue
+                == 4_000_000)
+        #expect(
+            try metrics.expectGauge("strato_volume_io_configured_volumes", iops).lastValue == 2)
+        #expect(
+            try metrics.expectGauge("strato_volume_io_applied_volumes", iops).lastValue == 1)
+        #expect(
+            try metrics.expectGauge(
+                "strato_volume_io_observed_at_ceiling_volumes", iops
+            ).lastValue == 1)
+
+        Telemetry.recordVolumeIO(agentName: "compute-1", samples: [], factory: metrics)
+        #expect(
+            try metrics.expectGauge("strato_volume_io_configured_limit_total", iops).lastValue == 0)
+        #expect(
+            try metrics.expectGauge("strato_volume_io_observed_rate_total", bytes).lastValue == 0)
     }
 
     // MARK: - SchedulerService.placementOutcome

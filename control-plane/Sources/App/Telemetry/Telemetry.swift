@@ -413,6 +413,94 @@ enum Telemetry {
         Gauge(label: "strato_diverged_workloads", dimensions: [("kind", kind)]).record(count)
     }
 
+    // MARK: - Volume I/O limits (STR-270)
+
+    /// One placed volume in an agent's complete observed-state snapshot.
+    /// Values stay out of labels; the aggregate gauges below therefore remain
+    /// bounded by agent count and the two fixed dimensions rather than volume
+    /// cardinality.
+    struct VolumeIOSample: Sendable {
+        let configured: VolumeIOLimits?
+        let applied: VolumeIOLimits?
+        let observedRate: VolumeIOObservedRate?
+    }
+
+    /// Record the configured and read-back ceilings plus live traffic at the
+    /// agent level. A full volume inventory drives this on every report,
+    /// including zeroes, so removed limits and idle traffic do not leave stale
+    /// series behind.
+    static func recordVolumeIO(
+        agentName: String,
+        samples: [VolumeIOSample],
+        factory: (any MetricsFactory)? = nil
+    ) {
+        recordVolumeIODimension(
+            agentName: agentName,
+            dimension: "iops",
+            configured: samples.map { $0.configured?.iopsTotal },
+            applied: samples.map { $0.applied?.iopsTotal },
+            observed: samples.map { $0.observedRate?.iops },
+            factory: factory)
+        recordVolumeIODimension(
+            agentName: agentName,
+            dimension: "bytes_per_second",
+            configured: samples.map { $0.configured?.bpsTotal },
+            applied: samples.map { $0.applied?.bpsTotal },
+            observed: samples.map { $0.observedRate?.bytesPerSecond },
+            factory: factory)
+    }
+
+    private static func recordVolumeIODimension(
+        agentName: String,
+        dimension: String,
+        configured: [Int64?],
+        applied: [Int64?],
+        observed: [Double?],
+        factory: (any MetricsFactory)?
+    ) {
+        let dimensions = [("agent", agentName), ("dimension", dimension)]
+        let configuredValues = configured.compactMap { $0 }
+        let appliedValues = applied.compactMap { $0 }
+        let observedValues = observed.compactMap { $0 }
+        let atCeiling = zip(applied, observed).reduce(into: 0) { count, pair in
+            guard let limit = pair.0, limit > 0, let rate = pair.1,
+                rate >= Double(limit) * 0.9
+            else { return }
+            count += 1
+        }
+
+        recordGauge(
+            label: "strato_volume_io_configured_limit_total",
+            dimensions: dimensions,
+            value: configuredValues.reduce(0) { $0 + Double($1) },
+            factory: factory)
+        recordGauge(
+            label: "strato_volume_io_applied_limit_total",
+            dimensions: dimensions,
+            value: appliedValues.reduce(0) { $0 + Double($1) },
+            factory: factory)
+        recordGauge(
+            label: "strato_volume_io_observed_rate_total",
+            dimensions: dimensions,
+            value: observedValues.reduce(0, +),
+            factory: factory)
+        recordGauge(
+            label: "strato_volume_io_configured_volumes",
+            dimensions: dimensions,
+            value: Double(configuredValues.count),
+            factory: factory)
+        recordGauge(
+            label: "strato_volume_io_applied_volumes",
+            dimensions: dimensions,
+            value: Double(appliedValues.count),
+            factory: factory)
+        recordGauge(
+            label: "strato_volume_io_observed_at_ceiling_volumes",
+            dimensions: dimensions,
+            value: Double(atCeiling),
+            factory: factory)
+    }
+
     /// Stored secrets the configured primary/previous keyring cannot open.
     /// This is level-triggered and records zero at every startup so a repaired
     /// rotation clears the prior series. `table` is one of four fixed columns.

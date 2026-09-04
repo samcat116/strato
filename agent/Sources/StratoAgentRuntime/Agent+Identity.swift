@@ -222,6 +222,7 @@ extension Agent {
                     supportsSnapshots: support.supportsSnapshots,
                     supportsVsock: preflight.vhostVsockAvailable,
                     supportsGuestExec: preflight.vhostVsockAvailable,
+                    supportsVolumeIOLimits: true,
                     version: support.version
                 )
             }
@@ -585,7 +586,8 @@ extension Agent {
                 type: type,
                 available: true,
                 accelerated: true,
-                supportsVsock: type == .qemu ? true : nil
+                supportsVsock: type == .qemu ? true : nil,
+                supportsVolumeIOLimits: type == .qemu ? true : nil
             )
         }
     }

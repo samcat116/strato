@@ -232,8 +232,21 @@ public protocol HypervisorService: Actor, Sendable {
     ///   hot-plug disks
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, orderedBootVolumeIds: [String]
+        readonly: Bool, orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws
+
+    /// Replaces both absolute I/O ceilings for an already attached disk and
+    /// persists them for the next boot. Nil clears both dimensions.
+    func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws
+
+    /// Reads the ceilings the backend is actually enforcing. A successful
+    /// uncapped read returns a present-but-empty value; failure is thrown so
+    /// callers never turn silence into an applied echo.
+    func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits
+
+    /// Cumulative live-domain I/O counters for operator rate telemetry. Nil is
+    /// normal for a stopped domain or a backend without observable counters.
+    func diskIOCounters(vmId: String, volumeId: String) async -> VolumeIOCounters?
 
     /// Detaches a disk from a running VM (hot-unplug)
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
@@ -399,6 +412,18 @@ public extension HypervisorService {
         throw HypervisorServiceError.notSupported(
             "\(hypervisorType.displayName) does not support VM network hot-unplug")
     }
+
+    func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support per-volume I/O limits")
+    }
+
+    func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not report per-volume I/O limits")
+    }
+
+    func diskIOCounters(vmId: String, volumeId: String) async -> VolumeIOCounters? { nil }
 
     /// Backends must opt in to running resize. The default refuses rather than
     /// implying any online resize support.

@@ -194,6 +194,30 @@ struct VolumeController: RouteCollection {
             format = try VolumeNaming.parseFormat(request.format)
         }
 
+        let requestsIOLimits = request.iopsTotal != nil || request.bpsTotal != nil
+        if requestsIOLimits {
+            let agents = await req.application.agentService.getAgentList()
+            let capable: Agent?
+            switch pool.mode {
+            case .local:
+                capable = VolumeService.selectVolumeAgent(
+                    from: agents, memberAgentIds: pool.memberAgentIds,
+                    requiresIOLimits: true)
+            case .ceph:
+                capable = VolumeService.selectCephReconciler(
+                    from: agents, pool: pool, requiresIOLimits: true)
+            case .replicated:
+                capable = nil
+            }
+            guard capable != nil else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "No eligible QEMU agent explicitly supports per-volume I/O limits for this storage pool."
+                )
+            }
+        }
+
         // Create volume record
         let volume = Volume(
             name: request.name,
@@ -289,7 +313,8 @@ struct VolumeController: RouteCollection {
                 case .ceph:
                     guard
                         let agentId = VolumeService.selectCephReconciler(
-                            from: agents, pool: currentPool)?.id?.uuidString
+                            from: agents, pool: currentPool,
+                            requiresIOLimits: requestsIOLimits)?.id?.uuidString
                     else {
                         throw ResourceMutation.WorkError(
                             "No configured Ceph client is online in storage pool '\(currentPool.name)'.")
@@ -305,7 +330,8 @@ struct VolumeController: RouteCollection {
                 case .local:
                     guard
                         let agentId = VolumeService.selectVolumeAgent(
-                            from: agents, memberAgentIds: currentPool.memberAgentIds)?.id?.uuidString
+                            from: agents, memberAgentIds: currentPool.memberAgentIds,
+                            requiresIOLimits: requestsIOLimits)?.id?.uuidString
                     else {
                         throw ResourceMutation.WorkError(
                             "No agent is available to host this volume: it needs an online, "
@@ -661,6 +687,13 @@ struct VolumeController: RouteCollection {
                             "Volume is not reachable from the VM's agent. Volume is on '\(replicaAgentIds.joined(separator: ", "))', VM is on '\(vmHypervisorID)'"
                     )
                 }
+                if volume.ioLimits != nil, !vmAgent.supportsVolumeIOLimits {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "The VM's agent does not support per-volume I/O limits; remove the policy or move the VM to a capable QEMU agent."
+                    )
+                }
             } else if attachmentPoolMode == .ceph {
                 throw Abort(.conflict, reason: "Ceph attachment requires a placed VM")
             }
@@ -885,10 +918,8 @@ struct VolumeController: RouteCollection {
     /// Body: { "iopsTotal"?: int, "bpsTotal"?: int }
     ///
     /// A full replacement: an omitted field clears that cap. Answers `202` and
-    /// converges like every other volume mutation — though note that no agent
-    /// applies ceilings yet, so `appliedIOLimits` stays null until the
-    /// agent-side work lands and the request is a recorded intent rather than
-    /// an enforced one.
+    /// converges only after the capable owning agent reads the replacement back
+    /// from libvirt.
     @Sendable
     func setIOLimits(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
@@ -901,15 +932,47 @@ struct VolumeController: RouteCollection {
 
         try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
 
-        guard try await reachableAgentHolding(volume, req: req) != nil else {
+        guard let agentID = try await reachableAgentHolding(volume, req: req) else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
+        }
+        let requestsIOLimits = request.iopsTotal != nil || request.bpsTotal != nil
+        if requestsIOLimits {
+            guard let agent = await req.application.agentService.getAgentInfo(agentID),
+                agent.supportsVolumeIOLimits
+            else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "The volume's agent does not support per-volume I/O limits; move it to a capable QEMU agent before setting this policy."
+                )
+            }
         }
 
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
             .throttle, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
+            // The holder can change while this request waits for the volume's
+            // mutation lock (notably a Ceph attach). Re-check from the locked,
+            // refreshed row so the preflight above cannot authorize a policy
+            // that is then committed onto a different unsupported agent.
+            if requestsIOLimits {
+                guard
+                    let currentAgentID = try await VolumeService.agentIDs(
+                        holding: volume, on: db
+                    ).first,
+                    let currentAgentUUID = UUID(uuidString: currentAgentID),
+                    let currentAgent = try await Agent.find(currentAgentUUID, on: db),
+                    currentAgent.supportsVolumeIOLimits
+                else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "The volume's current agent does not support per-volume I/O limits."
+                    )
+                }
+            }
             // The requested pair is desired state from here on; the applied
             // pair is only ever written by an agent's observed report.
             volume.iopsTotal = request.iopsTotal

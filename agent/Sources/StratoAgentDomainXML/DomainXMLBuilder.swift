@@ -560,7 +560,7 @@ public enum DomainXMLBuilder {
                 diskNode(
                     attachment: disk.attachment, index: index, readonly: disk.readonly,
                     bootOrder: bootOrders[index],
-                    volumeId: disk.volumeId))
+                    volumeId: disk.volumeId, ioLimits: disk.ioLimits))
         }
         if let isoPath = input.cloudInitISOPath {
             // A read-only virtio *disk*, not a cdrom, matching the QEMU path's
@@ -827,7 +827,7 @@ public enum DomainXMLBuilder {
     /// including the serial a detach resolves by.
     static func diskNode(
         attachment: DiskAttachment, target: String, readonly: Bool, bootOrder: Int?,
-        volumeId: String?
+        volumeId: String?, ioLimits: VolumeIOLimits? = nil
     ) -> DomainXMLNode {
         let diskType: String
         let driverFormat: String
@@ -879,14 +879,27 @@ public enum DomainXMLBuilder {
         }
 
         var disk = DomainXMLNode("disk", [("type", diskType), ("device", "disk")])
-        // No cache/discard/io tuning: the QEMU path passes none, and adding it
-        // here would be a behaviour change disguised as a translation.
+        // Cache and discard remain unspecified. I/O ceilings are part of the
+        // desired volume policy and must be present in the persistent domain
+        // definition so a reboot keeps enforcing them.
         disk.append(DomainXMLNode("driver", [("name", "qemu"), ("type", driverFormat)]))
         disk.append(source)
         if let authentication {
             disk.append(authentication)
         }
         disk.append(DomainXMLNode("target", [("dev", target), ("bus", "virtio")]))
+        if let ioLimits, !ioLimits.isEmpty {
+            var iotune = DomainXMLNode("iotune")
+            iotune.append(
+                ioLimits.iopsTotal.map {
+                    DomainXMLNode("total_iops_sec", text: String($0))
+                })
+            iotune.append(
+                ioLimits.bpsTotal.map {
+                    DomainXMLNode("total_bytes_sec", text: String($0))
+                })
+            disk.append(iotune)
+        }
         if readonly {
             disk.append(DomainXMLNode("readonly"))
         }
@@ -905,11 +918,12 @@ public enum DomainXMLBuilder {
 
     private static func diskNode(
         attachment: DiskAttachment, index: Int, readonly: Bool, bootOrder: Int?,
-        volumeId: String?
+        volumeId: String?, ioLimits: VolumeIOLimits? = nil
     ) -> DomainXMLNode {
         diskNode(
             attachment: attachment, target: targetDeviceName(index: index),
-            readonly: readonly, bootOrder: bootOrder, volumeId: volumeId)
+            readonly: readonly, bootOrder: bootOrder, volumeId: volumeId,
+            ioLimits: ioLimits)
     }
 
     /// Libvirt models a monitor endpoint as separate host and port attributes.

@@ -601,6 +601,23 @@ struct DomainXMLBuilderTests {
         #expect(xml.contains(QEMUDiskIdentity.deviceID(volumeId: volumeId)))
     }
 
+    @Test("cold boot persists volume I/O ceilings in the domain definition")
+    func volumeIOTune() throws {
+        let xml = try DomainXMLBuilder.build(
+            Self.input(
+                spec: Self.spec(),
+                disks: [
+                    Self.bootDisk,
+                    ResolvedDisk(
+                        attachment: .file(path: "/volumes/data.qcow2", format: .qcow2),
+                        volumeId: Self.dataVolumeId,
+                        ioLimits: VolumeIOLimits(iopsTotal: 1_250, bpsTotal: 32_000_000)),
+                ]))
+
+        #expect(xml.contains("<total_iops_sec>1250</total_iops_sec>"))
+        #expect(xml.contains("<total_bytes_sec>32000000</total_bytes_sec>"))
+    }
+
     /// libvirt allocates a `pcie-root-port` per PCI device the document
     /// declares, so a domain that reserves none has nowhere to hot-plug a disk —
     /// and a domain document is written once, so a VM defined without spares can
