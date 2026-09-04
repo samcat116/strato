@@ -178,6 +178,18 @@ struct VolumeController: RouteCollection {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")
         }
 
+        // Source-backed volumes inherit the image's native virtual size before
+        // any requested growth is applied. The artifact's stored-byte size is
+        // a useful floor for raw and fully allocated images; `defaultDisk` is
+        // the image's declared virtual-size floor for sparse images. Reserve
+        // the strongest bound available so placement cannot choose a host that
+        // only fits the smaller create request.
+        let sourceSizeBound =
+            sourceImage.map {
+                max($0.defaultDisk ?? 0, $0.usableDiskArtifact?.size ?? 0)
+            } ?? 0
+        let placementSizeBytes = max(sizeBytes, sourceSizeBound)
+
         try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
 
         // Omission preserves the historical default-local behavior exactly.
@@ -251,7 +263,7 @@ struct VolumeController: RouteCollection {
                 if pool.mode == .local {
                     do {
                         let selected = try await VolumeService.selectAndReserveVolumeAgent(
-                            sizeBytes: sizeBytes,
+                            sizeBytes: placementSizeBytes,
                             volumeId: volumeId,
                             agents: localPlacementAgents,
                             memberAgentIds: pool.memberAgentIds,
@@ -360,7 +372,7 @@ struct VolumeController: RouteCollection {
                     let selected: Agent
                     do {
                         selected = try await VolumeService.selectAndReserveVolumeAgent(
-                            sizeBytes: sizeBytes,
+                            sizeBytes: placementSizeBytes,
                             volumeId: volumeId,
                             agents: agents,
                             memberAgentIds: currentPool.memberAgentIds,

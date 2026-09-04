@@ -182,7 +182,8 @@ extension Agent {
         let message = AgentHeartbeatMessage(
             agentId: effectiveAgentID,
             resources: resources,
-            dependencyObservations: dependencyObservations
+            dependencyObservations: dependencyObservations,
+            hostResourceTelemetry: hostResourceTelemetry
         )
 
         if let client = websocketClient {

@@ -216,6 +216,15 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "guest_memory_balloon_actual_bytes")
     var guestMemoryBalloonActualBytes: Int64?
 
+    /// Latest host-side cgroup/guest contention sample (STR-266). Balloon
+    /// values remain in their established fields above and are exported next
+    /// to this snapshot; they are not duplicated here.
+    @OptionalField(key: "resource_telemetry")
+    var resourceTelemetry: WorkloadResourceTelemetry?
+
+    @OptionalField(key: "resource_telemetry_received_at")
+    var resourceTelemetryReceivedAt: Date?
+
     /// Operator-requested memory ceiling for the running guest, in bytes
     /// (issue #567 phase 2). Nil — the default — means no ballooning: the
     /// guest keeps its whole `memory` grant. Setting it inflates the VM's
@@ -743,6 +752,10 @@ struct VMDetailResponse: Content {
     let balloonTarget: Int64?
     let balloonTargetFormatted: String?
     let guestMemoryBalloonActualBytes: Int64?
+    /// Latest cgroup pressure, memory-event, CPU throttling, and guest-steal
+    /// snapshot. Each signal distinguishes unavailable from measured zero.
+    let resourceTelemetry: WorkloadResourceTelemetry?
+    let resourceTelemetryReceivedAt: Date?
     /// Whether this VM's attached security groups are actually being enforced
     /// (STR-34). False means a realizing agent — the host, or its site's
     /// network controller — registered with a protocol older than the
@@ -832,6 +845,8 @@ struct VMDetailResponse: Content {
         self.balloonTarget = vm.balloonTarget
         self.balloonTargetFormatted = vm.balloonTarget?.formattedByteSize
         self.guestMemoryBalloonActualBytes = vm.guestMemoryBalloonActualBytes
+        self.resourceTelemetry = vm.resourceTelemetry
+        self.resourceTelemetryReceivedAt = vm.resourceTelemetryReceivedAt
         self.conditions = vm.conditions
         self.createdAt = vm.createdAt
         self.updatedAt = vm.updatedAt

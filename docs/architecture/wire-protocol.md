@@ -74,7 +74,7 @@ and backend-health observations.
 
 Wire v47 adds typed dependency observations to agent registration and heartbeats.
 
-Wire v59 splits host-local disk reporting into committed availability
+Wire v60 splits host-local disk reporting into committed availability
 (`availableDisk`) and live filesystem headroom (`physicalFreeDisk`). Placement
 uses the former; operational utilization uses the latter.
 The control plane uses the latest received snapshot for feature-scoped placement

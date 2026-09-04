@@ -230,6 +230,68 @@ FROM hashed;
 | `strato_diverged_workloads` | gauge | `kind` = `vm` \| `sandbox` | Current workloads whose acknowledged observed status has remained different from desired state for at least 15 minutes with no mutation outstanding. Recorded every sweep, including zero. **Alert on `> 0`** |
 | `strato_secrets_encryption_unopenable` | gauge | `table` = one of the four recoverable-secret columns | Stored secrets the boot keyring could not open. Recorded for every table at startup, including zero. **Alert on `> 0`**; `/health/ready` also reports `secrets-encryption` degraded. |
 
+### Host pressure and workload contention
+
+Agents sample Linux pressure and contention every **15 seconds**. The sampler
+runs in its own detached utility task and writes a last-completed in-memory
+snapshot. The 20-second heartbeat and observed-state loops only read that
+cache; they never perform procfs, sysfs, cgroup, QMP, or guest I/O. A slow or
+failed read can therefore make a signal unavailable, but cannot delay
+heartbeat liveness or desired-state reconciliation.
+
+Host data comes from `/proc/pressure/{cpu,memory,io}`, `/proc/meminfo`,
+`/proc/vmstat`, zram `mm_stat`, and the MGLRU control file. Workload data comes
+from cgroup v2 `memory.current`, `memory.events`, the three pressure files, and
+`cpu.stat`. Libvirt QEMU cgroups are resolved from the domain PID's unified
+cgroup membership. Jailed Firecracker sandboxes use their dedicated jailer
+cgroup. An unjailed Firecracker workload does not have an attributable process
+boundary, so the agent reports its cgroup signals as unavailable instead of
+mislabeling the agent cgroup as workload data.
+
+Every remotely read scalar has a companion
+`*_resource_signal_available{signal=...}` gauge. `1` means the raw gauge is a
+measurement, including a legitimate zero; `0` means the kernel, backend, guest
+source, or latest read did not provide it, and the raw gauge is removed. PSI
+`some` and `full` lines are independently available. Guest steal time follows
+the same contract and remains unavailable until a guest metrics source supplies
+it. QEMU balloon total, available, and actual bytes retain their existing
+guest/QMP source and are exported alongside the cgroup signals.
+
+Host metrics carry only a control-plane-issued `agent_id`. Workload metrics
+add the control-plane-issued `workload_id` and bounded `kind` (`vm` or
+`sandbox`). The remaining labels (`resource`, `stall`, `event`, and `signal`)
+are closed vocabularies. Tenant names, projects, tags, errors, paths, and guest
+values never become labels. Cardinality is therefore a fixed number of series
+per live agent plus a fixed number per live workload; finalization explicitly
+removes a workload's UUID series.
+
+| Metric family | Type | Labels | Meaning |
+|---------------|------|--------|---------|
+| `strato_agent_resource_health` | gauge | `agent_id` | `0` unknown, `1` healthy, `2` pressured, `3` critical |
+| `strato_agent_pressure_average10_percent` | gauge | `agent_id`, `resource`, `stall` | Host CPU, memory, or I/O PSI 10-second stall percentage |
+| `strato_agent_pressure_total_seconds` | gauge | `agent_id`, `resource`, `stall` | Host cumulative PSI stall time |
+| `strato_agent_{swap_total,swap_used,zswap_stored,zswap_pool,zram_used}_bytes` | gauge | `agent_id` | Host swap and compressed-memory gauges |
+| `strato_agent_{major_faults,reclaim_scanned_pages,reclaim_reclaimed_pages,oom_kills}_total` | gauge | `agent_id` | Host kernel counters; exported as gauges because a host restart resets them |
+| `strato_agent_mglru_enabled` | gauge | `agent_id` | `1` enabled, `0` exposed but disabled; check availability to distinguish unsupported |
+| `strato_workload_resource_health` | gauge | `agent_id`, `workload_id`, `kind` | Same bounded health summary for one workload cgroup |
+| `strato_workload_pressure_average10_percent` | gauge | `agent_id`, `workload_id`, `kind`, `resource`, `stall` | Per-workload cgroup PSI |
+| `strato_workload_pressure_total_seconds` | gauge | `agent_id`, `workload_id`, `kind`, `resource`, `stall` | Per-workload cumulative PSI stall time |
+| `strato_workload_memory_current_bytes` | gauge | `agent_id`, `workload_id`, `kind` | Current cgroup memory charge |
+| `strato_workload_memory_events_total` | gauge | `agent_id`, `workload_id`, `kind`, `event` | `low`, `high`, `max`, `oom`, `oom_kill`, and `oom_group_kill` counters |
+| `strato_workload_cpu_usage_seconds_total` | gauge | `agent_id`, `workload_id`, `kind` | Cumulative cgroup CPU use |
+| `strato_workload_cpu_throttled_seconds_total` | gauge | `agent_id`, `workload_id`, `kind` | Cumulative cgroup CPU throttling time |
+| `strato_workload_cpu_throttled_periods_total` | gauge | `agent_id`, `workload_id`, `kind` | Cgroup periods in which CPU was throttled |
+| `strato_workload_guest_steal_seconds_total` | gauge | `agent_id`, `workload_id`, `kind` | Guest-reported cumulative steal time, when a guest source exists |
+| `strato_workload_balloon_{total,available,actual}_bytes` | gauge | `agent_id`, `workload_id`, `kind` | Preserved virtio-balloon guest statistics and QMP actual size |
+
+The raw PSI values are the alert authority. The health gauge is a compact
+operator and future-placement field derived from `avg10`: `pressured` starts at
+CPU `some` 10%, memory `some` 5% or `full` 0.5%, and I/O `some` 10% or `full`
+1%; `critical` starts at CPU `some` 50%, memory `some` 20% or `full` 2%, and I/O
+`some` 30% or `full` 5%. Agent, VM, and sandbox detail responses also expose
+the full availability-bearing snapshot plus a control-plane receipt timestamp;
+freshness decisions must use that receipt time, not the agent's wall clock.
+
 ### Teardown safety & site networking
 
 | Metric | Type | Labels | Meaning |
@@ -289,6 +351,30 @@ clusters.
 | `strato_webhook_delivery_attempts_total` | counter | — | HTTP delivery attempts started. Its summed rate measures endpoint work, not terminal queue drain: retryable failures remain pending |
 | `strato_webhook_delivery_results_total` | counter | `result` = `succeeded` \| `failed` \| `dead` | Durable claimed-row verdicts. `failed` remains pending; `dead` includes exhausted attempts and rows parked because their subscription is disabled |
 | `strato_webhook_delivery_dropped` | gauge | — | Committed `dropped` rows still present in the seven-day delivery history. It can fall when history is pruned or a row is manually redelivered |
+
+### Audit and IAM decision-log completeness
+
+Both security-record streams retry transient delivery failures off the request
+path. A batch gets eight attempts with bounded exponential backoff. Audit
+delivery tracks retries per destination, so a database write that succeeded is
+not repeated merely because Loki or a webhook failed. IAM decisions use the
+same retry policy for their database batch.
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_security_records_lost_total` | counter | `stream` = `audit` \| `iam_decision`; `cause` = `queue_count_limit` \| `queue_byte_limit` \| `record_too_large` \| `delivery_failure` \| `incomplete_shutdown`; `destination` = `all` \| `database` \| `log` \| `loki` \| `webhook` | Records dropped from a configured destination after queue shedding or exhausted retries, plus records whose delivery could not be confirmed before shutdown. `destination=all` means the record never entered delivery or its final destination is unknown. |
+
+Alert on any increase:
+
+```promql
+sum by (stream, cause, destination) (
+  increase(strato_security_records_lost_total[5m])
+) > 0
+```
+
+This counter makes known gaps loud; the in-memory queues still cannot report a
+replica that is killed before it can emit the metric. Eliminating that crash
+window requires a durable transactional outbox.
 
 ### Authorization (Cedar)
 
@@ -462,6 +548,40 @@ trace link back to the mutation that rang it.
 
 Thresholds are starting points; tune to your fleet size and SLOs.
 
+### Host CPU contention is violating the density budget
+
+- **Condition:** alert on CPU PSI, not load average. A useful starting warning
+  is an available host signal above 10% for 5 minutes:
+
+  ```promql
+  max by (agent_id) (
+    strato_agent_pressure_average10_percent{resource="cpu",stall="some"}
+  ) >= 10
+  and on (agent_id)
+  max by (agent_id) (
+    strato_agent_resource_signal_available{signal="psi_cpu_some"}
+  ) == 1
+  ```
+
+  Page at 50%, or earlier when workload CPU-throttled time rises and the
+  affected workload's latency SLO is burning.
+- **First checks:** compare host CPU PSI with per-workload CPU PSI and the rate
+  of `strato_workload_cpu_throttled_seconds_total`. A high load average without
+  CPU PSI is not this alert: runnable demand that the CPUs are serving is not
+  evidence of contention by itself.
+
+### Host memory reclaim is approaching an OOM
+
+- **Condition:** warn when available memory PSI `some` exceeds 5% or `full`
+  exceeds 0.5% for 5 minutes. Page at 20%/2%, on any increase in
+  `strato_agent_oom_kills_total`, or when
+  `strato_workload_memory_events_total{event="oom"}` rises.
+- **First checks:** graph host memory PSI with the rates of major faults,
+  reclaim scanned/reclaimed pages, swap/zswap/zram use, per-workload
+  `memory.current`, and `memory.events`. For QEMU VMs, compare balloon total,
+  available, and actual bytes. Pressure and reclaim should move before an OOM;
+  an unavailable companion signal is missing evidence, not a zero.
+
 ### Webhook outbox is falling behind
 
 - **Condition:** alert when
@@ -585,6 +705,23 @@ Thresholds are starting points; tune to your fleet size and SLOs.
 The compose deployment ships with OTel export disabled. To exercise metrics,
 set `OTEL_METRICS_ENABLED=true` and a reachable
 `OTEL_EXPORTER_OTLP_ENDPOINT` in `.env`, then:
+
+For a Linux density host, validate CPU contention with at least two runnable
+workers per logical CPU (for example,
+`stress-ng --cpu "$(($(nproc) * 2))" --cpu-load 100 --timeout 60s`) while
+watching the CPU PSI alert query above. The host
+`strato_agent_pressure_average10_percent{resource="cpu",stall="some"}` must
+rise; load average is deliberately not part of the rule. Stop the load and
+confirm the 10-second PSI average recovers.
+
+Validate memory reclaim in a disposable, bounded cgroup or test workload; do
+not run an unbounded allocator on a production agent. Increase its working set
+toward `memory.high` while leaving `memory.max` above the target. Before any
+OOM, confirm all applicable signals move: host/workload memory PSI, host reclaim
+counters, workload `memory.events{event="high"}`, and QEMU balloon available or
+actual bytes when the guest supports them. Then lower the working set and
+confirm PSI recovers. A kernel/backend without one of these files must instead
+emit availability `0` and no raw zero-valued gauge.
 
 - Create a webhook subscription and enqueue an event while delivery is stopped
   → expect `strato_webhook_delivery_pending` and the matching

@@ -643,7 +643,7 @@ insufficient committed disk therefore returns `409` before a volume row is
 created. A create made while no eligible agent exists retains the established
 asynchronous behavior: it is accepted, then degraded with that reason.
 
-Wire v59 separates the two local-disk quantities that sparse images made easy
+Wire v60 separates the two local-disk quantities that sparse images made easy
 to conflate. `availableDisk` is provisioned availability (`total - committed`)
 and is the placement/admission input. `physicalFreeDisk` is the live filesystem
 free-byte observation used for operational utilization. Local volume virtual

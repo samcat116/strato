@@ -180,19 +180,24 @@ public struct AgentHeartbeatMessage: WebSocketMessage {
     public let agentId: String
     public let resources: AgentResources
     public let dependencyObservations: [NodeDependencyObservation]
+    /// Last host-resource sample gathered independently of this heartbeat.
+    /// Nil only before the first sampling pass or from a pre-v59 sender.
+    public let hostResourceTelemetry: HostResourceTelemetry?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         agentId: String,
         resources: AgentResources,
-        dependencyObservations: [NodeDependencyObservation] = []
+        dependencyObservations: [NodeDependencyObservation] = [],
+        hostResourceTelemetry: HostResourceTelemetry? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.agentId = agentId
         self.resources = resources
         self.dependencyObservations = dependencyObservations
+        self.hostResourceTelemetry = hostResourceTelemetry
     }
 }
 

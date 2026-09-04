@@ -81,6 +81,7 @@ extension AgentService {
         var agentChanged = applyPeriodicAgentState(
             report.resources,
             dependencyObservations: nil,
+            hostResourceTelemetry: report.hostResourceTelemetry,
             to: agent)
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason

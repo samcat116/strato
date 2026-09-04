@@ -195,6 +195,10 @@ extension Application {
         // redundant. Fresh baselines omit it; preserved databases drop it here.
         migrations.add(DropAgentWireProtocolVersion())
 
+        // STR-266: explicit host PSI/reclaim/swap and per-workload cgroup
+        // contention snapshots, sampled outside the heartbeat path.
+        migrations.add(AddResourceContentionTelemetry())
+
         // STR-278: preserve both committed disk availability and the physical
         // filesystem headroom sparse volumes can consume later.
         migrations.add(AddAgentPhysicalFreeDisk())

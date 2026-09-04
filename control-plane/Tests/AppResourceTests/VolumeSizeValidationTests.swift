@@ -218,6 +218,74 @@ final class VolumeSizeValidationTests {
         }
     }
 
+    @Test("Image-backed volume placement reserves the source size bound")
+    func createFromImageSkipsHostThatOnlyFitsRequestedSize() async throws {
+        try await withVolumeTestApp { app, builder, user, project, token in
+            let smallAgentID = try await builder.registerAgent(
+                on: app,
+                named: "small-image-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 30.gbToBytes!,
+                    availableDisk: 30.gbToBytes!))
+            let largeAgentID = try await builder.registerAgent(
+                on: app,
+                named: "large-image-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 50.gbToBytes!,
+                    availableDisk: 50.gbToBytes!))
+
+            let image = try await builder.createImage(
+                name: "large-sparse-image",
+                project: project,
+                size: 2.gbToBytes!,
+                uploadedBy: user)
+            image.defaultDisk = 40.gbToBytes!
+            try await image.save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: try user.requireID(),
+                role: .admin,
+                nodeType: .image,
+                nodeID: try image.requireID(),
+                createdBy: try user.requireID(),
+                on: app.db)
+
+            let body = CreateVolumeRequest(
+                name: "from-large-image",
+                description: "must use the image size for placement",
+                projectId: try project.requireID(),
+                environment: nil,
+                sizeGB: 10,
+                format: "qcow2",
+                volumeType: "data",
+                sourceImageId: try image.requireID(),
+                iopsTotal: nil,
+                bpsTotal: nil)
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(body)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let replica = try #require(try await VolumeReplica.query(on: app.db).first())
+            #expect(replica.agentId == largeAgentID)
+            #expect(replica.agentId != smallAgentID)
+            let reservations = await app.coordination.activeReservations(
+                agentIds: [smallAgentID, largeAgentID])
+            #expect(reservations[smallAgentID]?.disk ?? 0 == 0)
+            #expect(reservations[largeAgentID]?.disk == 40.gbToBytes!)
+        }
+    }
+
     @Test("POST /api/volumes rejects a Firecracker-only source image")
     func createRejectsSourceImageWithoutDiskArtifact() async throws {
         try await withVolumeTestApp { app, _, user, project, token in
