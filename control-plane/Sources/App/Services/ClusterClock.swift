@@ -55,8 +55,10 @@ enum ClusterClock {
         }
     }
 
-    /// Reads PostgreSQL's transaction-stable clock once and estimates this
-    /// replica's offset using the midpoint of the local round trip.
+    /// Reads PostgreSQL's current wall clock once and estimates this replica's
+    /// offset using the midpoint of the local round trip. `clock_timestamp()`
+    /// is intentional: unlike `now()`, it does not freeze at transaction start
+    /// while an accepting transaction waits for advisory or row locks.
     static func read(
         on database: any Database,
         localTime: @Sendable () -> Date = { Date() }
@@ -65,7 +67,7 @@ enum ClusterClock {
             throw ClusterClockError.sqlDatabaseRequired
         }
         let before = localTime()
-        let row = try await sql.raw("SELECT now() AS database_time")
+        let row = try await sql.raw("SELECT clock_timestamp() AS database_time")
             .first(decoding: DatabaseClockRow.self)
         let after = localTime()
         guard let row else { throw ClusterClockError.missingDatabaseTime }

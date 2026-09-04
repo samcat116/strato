@@ -8,6 +8,22 @@ import AppTestSupport
 
 @Suite("Cluster clock", .serialized)
 struct ClusterClockTests {
+    @Test("reads advance inside an existing transaction")
+    func readsAdvanceInsideTransaction() async throws {
+        try await withTestApp { app in
+            try await app.db.transaction { db in
+                let first = try await ClusterClock.read(on: db)
+                try await Task.sleep(for: .milliseconds(150))
+                let second = try await ClusterClock.read(on: db)
+
+                // PostgreSQL `now()` would return the transaction-start instant
+                // for both reads. Acceptance clocks must observe elapsed lock
+                // waits instead.
+                #expect(second.date.timeIntervalSince(first.date) >= 0.1)
+            }
+        }
+    }
+
     @Test("a fast replica clock cannot expire a database-clock convergence deadline")
     func fastReplicaClockDoesNotDegradeHealthyMutation() async throws {
         try await withTestApp { app in
@@ -110,5 +126,11 @@ struct ClusterClockTests {
                 contentsOf: sources.appendingPathComponent(file), encoding: .utf8)
             #expect(!source.contains("now: Date = Date()"))
         }
+
+        let clusterClockSource = try String(
+            contentsOf: sources.appendingPathComponent("Services/ClusterClock.swift"),
+            encoding: .utf8)
+        #expect(clusterClockSource.contains("SELECT clock_timestamp() AS database_time"))
+        #expect(!clusterClockSource.contains("SELECT now() AS database_time"))
     }
 }

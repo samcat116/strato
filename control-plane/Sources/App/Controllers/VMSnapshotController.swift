@@ -98,13 +98,13 @@ extension VMController {
         let environment = vm.environment
         let memory = vm.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             // Checkpoint state draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: environment, size: memory, on: db)
+            let acceptedAt = try await ClusterClock.read(on: db)
             snapshot.expiresAt = try SnapshotRetention.expiry(
                 requested: request.ttlSeconds,
                 defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(

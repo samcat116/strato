@@ -96,33 +96,12 @@ extension SandboxController {
         let environment = sandbox.environment
         let memory = sandbox.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: environment, size: memory, on: db)
-            snapshot.expiresAt = try SnapshotRetention.expiry(
-                requested: request.ttlSeconds,
-                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
-                    .snapshotDefaultTTLSeconds),
-                from: acceptedAt)
-            snapshot.extendConvergenceDeadline(
-                by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create),
-                from: acceptedAt)
-            try await snapshot.save(on: db)
-            // The creator's binding on the snapshot, in the create
-            // transaction (the volume-snapshot path, issue #477).
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: userID,
-                role: .admin,
-                nodeType: .sandboxSnapshot,
-                nodeID: snapshot.requireID(),
-                createdBy: userID,
-                on: db
-            )
             if stopAfterSnapshot {
                 // Checkpoint-and-stop has two halves and they live in two
                 // places on purpose. The *capture* leaves the microVM paused,
@@ -146,6 +125,29 @@ extension SandboxController {
                 }
                 try await sandbox.save(on: db)
             }
+            // The optional sandbox row lock above can wait behind another
+            // mutation. Start both artifact clocks only after it completes.
+            let acceptedAt = try await ClusterClock.read(on: db)
+            snapshot.expiresAt = try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
+                    .snapshotDefaultTTLSeconds),
+                from: acceptedAt)
+            snapshot.extendConvergenceDeadline(
+                by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
+            try await snapshot.save(on: db)
+            // The creator's binding on the snapshot, in the create
+            // transaction (the volume-snapshot path, issue #477).
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: userID,
+                role: .admin,
+                nodeType: .sandboxSnapshot,
+                nodeID: snapshot.requireID(),
+                createdBy: userID,
+                on: db
+            )
             return try await SnapshotArtifactMutation.recordCapture(
                 snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext, on: db)
         }

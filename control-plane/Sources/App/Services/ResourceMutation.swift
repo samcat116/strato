@@ -190,7 +190,6 @@ struct ResourceMutation {
     ) async throws -> Accepted {
         let resourceID = try resource.requireID()
         let (accepted, placementAgentIDs) = try await db.transaction { db in
-            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(idempotencyContext, actor: actor, on: db)
             try await beforeResourceLock(db)
             guard try await resource.lockAndRefresh(on: db) else {
@@ -224,6 +223,10 @@ struct ResourceMutation {
                     reason: "Desired-state generation advanced unexpectedly from "
                         + "\(expectedGeneration) to \(actualGeneration) while its row was locked")
             }
+            // Start the convergence budget only after every admission and row
+            // lock has completed. A lock wait must not consume the agent's
+            // opportunity to realize the mutation after this transaction.
+            let acceptedAt = try await ClusterClock.read(on: db)
             resource.extendConvergenceDeadline(
                 by: R.operationResourceKind.completionBudgetSeconds(for: kind),
                 from: acceptedAt)

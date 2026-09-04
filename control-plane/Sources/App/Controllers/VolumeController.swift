@@ -229,13 +229,14 @@ struct VolumeController: RouteCollection {
         let accepted: ResourceMutation.Accepted
         do {
             accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-                let acceptedAt = try await ClusterClock.read(on: db)
                 try await IdempotencyService.reserve(
                     req.idempotencyContext, actor: .user(userID), on: db)
                 try await QuotaEnforcementService.reserveVolume(
                     for: project, environment: environment, size: sizeBytes, on: db)
                 // Stamp from PostgreSQL in the accepting transaction so the
-                // insert and its convergence budget share one clock.
+                // insert and its convergence budget share one clock. Sample
+                // after the admission locks so their wait cannot spend it.
+                let acceptedAt = try await ClusterClock.read(on: db)
                 volume.extendConvergenceDeadline(
                     by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
                     from: acceptedAt)
@@ -1012,11 +1013,11 @@ struct VolumeController: RouteCollection {
         // (STR-181): an overlay grows toward it with no API call to refuse along
         // the way, so the pool has to be able to absorb it fully grown.
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: volume.environment, size: volume.size, on: db)
+            let acceptedAt = try await ClusterClock.read(on: db)
             snapshot.expiresAt = try SnapshotRetention.expiry(
                 requested: request.ttlSeconds,
                 defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
@@ -1116,12 +1117,12 @@ struct VolumeController: RouteCollection {
         // attribution, and creator access visible together.
         let sourceProject = try await sourceVolume.project(on: req.db)
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            let acceptedAt = try await ClusterClock.read(on: db)
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             try await QuotaEnforcementService.reserveVolume(
                 for: sourceProject, environment: sourceVolume.environment,
                 size: sourceVolume.size, on: db)
+            let acceptedAt = try await ClusterClock.read(on: db)
             newVolume.extendConvergenceDeadline(
                 by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
                 from: acceptedAt)

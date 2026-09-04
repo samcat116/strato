@@ -57,10 +57,12 @@ HTTP request.
 ## Cluster time
 
 PostgreSQL is also the source of truth for durable time. Each 30-second
-maintenance pass reads `now()` once and threads that `ClusterInstant` through
+maintenance pass reads `clock_timestamp()` once and threads that `ClusterInstant` through
 heartbeat staleness, convergence, retention, finalizer, command, and rollout
 decisions. Accepting transactions use the same database clock when they stamp
-deadlines. A replica-local `Date()` is not a valid clock for durable state.
+deadlines, sampling it after admission and row locks so lock waits do not spend
+the resulting convergence budget. A replica-local `Date()` is not a valid clock
+for durable state.
 
 The maintenance read also measures PostgreSQL-minus-replica wall-clock offset.
 `control_plane_clock_offset_seconds` exports the signed value per process; the

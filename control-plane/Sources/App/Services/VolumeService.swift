@@ -161,7 +161,6 @@ enum VolumeService {
         if let initialPool = try await pool(of: volume, on: db), initialPool.mode == .ceph {
             let volumeID = try volume.requireID()
             let resolution = try await db.transaction { tx -> AgentHoldingResolution in
-                let instant = try await ClusterClock.read(on: tx)
                 guard let committed = try await Volume.find(volumeID, on: tx),
                     try await committed.lockAndRefresh(on: tx),
                     let committedPool = try await pool(of: committed, on: tx),
@@ -170,6 +169,7 @@ enum VolumeService {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: nil, recordedAgentID: nil)
                 }
+                let instant = try await ClusterClock.read(on: tx)
 
                 let previous = committed.reconcilerAgentId
                 if let previous,

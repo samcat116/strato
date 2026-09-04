@@ -174,12 +174,12 @@ enum VolumeAttachmentService {
     /// not make its VM undeletable" outranks every other consideration here.
     @discardableResult
     static func releaseDataVolumes(fromVM vmID: UUID, on db: any Database) async throws -> [UUID] {
-        let instant = try await ClusterClock.read(on: db)
         let attached = try await Volume.query(on: db)
             .filter(\.$vm.$id == vmID)
             .filter(\.$volumeType == .data)
             .all()
 
+        var releasable: [Volume] = []
         for volume in attached.sorted(by: {
             ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
         }) {
@@ -187,6 +187,14 @@ enum VolumeAttachmentService {
             // It may have moved while this VM's reap was reaching it. Only
             // release the attachment the query selected, never a newer one.
             guard volume.$vm.id == vmID else { continue }
+            releasable.append(volume)
+        }
+
+        // Acquire every row lock before starting the detach budgets. The
+        // sorted lock order remains unchanged, but contention cannot shorten
+        // any volume's post-commit convergence window.
+        let instant = try await ClusterClock.read(on: db)
+        for volume in releasable {
             let expectedGeneration = volume.generation
             clearAttachment(volume, at: instant)
             guard

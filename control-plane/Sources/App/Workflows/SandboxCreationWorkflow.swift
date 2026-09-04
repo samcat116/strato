@@ -379,7 +379,6 @@ enum SandboxCreationWorkflow {
                 sandbox.$id.exists = false
                 sandbox.generation = initialGeneration
                 return try await req.db.transaction { db -> ResourceMutation.Accepted in
-                    let acceptedAt = try await ClusterClock.read(on: db)
                     try await IdempotencyService.reserve(
                         req.idempotencyContext, actor: .user(userID), on: db)
                     if let restoreSnapshotID {
@@ -411,19 +410,6 @@ enum SandboxCreationWorkflow {
                             .internalServerError,
                             reason: "Failed to initialize the sandbox desired-state generation")
                     }
-                    // How long the create has to converge before the
-                    // stuck-convergence sweep marks the sandbox degraded
-                    // (STR-147), stamped with the insert for the reason the VM
-                    // create path stamps its own.
-                    sandbox.extendConvergenceDeadline(
-                        by: OperationResourceKind.sandbox.completionBudgetSeconds(for: .create),
-                        from: acceptedAt)
-                    // Fluent stamps `created_at` from the process clock on
-                    // insert. Rewrite it in the same transaction so the
-                    // sandbox TTL derives from PostgreSQL time as well.
-                    sandbox.createdAt = acceptedAt.date
-                    try await sandbox.update(on: db)
-
                     // One NIC on the requested logical network, IPAM-allocated by
                     // the control plane (issue #416); no NIC when the caller
                     // named no network (issue #765).
@@ -435,6 +421,19 @@ enum SandboxCreationWorkflow {
                         securityGroupIDs: requestedSecurityGroupIds,
                         on: db
                     )
+
+                    // The NIC allocator can wait on its network lock. Start
+                    // the convergence budget and TTL only after admission has
+                    // finished, while keeping both stamps in this transaction.
+                    let acceptedAt = try await ClusterClock.read(on: db)
+                    sandbox.extendConvergenceDeadline(
+                        by: OperationResourceKind.sandbox.completionBudgetSeconds(for: .create),
+                        from: acceptedAt)
+                    // Fluent stamps `created_at` from the process clock on
+                    // insert. Rewrite it so the sandbox TTL uses the same
+                    // current PostgreSQL instant as its convergence budget.
+                    sandbox.createdAt = acceptedAt.date
+                    try await sandbox.update(on: db)
 
                     // The create's attribution record and the client's handle on
                     // the agent work that follows (ADR 0001 stage 4), for the
