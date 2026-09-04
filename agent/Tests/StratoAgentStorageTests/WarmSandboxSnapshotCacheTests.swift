@@ -1,5 +1,7 @@
 import Foundation
+import Dispatch
 import Logging
+import Synchronization
 import Testing
 
 @testable import StratoAgentCore
@@ -386,5 +388,52 @@ struct WarmSandboxSnapshotCacheTests {
         #expect(result.evicted.count == 1)
         #expect(cache.lookup(oldKey) == nil)
         #expect(cache.lookup(newKey) != nil)
+    }
+
+    @Test("sweep cannot evict an entry while lookup verifies its checksum")
+    func sweepWaitsForLookup() async throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let key = makeKey()
+        let publishingCache = WarmSandboxSnapshotCache(rootPath: root)
+        let entry = try publishEntry(
+            publishingCache, key: key, fill: String(repeating: "a", count: 4096))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: entry.directory)
+
+        let hashingStarted = Mutex(false)
+        let finishHashing = DispatchSemaphore(value: 0)
+        defer { finishHashing.signal() }
+        let cache = WarmSandboxSnapshotCache(
+            rootPath: root,
+            rootfsHasher: { path in
+                hashingStarted.withLock { $0 = true }
+                finishHashing.wait()
+                return try FileHashing.sha256Hex(ofFileAt: path)
+            })
+
+        let lookup = Task.detached { cache.lookup(key) }
+        while !hashingStarted.withLock({ $0 }) { await Task.yield() }
+
+        let sweepStarted = Mutex(false)
+        let sweepFinished = Mutex(false)
+        let sweepLogger = logger
+        let sweep = Task.detached {
+            sweepStarted.withLock { $0 = true }
+            let result = cache.sweep(budgetBytes: 0, logger: sweepLogger)
+            sweepFinished.withLock { $0 = true }
+            return result
+        }
+        while !sweepStarted.withLock({ $0 }) { await Task.yield() }
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!sweepFinished.withLock { $0 })
+        #expect(FileManager.default.fileExists(atPath: entry.rootfsPath))
+
+        finishHashing.signal()
+        #expect(await lookup.value != nil)
+        let sweepResult = await sweep.value
+        #expect(sweepResult.evicted.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: entry.rootfsPath))
     }
 }

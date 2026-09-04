@@ -1,6 +1,18 @@
 import Foundation
 import Logging
 
+/// Shared by every copy of a cache value so detached eviction cannot unlink
+/// an entry while lookup is verifying and refreshing it.
+private final class WarmSnapshotCacheEntryAccess: @unchecked Sendable {
+    private let lock = NSLock()
+
+    func withLock<Result>(_ operation: () throws -> Result) rethrows -> Result {
+        lock.lock()
+        defer { lock.unlock() }
+        return try operation()
+    }
+}
+
 /// A warm-start snapshot's identity (issue #426): everything that must match
 /// for a template snapshot to be safely restored into a new sandbox.
 ///
@@ -146,9 +158,18 @@ public struct WarmSandboxSnapshotCache: Sendable {
     public static let metaFile = "meta.json"
 
     public let rootPath: String
+    private let entryAccess = WarmSnapshotCacheEntryAccess()
+    private let rootfsHasher: @Sendable (String) throws -> String
 
     public init(rootPath: String) {
+        self.init(
+            rootPath: rootPath,
+            rootfsHasher: { try FileHashing.sha256Hex(ofFileAt: $0) })
+    }
+
+    init(rootPath: String, rootfsHasher: @escaping @Sendable (String) throws -> String) {
         self.rootPath = rootPath
+        self.rootfsHasher = rootfsHasher
     }
 
     /// Sidecar written next to the artifacts. `templateId`/`templateNonce`
@@ -229,32 +250,34 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// required because restores verify the template identity it carries).
     /// A hit refreshes the entry's LRU timestamp.
     public func lookup(_ key: WarmSnapshotKey, fileManager: FileManager = .default) -> WarmSnapshotEntry? {
-        let entry = WarmSnapshotEntry(directory: entryDirectory(for: key))
-        let metaPath = entry.directory + "/" + Self.metaFile
-        for required in [entry.memoryPath, entry.vmstatePath, entry.rootfsPath, metaPath] {
-            guard fileManager.fileExists(atPath: required) else {
+        entryAccess.withLock {
+            let entry = WarmSnapshotEntry(directory: entryDirectory(for: key))
+            let metaPath = entry.directory + "/" + Self.metaFile
+            for required in [entry.memoryPath, entry.vmstatePath, entry.rootfsPath, metaPath] {
+                guard fileManager.fileExists(atPath: required) else {
+                    try? fileManager.removeItem(atPath: entry.directory)
+                    return nil
+                }
+            }
+            guard let meta = loadMeta(key, fileManager: fileManager),
+                let integrity = meta.artifactIntegrity,
+                integrity.memorySizeBytes >= 0,
+                integrity.vmstateSizeBytes >= 0,
+                integrity.rootfsSizeBytes >= 0,
+                integrity.rootfsSHA256.count == 64,
+                integrity.rootfsSHA256.allSatisfy({ $0.isHexDigit }),
+                fileSize(at: entry.memoryPath, fileManager: fileManager) == integrity.memorySizeBytes,
+                fileSize(at: entry.vmstatePath, fileManager: fileManager) == integrity.vmstateSizeBytes,
+                fileSize(at: entry.rootfsPath, fileManager: fileManager) == integrity.rootfsSizeBytes,
+                let rootfsSHA256 = try? rootfsHasher(entry.rootfsPath),
+                rootfsSHA256 == integrity.rootfsSHA256
+            else {
                 try? fileManager.removeItem(atPath: entry.directory)
                 return nil
             }
+            DiskCacheLRU.touch(entryDirectory: entry.directory)
+            return entry
         }
-        guard let meta = loadMeta(key, fileManager: fileManager),
-            let integrity = meta.artifactIntegrity,
-            integrity.memorySizeBytes >= 0,
-            integrity.vmstateSizeBytes >= 0,
-            integrity.rootfsSizeBytes >= 0,
-            integrity.rootfsSHA256.count == 64,
-            integrity.rootfsSHA256.allSatisfy({ $0.isHexDigit }),
-            fileSize(at: entry.memoryPath, fileManager: fileManager) == integrity.memorySizeBytes,
-            fileSize(at: entry.vmstatePath, fileManager: fileManager) == integrity.vmstateSizeBytes,
-            fileSize(at: entry.rootfsPath, fileManager: fileManager) == integrity.rootfsSizeBytes,
-            let rootfsSHA256 = try? FileHashing.sha256Hex(ofFileAt: entry.rootfsPath),
-            rootfsSHA256 == integrity.rootfsSHA256
-        else {
-            try? fileManager.removeItem(atPath: entry.directory)
-            return nil
-        }
-        DiskCacheLRU.touch(entryDirectory: entry.directory)
-        return entry
     }
 
     /// A fresh staging directory under the cache root (same filesystem as the
@@ -297,7 +320,7 @@ public struct WarmSandboxSnapshotCache: Sendable {
                 memorySizeBytes: memorySizeBytes,
                 vmstateSizeBytes: vmstateSizeBytes,
                 rootfsSizeBytes: rootfsSizeBytes,
-                rootfsSHA256: try FileHashing.sha256Hex(ofFileAt: stagedEntry.rootfsPath)))
+                rootfsSHA256: try rootfsHasher(stagedEntry.rootfsPath)))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         try encoder.encode(completedMeta).write(to: URL(fileURLWithPath: stagedMetaPath))
@@ -367,8 +390,10 @@ public struct WarmSandboxSnapshotCache: Sendable {
     /// honoring ``DiskCacheLRU``'s recent-use grace window.
     @discardableResult
     public func sweep(budgetBytes: Int64, now: Date = Date(), logger: Logger) -> DiskCacheLRU.SweepResult {
-        DiskCacheLRU.sweep(
-            entryDirectories: entryDirectories(), budgetBytes: budgetBytes, now: now, logger: logger)
+        entryAccess.withLock {
+            DiskCacheLRU.sweep(
+                entryDirectories: entryDirectories(), budgetBytes: budgetBytes, now: now, logger: logger)
+        }
     }
 
     private func fileSize(at path: String, fileManager: FileManager) -> Int64? {
