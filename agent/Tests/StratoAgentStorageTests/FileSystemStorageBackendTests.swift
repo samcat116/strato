@@ -78,9 +78,13 @@ private actor SubprocessRecorder {
     }
 }
 
-private func imageInfoJSON(format: String, virtualSize: Int64 = 1_073_741_824) -> ProcessResult {
+private func imageInfoJSON(
+    format: String,
+    virtualSize: Int64 = 1_073_741_824,
+    actualSize: Int64 = 313_460
+) -> ProcessResult {
     let json = """
-        {"filename": "img", "format": "\(format)", "virtual-size": \(virtualSize), "actual-size": 313460}
+        {"filename": "img", "format": "\(format)", "virtual-size": \(virtualSize), "actual-size": \(actualSize)}
         """
     return ProcessResult(terminationStatus: 0, standardOutput: Data(json.utf8), standardError: Data())
 }
@@ -709,27 +713,32 @@ struct FileSystemStorageBackendTests {
         #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
     }
 
-    @Test func snapshotRefusesBeforeWritingWhenParentFootprintExceedsFreeSpace() async throws {
+    @Test func snapshotDoesNotRequireParentFootprintToBeFree() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
         let recorder = SubprocessRecorder()
-        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let gibibyte: Int64 = 1_073_741_824
+        await recorder.stub(
+            subcommand: "info",
+            result: imageInfoJSON(
+                format: "qcow2",
+                virtualSize: 100 * gibibyte,
+                actualSize: 70 * gibibyte))
         let backend = makeBackend(
             root: root,
             recorder: recorder,
-            freeDiskSpace: { _ in 313_459 })
+            freeDiskSpace: { _ in 30 * gibibyte })
 
-        await #expect(throws: StorageBackendError.self) {
-            try await backend.createSnapshot(
-                volumeId: "vol-1",
-                snapshotId: "snap-1",
-                volumePath: "\(root)/vol-1/volume.qcow2")
-        }
+        let snapshotPath = try await backend.createSnapshot(
+            volumeId: "vol-1",
+            snapshotId: "snap-1",
+            volumePath: "\(root)/vol-1/volume.qcow2")
 
-        let invocations = await recorder.invocations
-        #expect(invocations.filter { $0.arguments.first == "create" }.isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: "\(root)/vol-1/snapshots"))
-        #expect(!FileManager.default.fileExists(atPath: "\(root)/vol-1/snapshots/snap-1.qcow2.partial"))
+        #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
+        let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
+        #expect(create.arguments.last == snapshotPath + ".partial")
+        #expect(FileManager.default.fileExists(atPath: snapshotPath))
+        #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
     }
 
     @Test func createSnapshotIsIdempotent() async throws {

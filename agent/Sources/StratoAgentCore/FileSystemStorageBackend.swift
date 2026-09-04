@@ -464,11 +464,11 @@ public actor FileSystemStorageBackend: StorageBackend {
         let backingFormat = sourceInfo.format
 
         let snapshotDirectory = (snapshotPath as NSString).deletingLastPathComponent
-        try requireCopyCapacity(
-            requiredBytes: sourceInfo.actualSize,
-            destinationPath: snapshotPath,
-            destinationDirectory: volumeDirectory(volumeId: volumeId),
-            operation: "capture snapshot")
+        // An external snapshot starts as a small qcow2 overlay; it does not
+        // copy the backing image's allocated blocks. Capacity admission
+        // reserves its possible future growth separately. Let qemu-img report
+        // an actual ENOSPC while creating the overlay rather than refusing
+        // based on the unrelated footprint of the parent.
         try DurableFileWriter().createDirectory(at: snapshotDirectory)
 
         try await publishAtomically(to: snapshotPath) { stagingPath in
