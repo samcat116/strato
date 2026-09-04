@@ -197,7 +197,7 @@ an overlay and retain the base read-only.
 
 The applied policy is persisted in the VM manifest and used by the same disk
 renderer for cold boot and hot attach. Re-adoption preserves it across an agent
-restart. A pre-v59 manifest is recorded explicitly as the historical
+restart. A pre-v60 manifest is recorded explicitly as the historical
 conservative XML instead of claiming that a surviving domain acquired new
 attributes during adoption. The control plane stores non-null reports but
 does not erase one when an older agent is silent; current agents report an

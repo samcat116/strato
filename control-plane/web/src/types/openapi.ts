@@ -6011,6 +6011,12 @@ export interface components {
              * @description What the balloon has actually reached. Sits above `balloonTarget` while a newly set target is still being applied.
              */
             guestMemoryBalloonActualBytes?: number;
+            resourceTelemetry?: components["schemas"]["WorkloadResourceTelemetry"];
+            /**
+             * Format: date-time
+             * @description Control-plane receipt time for the latest workload resource sample.
+             */
+            resourceTelemetryReceivedAt?: string;
             /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
             securityGroupsEnforced?: boolean;
             /** @description The VM's SPIFFE instance identity — `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload registration is filed under. A name, never an authorization: what the identity may do comes from role bindings against that principal, and a registration with none authorizes nothing. Absent means either an older control plane that does not report the field, or a registration an administrator revoked — never that the VM is exempt. */
@@ -6193,6 +6199,12 @@ export interface components {
             restoredFromSnapshotId?: string;
             status: components["schemas"]["SandboxStatus"];
             exitCode?: number;
+            resourceTelemetry?: components["schemas"]["WorkloadResourceTelemetry"];
+            /**
+             * Format: date-time
+             * @description Control-plane receipt time for the latest workload resource sample.
+             */
+            resourceTelemetryReceivedAt?: string;
             /** @description The security groups attached to the sandbox's NIC (flat: a sandbox has at most one). Absent when the sandbox has no NIC. Kept alongside the per-NIC copy on `networkInterfaces` for clients that predate it. Whether these groups filter anything is a separate question — see `securityGroupsEnforced`. */
             securityGroupIds?: string[];
             /** @description The sandbox's NICs — at most one today, but a list for parity with the VM response. */
@@ -8554,6 +8566,12 @@ export interface components {
              * @description Control-plane time when the latest dependency snapshot arrived. Placement freshness uses this value instead of the agent's clock.
              */
             dependencyObservationsReceivedAt?: string;
+            resourceTelemetry?: components["schemas"]["HostResourceTelemetry"];
+            /**
+             * Format: date-time
+             * @description Control-plane receipt time for the latest host resource sample. Placement freshness must use this value instead of the agent clock.
+             */
+            resourceTelemetryReceivedAt?: string;
             hostInfo?: components["schemas"]["AgentHostInfo"];
             /**
              * Format: uuid
@@ -8657,6 +8675,88 @@ export interface components {
             totalDisk: number;
             /** Format: int64 */
             availableDisk: number;
+        };
+        /**
+         * @description Whether the latest sampling pass measured the signal. Unavailable is distinct from an available signal whose value is zero.
+         * @enum {string}
+         */
+        ResourceTelemetryAvailability: "available" | "unavailable";
+        /**
+         * @description Bounded operator summary derived from PSI average10 values.
+         * @enum {string}
+         */
+        ResourcePressureHealth: "unknown" | "healthy" | "pressured" | "critical";
+        ResourceTelemetryValue: {
+            availability: components["schemas"]["ResourceTelemetryAvailability"];
+            /** Format: int64 */
+            value?: number | null;
+        };
+        ResourceTelemetryFlag: {
+            availability: components["schemas"]["ResourceTelemetryAvailability"];
+            value?: boolean | null;
+        };
+        PressureStallSample: {
+            /** Format: double */
+            average10: number;
+            /** Format: double */
+            average60: number;
+            /** Format: double */
+            average300: number;
+            /** Format: int64 */
+            totalMicroseconds: number;
+        };
+        PressureStallTelemetry: {
+            availability: components["schemas"]["ResourceTelemetryAvailability"];
+            some?: components["schemas"]["PressureStallSample"];
+            full?: components["schemas"]["PressureStallSample"];
+        };
+        HostResourceTelemetry: {
+            /** Format: date-time */
+            sampledAt: string;
+            health: components["schemas"]["ResourcePressureHealth"];
+            cpuPressure: components["schemas"]["PressureStallTelemetry"];
+            memoryPressure: components["schemas"]["PressureStallTelemetry"];
+            ioPressure: components["schemas"]["PressureStallTelemetry"];
+            swapTotalBytes: components["schemas"]["ResourceTelemetryValue"];
+            swapUsedBytes: components["schemas"]["ResourceTelemetryValue"];
+            zswapStoredBytes: components["schemas"]["ResourceTelemetryValue"];
+            zswapPoolBytes: components["schemas"]["ResourceTelemetryValue"];
+            zramUsedBytes: components["schemas"]["ResourceTelemetryValue"];
+            majorFaultsTotal: components["schemas"]["ResourceTelemetryValue"];
+            reclaimScannedPagesTotal: components["schemas"]["ResourceTelemetryValue"];
+            reclaimReclaimedPagesTotal: components["schemas"]["ResourceTelemetryValue"];
+            oomKillsTotal: components["schemas"]["ResourceTelemetryValue"];
+            mglruEnabled: components["schemas"]["ResourceTelemetryFlag"];
+        };
+        WorkloadMemoryEventsTelemetry: {
+            availability: components["schemas"]["ResourceTelemetryAvailability"];
+            /** Format: int64 */
+            low?: number | null;
+            /** Format: int64 */
+            high?: number | null;
+            /** Format: int64 */
+            max?: number | null;
+            /** Format: int64 */
+            oom?: number | null;
+            /** Format: int64 */
+            oomKill?: number | null;
+            /** Format: int64 */
+            oomGroupKill?: number | null;
+        };
+        WorkloadResourceTelemetry: {
+            /** Format: date-time */
+            sampledAt: string;
+            health: components["schemas"]["ResourcePressureHealth"];
+            cgroupV2: components["schemas"]["ResourceTelemetryAvailability"];
+            memoryCurrentBytes: components["schemas"]["ResourceTelemetryValue"];
+            memoryEvents: components["schemas"]["WorkloadMemoryEventsTelemetry"];
+            memoryPressure: components["schemas"]["PressureStallTelemetry"];
+            cpuPressure: components["schemas"]["PressureStallTelemetry"];
+            ioPressure: components["schemas"]["PressureStallTelemetry"];
+            cpuUsageMicroseconds: components["schemas"]["ResourceTelemetryValue"];
+            cpuThrottledMicroseconds: components["schemas"]["ResourceTelemetryValue"];
+            cpuThrottledPeriodsTotal: components["schemas"]["ResourceTelemetryValue"];
+            guestStealMicroseconds: components["schemas"]["ResourceTelemetryValue"];
         };
         /**
          * @description CPU architecture of a hypervisor host.

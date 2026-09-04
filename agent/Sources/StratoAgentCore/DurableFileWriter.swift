@@ -21,9 +21,21 @@ protocol DurableFileSystemCalls: Sendable {
     func write(_ data: Data, to fileDescriptor: CInt) throws
     func synchronizeFile(_ fileDescriptor: CInt, at path: String) throws
     func synchronizeFile(at path: String) throws
+    func directoryEntries(at path: String) throws -> [DurableDirectoryEntry]
     func synchronizeDirectory(_ fileDescriptor: CInt) -> CInt
     func close(_ fileDescriptor: CInt) -> CInt
     func replaceItem(at destination: String, withItemAt source: String) -> CInt
+}
+
+struct DurableDirectoryEntry: Sendable, Equatable {
+    enum Kind: Sendable, Equatable {
+        case file
+        case directory
+        case unsupported
+    }
+
+    let path: String
+    let kind: Kind
 }
 
 enum DurablePathStatus: Sendable, Equatable {
@@ -147,8 +159,80 @@ struct DurableFileWriter: Sendable {
         try synchronizeParentDirectory(of: path)
     }
 
+    /// Durably publishes a complete directory already staged beside `path`.
+    ///
+    /// Every regular file is synchronized before the directory entries that
+    /// name it, then the staged directory is renamed and its parent is
+    /// synchronized. Symlinks and special files are rejected: following one
+    /// while synchronizing could flush content outside the staged tree.
+    ///
+    /// When `completionFileName` is supplied, that direct child is
+    /// synchronized after every other payload file. This lets a cache use a
+    /// small sidecar as durable proof that all payload bytes preceded it.
+    func publishDirectory(
+        stagingPath: String, to path: String, completionFileName: String? = nil
+    ) throws {
+        let entries = try systemCalls.directoryEntries(at: stagingPath)
+        let completionPath: String?
+        if let completionFileName {
+            guard !completionFileName.isEmpty,
+                completionFileName != ".",
+                completionFileName != "..",
+                !(completionFileName as NSString).isAbsolutePath,
+                !completionFileName.contains("/")
+            else {
+                throw DurableFileWriteError(
+                    operation: "validate completion file", path: completionFileName,
+                    errorNumber: EINVAL)
+            }
+            completionPath = stagingPath + "/" + completionFileName
+            guard entries.contains(where: { $0.path == completionPath && $0.kind == .file }) else {
+                throw DurableFileWriteError(
+                    operation: "find completion file", path: completionPath!, errorNumber: ENOENT)
+            }
+        } else {
+            completionPath = nil
+        }
+
+        for entry in entries.sorted(by: { $0.path < $1.path }) {
+            switch entry.kind {
+            case .file where entry.path != completionPath:
+                try systemCalls.synchronizeFile(at: entry.path)
+            case .file, .directory:
+                break
+            case .unsupported:
+                throw DurableFileWriteError(
+                    operation: "synchronize unsupported directory entry", path: entry.path,
+                    errorNumber: EINVAL)
+            }
+        }
+
+        // Persist nested directory entries from the leaves upward before the
+        // staging directory's own entry set is synchronized.
+        let directories = entries.filter { $0.kind == .directory }.sorted {
+            let lhsDepth = $0.path.split(separator: "/").count
+            let rhsDepth = $1.path.split(separator: "/").count
+            return lhsDepth == rhsDepth ? $0.path < $1.path : lhsDepth > rhsDepth
+        }
+        for directory in directories {
+            try synchronizeDirectory(at: directory.path)
+        }
+        if let completionPath {
+            try systemCalls.synchronizeFile(at: completionPath)
+        }
+        try synchronizeDirectory(at: stagingPath)
+
+        try requireSuccess(
+            systemCalls.replaceItem(at: path, withItemAt: stagingPath),
+            operation: "rename", path: path)
+        try synchronizeParentDirectory(of: path)
+    }
+
     private func synchronizeParentDirectory(of path: String) throws {
-        let directoryPath = parentDirectory(of: path)
+        try synchronizeDirectory(at: parentDirectory(of: path))
+    }
+
+    private func synchronizeDirectory(at directoryPath: String) throws {
         let directoryDescriptor = systemCalls.openDirectoryForSynchronization(at: directoryPath)
         guard directoryDescriptor >= 0 else {
             throw error(operation: "open directory", path: directoryPath)
@@ -299,6 +383,31 @@ private struct POSIXDurableFileSystemCalls: DurableFileSystemCalls {
             try? handle.close()
             throw error
         }
+    }
+
+    func directoryEntries(at path: String) throws -> [DurableDirectoryEntry] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+        var entries: [DurableDirectoryEntry] = []
+        for relativePath in try FileManager.default.subpathsOfDirectory(atPath: path) {
+            // Keep the caller's lexical root instead of URL's canonicalized
+            // `/private/var` spelling so completion-file ordering can compare
+            // exact paths even when macOS reaches /tmp through a symlink.
+            let entryPath = path + "/" + relativePath
+            let url = URL(fileURLWithPath: entryPath)
+            let values = try url.resourceValues(forKeys: Set(keys))
+            let kind: DurableDirectoryEntry.Kind
+            if values.isSymbolicLink == true {
+                kind = .unsupported
+            } else if values.isDirectory == true {
+                kind = .directory
+            } else if values.isRegularFile == true {
+                kind = .file
+            } else {
+                kind = .unsupported
+            }
+            entries.append(DurableDirectoryEntry(path: entryPath, kind: kind))
+        }
+        return entries
     }
 
     func synchronizeDirectory(_ fileDescriptor: CInt) -> CInt {

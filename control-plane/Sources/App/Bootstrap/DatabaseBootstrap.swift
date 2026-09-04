@@ -198,5 +198,9 @@ extension Application {
         // STR-269: opt-in cache policy plus the agent's exact applied/fallback
         // report. Existing volumes remain conservative.
         migrations.add(AddVolumeBlockPolicy())
+
+        // STR-266: explicit host PSI/reclaim/swap and per-workload cgroup
+        // contention snapshots, sampled outside the heartbeat path.
+        migrations.add(AddResourceContentionTelemetry())
     }
 }

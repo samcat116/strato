@@ -214,7 +214,7 @@ extension ObservedStateApplier {
             }
         }
 
-        // Nil is a pre-v59 agent saying nothing, not an instruction to erase a
+        // Nil is a pre-v60 agent saying nothing, not an instruction to erase a
         // previously observed policy. A storage-only replica also reports an
         // explicit inactive policy, so accept policy only from the agent that
         // claims the attachment or from the persisted attachment owner clearing
