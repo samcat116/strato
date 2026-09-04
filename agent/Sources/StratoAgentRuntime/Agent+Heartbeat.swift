@@ -336,28 +336,18 @@ extension Agent {
         // is probed live from the machine the agent runs on.
         let totalCPU: Int
         let totalMemory: Int64
-        let totalDisk: Int64
-        let diskCapacity: (total: Int64, free: Int64)?
+        let simulatedDiskBytes: Int64?
         var diskInventoryKnown = true
         if let simulation, simulation.enabled {
             totalCPU = simulation.resolvedCPUCores
             totalMemory = simulation.resolvedMemoryBytes
-            totalDisk = simulation.resolvedDiskBytes
-            diskCapacity = nil
+            simulatedDiskBytes = simulation.resolvedDiskBytes
             // Mock volumes write no physical bytes; this figure is the
             // operational media signal, not commitment availability.
         } else {
             totalCPU = HostResources.logicalCoreCount
             totalMemory = HostResources.physicalMemoryBytes
-            let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
-            diskCapacity = disk
-            if disk == nil {
-                logger.warning(
-                    "Unable to determine disk capacity for managed volume storage path",
-                    metadata: ["path": .string(volumeStoragePath)])
-                diskInventoryKnown = false
-            }
-            totalDisk = disk?.total ?? 0
+            simulatedDiskBytes = nil
         }
 
         // Resources committed to VMs currently managed on this host. We report
@@ -493,37 +483,55 @@ extension Agent {
 
         // An external local qcow2 overlay can eventually consume its parent's
         // whole virtual size. Charge that bound rather than today's tiny file.
-        guard !snapshotInventoryUnreadable else {
-            return HostCapacitySnapshot(
-                total: HostReservation(
-                    cpus: totalCPU, memoryBytes: totalMemory, diskBytes: totalDisk),
-                reserved: reserved, inventoryKnown: manifestReadFailure == nil,
-                diskInventoryKnown: false)
-        }
-        for record in snapshotRecords.values where record.kind == .volumeSnapshot {
-            let storage = VolumeSnapshotStorageRouting.resolve(
-                desiredStorage: nil,
-                recordedStorage: record.volumeStorage,
-                currentParentStorage: desiredVolumeStates[record.parentId.uuidString]?.storage)
-            guard storage == .local else { continue }
-            let bytes =
-                record.reservedDiskBytes
-                ?? desiredVolumeStates[record.parentId.uuidString]?.sizeBytes
-                ?? 0
-            reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
-            if simulation?.enabled != true {
-                if let path = record.facts.storagePath,
-                    let allocated = SnapshotFootprint.allocatedBytes(at: path)
-                {
-                    managedDiskAllocated = managedDiskAllocated.addingSaturating(
-                        HostReservation(diskBytes: allocated))
-                } else {
-                    diskInventoryKnown = false
-                    logger.warning(
-                        "Unable to measure managed local snapshot footprint",
-                        metadata: ["snapshotId": .string(record.snapshotId.uuidString)])
+        if snapshotInventoryUnreadable {
+            diskInventoryKnown = false
+        } else {
+            for record in snapshotRecords.values where record.kind == .volumeSnapshot {
+                let storage = VolumeSnapshotStorageRouting.resolve(
+                    desiredStorage: nil,
+                    recordedStorage: record.volumeStorage,
+                    currentParentStorage: desiredVolumeStates[record.parentId.uuidString]?.storage)
+                guard storage == .local else { continue }
+                let bytes =
+                    record.reservedDiskBytes
+                    ?? desiredVolumeStates[record.parentId.uuidString]?.sizeBytes
+                    ?? 0
+                reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
+                if simulation?.enabled != true {
+                    if let path = record.facts.storagePath,
+                        let allocated = SnapshotFootprint.allocatedBytes(at: path)
+                    {
+                        managedDiskAllocated = managedDiskAllocated.addingSaturating(
+                            HostReservation(diskBytes: allocated))
+                    } else {
+                        diskInventoryKnown = false
+                        logger.warning(
+                            "Unable to measure managed local snapshot footprint",
+                            metadata: ["snapshotId": .string(record.snapshotId.uuidString)])
+                    }
                 }
             }
+        }
+
+        // Sample the filesystem only after every managed footprint. Guest
+        // writes can race this inventory; this order makes a newer increase in
+        // physical use visible rather than subtracting it as managed use from
+        // an older sample.
+        let totalDisk: Int64
+        let diskCapacity: (total: Int64, free: Int64)?
+        if let simulatedDiskBytes {
+            totalDisk = simulatedDiskBytes
+            diskCapacity = nil
+        } else {
+            let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
+            diskCapacity = disk
+            if disk == nil {
+                logger.warning(
+                    "Unable to determine disk capacity for managed volume storage path",
+                    metadata: ["path": .string(volumeStoragePath)])
+                diskInventoryKnown = false
+            }
+            totalDisk = disk?.total ?? 0
         }
 
         // Filesystem total includes bytes already occupied by the OS, logs,
