@@ -2,6 +2,7 @@ import Fluent
 import Foundation
 import Metrics
 import NIOConcurrencyHelpers
+import SQLKit
 import Tracing
 import Vapor
 
@@ -44,17 +45,43 @@ struct IAMDecisionLogConfig: Sendable {
 
 /// One decision waiting to be written. The row is built in the drain, not at
 /// the check site, so the request path pays nothing beyond the enqueue.
-enum PendingIAMDecision: Sendable {
-    /// A decision the evaluator reached.
-    case evaluated(IAMDecisionRecord)
-    /// A request refused because a restricted credential reached a surface the
-    /// evaluator does not gate — the only credential denial left without a
-    /// Cedar verdict behind it, recorded so every authorization refusal is
-    /// attributable here (STR-116, STR-115).
-    case credentialRestricted(
+struct PendingIAMDecision: Sendable {
+    enum Value: Sendable {
+        /// A decision the evaluator reached.
+        case evaluated(IAMDecisionRecord)
+        /// A request refused because a restricted credential reached a surface the
+        /// evaluator does not gate — the only credential denial left without a
+        /// Cedar verdict behind it, recorded so every authorization refusal is
+        /// attributable here (STR-116, STR-115).
+        case credentialRestricted(
+            subject: String,
+            credential: CredentialReference?,
+            context: IAMCheckContext)
+    }
+
+    let id: UUID
+    let timestamp: Date
+    let value: Value
+
+    private init(value: Value, id: UUID = UUID(), timestamp: Date = Date()) {
+        self.id = id
+        self.timestamp = timestamp
+        self.value = value
+    }
+
+    static func evaluated(_ record: IAMDecisionRecord) -> Self {
+        Self(value: .evaluated(record))
+    }
+
+    static func credentialRestricted(
         subject: String,
         credential: CredentialReference?,
-        context: IAMCheckContext)
+        context: IAMCheckContext
+    ) -> Self {
+        Self(
+            value: .credentialRestricted(
+                subject: subject, credential: credential, context: context))
+    }
 }
 
 protocol IAMDecisionBackend: Sendable {
@@ -78,10 +105,28 @@ final class DatabaseIAMDecisionBackend: IAMDecisionBackend, Sendable {
                 metadata: ["count": .stringConvertible(entries.count)])
             return false
         }
+        guard let sql = db as? any SQLDatabase else {
+            app.logger.error("IAM decision-log idempotency requires a SQL database")
+            return false
+        }
         do {
-            // One statement for the whole batch — Fluent's array `create` is
-            // atomic, so every entry can be retried when it fails.
-            try await entries.create(on: db)
+            let insert = sql.insert(into: IAMDecisionLog.schema)
+                .columns(
+                    "id", "request_id", "path", "method", "subject", "action", "node_type",
+                    "node_id", "organization_id", "decision", "determining_policies", "tier",
+                    "cedar_errors", "policy_version", "skipped_conditioned_bindings",
+                    "credential_type", "credential_id", "created_at")
+            for entry in entries {
+                insert.values(
+                    SQLBind(entry.id), SQLBind(entry.requestID), SQLBind(entry.path),
+                    SQLBind(entry.method), SQLBind(entry.subject), SQLBind(entry.action),
+                    SQLBind(entry.nodeType), SQLBind(entry.nodeID), SQLBind(entry.organizationID),
+                    SQLBind(entry.decision), SQLBind(entry.determiningPoliciesJSON),
+                    SQLBind(entry.tier), SQLBind(entry.cedarErrors), SQLBind(entry.policyVersion),
+                    SQLBind(entry.skippedConditionedBindings), SQLBind(entry.credentialType),
+                    SQLBind(entry.credentialID), SQLBind(entry.createdAt))
+            }
+            try await insert.ignoringConflicts(with: "id").run()
             return true
         } catch {
             app.logger.error(
@@ -485,11 +530,12 @@ final class IAMDecisionRecorder: Sendable {
     }
 
     private func entry(for decision: PendingIAMDecision) -> IAMDecisionLog {
-        switch decision {
+        let entry: IAMDecisionLog
+        switch decision.value {
         case .evaluated(let record):
-            return entry(for: record)
+            entry = self.entry(for: record)
         case .credentialRestricted(let subject, let credential, let context):
-            let entry = IAMDecisionLog()
+            entry = IAMDecisionLog()
             entry.requestID = context.requestID
             entry.path = context.path
             entry.method = context.method
@@ -498,8 +544,10 @@ final class IAMDecisionRecorder: Sendable {
             entry.tier = CedarCheckDecision.credentialTier
             entry.credentialType = credential?.kind.rawValue
             entry.credentialID = credential?.id
-            return entry
         }
+        entry.id = decision.id
+        entry.createdAt = decision.timestamp
+        return entry
     }
 
     private func entry(for record: IAMDecisionRecord) -> IAMDecisionLog {

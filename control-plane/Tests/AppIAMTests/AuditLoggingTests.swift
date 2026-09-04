@@ -644,7 +644,9 @@ final class AuditLoggingTests {
                 await audit.flush(waitingUpTo: .milliseconds(25))
             }
 
-            #expect(failing.attempts == 1)
+            // Delivery continues in its destination lane after the caller's
+            // deadline; the flush itself must not wait for that retry loop.
+            #expect(failing.attempts <= 1)
             #expect(elapsed < .milliseconds(100))
         }
     }
@@ -699,6 +701,33 @@ final class AuditLoggingTests {
                     ("destination", "database"),
                 ])
             #expect(losses.totalValue == 1)
+        }
+    }
+
+    @Test("A retrying destination does not block healthy destination batches")
+    func auditDestinationsDrainIndependently() async throws {
+        try await withApp { app, _, _, _ in
+            let gate = AuditDeliveryGate()
+            let blocked = GatedAuditBackend(gate: gate)
+            let healthy = RecordingAuditBackend()
+            let audit = self.backgroundAuditService(on: app, backends: [blocked, healthy])
+
+            await audit.record(AuditRecord(eventType: "test.first"))
+            for _ in 0..<1_000 {
+                if await audit.destinationStats(named: "gated")?.inFlight == 1 { break }
+                await Task.yield()
+            }
+            #expect(await audit.destinationStats(named: "gated")?.inFlight == 1)
+
+            await audit.record(AuditRecord(eventType: "test.second"))
+            for _ in 0..<1_000 {
+                if healthy.records.count == 2 { break }
+                await Task.yield()
+            }
+            #expect(healthy.records.map(\.eventType) == ["test.first", "test.second"])
+
+            await gate.release()
+            await audit.flush()
         }
     }
 
@@ -797,17 +826,17 @@ final class AuditLoggingTests {
 
             await audit.recordFailOpen(AuditRecord(eventType: "vm.exec.started"))
             for _ in 0..<1_000 {
-                if await audit.queue.stats.inFlight > 0 { break }
+                if await audit.destinationStats(named: "gated")?.inFlight == 1 { break }
                 await Task.yield()
             }
-            #expect(await audit.queue.stats.inFlight == 1)
+            #expect(await audit.destinationStats(named: "gated")?.inFlight == 1)
 
             await audit.flush(waitingUpTo: .milliseconds(25))
             let timeoutMetadata = entries.withLockedValue {
                 $0.first { $0["in_flight_batches"] != nil }
             }
             #expect(timeoutMetadata?["queued"] == .stringConvertible(0))
-            #expect(timeoutMetadata?["in_flight_batches"] == .stringConvertible(1))
+            #expect(timeoutMetadata?["destination_pending"] == .stringConvertible(1))
 
             await gate.release()
             await audit.flush()
@@ -886,6 +915,21 @@ final class AuditLoggingTests {
 
             let persisted = try await AuditEvent.query(on: app.db).all()
             #expect(Set(persisted.map(\.eventType)) == ["test.pending0", "test.pending1", "test.pending2"])
+        }
+    }
+
+    @Test("Database audit retries are idempotent")
+    func databaseAuditRetryIsIdempotent() async throws {
+        try await withApp { app, _, _, _ in
+            let backend = DatabaseAuditBackend(app: app)
+            let record = AuditRecord(eventType: "test.idempotent")
+
+            #expect(await backend.write(record))
+            #expect(await backend.write(record))
+
+            let rows = try await self.events(ofType: record.eventType, on: app.db)
+            #expect(rows.count == 1)
+            #expect(rows.first?.id == record.id)
         }
     }
 

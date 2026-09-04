@@ -415,6 +415,22 @@ final class IAMAuthorizerTests {
         }
     }
 
+    @Test("IAM decision retries are idempotent")
+    func decisionRetryIsIdempotent() async throws {
+        try await withApp { app in
+            let pending = sample(path: "/api/idempotent-decision")
+
+            _ = await app.iamDecisionRecorder.queue.enqueue([pending, pending])
+            await app.iamDecisionRecorder.flush()
+
+            let rows = try await IAMDecisionLog.query(on: app.db)
+                .filter(\.$path == "/api/idempotent-decision")
+                .all()
+            #expect(rows.count == 1)
+            #expect(rows.first?.id == pending.id)
+        }
+    }
+
     /// The create-shaped request — three checks, three decisions — still
     /// records every one of them, and the flush is what a caller waits on
     /// instead of a sleep.
