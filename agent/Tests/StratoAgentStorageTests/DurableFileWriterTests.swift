@@ -14,6 +14,7 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
         case write(Data, fileDescriptor: CInt)
         case synchronizeFile(CInt)
         case synchronizeFileAt(String)
+        case directoryEntries(String)
         case synchronizeDirectory(CInt)
         case close(CInt)
         case replace(source: String, destination: String)
@@ -23,6 +24,7 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
         var events: [Event] = []
         var fileSynchronizationFails = false
         var existingDirectories: Set<String>
+        var directoryEntries: [String: [DurableDirectoryEntry]] = [:]
     }
 
     private let state: Mutex<State>
@@ -40,6 +42,10 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     func failFileSynchronization() {
         state.withLock { $0.fileSynchronizationFails = true }
+    }
+
+    func setDirectoryEntries(_ entries: [DurableDirectoryEntry], at path: String) {
+        state.withLock { $0.directoryEntries[path] = entries }
     }
 
     func pathStatus(at path: String) -> DurablePathStatus {
@@ -87,6 +93,13 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
         record(.synchronizeFileAt(path))
         if state.withLock({ $0.fileSynchronizationFails }) {
             throw DurableFileWriteError(operation: "synchronize", path: path, errorNumber: errorNumber)
+        }
+    }
+
+    func directoryEntries(at path: String) throws -> [DurableDirectoryEntry] {
+        state.withLock {
+            $0.events.append(.directoryEntries(path))
+            return $0.directoryEntries[path] ?? []
         }
     }
 
@@ -206,6 +219,69 @@ struct DurableFileWriterTests {
                 .openDirectory("/vol"),
                 .synchronizeDirectory(20),
                 .close(20),
+            ])
+    }
+
+    @Test("Directory publication synchronizes every payload before its completion sidecar and rename")
+    func publishDirectoryOrdering() throws {
+        let calls = RecordingDurableFileSystemCalls()
+        calls.setDirectoryEntries(
+            [
+                DurableDirectoryEntry(path: "/cache/item/rootfs.ext4", kind: .file),
+                DurableDirectoryEntry(path: "/cache/item/config.json", kind: .file),
+                DurableDirectoryEntry(path: "/cache/item/nested", kind: .directory),
+                DurableDirectoryEntry(path: "/cache/item/nested/state", kind: .file),
+                DurableDirectoryEntry(path: "/cache/item/completion.json", kind: .file),
+            ],
+            at: "/cache/item")
+        let writer = DurableFileWriter(systemCalls: calls)
+
+        try writer.publishDirectory(
+            stagingPath: "/cache/item", to: "/cache/published",
+            completionFileName: "completion.json")
+
+        #expect(
+            calls.events == [
+                .directoryEntries("/cache/item"),
+                .synchronizeFileAt("/cache/item/config.json"),
+                .synchronizeFileAt("/cache/item/nested/state"),
+                .synchronizeFileAt("/cache/item/rootfs.ext4"),
+                .openDirectory("/cache/item/nested"),
+                .synchronizeDirectory(20),
+                .close(20),
+                .synchronizeFileAt("/cache/item/completion.json"),
+                .openDirectory("/cache/item"),
+                .synchronizeDirectory(20),
+                .close(20),
+                .replace(source: "/cache/item", destination: "/cache/published"),
+                .openDirectory("/cache"),
+                .synchronizeDirectory(20),
+                .close(20),
+            ])
+    }
+
+    @Test("A directory payload synchronization failure never publishes the directory")
+    func directoryPayloadSynchronizationFailureDoesNotRename() {
+        let calls = RecordingDurableFileSystemCalls()
+        calls.setDirectoryEntries(
+            [
+                DurableDirectoryEntry(path: "/cache/item/rootfs.ext4", kind: .file),
+                DurableDirectoryEntry(path: "/cache/item/completion.json", kind: .file),
+            ],
+            at: "/cache/item")
+        calls.failFileSynchronization()
+        let writer = DurableFileWriter(systemCalls: calls)
+
+        #expect(throws: DurableFileWriteError.self) {
+            try writer.publishDirectory(
+                stagingPath: "/cache/item", to: "/cache/published",
+                completionFileName: "completion.json")
+        }
+
+        #expect(
+            calls.events == [
+                .directoryEntries("/cache/item"),
+                .synchronizeFileAt("/cache/item/rootfs.ext4"),
             ])
     }
 
