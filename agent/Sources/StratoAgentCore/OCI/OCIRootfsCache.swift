@@ -19,14 +19,17 @@ public struct CachedSandboxRootfs: Sendable {
 
 /// Content-addressed cache of materialized sandbox root filesystems, keyed by
 /// **platform manifest digest** — unlike the identity-addressed
-/// `{projectId}/{imageId}` layout of `ImageCacheService`, because two
-/// sandboxes anywhere that pin the same digest are byte-identical by
-/// definition. v1 granularity is the flattened image (no layer dedup).
+/// `{projectId}/{imageId}` layout of `ImageCacheService`, because sandboxes
+/// that pin the same source content can share one host-local materialization.
+/// The ext4 bytes themselves are not reproducible from the manifest digest;
+/// filesystem UUIDs and timestamps vary. v1 granularity is the flattened
+/// image (no layer dedup).
 ///
 /// Layout under the cache root:
 ///
 ///     images/<hex>/rootfs.ext4        one directory per manifest digest
 ///     images/<hex>/config.json        the staged guest config
+///     images/<hex>/completion.json    durable rootfs size + SHA-256 proof
 ///     images/<hex>.partial/           staging; renamed into place on publish
 ///     aliases/<hex>.<arch>            index digest → platform manifest digest
 ///
@@ -38,6 +41,13 @@ public struct CachedSandboxRootfs: Sendable {
 public actor OCIRootfsCache {
     public static let rootfsFileName = "rootfs.ext4"
     public static let configFileName = "config.json"
+    public static let completionFileName = "completion.json"
+
+    private struct Completion: Codable {
+        let version: Int
+        let rootfsSizeBytes: Int64
+        let rootfsSHA256: String
+    }
 
     /// Default retention for unused sandbox rootfs entries.
     public static let defaultTTL: TimeInterval = 7 * 24 * 60 * 60
@@ -75,14 +85,25 @@ public actor OCIRootfsCache {
         guard let directory = imageDirectory(for: manifestDigest) else { return nil }
         let rootfsPath = directory + "/" + Self.rootfsFileName
         let configPath = directory + "/" + Self.configFileName
+        let completionPath = directory + "/" + Self.completionFileName
         guard FileManager.default.fileExists(atPath: directory) else { return nil }
         guard FileManager.default.fileExists(atPath: rootfsPath),
-            FileManager.default.fileExists(atPath: configPath)
+            FileManager.default.fileExists(atPath: configPath),
+            let completionData = FileManager.default.contents(atPath: completionPath),
+            let completion = try? JSONDecoder().decode(Completion.self, from: completionData),
+            completion.version == 1,
+            completion.rootfsSizeBytes >= 0,
+            completion.rootfsSHA256.count == 64,
+            completion.rootfsSHA256.allSatisfy({ $0.isHexDigit }),
+            fileSize(at: rootfsPath) == completion.rootfsSizeBytes,
+            let rootfsSHA256 = try? FileHashing.sha256Hex(ofFileAt: rootfsPath),
+            rootfsSHA256 == completion.rootfsSHA256
         else {
-            // A digest directory without both files is debris from a crash
-            // predating atomic publication semantics, or manual tampering.
+            // Missing sidecars are pre-durability entries. A size mismatch is
+            // a torn rootfs; a hash mismatch catches same-size damage. Neither
+            // is safe to boot.
             logger.warning(
-                "Removing structurally incomplete rootfs cache entry",
+                "Removing incomplete rootfs cache entry",
                 metadata: ["digest": .string(manifestDigest)])
             try? FileManager.default.removeItem(atPath: directory)
             return nil
@@ -152,16 +173,35 @@ public actor OCIRootfsCache {
             throw OCIError.malformedResponse(detail: "malformed manifest digest \(manifestDigest)")
         }
         let staging = directory + ".partial"
-        if !FileManager.default.fileExists(atPath: directory) {
-            try FileManager.default.moveItem(atPath: staging, toPath: directory)
-        } else {
+        if let existing = lookup(manifestDigest: manifestDigest) {
             try? FileManager.default.removeItem(atPath: staging)
+            return existing
         }
-        guard let published = lookup(manifestDigest: manifestDigest) else {
+
+        let rootfsPath = staging + "/" + Self.rootfsFileName
+        let configPath = staging + "/" + Self.configFileName
+        guard FileManager.default.fileExists(atPath: configPath),
+            let rootfsSizeBytes = fileSize(at: rootfsPath)
+        else {
             throw OCIError.layerUnpackFailed(
-                detail: "published cache entry for \(manifestDigest) is incomplete")
+                detail: "staged cache entry for \(manifestDigest) is incomplete")
         }
-        return published
+        let completion = Completion(
+            version: 1,
+            rootfsSizeBytes: rootfsSizeBytes,
+            rootfsSHA256: try FileHashing.sha256Hex(ofFileAt: rootfsPath))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(completion).write(
+            to: URL(fileURLWithPath: staging + "/" + Self.completionFileName))
+
+        try DurableFileWriter().publishDirectory(
+            stagingPath: staging, to: directory,
+            completionFileName: Self.completionFileName)
+        return CachedSandboxRootfs(
+            manifestDigest: manifestDigest,
+            rootfsPath: directory + "/" + Self.rootfsFileName,
+            configPath: directory + "/" + Self.configFileName)
     }
 
     // MARK: - Space and cleanup
@@ -255,5 +295,12 @@ public actor OCIRootfsCache {
             let modified = attributes[.modificationDate] as? Date
         else { return false }
         return modified < cutoff
+    }
+
+    private func fileSize(at path: String) -> Int64? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+            let size = attributes[.size] as? NSNumber
+        else { return nil }
+        return size.int64Value
     }
 }

@@ -191,6 +191,7 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "SQLKit", package: "sql-kit"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "MetricsTestKit", package: "swift-metrics"),
             ],
             swiftSettings: testSwiftSettings
         ),

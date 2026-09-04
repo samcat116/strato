@@ -69,7 +69,7 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
         echo "Building from source"; \
         cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
         (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
-        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ +; \
+        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra -t ./ {} +; \
     fi
 
 # Ensure proper permissions
@@ -99,6 +99,7 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     tzdata \
     libcurl4 \
     curl \
+    unzip \
     && rm -r /var/lib/apt/lists/*
 # `curl` (the binary — libcurl4 above is the library the Swift runtime links)
 # exists so the container can probe its own /health/ready. Kubernetes probes are

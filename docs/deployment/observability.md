@@ -352,6 +352,30 @@ clusters.
 | `strato_webhook_delivery_results_total` | counter | `result` = `succeeded` \| `failed` \| `dead` | Durable claimed-row verdicts. `failed` remains pending; `dead` includes exhausted attempts and rows parked because their subscription is disabled |
 | `strato_webhook_delivery_dropped` | gauge | — | Committed `dropped` rows still present in the seven-day delivery history. It can fall when history is pruned or a row is manually redelivered |
 
+### Audit and IAM decision-log completeness
+
+Both security-record streams retry transient delivery failures off the request
+path. A batch gets eight attempts with bounded exponential backoff. Audit
+delivery tracks retries per destination, so a database write that succeeded is
+not repeated merely because Loki or a webhook failed. IAM decisions use the
+same retry policy for their database batch.
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `strato_security_records_lost_total` | counter | `stream` = `audit` \| `iam_decision`; `cause` = `queue_count_limit` \| `queue_byte_limit` \| `record_too_large` \| `delivery_failure` \| `incomplete_shutdown`; `destination` = `all` \| `database` \| `log` \| `loki` \| `webhook` | Records dropped from a configured destination after queue shedding or exhausted retries, plus records whose delivery could not be confirmed before shutdown. `destination=all` means the record never entered delivery or its final destination is unknown. |
+
+Alert on any increase:
+
+```promql
+sum by (stream, cause, destination) (
+  increase(strato_security_records_lost_total[5m])
+) > 0
+```
+
+This counter makes known gaps loud; the in-memory queues still cannot report a
+replica that is killed before it can emit the metric. Eliminating that crash
+window requires a durable transactional outbox.
+
 ### Authorization (Cedar)
 
 Every `IAMAuthorizer.authorize` funnels through the same instrumented entry, so
