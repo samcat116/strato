@@ -252,9 +252,9 @@ extension AgentService {
         // an eligible peer claims it on its own next registration.
         let persistedSiteID = agent.$site.id
         await SiteNetworkAuthority.revalidateDesignation(
-            agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
+            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
         await SiteNetworkAuthority.designateIfUnset(
-            agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
+            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
 
         // Record that the node completed its first registration. Bootstrap
         // redemption already erased the token hash atomically before minting

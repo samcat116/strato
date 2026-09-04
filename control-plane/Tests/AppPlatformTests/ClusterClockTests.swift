@@ -93,6 +93,14 @@ struct ClusterClockTests {
         #expect(!agentSource.contains("receivedAt: Date = Date()"))
         #expect(!agentSource.contains("Date().timeIntervalSince(lastHeartbeat)"))
         #expect(!agentSource.contains("var isOnline: Bool"))
+        #expect(!agentSource.contains("func dependencyAllows(_ capability: NodeCapability, at now: Date"))
+        #expect(!agentSource.contains("var supportedHypervisors:"))
+        #expect(!agentSource.contains("var supportsInterVMNetworking:"))
+        #expect(!agentSource.contains("var effectiveSandboxNetworkingCapable:"))
+        #expect(!agentSource.contains("var effectiveResolverCapable:"))
+        #expect(
+            !agentSource.contains(
+                "func supportsSnapshotArtifact(_ kind: SnapshotArtifactKind) -> Bool"))
 
         for file in [
             "Controllers/StorageDeviceController.swift",

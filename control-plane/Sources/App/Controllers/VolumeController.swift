@@ -282,6 +282,7 @@ struct VolumeController: RouteCollection {
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable db in
                 let agents = await app.agentService.getAgentList()
+                let instant = try await ClusterClock.read(on: db)
                 guard let currentPool = try await StoragePool.find(poolID, on: db) else {
                     throw ResourceMutation.WorkError("The selected storage pool no longer exists")
                 }
@@ -289,7 +290,7 @@ struct VolumeController: RouteCollection {
                 case .ceph:
                     guard
                         let agentId = VolumeService.selectCephReconciler(
-                            from: agents, pool: currentPool)?.id?.uuidString
+                            from: agents, pool: currentPool, at: instant)?.id?.uuidString
                     else {
                         throw ResourceMutation.WorkError(
                             "No configured Ceph client is online in storage pool '\(currentPool.name)'.")
@@ -305,7 +306,8 @@ struct VolumeController: RouteCollection {
                 case .local:
                     guard
                         let agentId = VolumeService.selectVolumeAgent(
-                            from: agents, memberAgentIds: currentPool.memberAgentIds)?.id?.uuidString
+                            from: agents, memberAgentIds: currentPool.memberAgentIds,
+                            at: instant)?.id?.uuidString
                     else {
                         throw ResourceMutation.WorkError(
                             "No agent is available to host this volume: it needs an online, "
@@ -641,6 +643,7 @@ struct VolumeController: RouteCollection {
             // after that refresh: placement may have moved while this request
             // was waiting for the volume/attachment locks.
             let replicaAgentIds = try await VolumeService.agentIDs(holding: volume, on: tx)
+            let instant = try await ClusterClock.read(on: tx)
             guard let currentPool = try await volume.$pool.get(on: tx) else {
                 throw Abort(.internalServerError, reason: "Volume references a missing storage pool")
             }
@@ -653,7 +656,7 @@ struct VolumeController: RouteCollection {
                 guard
                     StoragePool.agentCanReach(
                         agent: vmAgent, pool: currentPool,
-                        replicaAgentIds: replicaAgentIds)
+                        replicaAgentIds: replicaAgentIds, at: instant)
                 else {
                     throw Abort(
                         .badRequest,

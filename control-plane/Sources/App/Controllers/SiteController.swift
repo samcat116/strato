@@ -239,6 +239,7 @@ struct SiteController: RouteCollection {
         let site = try await findSite(req)
         try await requireSiteAction(req, site: site, action: "site:manage")
         let update = try req.content.decodeValidated(UpdateSiteRequest.self)
+        let instant = try await ClusterClock.read(on: req.db)
 
         if let controllerId = update.networkControllerAgentId {
             guard let agent = try await Agent.find(controllerId, on: req.db) else {
@@ -256,7 +257,7 @@ struct SiteController: RouteCollection {
             // non-overlay (user-mode/SLIRP) agent has no OVN network service
             // to reconcile with, so peers stay non-authoritative and the
             // site's networks are realized nowhere.
-            guard agent.supportsInterVMNetworking else {
+            guard agent.supportsInterVMNetworking(at: instant) else {
                 throw Abort(
                     .badRequest,
                     reason:
@@ -290,7 +291,6 @@ struct SiteController: RouteCollection {
         await req.application.agentService.syncDesiredStateToFleet()
 
         let controller = try await Self.controller(of: site, on: req.db)
-        let instant = try await ClusterClock.read(on: req.db)
         return try SiteResponse(from: site, controller: controller, at: instant)
     }
 
@@ -397,17 +397,18 @@ struct SiteController: RouteCollection {
 
         agent.$site.id = targetSiteId
         try await agent.save(on: req.db)
+        let instant = try await ClusterClock.read(on: req.db)
         // The other way an agent joins a site (registration is the first): a
         // site with no designated controller reconciles no topology, so its
         // first OVN-capable member takes the job rather than leaving the
         // operator to discover the requirement from agent logs (issue #743).
         await SiteNetworkAuthority.designateIfUnset(
-            agent: agent, siteID: targetSiteId, on: req.db, logger: req.logger)
+            agent: agent, siteID: targetSiteId, at: instant, on: req.db, logger: req.logger)
         await req.application.agentService.syncDesiredStateToFleet()
         return try AgentResponse(
             from: agent,
             targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration),
-            at: try await ClusterClock.read(on: req.db))
+            at: instant)
     }
 
 }

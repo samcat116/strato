@@ -1501,10 +1501,11 @@ struct VMController: RouteCollection {
         // host lets `refusal` exempt the single-node site whose own node is the
         // offline controller: there the boot is simply waiting on that node to
         // come back, which is what desired state is for.
+        let instant = try await ClusterClock.read(on: req.db)
         if let hypervisorId = vm.hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
             let agent = try await Agent.find(agentUUID, on: req.db),
-            agent.supportsInterVMNetworking
+            agent.supportsInterVMNetworking(at: instant)
         {
             let authority = try await SiteNetworkAuthority.resolve(
                 forAgent: agent,
@@ -1601,12 +1602,15 @@ struct VMController: RouteCollection {
         guard let agent = await app.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Agent '\(agentId)' is unknown")
         }
-        if let snapshotKind, !agent.supportsSnapshotArtifact(snapshotKind) {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent '\(agentId)' cannot realize this request (the required snapshot backend "
-                    + "is unavailable); place the VM on a host with a capable backend.")
+        if let snapshotKind {
+            let instant = try await ClusterClock.read(on: app.db)
+            if !agent.supportsSnapshotArtifact(snapshotKind, at: instant) {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Agent '\(agentId)' cannot realize this request (the required snapshot backend "
+                        + "is unavailable); place the VM on a host with a capable backend.")
+            }
         }
     }
 

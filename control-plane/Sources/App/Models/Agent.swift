@@ -489,13 +489,13 @@ extension Agent {
     static let dependencyObservationStaleAfter: TimeInterval = 60
 
     /// Whether every fresh dependency affecting `capability` permits new work.
-    func dependencyAllows(_ capability: NodeCapability, at now: Date = Date()) -> Bool {
+    func dependencyAllows(_ capability: NodeCapability, at instant: ClusterInstant) -> Bool {
         let relevant = dependencyObservations.filter { $0.affectedCapabilities.contains(capability) }
         guard !relevant.isEmpty, let receivedAt = dependencyObservationsReceivedAt else { return false }
         return relevant.allSatisfy {
             $0.allowsNewWork(
                 receivedAt: receivedAt,
-                at: now,
+                at: instant.date,
                 staleAfter: Self.dependencyObservationStaleAfter)
         }
     }
@@ -505,10 +505,10 @@ extension Agent {
     /// run VMs at all — it stays registered but is never eligible for
     /// placement. No QEMU fallback here: assuming QEMU for an empty list
     /// would defeat the agent-side probe in exactly the case it exists for.
-    var supportedHypervisors: [HypervisorType] {
+    func supportedHypervisors(at instant: ClusterInstant) -> [HypervisorType] {
         hypervisors.filter { support in
             guard support.available else { return false }
-            return support.type != .qemu || dependencyAllows(.qemuPlacement)
+            return support.type != .qemu || dependencyAllows(.qemuPlacement, at: instant)
         }.map(\.type)
     }
 
@@ -534,17 +534,17 @@ extension Agent {
 
     /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
     /// (SLIRP) agents cannot. Absence is not capability.
-    var supportsInterVMNetworking: Bool {
+    func supportsInterVMNetworking(at instant: ClusterInstant) -> Bool {
         networkCapability.flatMap(NetworkCapability.init(rawValue:)) == .overlay
-            && dependencyAllows(.overlayNetworking)
+            && dependencyAllows(.overlayNetworking, at: instant)
     }
 
-    var effectiveSandboxNetworkingCapable: Bool {
-        sandboxNetworkingCapable && dependencyAllows(.sandboxNetworking)
+    func effectiveSandboxNetworkingCapable(at instant: ClusterInstant) -> Bool {
+        sandboxNetworkingCapable && dependencyAllows(.sandboxNetworking, at: instant)
     }
 
-    var effectiveResolverCapable: Bool {
-        resolverCapable && dependencyAllows(.networkResolver)
+    func effectiveResolverCapable(at instant: ClusterInstant) -> Bool {
+        resolverCapable && dependencyAllows(.networkResolver, at: instant)
     }
 
     /// Whether the structured registration report proves that this agent can
@@ -553,7 +553,7 @@ extension Agent {
     /// QEMU owns VM checkpoints and volume overlays. Sandbox checkpoints need
     /// both Firecracker snapshot support and the separately probed sandbox
     /// runtime; a Firecracker binary alone cannot load Strato's guest image.
-    func supportsSnapshotArtifact(_ kind: SnapshotArtifactKind) -> Bool {
+    func supportsSnapshotArtifact(_ kind: SnapshotArtifactKind, at instant: ClusterInstant) -> Bool {
         let backend: HypervisorType
         switch kind {
         case .volumeSnapshot, .vmCheckpoint:
@@ -565,7 +565,7 @@ extension Agent {
 
         return hypervisors.contains {
             $0.type == backend && $0.available && $0.supportsSnapshots
-                && (backend != .qemu || dependencyAllows(.qemuPlacement))
+                && (backend != .qemu || dependencyAllows(.qemuPlacement, at: instant))
         }
     }
 
@@ -772,9 +772,9 @@ struct AgentResponse: Content {
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.sandboxCapable = agent.sandboxCapable
-        self.sandboxNetworkingCapable = agent.effectiveSandboxNetworkingCapable
+        self.sandboxNetworkingCapable = agent.effectiveSandboxNetworkingCapable(at: instant)
         self.tpmCapable = agent.tpmCapable
-        self.resolverCapable = agent.effectiveResolverCapable
+        self.resolverCapable = agent.effectiveResolverCapable(at: instant)
         self.metadataServiceCapable = agent.metadataServiceCapable
         self.dependencyObservations = agent.dependencyObservations
         self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt

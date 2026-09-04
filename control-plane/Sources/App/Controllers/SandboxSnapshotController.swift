@@ -272,11 +272,12 @@ extension SandboxController {
         guard let targetAgent = await req.application.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Sandbox's agent '\(agentId)' is unknown")
         }
+        let instant = try await ClusterClock.read(on: req.db)
         // The issue #415 rule the capture path also follows: the capability
         // proves a backend that can load a checkpoint is usable on that host.
         // A host without one fails later still, as a `degraded` condition an
         // hour after admission — refused here instead.
-        guard targetAgent.supportsSnapshotArtifact(.sandboxSnapshot) else {
+        guard targetAgent.supportsSnapshotArtifact(.sandboxSnapshot, at: instant) else {
             throw Abort(
                 .conflict,
                 reason:

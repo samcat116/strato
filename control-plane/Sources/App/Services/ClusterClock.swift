@@ -3,8 +3,9 @@ import Foundation
 import SQLKit
 
 /// A cluster-visible instant sourced from PostgreSQL rather than this
-/// process's wall clock. Durable deadlines and maintenance verdicts accept
-/// this type so a bare `Date()` cannot silently become shared time.
+/// process's wall clock. Durable deadlines, maintenance verdicts, and
+/// cluster-visible freshness checks accept this type so a bare `Date()`
+/// cannot silently become shared time.
 struct ClusterInstant: Equatable, Sendable {
     let date: Date
     let localClockOffsetSeconds: TimeInterval

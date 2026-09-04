@@ -30,14 +30,16 @@ struct AgentDependencyHealthTests {
     @Test("Fresh health gates only the capability it affects")
     func featureScopedGating() {
         let now = Date()
-        let agent = makeAgent(observations: [
-            observation(.libvirt, capability: .qemuPlacement, state: .unhealthy, checkedAt: now),
-            observation(.ovnOvs, capability: .overlayNetworking, state: .healthy, checkedAt: now),
-        ])
+        let agent = makeAgent(
+            observations: [
+                observation(.libvirt, capability: .qemuPlacement, state: .unhealthy, checkedAt: now),
+                observation(.ovnOvs, capability: .overlayNetworking, state: .healthy, checkedAt: now),
+            ], receivedAt: now)
+        let instant = ClusterInstant.testing(now)
 
-        #expect(!agent.supportedHypervisors.contains(.qemu))
-        #expect(agent.supportedHypervisors.contains(.firecracker))
-        #expect(agent.supportsInterVMNetworking)
+        #expect(!agent.supportedHypervisors(at: instant).contains(.qemu))
+        #expect(agent.supportedHypervisors(at: instant).contains(.firecracker))
+        #expect(agent.supportsInterVMNetworking(at: instant))
     }
 
     @Test("Stale observations refuse new placement without changing agent liveness")
@@ -55,8 +57,8 @@ struct AgentDependencyHealthTests {
             ], receivedAt: staleReceipt)
 
         #expect(agent.status == .online)
-        #expect(!agent.dependencyAllows(.qemuPlacement, at: now))
-        #expect(!agent.dependencyAllows(.overlayNetworking, at: now))
+        #expect(!agent.dependencyAllows(.qemuPlacement, at: .testing(now)))
+        #expect(!agent.dependencyAllows(.overlayNetworking, at: .testing(now)))
     }
 
     @Test("Agent clock skew does not change the freshness window")
@@ -73,20 +75,37 @@ struct AgentDependencyHealthTests {
             ], receivedAt: receivedAt)
 
         let fresh = receivedAt.addingTimeInterval(59)
-        #expect(agent.dependencyAllows(.qemuPlacement, at: fresh))
-        #expect(agent.dependencyAllows(.overlayNetworking, at: fresh))
+        #expect(agent.dependencyAllows(.qemuPlacement, at: .testing(fresh)))
+        #expect(agent.dependencyAllows(.overlayNetworking, at: .testing(fresh)))
 
         let stale = receivedAt.addingTimeInterval(61)
-        #expect(!agent.dependencyAllows(.qemuPlacement, at: stale))
-        #expect(!agent.dependencyAllows(.overlayNetworking, at: stale))
+        #expect(!agent.dependencyAllows(.qemuPlacement, at: .testing(stale)))
+        #expect(!agent.dependencyAllows(.overlayNetworking, at: .testing(stale)))
+    }
+
+    @Test("Dependency freshness is independent of the process wall clock")
+    func dependencyFreshnessUsesClusterInstant() {
+        let receivedAt = Date(timeIntervalSince1970: 1_000)
+        let agent = makeAgent(
+            observations: [
+                observation(
+                    .libvirt, capability: .qemuPlacement, state: .healthy,
+                    checkedAt: receivedAt)
+            ], receivedAt: receivedAt)
+
+        let instant = ClusterInstant.testing(receivedAt.addingTimeInterval(1))
+        #expect(agent.dependencyAllows(.qemuPlacement, at: instant))
+        #expect(agent.supportedHypervisors(at: instant).contains(.qemu))
     }
 
     @Test("A first degraded sample remains eligible for hysteresis")
     func degradedHysteresis() {
-        let agent = makeAgent(observations: [
-            observation(.libvirt, capability: .qemuPlacement, state: .degraded, checkedAt: Date())
-        ])
-        #expect(agent.supportedHypervisors.contains(.qemu))
+        let now = Date()
+        let agent = makeAgent(
+            observations: [
+                observation(.libvirt, capability: .qemuPlacement, state: .degraded, checkedAt: now)
+            ], receivedAt: now)
+        #expect(agent.supportedHypervisors(at: .testing(now)).contains(.qemu))
     }
 
     @Test("Supervisor metadata does not override healthy external SPIRE")
@@ -104,7 +123,7 @@ struct AgentDependencyHealthTests {
             affectedCapabilities: [.workloadIdentity])
         let agent = makeAgent(observations: [spire], receivedAt: now)
 
-        #expect(agent.dependencyAllows(.workloadIdentity, at: now))
+        #expect(agent.dependencyAllows(.workloadIdentity, at: .testing(now)))
     }
 
     @Test("Repeated healthy dependency observations keep placement available")
@@ -135,8 +154,8 @@ struct AgentDependencyHealthTests {
                 totalMemory: agent.totalMemory, availableMemory: agent.availableMemory,
                 totalDisk: agent.totalDisk, availableDisk: agent.availableDisk,
                 status: agent.status, runningVMCount: 0,
-                supportedHypervisors: agent.supportedHypervisors,
-                supportsInterVMNetworking: agent.supportsInterVMNetworking,
+                supportedHypervisors: agent.supportedHypervisors(at: .testing(now)),
+                supportsInterVMNetworking: agent.supportsInterVMNetworking(at: .testing(now)),
                 siteID: agent.$site.id)
 
             try #require(

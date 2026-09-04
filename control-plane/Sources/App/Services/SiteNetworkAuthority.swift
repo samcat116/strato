@@ -134,7 +134,7 @@ enum SiteNetworkAuthority {
         at instant: ClusterInstant,
         offlineGrace: TimeInterval = controllerOfflineGrace
     ) -> ControllerFault? {
-        if let capability = capabilityFault(controller) { return capability }
+        if let capability = capabilityFault(controller, at: instant) { return capability }
         guard let lastHeartbeat = controller.lastHeartbeat else { return .offline(staleFor: nil) }
         let staleFor = instant.date.timeIntervalSince(lastHeartbeat)
         guard staleFor > offlineGrace else { return nil }
@@ -153,14 +153,14 @@ enum SiteNetworkAuthority {
     /// explicit designation: a non-overlay (user-mode/SLIRP) agent has no OVN
     /// network service to reconcile with, so the site's networks would be
     /// realized nowhere.
-    static func canAuthorTopology(_ agent: Agent) -> Bool {
-        capabilityFault(agent) == nil
+    static func canAuthorTopology(_ agent: Agent, at instant: ClusterInstant) -> Bool {
+        capabilityFault(agent, at: instant) == nil
     }
 
     /// `canAuthorTopology` as a fault, so the designation bar is written once
     /// and the refusal can still name what the agent fails.
-    private static func capabilityFault(_ agent: Agent) -> ControllerFault? {
-        guard agent.supportsInterVMNetworking else { return .noOverlayNetworking }
+    private static func capabilityFault(_ agent: Agent, at instant: ClusterInstant) -> ControllerFault? {
+        guard agent.supportsInterVMNetworking(at: instant) else { return .noOverlayNetworking }
         return nil
     }
 
@@ -283,9 +283,9 @@ enum SiteNetworkAuthority {
     /// the registration or assignment that triggered it.
     @discardableResult
     static func designateIfUnset(
-        agent: Agent, siteID: UUID, on db: any Database, logger: Logger
+        agent: Agent, siteID: UUID, at instant: ClusterInstant, on db: any Database, logger: Logger
     ) async -> Bool {
-        guard let agentID = agent.id, canAuthorTopology(agent) else { return false }
+        guard let agentID = agent.id, canAuthorTopology(agent, at: instant) else { return false }
         do {
             // A conditional update rather than read-modify-write: replicas can
             // be admitting members of the same controller-less site
@@ -348,7 +348,7 @@ enum SiteNetworkAuthority {
     /// `designateIfUnset`: it must never fail the registration that ran it.
     @discardableResult
     static func revalidateDesignation(
-        agent: Agent, siteID: UUID, on db: any Database, logger: Logger
+        agent: Agent, siteID: UUID, at instant: ClusterInstant, on db: any Database, logger: Logger
     ) async -> Bool {
         guard let agentID = agent.id else { return false }
         do {
@@ -357,7 +357,7 @@ enum SiteNetworkAuthority {
             else {
                 return false
             }
-            guard let fault = capabilityFault(agent) else {
+            guard let fault = capabilityFault(agent, at: instant) else {
                 // A healthy controller re-registering is the signal that clears
                 // the alert the stale sweep raised when it went away.
                 Telemetry.recordSiteNetworkControllerUp(site: site.name, up: true)
@@ -368,7 +368,7 @@ enum SiteNetworkAuthority {
                 .filter(\.$site.$id == siteID)
                 .filter(\.$id != agentID)
                 .all()
-                .filter(canAuthorTopology)
+                .filter { canAuthorTopology($0, at: instant) }
 
             Telemetry.recordSiteNetworkControllerUp(site: site.name, up: false)
             logger.warning(

@@ -161,6 +161,7 @@ enum VolumeService {
         if let initialPool = try await pool(of: volume, on: db), initialPool.mode == .ceph {
             let volumeID = try volume.requireID()
             let resolution = try await db.transaction { tx -> AgentHoldingResolution in
+                let instant = try await ClusterClock.read(on: tx)
                 guard let committed = try await Volume.find(volumeID, on: tx),
                     try await committed.lockAndRefresh(on: tx),
                     let committedPool = try await pool(of: committed, on: tx),
@@ -175,7 +176,7 @@ enum VolumeService {
                     let reconcilerID = UUID(uuidString: previous),
                     let reconciler = try await Agent.find(reconcilerID, on: tx),
                     StoragePool.agentCanReach(
-                        agent: reconciler, pool: committedPool, replicaAgentIds: [])
+                        agent: reconciler, pool: committedPool, replicaAgentIds: [], at: instant)
                 {
                     return AgentHoldingResolution(
                         agentID: previous, previousAgentID: previous, recordedAgentID: previous)
@@ -195,7 +196,7 @@ enum VolumeService {
                 let agents = try await Agent.query(on: tx).all()
                 guard
                     let replacement = selectCephReconciler(
-                        from: agents, pool: committedPool)?.id?.uuidString
+                        from: agents, pool: committedPool, at: instant)?.id?.uuidString
                 else {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: previous, recordedAgentID: previous)
@@ -323,9 +324,11 @@ enum VolumeService {
     /// restricts candidates to those members; an empty list (the default
     /// local pool) leaves all agents eligible.
     ///
-    static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {
+    static func selectVolumeAgent(
+        from agents: [Agent], memberAgentIds: [String] = [], at instant: ClusterInstant
+    ) -> Agent? {
         agents.first {
-            $0.status == .online && $0.supportedHypervisors.contains(.qemu)
+            $0.status == .online && $0.supportedHypervisors(at: instant).contains(.qemu)
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
         }
     }
@@ -333,11 +336,16 @@ enum VolumeService {
     /// Pick one lifecycle executor for a shared RBD volume. Site membership
     /// plus a fresh functional Ceph-client observation is the complete client
     /// configuration gate; the selected id is not data placement.
-    static func selectCephReconciler(from agents: [Agent], pool: StoragePool) -> Agent? {
+    static func selectCephReconciler(
+        from agents: [Agent], pool: StoragePool, at instant: ClusterInstant
+    ) -> Agent? {
         guard pool.mode == .ceph else { return nil }
         return
             agents
-            .filter { StoragePool.agentCanReach(agent: $0, pool: pool, replicaAgentIds: []) }
+            .filter {
+                StoragePool.agentCanReach(
+                    agent: $0, pool: pool, replicaAgentIds: [], at: instant)
+            }
             .sorted { ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "") }
             .first
     }
