@@ -1,0 +1,111 @@
+shared/Tests/StratoSharedTests/AgentAutoUpdateProtocolTests.swift
+  s_3af79fd703f9fa::t_66975d409105b9 74
+control-plane/Sources/App/Migrations/AddAgentPhysicalFreeDisk.swift
+  s_3af79fd703f9fa::t_c55a8bab41e3c5 1-41
+agent/Tests/StratoAgentStorageTests/FileSystemStorageBackendTests.swift
+  s_3af79fd703f9fa::t_cc66bd1cc9f01f 159,171,551-569,571-573,712-730,732-733
+  s_3af79fd703f9fa::t_3d7147b22c7704 570,731
+  s_3af79fd703f9fa::t_8a172b6503b976 734
+shared/Tests/StratoSharedTests/SnapshotReconciliationTests.swift
+  s_3af79fd703f9fa::t_66975d409105b9 107
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_3af79fd703f9fa::t_209c26ca3a3bd1 4,10,12,15,21-22,28,31-32,72-73,91,93-98,102,107,110-111,125,158-160,172-174,206,231-235,239-240,250-253,283-286,304-307
+  s_3af79fd703f9fa::t_facd1fd24696d5 108-109
+  s_3af79fd703f9fa::t_b30c7e9284fcee 227-230,287-292,308
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  s_3af79fd703f9fa::t_facd1fd24696d5 490-491
+  s_3af79fd703f9fa::t_6a6c296b882a0f 517-518,530
+  s_3af79fd703f9fa::t_8d0505ca57b2d6 311,339-340,344-346,350-357,434-489,492-494,504-507,521-522,529,531
+  s_3af79fd703f9fa::t_e47085851d9e6d 520
+docs/architecture/wire-protocol.md
+  s_3af79fd703f9fa::t_e730ef4172b321 54,76-79
+shared/Sources/StratoShared/WireProtocol.swift
+  s_3af79fd703f9fa::t_927f116e4ddc1f 14-16,34
+docs/architecture/storage.md
+  s_3af79fd703f9fa::t_329d44fae42b1c 639-644,652-654
+  s_3af79fd703f9fa::t_e730ef4172b321 631-636,645-651
+agent/Tests/StratoAgentStorageTests/SnapshotRecordStoreTests.swift
+  s_3af79fd703f9fa::t_1c8db26b50b157 79-99
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_3af79fd703f9fa::t_b75345e08271c7 198,200,224-246,269-275,299-312,348-351
+  s_3af79fd703f9fa::t_7d96738b34eddf 315-321
+  s_3af79fd703f9fa::t_facd1fd24696d5 361-362
+  s_3af79fd703f9fa::t_840a13b51bac8e 352-360,366-380
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_3af79fd703f9fa::t_4d330be41085bd 571
+  s_3af79fd703f9fa::t_13721310c8322e 36,71-73,84,232,466,469,471,570,572,608-611,613-615,617-622
+  s_3af79fd703f9fa::t_8ff7300ae4854c 467,568,616
+  s_3af79fd703f9fa::t_d9e25764f979bc 470,472
+  s_3af79fd703f9fa::t_5cbff1214e8b21 463-464,468,543-544,569,612
+  s_3af79fd703f9fa::t_ae2df2cbfebb92 623-624
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_3af79fd703f9fa::t_ccf5faea95469a 338-347
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_3af79fd703f9fa::t_d4ad1912176bd5 20
+control-plane/Sources/App/Services/VolumeService.swift
+  s_3af79fd703f9fa::t_facd1fd24696d5 30-31,369-376,384-385
+  s_3af79fd703f9fa::t_7d4829881d3fee 25-29,32-38,340-344,346-368,377-383,386-414
+docs/architecture/scheduler.md
+  s_3af79fd703f9fa::t_e730ef4172b321 228-229,248-249
+control-plane/web/src/types/openapi.ts
+  s_3af79fd703f9fa::t_30a962216a595f 8630-8633,8635-8639
+agent/Sources/StratoAgentCore/StorageBackendRegistry.swift
+  s_3af79fd703f9fa::t_91117add7b675d 90-93
+control-plane/web/src/components/agents/agent-detail-page.tsx
+  s_3af79fd703f9fa::t_415d718760f77d 144,147-150
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_3af79fd703f9fa::t_c55a8bab41e3c5 197-200
+control-plane/Sources/App/Models/Agent.swift
+  s_3af79fd703f9fa::t_c55a8bab41e3c5 50-53,294,319,324,335-336,439
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_3af79fd703f9fa::t_541347f7473ce8 32,70,91,149
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_3af79fd703f9fa::t_facd1fd24696d5 125-127
+  s_3af79fd703f9fa::t_dfa623d0fce282 121-124,144-218
+  s_3af79fd703f9fa::t_99c2e28fba4bf4 219
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  s_3af79fd703f9fa::t_541347f7473ce8 441
+control-plane/Sources/App/openapi.yaml
+  s_3af79fd703f9fa::t_d4ad1912176bd5 15515,15536-15540
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_3af79fd703f9fa::t_fc5a7dd3342643 157-184
+control-plane/Tests/AppPlatformTests/AddAgentPhysicalFreeDiskTests.swift
+  s_3af79fd703f9fa::t_47bb745806ef19 1-56
+control-plane/web/src/app/(dashboard)/dashboard/page.tsx
+  s_3af79fd703f9fa::t_415d718760f77d 77-78,87,119,233,236
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_3af79fd703f9fa::t_927f116e4ddc1f 258,260-261,269-270,278
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_3af79fd703f9fa::t_65d0436442b501 239-244
+  s_3af79fd703f9fa::t_814fc74fce141d 268-269
+agent/Sources/StratoAgentCore/SnapshotRecordStore.swift
+  s_3af79fd703f9fa::t_91117add7b675d 36-39,51,59
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_3af79fd703f9fa::t_5b5c030acebf58 106-124,167-170,377-389,449-451,544-558,560-562,579
+agent/Sources/StratoAgentRuntime/Agent.swift
+  s_3af79fd703f9fa::t_91117add7b675d 199-202
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_3af79fd703f9fa::t_1e6ffef189eec5 13,67
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_3af79fd703f9fa::t_b83616ccd6fb70 20-21,46-47,130-167
+  s_3af79fd703f9fa::t_6798a1e6aebc21 168
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  s_3af79fd703f9fa::t_19b8e4e7a3f2e3 39,61,116-119
+  s_3af79fd703f9fa::t_415d718760f77d 114,120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e5cecca2518334d31f45cbf7e489f64c05910e1e",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
