@@ -318,6 +318,52 @@ final class VolumeQuotaTests {
         }
     }
 
+    @Test("An image-backed create charges the measured inherited virtual size")
+    func imageBackedCreateUsesVirtualSizeForQuota() async throws {
+        try await withVolumeQuotaApp { app, builder, user, project, token in
+            let quota = try await builder.createResourceQuota(
+                name: "sparse-image", maxStorageGB: 20, project: project)
+            let image = try await builder.createImage(
+                name: "sparse-source",
+                project: project,
+                size: gb(1),
+                virtualSize: gb(40),
+                uploadedBy: user)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: try user.requireID(),
+                role: .admin,
+                nodeType: .image,
+                nodeID: try image.requireID(),
+                createdBy: try user.requireID(),
+                on: app.db)
+            let body = CreateVolumeRequest(
+                name: "larger-than-request",
+                description: "must charge inherited capacity",
+                projectId: try project.requireID(),
+                environment: nil,
+                sizeGB: 10,
+                format: "qcow2",
+                volumeType: "data",
+                sourceImageId: try image.requireID(),
+                iopsTotal: nil,
+                bpsTotal: nil)
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(body)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
+            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(refreshed.reservedStorage == 0)
+            #expect(refreshed.volumeCount == 0)
+        }
+    }
+
     @Test("A create that fits is admitted and reserved")
     func createWithinQuotaIsAdmitted() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, token in

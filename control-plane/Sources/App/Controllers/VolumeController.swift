@@ -179,16 +179,30 @@ struct VolumeController: RouteCollection {
         }
 
         // Source-backed volumes inherit the image's native virtual size before
-        // any requested growth is applied. The artifact's stored-byte size is
-        // a useful floor for raw and fully allocated images; `defaultDisk` is
-        // the image's declared virtual-size floor for sparse images. Reserve
-        // the strongest bound available so placement cannot choose a host that
-        // only fits the smaller create request.
-        let sourceSizeBound =
-            sourceImage.map {
-                max($0.defaultDisk ?? 0, $0.usableDiskArtifact?.size ?? 0)
-            } ?? 0
-        let placementSizeBytes = max(sizeBytes, sourceSizeBound)
+        // any requested growth is applied. Stored object bytes are not a bound
+        // for sparse images, so placement and quota both use the virtual size
+        // measured from the artifact at ingestion. Legacy or unsupported image
+        // formats without that measurement fail closed instead of pinning a
+        // volume to a host that can never admit it.
+        let sourceSizeBound: Int64
+        if let sourceImage, let artifact = sourceImage.usableDiskArtifact {
+            guard let virtualSize = artifact.virtualSize else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Source image disk size is unknown. Re-upload the disk artifact so Strato can measure its virtual size."
+                )
+            }
+            sourceSizeBound = max(sourceImage.defaultDisk ?? 0, virtualSize)
+        } else {
+            sourceSizeBound = 0
+        }
+        let admittedSizeBytes = max(sizeBytes, sourceSizeBound)
+        guard admittedSizeBytes <= WorkloadSizeLimits.maxDiskBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "Source image exceeds the maximum supported volume size")
+        }
 
         try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
 
@@ -215,7 +229,7 @@ struct VolumeController: RouteCollection {
             description: request.description ?? "",
             projectID: projectId,
             environment: environment,
-            size: sizeBytes,
+            size: admittedSizeBytes,
             format: format,
             volumeType: volumeType,
             status: .creating,
@@ -263,7 +277,7 @@ struct VolumeController: RouteCollection {
                 if pool.mode == .local {
                     do {
                         let selected = try await VolumeService.selectAndReserveVolumeAgent(
-                            sizeBytes: placementSizeBytes,
+                            sizeBytes: admittedSizeBytes,
                             volumeId: volumeId,
                             agents: localPlacementAgents,
                             memberAgentIds: pool.memberAgentIds,
@@ -282,7 +296,7 @@ struct VolumeController: RouteCollection {
                 }
 
                 try await QuotaEnforcementService.reserveVolume(
-                    for: project, environment: environment, size: sizeBytes, on: db)
+                    for: project, environment: environment, size: admittedSizeBytes, on: db)
                 try await volume.save(on: db)
                 let volumeID = try volume.requireID()
                 if let preselectedLocalAgentID {
@@ -372,7 +386,7 @@ struct VolumeController: RouteCollection {
                     let selected: Agent
                     do {
                         selected = try await VolumeService.selectAndReserveVolumeAgent(
-                            sizeBytes: placementSizeBytes,
+                            sizeBytes: admittedSizeBytes,
                             volumeId: volumeId,
                             agents: agents,
                             memberAgentIds: currentPool.memberAgentIds,

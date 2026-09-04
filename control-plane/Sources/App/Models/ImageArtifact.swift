@@ -47,6 +47,12 @@ final class ImageArtifact: Model, @unchecked Sendable {
     @Field(key: "size")
     var size: Int64
 
+    /// The guest-visible capacity encoded by a disk artifact, measured from
+    /// its bytes at ingestion. Unlike `size`, this does not collapse a sparse
+    /// qcow2 image to its stored object footprint.
+    @OptionalField(key: "virtual_size")
+    var virtualSize: Int64?
+
     @Field(key: "checksum")
     var checksum: String
 
@@ -91,6 +97,7 @@ final class ImageArtifact: Model, @unchecked Sendable {
         architecture: CPUArchitecture,
         filename: String,
         size: Int64,
+        virtualSize: Int64? = nil,
         checksum: String,
         storagePath: String,
         status: ArtifactStatus = .ready,
@@ -104,6 +111,7 @@ final class ImageArtifact: Model, @unchecked Sendable {
         self.architecture = architecture
         self.filename = filename
         self.size = size
+        self.virtualSize = virtualSize
         self.checksum = checksum
         self.storagePath = storagePath
         self.status = status

@@ -246,8 +246,9 @@ final class VolumeSizeValidationTests {
                 name: "large-sparse-image",
                 project: project,
                 size: 2.gbToBytes!,
+                virtualSize: 40.gbToBytes!,
                 uploadedBy: user)
-            image.defaultDisk = 40.gbToBytes!
+            image.defaultDisk = 10.gbToBytes!
             try await image.save(on: app.db)
             try await RoleBindingService.grant(
                 principalType: .user,
@@ -279,6 +280,8 @@ final class VolumeSizeValidationTests {
             let replica = try #require(try await VolumeReplica.query(on: app.db).first())
             #expect(replica.agentId == largeAgentID)
             #expect(replica.agentId != smallAgentID)
+            let volume = try #require(try await Volume.query(on: app.db).first())
+            #expect(volume.size == 40.gbToBytes!)
             let reservations = await app.coordination.activeReservations(
                 agentIds: [smallAgentID, largeAgentID])
             #expect(reservations[smallAgentID]?.disk ?? 0 == 0)
