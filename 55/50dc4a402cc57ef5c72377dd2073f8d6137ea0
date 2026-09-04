@@ -1,0 +1,67 @@
+control-plane/Sources/App/Services/SecurityRecordDelivery.swift
+  s_075d155f14d28a::t_e55b11d302cac3 1-69
+agent/Package.swift
+  s_075d155f14d28a::t_e55b11d302cac3 202-203
+agent/Sources/StratoAgentCore/DurableFileWriter.swift
+  s_075d155f14d28a::t_e55b11d302cac3 24,30-40,162-230,232-235,388-411
+  s_075d155f14d28a::t_37347156ef60cb 412
+agent/Tests/StratoAgentStorageTests/WarmSandboxSnapshotCacheTests.swift
+  s_075d155f14d28a::t_e55b11d302cac3 2,4,190-243,276-281,392-438
+agent/Sources/StratoAgentCore/WarmSandboxSnapshotCache.swift
+  s_075d155f14d28a::t_e55b11d302cac3 4-15,141,161-162,165-170,172,180-196,207-209,221-231,253-279,301,305-327,329-332,334-338,340,393-403
+agent/Sources/StratoAgent/StratoAgentMain.swift
+  s_075d155f14d28a::t_e55b11d302cac3 1-9
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_075d155f14d28a::t_e55b11d302cac3 22-26,32,44-50,88,91-100,102-104,106,176,178,180-185,187,189-204,299-305
+control-plane/Dockerfile
+  s_075d155f14d28a::t_e55b11d302cac3 72,102
+agent/Tests/StratoAgentStorageTests/OCIRootfsCacheTests.swift
+  s_075d155f14d28a::t_e55b11d302cac3 46-54,96-145,212-213
+control-plane/Tests/AppIAMTests/AuditLoggingTests.swift
+  s_075d155f14d28a::t_e55b11d302cac3 3,443,479,481,499,511-512,515,518,541,548,550-595,629-761,829,832,839,878,883,921-935,1000,1003
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_075d155f14d28a::t_e55b11d302cac3 3,5,48-76,79-140,228,272,277,279,294-303,329-331,342-348,352-354,401-406,437-438,448-480,492-495,500-507,514-522,524-528,533-534,536,538,548-550,695-696
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_075d155f14d28a::t_e55b11d302cac3 3-4,18-46,364,369-432
+  s_075d155f14d28a::t_383b3a7cd64b6c 433
+docs/deployment/observability.md
+  s_075d155f14d28a::t_e55b11d302cac3 355-378
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  s_075d155f14d28a::t_e55b11d302cac3 265-303
+  s_9d764f706ace50::t_b1e8ac51fe6012 304
+control-plane/Sources/App/Services/AuditService.swift
+  s_075d155f14d28a::t_e55b11d302cac3 4,7,61-64,183-184,188-190,193-194,198-221,242,249-250,256-257,263,268-272,275-295,304,316,319,321,348,361,372,398,400,403,416,427,432,439,441,444,497,574,579,581,596-606,612-616,629,632-633,642,647-653,657-658,674-676,707-715,723-726,747-757,786-788,791-792,803,805-855,857-878,883-907,918-921,926-927,930-941,944-974,978-982,987-994,1138-1139
+control-plane/Package.swift
+  s_075d155f14d28a::t_e55b11d302cac3 194
+agent/Tests/StratoAgentStorageTests/DurableFileWriterTests.swift
+  s_075d155f14d28a::t_e55b11d302cac3 17,27,47-50,99-105,225-286
+  s_075d155f14d28a::t_83f56acee96241 287
+control-plane/Sources/App/Models/AuditEvent.swift
+  s_075d155f14d28a::t_e55b11d302cac3 74
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_075d155f14d28a::t_e55b11d302cac3 17-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5550dc4a402cc57ef5c72377dd2073f8d6137ea0",
+  "prompts": {},
+  "sessions": {
+    "s_075d155f14d28a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a3f-e4c5-7dc2-9441-35e22e35eb43",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9d764f706ace50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-dda9-7730-90f4-480f55b6b230",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
