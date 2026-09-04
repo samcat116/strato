@@ -39,6 +39,25 @@ struct NetworkReconcilerTests {
             floatingIPs: floatingIPs)
     }
 
+    @Test("A failed newer generation still closes the replay window for older payloads")
+    func acceptedAndObservedGenerationsAreIndependent() {
+        let networkID = UUID()
+        var ledger = NetworkGenerationLedger()
+
+        let acceptedFour = ledger.accept(networkID: networkID, generation: 4)
+        #expect(acceptedFour)
+        ledger.recordObserved(networkID: networkID, generation: 4)
+        let acceptedFive = ledger.accept(networkID: networkID, generation: 5)
+        #expect(acceptedFive)
+        // Generation 5 fails before it can become observed.
+        #expect(ledger.observedGeneration(for: networkID) == 4)
+        let replayedFour = ledger.accept(networkID: networkID, generation: 4)
+        #expect(!replayedFour)
+        let retriedFive = ledger.accept(networkID: networkID, generation: 5)
+        #expect(retriedFive)
+        #expect(ledger.acceptedGeneration(for: networkID) == 5)
+    }
+
     // MARK: - Plan
 
     @Test("Networks sharing a project share one router with a port each")

@@ -27,13 +27,40 @@ extension NetworkServiceLinux {
     ) async -> NetworkReconcileOutcome {
         topologyAuthority = authoritative
 
+        // Advance replay protection before any fallible await. A partially
+        // applied generation N+1 must still make a delayed generation N stale,
+        // while the separate observed cursor remains at the last full success.
+        var current: [DesiredNetworkState] = []
+        var stale: [DesiredNetworkState] = []
+        if authoritative {
+            for network in networks {
+                guard
+                    networkGenerationLedger.accept(
+                        networkID: network.networkId, generation: network.generation)
+                else {
+                    logger.debug(
+                        "Skipping stale network desired state",
+                        metadata: [
+                            "network": .string(network.name),
+                            "generation": .stringConvertible(network.generation),
+                            "accepted": .stringConvertible(
+                                networkGenerationLedger.acceptedGeneration(for: network.networkId)
+                                    ?? 0),
+                        ])
+                    stale.append(network)
+                    continue
+                }
+                current.append(network)
+            }
+        }
+
         #if os(Linux)
         guard isConnected else {
             logger.debug("Network service not connected; skipping network reconciliation")
             let reason = NetworkError.notConnected("OVN/OVS connections are unavailable")
             return NetworkReconcileOutcome(
                 networks: authoritative
-                    ? networks.map { failedNetworkObservation($0, error: reason) } : nil,
+                    ? current.map { failedNetworkObservation($0, error: reason) } : nil,
                 securityGroups: authoritative
                     ? securityGroups?.map { failedSecurityGroupObservation($0, error: reason) } : nil,
                 portMemberships: portMemberships.compactMap {
@@ -78,22 +105,6 @@ extension NetworkServiceLinux {
         // (left exactly as-is); current networks are governed by the plan, so
         // their dropped objects — e.g. SNAT after externalAccess is turned off —
         // are still torn down. Only networks absent from the sync are torn down.
-        var current: [DesiredNetworkState] = []
-        var stale: [DesiredNetworkState] = []
-        for network in networks {
-            if let applied = networkGenerations[network.networkId], network.generation < applied {
-                logger.debug(
-                    "Skipping stale network desired state",
-                    metadata: [
-                        "network": .string(network.name),
-                        "generation": .stringConvertible(network.generation),
-                        "applied": .stringConvertible(applied),
-                    ])
-                stale.append(network)
-                continue
-            }
-            current.append(network)
-        }
         var protected = NetworkReconciler.protectedTopology(forStale: stale)
         // Resolver service capability is still optional; protect an existing
         // resolver port when the control plane expresses no opinion about it.
@@ -116,8 +127,13 @@ extension NetworkServiceLinux {
         }
 
         #if os(Linux)
-        lastObservedLoadBalancers = await LoadBalancerReconciler.reconcile(
-            networks: current, actuator: self, logger: logger)
+        let loadBalancerOutcome = await LoadBalancerReconciler.reconcileWithOutcome(
+            networks: current,
+            actuator: self,
+            logger: logger,
+            protectedNetworkIDs: Set(stale.map(\.networkId)))
+        lastObservedLoadBalancers = loadBalancerOutcome.observations
+        networkFailures.append(contentsOf: loadBalancerOutcome.networkFailures)
         #else
         lastObservedLoadBalancers = nil
         #endif
@@ -249,7 +265,8 @@ extension NetworkServiceLinux {
             } else {
                 // Stamp only after every topology/DHCP/NACL write completed.
                 // Equal generations still re-drive level-triggered side state.
-                networkGenerations[network.networkId] = network.generation
+                networkGenerationLedger.recordObserved(
+                    networkID: network.networkId, generation: network.generation)
                 return ObservedNetworkState(
                     id: network.networkId,
                     observedGeneration: network.generation,
@@ -282,7 +299,7 @@ extension NetworkServiceLinux {
     ) -> ObservedNetworkState {
         ObservedNetworkState(
             id: network.networkId,
-            observedGeneration: networkGenerations[network.networkId] ?? 0,
+            observedGeneration: networkGenerationLedger.observedGeneration(for: network.networkId),
             status: .error,
             lastError: failure.message,
             failedGeneration: network.generation,

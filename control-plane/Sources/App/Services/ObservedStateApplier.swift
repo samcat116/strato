@@ -501,6 +501,10 @@ struct ObservedStateApplier {
         for observed in observations {
             try await db.transaction { tx in
                 guard
+                    case .applied = try await DesiredStateGenerationWriter.lockCurrent(
+                        schema: LogicalNetwork.schema, id: observed.id, on: tx)
+                else { return }
+                guard
                     let network = try await LogicalNetwork.query(on: tx)
                         .filter(\.$id == observed.id)
                         .with(\.$site)
