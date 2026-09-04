@@ -488,7 +488,7 @@ agent is involved.
    caps were cleared", while an all-nil *desired* value must normalize to absent
    or a planner re-plans it forever. Two rules, opposite directions, one type.
 
-   *Implemented by STR-270 (wire v59).* QEMU agents now advertise an explicit,
+   *Implemented by STR-270 (wire v60).* QEMU agents now advertise an explicit,
    fail-closed capability, apply total IOPS and bytes-per-second limits to the
    live and persistent libvirt domain, and echo libvirt read-back. A capped
    attachment cannot converge without that current echo. Firecracker remains

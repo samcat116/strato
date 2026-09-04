@@ -57,15 +57,20 @@ final class VolumeIOLimitsTests {
 
     private func registerAgent(
         app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion,
-        supportsVolumeIOLimits: Bool? = true
+        supportsVolumeIOLimits: Bool? = true, includeFirecracker: Bool = false
     ) async throws -> String {
-        try await TestDataBuilder(db: app.db).registerAgent(
+        var hypervisors = [
+            HypervisorSupport(
+                type: .qemu, available: true, accelerated: true,
+                supportsVolumeIOLimits: supportsVolumeIOLimits)
+        ]
+        if includeFirecracker {
+            hypervisors.append(
+                HypervisorSupport(type: .firecracker, available: true, accelerated: true))
+        }
+        return try await TestDataBuilder(db: app.db).registerAgent(
             on: app, named: name, hostname: "\(name).test",
-            hypervisors: [
-                HypervisorSupport(
-                    type: .qemu, available: true, accelerated: true,
-                    supportsVolumeIOLimits: supportsVolumeIOLimits)
-            ],
+            hypervisors: hypervisors,
             protocolVersion: protocolVersion)
     }
 
@@ -346,6 +351,39 @@ final class VolumeIOLimitsTests {
                 try req.content.encode(SetVolumeIOLimitsRequest(iopsTotal: 500, bpsTotal: nil))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
+            }
+
+            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            #expect(stored.ioLimits == nil)
+            #expect(stored.generation == 1)
+        }
+    }
+
+    @Test("A Firecracker volume is refused even when its agent also supports QEMU limits")
+    func firecrackerVolumeIsRefused() async throws {
+        try await withVolumeApp { app, user, project, token in
+            let agentId = try await self.registerAgent(
+                app: app, named: "io-dual-backend-agent", includeFirecracker: true)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "io-firecracker-vm", project: project)
+            vm.hypervisorType = .firecracker
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+            let volume = try await self.makeVolume(
+                app: app, user: user, project: project, agentId: agentId)
+            volume.volumeType = .boot
+            volume.$vm.id = try vm.requireID()
+            volume.attachedAgentId = agentId
+            volume.deviceName = "disk0"
+            volume.bootOrder = 0
+            try await volume.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/io-limits") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(SetVolumeIOLimitsRequest(iopsTotal: 500, bpsTotal: nil))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("not supported for Firecracker VMs"))
             }
 
             let stored = try #require(try await Volume.find(volume.id!, on: app.db))

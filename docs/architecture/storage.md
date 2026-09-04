@@ -613,7 +613,7 @@ difference is "this tenant is capped" versus "this tenant is not".
 The ceilings travel on `DesiredVolumeState.ioLimits` (wire v35) and come back on
 `ObservedVolumeState.ioLimits` as an **echo of what the agent actually applied**,
 recorded separately from what was requested. A QEMU agent advertises the
-additive `supportsVolumeIOLimits` capability (wire v59); absence is fail-closed.
+additive `supportsVolumeIOLimits` capability (wire v60); absence is fail-closed.
 Creating, attaching, or adding a cap is rejected before it can target an agent
 that did not advertise support. Firecracker does not advertise the capability.
 

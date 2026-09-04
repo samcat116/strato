@@ -937,6 +937,7 @@ struct VolumeController: RouteCollection {
         }
         let requestsIOLimits = request.iopsTotal != nil || request.bpsTotal != nil
         if requestsIOLimits {
+            try await Self.requireQEMUAttachment(for: volume, on: req.db)
             guard let agent = await req.application.agentService.getAgentInfo(agentID),
                 agent.supportsVolumeIOLimits
             else {
@@ -958,6 +959,7 @@ struct VolumeController: RouteCollection {
             // refreshed row so the preflight above cannot authorize a policy
             // that is then committed onto a different unsupported agent.
             if requestsIOLimits {
+                try await Self.requireQEMUAttachment(for: volume, on: db)
                 guard
                     let currentAgentID = try await VolumeService.agentIDs(
                         holding: volume, on: db
@@ -990,6 +992,20 @@ struct VolumeController: RouteCollection {
         return try await AcceptedMutation(
             VolumeService.response(for: volume, on: req.db), accepted
         ).acceptedResponse()
+    }
+
+    /// A capable agent can host both backends, so its QEMU capability does not
+    /// prove that an attached Firecracker volume can enforce this policy.
+    private static func requireQEMUAttachment(for volume: Volume, on db: any Database) async throws {
+        guard let vmID = volume.$vm.id else { return }
+        guard let vm = try await VM.find(vmID, on: db) else {
+            throw Abort(.conflict, reason: "The volume's attached VM no longer exists")
+        }
+        guard vm.hypervisorType == .qemu else {
+            throw Abort(
+                .conflict,
+                reason: "Per-volume I/O limits are not supported for Firecracker VMs.")
+        }
     }
 
     // MARK: - Create Snapshot

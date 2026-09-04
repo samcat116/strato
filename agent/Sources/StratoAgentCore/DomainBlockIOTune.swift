@@ -104,9 +104,9 @@ public struct VolumeIOCounters: Equatable, Sendable {
 /// process, so counter magnitude alone cannot identify a reset.
 public struct VolumeIOCounterSample: Equatable, Sendable {
     public let counters: VolumeIOCounters
-    public let incarnation: Int32
+    public let incarnation: String
 
-    public init(counters: VolumeIOCounters, incarnation: Int32) {
+    public init(counters: VolumeIOCounters, incarnation: String) {
         self.counters = counters
         self.incarnation = incarnation
     }
@@ -115,5 +115,33 @@ public struct VolumeIOCounterSample: Equatable, Sendable {
     public func rate(since previous: Self, elapsedSeconds: Double) -> VolumeIOObservedRate? {
         guard incarnation == previous.incarnation else { return nil }
         return counters.rate(since: previous.counters, elapsedSeconds: elapsedSeconds)
+    }
+}
+
+/// Extracts the stable identity of one Linux process from its pid file and
+/// `/proc/<pid>/stat`. PID alone is reusable; field 22 is the process start
+/// time in clock ticks since boot, so the pair changes across restarts.
+public enum LinuxProcessIncarnation {
+    public static func processID(fromPIDFile contents: String) -> Int32? {
+        let value = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let processID = Int32(value), processID > 0 else { return nil }
+        return processID
+    }
+
+    public static func token(processID: Int32, processStat: String) -> String? {
+        guard processID > 0,
+            let openingParenthesis = processStat.firstIndex(of: "("),
+            let closingParenthesis = processStat.lastIndex(of: ")"),
+            openingParenthesis < closingParenthesis
+        else { return nil }
+
+        let statProcessID = processStat[..<openingParenthesis]
+            .trimmingCharacters(in: .whitespaces)
+        guard Int32(statProcessID) == processID else { return nil }
+
+        let fields = processStat[processStat.index(after: closingParenthesis)...]
+            .split(whereSeparator: \Character.isWhitespace)
+        guard fields.count > 19, let startTimeTicks = UInt64(fields[19]) else { return nil }
+        return "\(processID):\(startTimeTicks)"
     }
 }

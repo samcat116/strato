@@ -66,13 +66,26 @@ struct DomainBlockIOTuneTests {
             counters: VolumeIOCounters(
                 readOperations: 100, writeOperations: 200,
                 readBytes: 1_000, writeBytes: 2_000),
-            incarnation: 41)
+            incarnation: "4321:41")
         let replacement = VolumeIOCounterSample(
             counters: VolumeIOCounters(
                 readOperations: 1_000, writeOperations: 2_000,
                 readBytes: 10_000, writeBytes: 20_000),
-            incarnation: 42)
+            incarnation: "4321:42")
 
         #expect(replacement.rate(since: previous, elapsedSeconds: 1) == nil)
+    }
+
+    @Test("Linux process identity includes PID and start time")
+    func linuxProcessIdentity() throws {
+        let processID = try #require(
+            LinuxProcessIncarnation.processID(fromPIDFile: "4321\n"))
+        let fields = ["S"] + (1...18).map(String.init) + ["98765"]
+        let stat = "4321 (qemu worker) \(fields.joined(separator: " "))\n"
+
+        #expect(
+            LinuxProcessIncarnation.token(processID: processID, processStat: stat)
+                == "4321:98765")
+        #expect(LinuxProcessIncarnation.token(processID: 4322, processStat: stat) == nil)
     }
 }

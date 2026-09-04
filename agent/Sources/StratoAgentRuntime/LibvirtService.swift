@@ -1563,14 +1563,21 @@ actor LibvirtService: HypervisorService {
             guard LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
                 return nil
             }
+            guard let incarnation = await qemuProcessIncarnation(vmId: vmId) else { return nil }
             let disks = try await domainDisks(dom, vmId: vmId)
             guard let disk = DomainDiskInventory.disk(forVolume: volumeId, in: disks) else { return nil }
             let stats = try await call("libvirt-disk-io-stats", vmId: vmId) { client, deadline in
                 try await client.domainBlockStats(
                     dom: dom, path: disk.target, deadline: deadline)
             }
-            guard dom.id >= 0, let counters = VolumeIOCounters(stats) else { return nil }
-            return VolumeIOCounterSample(counters: counters, incarnation: dom.id)
+            // Pair the counters only with a process identity that remained
+            // stable for the whole read. A restart on either side of the
+            // libvirt call establishes a fresh baseline next time.
+            let incarnationAfterRead = await qemuProcessIncarnation(vmId: vmId)
+            guard incarnation == incarnationAfterRead,
+                let counters = VolumeIOCounters(stats)
+            else { return nil }
+            return VolumeIOCounterSample(counters: counters, incarnation: incarnation)
         } catch {
             logger.debug(
                 "Could not sample live disk I/O counters",
@@ -1580,6 +1587,22 @@ actor LibvirtService: HypervisorService {
                 ])
             return nil
         }
+    }
+
+    private func qemuProcessIncarnation(vmId: String) async -> String? {
+        await Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            guard
+                let pidData = fileManager.contents(atPath: "/run/libvirt/qemu/\(vmId).pid")
+            else { return nil }
+            let pidFile = String(decoding: pidData, as: UTF8.self)
+            guard let processID = LinuxProcessIncarnation.processID(fromPIDFile: pidFile),
+                let statData = fileManager.contents(atPath: "/proc/\(processID)/stat")
+            else { return nil }
+            return LinuxProcessIncarnation.token(
+                processID: processID,
+                processStat: String(decoding: statData, as: UTF8.self))
+        }.value
     }
 
     private func applyDiskIOLimits(
