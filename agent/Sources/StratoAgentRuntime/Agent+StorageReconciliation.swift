@@ -486,12 +486,12 @@ extension Agent {
                     // artifact for the next sync to mistake for a converged
                     // volume that no longer needs admission.
                     do {
-                        try await backend.deleteVolume(volumeId: item.id)
+                        try await backend.rejectVolume(volumeId: item.id)
                         volumeSizes.removeValue(forKey: item.id)
                         volumeCommittedSizes.removeValue(forKey: item.id)
                     } catch let rollbackError {
                         logger.error(
-                            "Failed to roll back a volume rejected after materialization",
+                            "Failed to durably reject a volume after materialization",
                             metadata: [
                                 "volumeId": .string(item.id),
                                 "admissionError": .string(admissionError.localizedDescription),

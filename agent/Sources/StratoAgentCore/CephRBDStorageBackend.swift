@@ -215,6 +215,13 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         logger.info("Ceph RBD volume removed", metadata: ["volumeId": .string(volumeId)])
     }
 
+    public func rejectVolume(volumeId: String) async throws {
+        // Host-local admission never invokes this for Ceph, whose capacity is
+        // cluster-owned. Keep the protocol operation safe and idempotent if a
+        // caller does so anyway.
+        try await deleteVolume(volumeId: volumeId)
+    }
+
     public func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {
         try beginOperation()
         defer { endOperation() }

@@ -32,6 +32,7 @@ public actor FileSystemStorageBackend: StorageBackend {
     private let runSubprocess: SubprocessRunner
     private let enumerateVolumeStore: @Sendable (String) throws -> [String]
     private let copyItem: @Sendable (String, String) throws -> Void
+    private let removeItem: @Sendable (String) throws -> Void
     private let publishItem: @Sendable (String, String) throws -> Void
     private let freeDiskSpace: @Sendable (String) -> Int64?
 
@@ -68,6 +69,9 @@ public actor FileSystemStorageBackend: StorageBackend {
         copyItem: @escaping @Sendable (String, String) throws -> Void = {
             try FileManager.default.copyItem(atPath: $0, toPath: $1)
         },
+        removeItem: @escaping @Sendable (String) throws -> Void = {
+            try FileManager.default.removeItem(atPath: $0)
+        },
         freeDiskSpace: @escaping @Sendable (String) -> Int64? = {
             HostPreflight.freeDiskSpace(atPath: $0)
         },
@@ -81,6 +85,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         self.runSubprocess = runSubprocess
         self.enumerateVolumeStore = enumerateVolumeStore
         self.copyItem = copyItem
+        self.removeItem = removeItem
         self.freeDiskSpace = freeDiskSpace
         self.publishItem =
             publishItem ?? {
@@ -119,6 +124,10 @@ public actor FileSystemStorageBackend: StorageBackend {
 
     private func legacyPathRecord(volumeId: String) -> String {
         "\(volumeDirectory(volumeId: volumeId))/.adopted-path"
+    }
+
+    private func rejectedVolumeMarker(volumeId: String) -> String {
+        "\(volumeDirectory(volumeId: volumeId))/.rejected-by-admission"
     }
 
     private func snapshotPath(volumeId: String, snapshotId: String) -> String {
@@ -353,9 +362,9 @@ public actor FileSystemStorageBackend: StorageBackend {
                 let legacy = try? FileManager.default.attributesOfItem(atPath: legacyPath),
                 Self.sameFile(managed, legacy)
             {
-                try FileManager.default.removeItem(atPath: legacyPath)
+                try removeItem(legacyPath)
             }
-            try FileManager.default.removeItem(atPath: volumeDir)
+            try removeItem(volumeDir)
             logger.info("Volume deleted", metadata: ["volumeId": .string(volumeId)])
         } else {
             logger.warning(
@@ -363,6 +372,27 @@ public actor FileSystemStorageBackend: StorageBackend {
                 metadata: [
                     "volumeId": .string(volumeId),
                     "path": .string(volumeDir),
+                ])
+        }
+    }
+
+    public func rejectVolume(volumeId: String) async throws {
+        let volumeDir = volumeDirectory(volumeId: volumeId)
+        guard FileManager.default.fileExists(atPath: volumeDir) else { return }
+
+        // The marker is the durable safety boundary. If deletion fails after
+        // this write, a restarted agent still cannot inventory the artifact as
+        // a healthy volume and bypass the admission refusal that created it.
+        try DurableFileWriter().write(
+            Data(), to: rejectedVolumeMarker(volumeId: volumeId), permissions: 0o600)
+        do {
+            try await deleteVolume(volumeId: volumeId)
+        } catch {
+            logger.error(
+                "Admission-rejected volume remains quarantined until deletion succeeds",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "error": .string(error.localizedDescription),
                 ])
         }
     }
@@ -702,6 +732,16 @@ public actor FileSystemStorageBackend: StorageBackend {
         var volumes: [String: DiskAttachment] = [:]
         for entry in entries {
             guard let volumeId = UUID(uuidString: entry)?.uuidString else { continue }
+            if FileManager.default.fileExists(atPath: rejectedVolumeMarker(volumeId: entry)) {
+                do {
+                    try await deleteVolume(volumeId: entry)
+                } catch {
+                    throw StorageBackendError.deleteFailed(
+                        "admission-rejected volume \(volumeId) remains quarantined at "
+                            + "\(volumeDirectory(volumeId: entry)): \(error.localizedDescription)")
+                }
+                continue
+            }
             for format in DiskFormat.allCases {
                 let path = volumePath(volumeId: entry, format: format)
                 if FileManager.default.fileExists(atPath: path) {
