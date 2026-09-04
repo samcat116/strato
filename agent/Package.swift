@@ -199,7 +199,8 @@ let package = Package(
         .executableTarget(
             name: "StratoAgent",
             dependencies: [
-                "StratoAgentRuntime"
+                "StratoAgentRuntime",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/StratoAgent",
             swiftSettings: swiftSettings
