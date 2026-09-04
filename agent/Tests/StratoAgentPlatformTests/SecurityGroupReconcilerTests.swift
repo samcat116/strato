@@ -633,22 +633,28 @@ struct SecurityGroupReconcilerTests {
 
     @Test("A failed drop-group join skips the port's allow groups entirely (fail closed)")
     func membershipDropGroupFailureSkipsAllows() async {
+        let interfaceID = UUID()
         let actuator = RecordingSecurityGroupActuator(
             failingGroups: [OVNNaming.dropPortGroupName])
         let memberships = [
-            DesiredPortMembership(portName: "vm-A", securityGroupIds: [groupId]),
+            DesiredPortMembership(
+                interfaceId: interfaceID, portName: "vm-A", securityGroupIds: [groupId]),
             // A port already in the drop group converges its allows normally.
             DesiredPortMembership(portName: "vm-B", securityGroupIds: [groupId]),
         ]
         let actuatorWithB = actuator
         await actuatorWithB.seedMembership(port: "vm-B", groups: [OVNNaming.dropPortGroupName])
-        await SecurityGroupReconciler.reconcileMembership(
+        let observations = await SecurityGroupReconciler.reconcileMembership(
             memberships: memberships, actuator: actuator, logger: Logger(label: "test"))
 
         let added = await actuator.added
         // vm-A: the drop add failed, so no allow group was joined — a port in
         // allow groups without the drop group would be default-allow.
         #expect(!added.contains(Membership(port: "vm-A", group: pg)))
+        #expect(observations.first?.interfaceId == interfaceID)
+        #expect(observations.first?.status == .error)
+        #expect(observations.first?.failureClassification == .transient)
+        #expect(observations.first?.lastError != nil)
         // vm-B: already default-denied, its allow group converged.
         #expect(added.contains(Membership(port: "vm-B", group: pg)))
     }
@@ -661,7 +667,7 @@ struct SecurityGroupReconcilerTests {
                 ObservedPortGroup(name: OVNNaming.dropPortGroupName, generation: 1),
                 ObservedPortGroup(name: peerPG, generation: 5),
             ])
-        let ready = try await SecurityGroupReconciler.reconcile(
+        let result = try await SecurityGroupReconciler.reconcile(
             securityGroups: [group], actuator: actuator, logger: Logger(label: "test"))
 
         let ensured = await actuator.ensured
@@ -674,7 +680,28 @@ struct SecurityGroupReconcilerTests {
         // pre-STR-185 site: it is created by this pass rather than reaped, and
         // the group the authority no longer wants still goes.
         #expect(removedGroups == [peerPG])
-        #expect(ready)
+        #expect(result.networkACLTierReady)
+        #expect(
+            result.observations == [
+                ObservedSecurityGroupState(
+                    id: groupId, observedGeneration: 2, status: .active)
+            ])
+    }
+
+    @Test("A failed safety port group degrades every tenant group")
+    func safetyGroupFailureIsReported() async throws {
+        let group = DesiredSecurityGroup(id: groupId, generation: 2, rules: [rule()])
+        let actuator = RecordingSecurityGroupActuator(
+            unreadyEnsureGroups: [OVNNaming.dropPortGroupName])
+
+        let result = try await SecurityGroupReconciler.reconcile(
+            securityGroups: [group], actuator: actuator, logger: Logger(label: "test"))
+
+        #expect(result.observations.count == 1)
+        #expect(result.observations.first?.id == groupId)
+        #expect(result.observations.first?.status == .error)
+        #expect(result.observations.first?.failedGeneration == 2)
+        #expect(result.observations.first?.lastError?.contains("safety port group") == true)
     }
 }
 
@@ -697,14 +724,16 @@ private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
     private var observed: [ObservedPortGroup]
     private var membership: [String: Set<String>]
     private let failingGroups: Set<String>
+    private let unreadyEnsureGroups: Set<String>
 
     init(
         observed: [ObservedPortGroup] = [], membership: [String: Set<String>] = [:],
-        failingGroups: Set<String> = []
+        failingGroups: Set<String> = [], unreadyEnsureGroups: Set<String> = []
     ) {
         self.observed = observed
         self.membership = membership
         self.failingGroups = failingGroups
+        self.unreadyEnsureGroups = unreadyEnsureGroups
     }
 
     func seedMembership(port: String, groups: Set<String>) {
@@ -724,7 +753,7 @@ private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
         } else {
             observed.append(row)
         }
-        return true
+        return !unreadyEnsureGroups.contains(plan.name)
     }
 
     func removePortGroup(named name: String) async throws {

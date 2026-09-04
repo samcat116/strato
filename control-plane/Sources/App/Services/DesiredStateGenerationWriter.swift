@@ -39,12 +39,34 @@ enum DesiredStateGenerationWriter {
         guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
 
         let advanced: GenerationRow?
-        if let expectedGeneration {
+        let tracksNetworkFabric = schema == LogicalNetwork.schema || schema == SecurityGroup.schema
+        let convergenceDeadline = Date().addingTimeInterval(180)
+        if let expectedGeneration, tracksNetworkFabric {
+            advanced = try await sql.raw(
+                """
+                UPDATE \(ident: schema)
+                SET generation = generation + 1,
+                    convergence_deadline = \(bind: convergenceDeadline)
+                WHERE id = \(bind: id) AND generation = \(bind: expectedGeneration)
+                RETURNING generation
+                """
+            ).first(decoding: GenerationRow.self)
+        } else if let expectedGeneration {
             advanced = try await sql.raw(
                 """
                 UPDATE \(ident: schema)
                 SET generation = generation + 1
                 WHERE id = \(bind: id) AND generation = \(bind: expectedGeneration)
+                RETURNING generation
+                """
+            ).first(decoding: GenerationRow.self)
+        } else if tracksNetworkFabric {
+            advanced = try await sql.raw(
+                """
+                UPDATE \(ident: schema)
+                SET generation = generation + 1,
+                    convergence_deadline = \(bind: convergenceDeadline)
+                WHERE id = \(bind: id)
                 RETURNING generation
                 """
             ).first(decoding: GenerationRow.self)

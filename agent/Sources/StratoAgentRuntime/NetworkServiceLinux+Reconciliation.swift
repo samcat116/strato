@@ -24,13 +24,21 @@ extension NetworkServiceLinux {
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
         metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
         dnsZones: [DesiredDNSZone]?
-    ) async {
+    ) async -> NetworkReconcileOutcome {
         topologyAuthority = authoritative
 
         #if os(Linux)
         guard isConnected else {
             logger.debug("Network service not connected; skipping network reconciliation")
-            return
+            let reason = NetworkError.notConnected("OVN/OVS connections are unavailable")
+            return NetworkReconcileOutcome(
+                networks: authoritative
+                    ? networks.map { failedNetworkObservation($0, error: reason) } : nil,
+                securityGroups: authoritative
+                    ? securityGroups?.map { failedSecurityGroupObservation($0, error: reason) } : nil,
+                portMemberships: portMemberships.compactMap {
+                    failedMembershipObservation($0, error: reason)
+                })
         }
         #endif
 
@@ -57,9 +65,10 @@ extension NetworkServiceLinux {
             // Membership is per-VM state this host owns even without topology
             // authority — its ports join the port groups the site's
             // controller authors (the LSP-binding pattern, issue #343).
-            await SecurityGroupReconciler.reconcileMembership(
+            let memberships = await SecurityGroupReconciler.reconcileMembership(
                 memberships: portMemberships, actuator: self, logger: logger)
-            return
+            return NetworkReconcileOutcome(
+                networks: nil, securityGroups: nil, portMemberships: memberships)
         }
 
         // Generation guard: apply only entries at least as new as what we last
@@ -83,7 +92,6 @@ extension NetworkServiceLinux {
                 stale.append(network)
                 continue
             }
-            networkGenerations[network.networkId] = network.generation
             current.append(network)
         }
         var protected = NetworkReconciler.protectedTopology(forStale: stale)
@@ -91,8 +99,9 @@ extension NetworkServiceLinux {
         // resolver port when the control plane expresses no opinion about it.
         protected.formUnion(NetworkReconciler.serviceLocalPortProtection(for: current))
 
+        var networkFailures: [ReconcileStepFailure] = []
         do {
-            try await NetworkReconciler.reconcile(
+            networkFailures += try await NetworkReconciler.reconcile(
                 networks: current, actuator: self, logger: logger, protected: protected)
         } catch {
             // observeTopology failed (can't compute teardown safely); the
@@ -100,6 +109,10 @@ extension NetworkServiceLinux {
             logger.error(
                 "Network reconciliation could not complete",
                 metadata: ["error": .string(error.localizedDescription)])
+            networkFailures.append(
+                ReconcileStepFailure(
+                    message: error.localizedDescription,
+                    classification: (error as? any ClassifiableError)?.failureClassification ?? .transient))
         }
 
         #if os(Linux)
@@ -110,13 +123,16 @@ extension NetworkServiceLinux {
         #endif
 
         // Converge each network's DHCP_Options rows here, level-triggered,
-        // not only when a NIC is realized: DHCP edits don't bump VM or
-        // network generations, and converged VMs never re-run createVMNetwork,
-        // so this is the only path that reaches a live network whose DHCP
-        // config changed — including deleting its rows when DHCP is turned
-        // off (their weak refs clear every port's binding).
+        // not only when a NIC is realized: converged VMs never re-run
+        // createVMNetwork, so this is the path that reaches a live network
+        // whose DHCP config changed — including deleting its rows when DHCP is
+        // turned off (their weak refs clear every port's binding).
         for network in current {
-            await attemptDHCPConvergence(for: network, dhcpEnabled: network.dhcpEnabled)
+            if let failure = await attemptDHCPConvergence(
+                for: network, dhcpEnabled: network.dhcpEnabled)
+            {
+                networkFailures.append(failure)
+            }
         }
 
         // DNS zones (STR-39), converged here for the DHCP rows' reason and on
@@ -136,6 +152,11 @@ extension NetworkServiceLinux {
                 logger.error(
                     "DNS zone reconciliation could not complete",
                     metadata: ["error": .string(error.localizedDescription)])
+                networkFailures.append(
+                    ReconcileStepFailure(
+                        message: "DNS zone reconciliation: \(error.localizedDescription)",
+                        classification: (error as? any ClassifiableError)?.failureClassification
+                            ?? .transient))
             }
         }
 
@@ -146,14 +167,25 @@ extension NetworkServiceLinux {
         // contract stands): touch nothing, exactly like the `networks` list's
         // absence semantics.
         var securityGroupTiersReady = false
+        var observedSecurityGroups: [ObservedSecurityGroupState]?
         if let securityGroups {
             do {
-                securityGroupTiersReady = try await SecurityGroupReconciler.reconcile(
+                let result = try await SecurityGroupReconciler.reconcile(
                     securityGroups: securityGroups, actuator: self, logger: logger)
+                securityGroupTiersReady = result.networkACLTierReady
+                observedSecurityGroups = result.observations.map { observation in
+                    if observation.status == .active {
+                        securityGroupGenerations[observation.id] = observation.observedGeneration
+                    }
+                    return observation
+                }
             } catch {
                 logger.error(
                     "Security-group reconciliation could not complete",
                     metadata: ["error": .string(error.localizedDescription)])
+                observedSecurityGroups = securityGroups.map {
+                    failedSecurityGroupObservation($0, error: error)
+                }
             }
         }
 
@@ -176,18 +208,112 @@ extension NetworkServiceLinux {
                     logger.error(
                         "Network ACL reconciliation could not complete",
                         metadata: ["error": .string(error.localizedDescription)])
+                    networkFailures.append(
+                        ReconcileStepFailure(
+                            message: "Network ACL reconciliation: \(error.localizedDescription)",
+                            classification: (error as? any ClassifiableError)?.failureClassification
+                                ?? .transient))
                 }
             } else {
                 logger.warning(
                     "Network ACL reconciliation deferred until every managed security group uses the tiered ACL schema")
+                networkFailures.append(
+                    ReconcileStepFailure(
+                        message:
+                            "Network ACL reconciliation is blocked until every security group uses the tiered ACL schema",
+                        classification: .blocked))
             }
         }
-        await SecurityGroupReconciler.reconcileMembership(
+        let observedMemberships = await SecurityGroupReconciler.reconcileMembership(
             memberships: portMemberships, actuator: self, logger: logger)
+
+        let observedNetworks: [ObservedNetworkState]
+        if let failure = networkFailures.first {
+            observedNetworks = current.map { failedNetworkObservation($0, failure: failure) }
+        } else {
+            observedNetworks = current.map { network in
+                // Stamp only after every topology/DHCP/NACL write completed.
+                // Equal generations still re-drive level-triggered side state.
+                networkGenerations[network.networkId] = network.generation
+                return ObservedNetworkState(
+                    id: network.networkId,
+                    observedGeneration: network.generation,
+                    status: .active)
+            }
+        }
+        return NetworkReconcileOutcome(
+            networks: observedNetworks,
+            securityGroups: observedSecurityGroups,
+            portMemberships: observedMemberships)
     }
 
     func observedLoadBalancers() async -> [ObservedLoadBalancerState]? {
         lastObservedLoadBalancers
+    }
+
+    private func observedClassification(
+        _ classification: FailureClassification
+    ) -> ObservedFailureClassification {
+        switch classification {
+        case .permanent: .permanent
+        case .blocked, .waitingOnDependency: .blocked
+        case .transient: .transient
+        }
+    }
+
+    private func failedNetworkObservation(
+        _ network: DesiredNetworkState,
+        failure: ReconcileStepFailure
+    ) -> ObservedNetworkState {
+        ObservedNetworkState(
+            id: network.networkId,
+            observedGeneration: networkGenerations[network.networkId] ?? 0,
+            status: .error,
+            lastError: failure.message,
+            failedGeneration: network.generation,
+            failureClassification: observedClassification(failure.classification))
+    }
+
+    private func failedNetworkObservation(
+        _ network: DesiredNetworkState,
+        error: any Error
+    ) -> ObservedNetworkState {
+        failedNetworkObservation(
+            network,
+            failure: ReconcileStepFailure(
+                message: error.localizedDescription,
+                classification: (error as? any ClassifiableError)?.failureClassification ?? .transient))
+    }
+
+    private func failedSecurityGroupObservation(
+        _ group: DesiredSecurityGroup,
+        error: any Error
+    ) -> ObservedSecurityGroupState {
+        let classification = (error as? any ClassifiableError)?.failureClassification ?? .transient
+        return ObservedSecurityGroupState(
+            id: group.id,
+            observedGeneration: securityGroupGenerations[group.id] ?? 0,
+            status: .error,
+            lastError: error.localizedDescription,
+            failedGeneration: group.generation,
+            failureClassification: observedClassification(classification))
+    }
+
+    private func failedMembershipObservation(
+        _ membership: DesiredPortMembership,
+        error: any Error
+    ) -> ObservedPortMembershipState? {
+        guard let interfaceId = membership.interfaceId,
+            let securityGroupIds = membership.securityGroupIds
+        else { return nil }
+        let classification = (error as? any ClassifiableError)?.failureClassification ?? .transient
+        return ObservedPortMembershipState(
+            interfaceId: interfaceId,
+            portName: membership.portName,
+            securityGroupIds: securityGroupIds.sorted { $0.uuidString < $1.uuidString },
+            status: .error,
+            lastError: error.localizedDescription,
+            failureClassification: observedClassification(classification))
     }
 
     /// Converge this chassis's metadata namespaces toward `desired` — the
@@ -571,12 +697,14 @@ extension NetworkServiceLinux {
     /// Best-effort per-network DHCP row convergence; a failing network is
     /// logged and left for the next full desired-state payload, like other
     /// reconcile steps.
-    func attemptDHCPConvergence(for network: DesiredNetworkState, dhcpEnabled: Bool) async {
+    func attemptDHCPConvergence(
+        for network: DesiredNetworkState, dhcpEnabled: Bool
+    ) async -> ReconcileStepFailure? {
         #if os(Linux)
         do {
             if !dhcpEnabled {
                 try await removeDHCPOptions(networkId: network.networkId, networkName: network.name)
-                return
+                return nil
             }
             if let gateway = network.gateway, let cidr = IPv4CIDR(network.subnet) {
                 // Masked, so the row key matches what the NIC path derives
@@ -613,7 +741,11 @@ extension NetworkServiceLinux {
                     "networkId": .string(network.networkId.uuidString),
                     "error": .string(error.localizedDescription),
                 ])
+            return ReconcileStepFailure(
+                message: "DHCP options for \(network.name): \(error.localizedDescription)",
+                classification: (error as? any ClassifiableError)?.failureClassification ?? .transient)
         }
         #endif
+        return nil
     }
 }

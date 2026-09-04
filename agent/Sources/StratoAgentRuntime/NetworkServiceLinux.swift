@@ -64,6 +64,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// and is skipped, so it can't roll the network's L3 realization backward —
     /// the same guard the VM reconciler applies per VM.
     var networkGenerations: [UUID: Int64] = [:]
+    /// Highest security-group generation this authority has verified. This is
+    /// kept separately from the desired input so a later failed retry can
+    /// report the last known-good generation without falsely advancing it.
+    var securityGroupGenerations: [UUID: Int64] = [:]
     var lastObservedLoadBalancers: [ObservedLoadBalancerState]?
 
     #if os(Linux)

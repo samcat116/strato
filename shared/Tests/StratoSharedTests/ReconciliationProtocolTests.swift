@@ -207,6 +207,49 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[0].guestInfo == nil)
     }
 
+    @Test("Network fabric observations round-trip and preserve nil as no opinion")
+    func observedNetworkFabricRoundTrip() throws {
+        let networkID = UUID()
+        let groupID = UUID()
+        let interfaceID = UUID()
+        let message = ObservedStateReport(
+            agentId: "agent-1",
+            vms: [],
+            resources: Fixtures.resources,
+            networks: [
+                ObservedNetworkState(
+                    id: networkID, observedGeneration: 6, status: .error,
+                    lastError: "OVSDB unavailable", failedGeneration: 7,
+                    failureClassification: .transient)
+            ],
+            securityGroups: [
+                ObservedSecurityGroupState(
+                    id: groupID, observedGeneration: 4, status: .active)
+            ],
+            portMemberships: [
+                ObservedPortMembershipState(
+                    interfaceId: interfaceID, portName: "vm-a-net0",
+                    securityGroupIds: [groupID], status: .error,
+                    lastError: "drop group missing", failureClassification: .blocked)
+            ])
+
+        let decoded = try MessageEnvelope(message: message).decode(as: ObservedStateReport.self)
+        #expect(decoded.networks?.first?.id == networkID)
+        #expect(decoded.networks?.first?.failedGeneration == 7)
+        #expect(decoded.networks?.first?.failureClassification == .transient)
+        #expect(decoded.securityGroups?.first?.status == .active)
+        #expect(decoded.portMemberships?.first?.interfaceId == interfaceID)
+        #expect(decoded.portMemberships?.first?.failureClassification == .blocked)
+
+        let noOpinion = ObservedStateReport(
+            agentId: "agent-2", vms: [], resources: Fixtures.resources)
+        let decodedNoOpinion = try MessageEnvelope(message: noOpinion)
+            .decode(as: ObservedStateReport.self)
+        #expect(decodedNoOpinion.networks == nil)
+        #expect(decodedNoOpinion.securityGroups == nil)
+        #expect(decodedNoOpinion.portMemberships == nil)
+    }
+
     @Test("The current observed schema requires sandbox and unrecognized inventories")
     func observedStateRequiresCurrentCollections() throws {
         let report = ObservedStateReport(

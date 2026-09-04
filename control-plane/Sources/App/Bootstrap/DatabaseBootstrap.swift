@@ -194,5 +194,9 @@ extension Application {
         // The exact-match registration handshake makes a persisted wire version
         // redundant. Fresh baselines omit it; preserved databases drop it here.
         migrations.add(DropAgentWireProtocolVersion())
+
+        // STR-294: close the desired/observed loop for network topology,
+        // security-group ACLs, and per-port membership.
+        migrations.add(AddNetworkFabricObservations())
     }
 }

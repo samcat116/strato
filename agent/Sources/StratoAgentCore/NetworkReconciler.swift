@@ -847,106 +847,161 @@ extension NetworkReconciler {
     /// logged and skipped so it can't stall the rest of the sync — the periodic
     /// level-triggered sync retries it. Throws only when the topology snapshot
     /// itself can't be read (teardown can't be computed safely without it).
+    @discardableResult
     public static func reconcile(
         networks: [DesiredNetworkState],
         actuator: any NetworkActuator,
         logger: Logger,
         protected: ProtectedTopology = ProtectedTopology()
-    ) async throws {
+    ) async throws -> [ReconcileStepFailure] {
         let topology = plan(networks: networks)
+        var failures: [ReconcileStepFailure] = []
 
         for desired in topology.switches {
-            let ensured = await attempt(logger, "ensure switch \(desired.name)") {
-                try await actuator.ensureSwitch(desired)
+            if let failure = await observeAttempt(
+                logger, "ensure switch \(desired.name)",
+                {
+                    try await actuator.ensureSwitch(desired)
+                })
+            {
+                failures.append(failure)
+                continue
             }
-            // The port hangs off the switch, so a switch we failed to ensure
-            // has nothing to hang it on; the next level-triggered sync retries
-            // both.
-            guard ensured else { continue }
-            if let metadata = desired.serviceLocalPort {
-                await attempt(logger, "ensure metadata port \(metadata.name)") {
-                    try await actuator.ensureServiceLocalPort(metadata)
-                }
+            if let metadata = desired.serviceLocalPort,
+                let failure = await observeAttempt(
+                    logger, "ensure metadata port \(metadata.name)",
+                    {
+                        try await actuator.ensureServiceLocalPort(metadata)
+                    })
+            {
+                failures.append(failure)
             }
-            if let resolver = desired.resolverPort {
-                await attempt(logger, "ensure resolver port \(resolver.name)") {
-                    try await actuator.ensureServiceLocalPort(resolver)
-                }
+            if let resolver = desired.resolverPort,
+                let failure = await observeAttempt(
+                    logger, "ensure resolver port \(resolver.name)",
+                    {
+                        try await actuator.ensureServiceLocalPort(resolver)
+                    })
+            {
+                failures.append(failure)
             }
         }
 
         for router in topology.routers {
-            let ensured = await attempt(logger, "ensure router \(router.name)") {
-                try await actuator.ensureRouter(router)
+            if let failure = await observeAttempt(
+                logger, "ensure router \(router.name)",
+                {
+                    try await actuator.ensureRouter(router)
+                })
+            {
+                failures.append(failure)
+                continue
             }
-            guard ensured else { continue }
 
             for port in router.ports {
-                await attempt(logger, "ensure router port \(port.name)") {
-                    try await actuator.ensureRouterPort(port, onRouter: router.name)
+                if let failure = await observeAttempt(
+                    logger, "ensure router port \(port.name)",
+                    {
+                        try await actuator.ensureRouterPort(port, onRouter: router.name)
+                    })
+                {
+                    failures.append(failure)
                 }
             }
 
-            // Dynamic routing converges on every router, every pass, with the
-            // uplink's realized state: enabling needs a live gateway port, but
-            // *stripping* must run even when the router lost (or never had) an
-            // uplink, or a withdrawn `[ovn_uplink]`/`[ovn_dynamic_routing]`
-            // would leave stale `dynamic-routing*` options in the NB forever.
             guard router.needsUplink else {
-                await attempt(logger, "ensure dynamic routing on \(router.name)") {
-                    try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
+                if let failure = await observeAttempt(
+                    logger, "ensure dynamic routing on \(router.name)",
+                    {
+                        try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
+                    })
+                {
+                    failures.append(failure)
                 }
                 continue
             }
             var uplinkReady = false
-            _ = await attempt(logger, "ensure uplink for \(router.name)") {
-                uplinkReady = try await actuator.ensureUplink(for: router)
+            if let failure = await observeAttempt(
+                logger, "ensure uplink for \(router.name)",
+                {
+                    uplinkReady = try await actuator.ensureUplink(for: router)
+                })
+            {
+                failures.append(failure)
             }
             guard uplinkReady else {
                 logger.warning(
                     "No detectable host uplink; skipping SNAT this pass",
                     metadata: ["router": .string(router.name)])
-                await attempt(logger, "ensure dynamic routing on \(router.name)") {
-                    try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
+                failures.append(
+                    ReconcileStepFailure(
+                        message: "No detectable host uplink for \(router.name); SNAT is not realized",
+                        classification: .blocked))
+                if let failure = await observeAttempt(
+                    logger, "ensure dynamic routing on \(router.name)",
+                    {
+                        try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
+                    })
+                {
+                    failures.append(failure)
                 }
                 continue
             }
             for subnet in router.snatSubnets {
-                await attempt(logger, "ensure SNAT \(subnet) on \(router.name)") {
-                    try await actuator.ensureSNAT(router: router.name, logicalIP: subnet)
+                if let failure = await observeAttempt(
+                    logger, "ensure SNAT \(subnet) on \(router.name)",
+                    {
+                        try await actuator.ensureSNAT(router: router.name, logicalIP: subnet)
+                    })
+                {
+                    failures.append(failure)
                 }
             }
             for rule in router.dnatRules {
-                await attempt(logger, "ensure floating IP \(rule.externalIP) on \(router.name)") {
-                    try await actuator.ensureDNAT(router: router.name, rule: rule)
+                if let failure = await observeAttempt(
+                    logger, "ensure floating IP \(rule.externalIP) on \(router.name)",
+                    { try await actuator.ensureDNAT(router: router.name, rule: rule) })
+                {
+                    failures.append(failure)
                 }
             }
-            await attempt(logger, "ensure dynamic routing on \(router.name)") {
-                try await actuator.ensureDynamicRouting(for: router, uplinkReady: true)
+            if let failure = await observeAttempt(
+                logger, "ensure dynamic routing on \(router.name)",
+                {
+                    try await actuator.ensureDynamicRouting(for: router, uplinkReady: true)
+                })
+            {
+                failures.append(failure)
             }
         }
 
         let observed = try await actuator.observeTopology()
         for action in teardownActions(desired: topology, observed: observed, protected: protected) {
-            await attempt(logger, "teardown \(action)") {
-                switch action {
-                case .dnat(let router, let externalIP):
-                    try await actuator.removeDNAT(router: router, externalIP: externalIP)
-                case .snat(let router, let logicalIP):
-                    try await actuator.removeSNAT(router: router, logicalIP: logicalIP)
-                case .serviceLocalPort(let name):
-                    try await actuator.removeServiceLocalPort(name: name)
-                case .switchRouterPort(let name):
-                    try await actuator.removeSwitchRouterPort(name: name)
-                case .routerPort(let name):
-                    try await actuator.removeRouterPort(name: name)
-                case .externalSwitch(let name):
-                    try await actuator.removeExternalSwitch(name: name)
-                case .router(let name):
-                    try await actuator.removeRouter(name: name)
-                }
+            if let failure = await observeAttempt(
+                logger, "teardown \(action)",
+                {
+                    switch action {
+                    case .dnat(let router, let externalIP):
+                        try await actuator.removeDNAT(router: router, externalIP: externalIP)
+                    case .snat(let router, let logicalIP):
+                        try await actuator.removeSNAT(router: router, logicalIP: logicalIP)
+                    case .serviceLocalPort(let name):
+                        try await actuator.removeServiceLocalPort(name: name)
+                    case .switchRouterPort(let name):
+                        try await actuator.removeSwitchRouterPort(name: name)
+                    case .routerPort(let name):
+                        try await actuator.removeRouterPort(name: name)
+                    case .externalSwitch(let name):
+                        try await actuator.removeExternalSwitch(name: name)
+                    case .router(let name):
+                        try await actuator.removeRouter(name: name)
+                    }
+                })
+            {
+                failures.append(failure)
             }
         }
+        return failures
     }
 
 }

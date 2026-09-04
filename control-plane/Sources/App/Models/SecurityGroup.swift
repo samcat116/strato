@@ -55,6 +55,24 @@ final class SecurityGroup: Model, @unchecked Sendable {
     @Field(key: "generation")
     var generation: Int64
 
+    @Field(key: "observed_generation")
+    var observedGeneration: Int64
+
+    @OptionalField(key: "convergence_phase")
+    var convergencePhase: String?
+
+    @OptionalField(key: "last_error")
+    var lastError: String?
+
+    @OptionalField(key: "failed_generation")
+    var failedGeneration: Int64?
+
+    @OptionalField(key: "last_error_at")
+    var lastErrorAt: Date?
+
+    @OptionalField(key: "convergence_deadline")
+    var convergenceDeadline: Date?
+
     @OptionalParent(key: "created_by_id")
     var createdBy: User?
 
@@ -83,6 +101,12 @@ final class SecurityGroup: Model, @unchecked Sendable {
         self.groupDescription = description
         self.isDefault = isDefault
         self.generation = 0
+        self.observedGeneration = 0
+        self.convergencePhase = nil
+        self.lastError = nil
+        self.failedGeneration = nil
+        self.lastErrorAt = nil
+        self.convergenceDeadline = nil
         self.$createdBy.id = createdByID
     }
 }
@@ -242,6 +266,7 @@ struct SecurityGroupResponse: Content {
     /// How many NICs currently attach this group (drives "in use" UI and
     /// delete affordances).
     let attachmentCount: Int
+    let conditions: ResourceConditions
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -253,7 +278,12 @@ struct SecurityGroupResponse: Content {
         self.isDefault = group.isDefault
         self.rules = try group.rules.map(SecurityGroupRuleResponse.init(from:))
         self.attachmentCount = attachmentCount
+        self.conditions = group.conditions
         self.createdAt = group.createdAt
         self.updatedAt = group.updatedAt
     }
+}
+
+extension SecurityGroup: NetworkFabricConvergingResource {
+    var desiredSatisfied: Bool { true }
 }

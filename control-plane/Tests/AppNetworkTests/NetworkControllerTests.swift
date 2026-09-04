@@ -681,7 +681,8 @@ final class NetworkControllerTests {
             let afterToggle = try await LogicalNetwork.find(network.id, on: app.db)
             #expect(afterToggle?.generation == startGeneration + 1)
 
-            // A DHCP-only edit does not bump the generation (no L3 change).
+            // DHCP is part of the observed fabric, so its edit also gets a
+            // generation that callers can wait for.
             try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(UpdateNetworkRequest(dhcpEnabled: false))
@@ -689,7 +690,8 @@ final class NetworkControllerTests {
                 #expect(res.status == .ok)
             }
             let afterDHCP = try await LogicalNetwork.find(network.id, on: app.db)
-            #expect(afterDHCP?.generation == startGeneration + 1)
+            #expect(afterDHCP?.generation == startGeneration + 2)
+            #expect(afterDHCP?.convergenceDeadline != nil)
         }
     }
 
@@ -728,8 +730,8 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("The metadata service defaults on and toggles without bumping the generation")
-    func metadataEnabledDefaultsOnAndDoesNotBumpGeneration() async throws {
+    @Test("The metadata service defaults on and toggles with an observed generation")
+    func metadataEnabledDefaultsOnAndBumpsGeneration() async throws {
         try await withNetworkTestApp { app, user, project, token in
             // Created through the API, not the model, so this covers the
             // controller's default rather than the model's.
@@ -761,10 +763,8 @@ final class NetworkControllerTests {
 
             let updated = try await LogicalNetwork.find(networkID, on: app.db)
             #expect(updated?.metadataEnabled == false)
-            // Deliberately no bump: the metadata port converges level-triggered
-            // on every network reconcile, like the DHCP rows, so bumping would
-            // only make agents skip legitimately concurrent syncs as stale.
-            #expect(updated?.generation == startGeneration)
+            #expect(updated?.generation == startGeneration + 1)
+            #expect(updated?.convergenceDeadline != nil)
 
             // And back on, since turning it off is the half that has to delete
             // a live port.
@@ -776,11 +776,12 @@ final class NetworkControllerTests {
             }
             let reEnabled = try await LogicalNetwork.find(networkID, on: app.db)
             #expect(reEnabled?.metadataEnabled == true)
+            #expect(reEnabled?.generation == startGeneration + 2)
         }
     }
 
-    @Test("The resolver defaults on and toggles without bumping the generation")
-    func resolverEnabledDefaultsOnAndDoesNotBumpGeneration() async throws {
+    @Test("The resolver defaults on and toggles with an observed generation")
+    func resolverEnabledDefaultsOnAndBumpsGeneration() async throws {
         try await withNetworkTestApp { app, user, project, token in
             var created: NetworkResponse?
             try await app.test(.POST, "/api/networks") { req in
@@ -824,10 +825,8 @@ final class NetworkControllerTests {
 
             let updated = try await LogicalNetwork.find(networkID, on: app.db)
             #expect(updated?.resolverEnabled == false)
-            // No bump, for the metadata port's reason: the localport, the DHCP
-            // row and the resolver process all converge level-triggered on every
-            // network reconcile.
-            #expect(updated?.generation == startGeneration)
+            #expect(updated?.generation == startGeneration + 1)
+            #expect(updated?.convergenceDeadline != nil)
 
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -837,6 +836,7 @@ final class NetworkControllerTests {
             }
             let reEnabled = try await LogicalNetwork.find(networkID, on: app.db)
             #expect(reEnabled?.resolverEnabled == true)
+            #expect(reEnabled?.generation == startGeneration + 2)
             // **The same index, not a fresh one.** Moving it would change what
             // guests were told over DHCP and strand every lease until it
             // renewed, so re-enabling reuses what the network already holds.
@@ -1385,7 +1385,7 @@ private extension LogicalNetwork {
         metadataEnabled: Bool = true,
         resolverEnabled: Bool = true,
         resolverIndex: Int? = nil,
-        generation: Int = 1
+        generation: Int64 = 1
     ) {
         self.init(
             id: id,

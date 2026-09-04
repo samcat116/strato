@@ -99,7 +99,11 @@ final class DesiredStateReconciliationTests {
 
     private func report(
         agentId: String,
-        vms: [ObservedVMState]
+        vms: [ObservedVMState],
+        networks: [ObservedNetworkState]? = nil,
+        securityGroups: [ObservedSecurityGroupState]? = nil,
+        portMemberships: [ObservedPortMembershipState]? = nil,
+        manifestStatus: ObservedManifestStatus? = nil
     ) throws -> MessageEnvelope {
         let report = ObservedStateReport(
             agentId: agentId,
@@ -108,7 +112,11 @@ final class DesiredStateReconciliationTests {
                 totalCPU: 16, availableCPU: 12,
                 totalMemory: 1 << 34, availableMemory: 1 << 33,
                 totalDisk: 1 << 40, availableDisk: 1 << 39
-            )
+            ),
+            manifestStatus: manifestStatus,
+            networks: networks,
+            securityGroups: securityGroups,
+            portMemberships: portMemberships
         )
         return try MessageEnvelope(message: report)
     }
@@ -475,6 +483,163 @@ final class DesiredStateReconciliationTests {
             #expect(refreshed.conditions.converged)
             // Converged means nothing is outstanding to time out.
             #expect(refreshed.convergenceDeadline == nil)
+        }
+    }
+
+    @Test("Fabric failures become degraded conditions and membership errors")
+    func fabricFailuresArePersisted() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            let network = try await self.network(app: app, vm: vm, named: "observed-fabric")
+            network.generation = 2
+            network.convergenceDeadline = Date().addingTimeInterval(300)
+            try await network.save(on: app.db)
+
+            let group = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: vm.$project.id, on: app.db)
+            group.generation = 3
+            group.convergenceDeadline = Date().addingTimeInterval(300)
+            try await group.save(on: app.db)
+
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "52:54:00:29:40:01", deviceName: "net0", orderIndex: 0)
+            try await nic.save(on: app.db)
+            let membership = VMInterfaceSecurityGroup(
+                interfaceID: try nic.requireID(), securityGroupID: try group.requireID())
+            try await membership.save(on: app.db)
+
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [],
+                networks: [
+                    ObservedNetworkState(
+                        id: try network.requireID(), observedGeneration: 0, status: .error,
+                        lastError: "OVSDB unavailable", failedGeneration: 2,
+                        failureClassification: .transient)
+                ],
+                securityGroups: [
+                    ObservedSecurityGroupState(
+                        id: try group.requireID(), observedGeneration: 0, status: .error,
+                        lastError: "ACL match rejected", failedGeneration: 3,
+                        failureClassification: .permanent)
+                ],
+                portMemberships: [
+                    ObservedPortMembershipState(
+                        interfaceId: try nic.requireID(), portName: "vm-test-net0",
+                        securityGroupIds: [try group.requireID()], status: .error,
+                        lastError: "could not join pg_strato_drop",
+                        failureClassification: .transient)
+                ],
+                manifestStatus: ObservedManifestStatus(
+                    inventoryComplete: false, quarantinedEntries: 0,
+                    reason: "fabric-only test report"))
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("recon-agent"))
+
+            let storedNetwork = try #require(
+                try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(storedNetwork.conditions.degraded?.reason == "OVSDB unavailable")
+            #expect(storedNetwork.conditions.degraded?.sinceGeneration == 2)
+            #expect(storedNetwork.convergenceDeadline == nil)
+
+            let storedGroup = try #require(try await SecurityGroup.find(group.id, on: app.db))
+            #expect(storedGroup.conditions.degraded?.reason == "ACL match rejected")
+            #expect(storedGroup.conditions.degraded?.sinceGeneration == 3)
+            #expect(storedGroup.convergenceDeadline == nil)
+
+            let storedNIC = try #require(try await VMNetworkInterface.find(nic.id, on: app.db))
+            #expect(storedNIC.securityGroupStatus == ObservedNetworkFabricStatus.error.rawValue)
+            #expect(storedNIC.securityGroupLastError == "could not join pg_strato_drop")
+            #expect(storedNIC.securityGroupLastErrorAt != nil)
+
+            let recovery = try self.report(
+                agentId: agentId,
+                vms: [],
+                networks: [
+                    ObservedNetworkState(
+                        id: try network.requireID(), observedGeneration: 2, status: .active)
+                ],
+                securityGroups: [
+                    ObservedSecurityGroupState(
+                        id: try group.requireID(), observedGeneration: 3, status: .active)
+                ],
+                portMemberships: [
+                    ObservedPortMembershipState(
+                        interfaceId: try nic.requireID(), portName: "vm-test-net0",
+                        securityGroupIds: [try group.requireID()], status: .active)
+                ],
+                manifestStatus: ObservedManifestStatus(
+                    inventoryComplete: false, quarantinedEntries: 0,
+                    reason: "same-generation fabric recovery"))
+            await app.agentService.applyObservedStateReport(
+                recovery, fromAgentKey: agentKey("recon-agent"))
+
+            let recoveredNetwork = try #require(
+                try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(recoveredNetwork.conditions.converged)
+            #expect(recoveredNetwork.lastError == nil)
+            let recoveredGroup = try #require(
+                try await SecurityGroup.find(group.id, on: app.db))
+            #expect(recoveredGroup.conditions.converged)
+            #expect(recoveredGroup.lastError == nil)
+            let recoveredNIC = try #require(
+                try await VMNetworkInterface.find(nic.id, on: app.db))
+            #expect(recoveredNIC.securityGroupStatus == ObservedNetworkFabricStatus.active.rawValue)
+            #expect(recoveredNIC.securityGroupLastError == nil)
+            #expect(recoveredNIC.securityGroupLastErrorAt == nil)
+        }
+    }
+
+    @Test("Only the site's topology authority can update network observations")
+    func nonAuthorityNetworkObservationIsIgnored() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            _ = try await self.registerAgent(
+                app: app, vm: vm, named: "recon-agent", protocolVersion: WireProtocol.currentVersion)
+            let nonAuthority = try await self.registerAgent(
+                app: app, vm: vm, named: "fabric-bystander",
+                protocolVersion: WireProtocol.currentVersion, placeVM: false)
+            let network = try await self.network(app: app, vm: vm, named: "authority-guard")
+            network.generation = 1
+            try await network.save(on: app.db)
+
+            let envelope = try self.report(
+                agentId: nonAuthority,
+                vms: [],
+                networks: [
+                    ObservedNetworkState(
+                        id: try network.requireID(), observedGeneration: 0, status: .error,
+                        lastError: "must be ignored", failedGeneration: 1)
+                ],
+                manifestStatus: ObservedManifestStatus(
+                    inventoryComplete: false, quarantinedEntries: 0,
+                    reason: "fabric-only test report"))
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("fabric-bystander"))
+
+            let stored = try #require(try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(stored.lastError == nil)
+            #expect(stored.observedGeneration == 0)
+        }
+    }
+
+    @Test("An unanswered network generation degrades after its deadline")
+    func networkFabricDeadlineSweep() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let network = try await self.network(app: app, vm: vm, named: "fabric-timeout")
+            network.generation = 4
+            network.observedGeneration = 3
+            network.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await network.save(on: app.db)
+
+            await app.agentMaintenance.sweepStuckConvergence()
+
+            let stored = try #require(try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(stored.conditions.converged == false)
+            #expect(stored.conditions.degraded?.sinceGeneration == 4)
+            #expect(stored.conditions.degraded?.reason.contains("did not report convergence") == true)
+            #expect(stored.convergenceDeadline == nil)
         }
     }
 

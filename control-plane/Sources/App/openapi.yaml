@@ -10533,6 +10533,18 @@ components:
         attachmentError:
           type: string
           description: The current generation's convergence error for this interface, when failed.
+        securityGroupStatus:
+          type: string
+          enum: [active, error]
+          description: >-
+            The reporting host's observed result for this port's security-group
+            membership. Absent until a current membership has been attempted.
+        securityGroupLastError:
+          type: string
+          description: Why the reporting host could not realize the current membership.
+        securityGroupLastErrorAt:
+          type: string
+          format: date-time
         securityGroupIds:
           type: array
           description: >-
@@ -10826,6 +10838,18 @@ components:
           items:
             type: string
             format: uuid
+        securityGroupStatus:
+          type: string
+          enum: [active, error]
+          description: >-
+            The reporting host's observed result for this port's security-group
+            membership. Absent until a current membership has been attempted.
+        securityGroupLastError:
+          type: string
+          description: Why the reporting host could not realize the current membership.
+        securityGroupLastErrorAt:
+          type: string
+          format: date-time
     SandboxStatus:
       type: string
       enum: [Stopped, Running, Exited, Starting, Stopping, Error, Unknown]
@@ -11795,6 +11819,7 @@ components:
         - metadataEnabled
         - resolverEnabled
         - siteId
+        - conditions
       properties:
         id:
           type: string
@@ -11863,6 +11888,8 @@ components:
             resolver is off, its site cannot run one, or it has no address yet.
             Absent for a network with no attached zone, which has nothing to
             fail to deliver.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdAt:
           type: string
           format: date-time
@@ -12324,7 +12351,7 @@ components:
           format: date-time
     SecurityGroup:
       type: object
-      required: [id, name, projectId, isDefault, rules, attachmentCount]
+      required: [id, name, projectId, isDefault, rules, attachmentCount, conditions]
       properties:
         id:
           type: string
@@ -12348,6 +12375,8 @@ components:
         attachmentCount:
           type: integer
           description: How many VM NICs currently attach this group.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdAt:
           type: string
           format: date-time

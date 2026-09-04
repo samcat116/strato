@@ -120,13 +120,14 @@ extension Agent {
                     // topology authority — leave every managed `DNS` row
                     // alone. Only an explicit list is an instruction.
                     let dnsZones = message.dnsZones
-                    await networkService?.reconcileNetworks(
-                        message.networks, authoritative: message.networksAuthoritative,
-                        securityGroups: message.securityGroups,
-                        portMemberships: derivations.portMemberships,
-                        metadataNetworks: derivations.metadataNetworkIDs,
-                        resolverNetworks: derivations.resolverNetworks,
-                        dnsZones: dnsZones)
+                    observedNetworkFabric =
+                        await networkService?.reconcileNetworks(
+                            message.networks, authoritative: message.networksAuthoritative,
+                            securityGroups: message.securityGroups,
+                            portMemberships: derivations.portMemberships,
+                            metadataNetworks: derivations.metadataNetworkIDs,
+                            resolverNetworks: derivations.resolverNetworks,
+                            dnsZones: dnsZones) ?? .noOpinion
                 }
                 // One belt survives the version gates' retirement inside
                 // `apply`: a nil `volumes` field skips the volume half

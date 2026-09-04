@@ -207,6 +207,7 @@ struct NetworkController: RouteCollection {
             resolverEnabled: request.resolverEnabled ?? true,
             siteID: siteId
         )
+        network.convergenceDeadline = Date().addingTimeInterval(180)
 
         do {
             // The creator's explicit, revocable binding on the network, in the
@@ -470,6 +471,14 @@ struct NetworkController: RouteCollection {
                 let oldSubnet6 = current.subnet6
                 let oldGateway6 = current.gateway6
                 let oldExternalAccess = current.externalAccess
+                let oldDHCPEnabled = current.dhcpEnabled
+                let oldDNSServersRaw = current.dnsServersRaw
+                let oldDomainName = current.domainName
+                let oldLeaseTime = current.leaseTime
+                let oldMetadataEnabled = current.metadataEnabled
+                let oldResolverEnabled = current.resolverEnabled
+                let oldResolverIndex = current.resolverIndex
+                let oldPrimaryDNSZoneID = current.$primaryDNSZone.id
 
                 let currentInterfaceCount = try await attachedInterfaceCount(for: current, on: db)
                 let changesSubnet = request.subnet != nil && prepared.subnet != current.subnet
@@ -602,23 +611,26 @@ struct NetworkController: RouteCollection {
                         domainNameExplicit: domainNameExplicit)
                 }
 
-                let l3Changed =
+                let fabricChanged =
                     current.subnet != oldSubnet
                     || current.gateway != oldGateway
                     || current.subnet6 != oldSubnet6
                     || current.gateway6 != oldGateway6
                     || current.externalAccess != oldExternalAccess
-                if l3Changed {
+                    || current.dhcpEnabled != oldDHCPEnabled
+                    || current.dnsServersRaw != oldDNSServersRaw
+                    || current.domainName != oldDomainName
+                    || current.leaseTime != oldLeaseTime
+                    || current.metadataEnabled != oldMetadataEnabled
+                    || current.resolverEnabled != oldResolverEnabled
+                    || current.resolverIndex != oldResolverIndex
+                    || current.$primaryDNSZone.id != oldPrimaryDNSZoneID
+                if fabricChanged {
                     switch try await DesiredStateGenerationWriter.advance(
                         schema: LogicalNetwork.schema, id: networkID,
                         expectedGeneration: Int64(current.generation), on: db)
                     {
                     case .applied(let generation):
-                        guard let generation = Int(exactly: generation) else {
-                            throw Abort(
-                                .internalServerError,
-                                reason: "Network generation exceeds the model's integer range")
-                        }
                         current.generation = generation
                     case .missing:
                         throw Abort(.notFound, reason: "Network no longer exists")

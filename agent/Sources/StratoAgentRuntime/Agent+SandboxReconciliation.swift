@@ -551,6 +551,9 @@ extension Agent {
             // a point in time nothing can recreate (STR-150).
             snapshots: await observedSnapshotStates(reconciler: reconciler),
             loadBalancers: await networkService?.observedLoadBalancers(),
+            networks: observedNetworkFabric.networks,
+            securityGroups: observedNetworkFabric.securityGroups,
+            portMemberships: observedNetworkFabric.portMemberships,
             storageDevices: await storageDeviceInventory.snapshot()
         )
         // A newer report started while this one was assembling — which is

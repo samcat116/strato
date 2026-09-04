@@ -580,6 +580,12 @@ CREATE TABLE public.logical_networks (
     lease_time bigint,
     external_access boolean DEFAULT true NOT NULL,
     generation bigint DEFAULT 1 NOT NULL,
+    observed_generation bigint DEFAULT 0 NOT NULL,
+    convergence_phase text,
+    last_error text,
+    failed_generation bigint,
+    last_error_at timestamp with time zone,
+    convergence_deadline timestamp with time zone,
     site_id uuid NOT NULL,
     subnet6 text,
     gateway6 text,
@@ -866,7 +872,10 @@ CREATE TABLE public.sandbox_network_interfaces (
     device_name text NOT NULL,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
-    logical_network_id uuid NOT NULL
+    logical_network_id uuid NOT NULL,
+    security_group_status text,
+    security_group_last_error text,
+    security_group_last_error_at timestamp with time zone
 );
 
 
@@ -1023,6 +1032,12 @@ CREATE TABLE public.security_groups (
     description text,
     is_default boolean NOT NULL,
     generation bigint NOT NULL,
+    observed_generation bigint DEFAULT 0 NOT NULL,
+    convergence_phase text,
+    last_error text,
+    failed_generation bigint,
+    last_error_at timestamp with time zone,
+    convergence_deadline timestamp with time zone,
     created_by_id uuid,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
@@ -1314,7 +1329,10 @@ CREATE TABLE public.vm_network_interfaces (
     updated_at timestamp with time zone,
     logical_network_id uuid NOT NULL,
     attach_generation bigint,
-    detach_generation bigint
+    detach_generation bigint,
+    security_group_status text,
+    security_group_last_error text,
+    security_group_last_error_at timestamp with time zone
 );
 
 
