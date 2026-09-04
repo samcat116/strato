@@ -1,0 +1,46 @@
+control-plane/Sources/App/Models/Site.swift
+  s_d5e22336a13eea::t_e8ea5e28510b47 221-222
+control-plane/Sources/App/Models/Agent.swift
+  s_d5e22336a13eea::t_52ab891ab637cd 468-470,472,577-578,580,757-758,768,787
+control-plane/Sources/App/Services/Sweeps/AgentAutoUpdateSweep.swift
+  s_d5e22336a13eea::t_52ab891ab637cd 193
+control-plane/Tests/AppPlatformTests/AgentControllerTests.swift
+  s_d5e22336a13eea::t_5e9793c404ec5d 88-105
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  s_d5e22336a13eea::t_5e9793c404ec5d 63-66,68,107-122
+  s_d5e22336a13eea::t_105403ae28c269 123
+control-plane/Tests/AppPlatformTests/ClusterClockTests.swift
+  s_d5e22336a13eea::t_5e9793c404ec5d 94-104
+control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
+  s_d5e22336a13eea::t_5d83e003de05a3 97-99,102-104,107-109,112-114,117-119,122-124,127-129
+  s_d5e22336a13eea::t_ca7f1fabf83634 138,153
+control-plane/Sources/App/Controllers/StorageDeviceController.swift
+  s_d5e22336a13eea::t_9d9d4a6d5c00e2 36-42,101-102,185,204,228,233-234,241
+  s_d5e22336a13eea::t_9e48e5af3bdd38 48
+  s_d5e22336a13eea::t_6168429dc8d896 45
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_d5e22336a13eea::t_52ab891ab637cd 728-731,759-760,1195-1197,1326,1379,1385-1386,1405-1406,1429,1443,1468-1469
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_d5e22336a13eea::t_e8ea5e28510b47 117-118,134,139,250-252,254,256
+  s_d5e22336a13eea::t_4685f62bfa9f7c 84,131
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_d5e22336a13eea::t_e8ea5e28510b47 173,175-178,234-235
+  s_d5e22336a13eea::t_6168429dc8d896 185-187,292-294
+  s_d5e22336a13eea::t_52ab891ab637cd 409-410
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5bc76c59c504fe925c66ac68031dab2e6bf985b6",
+  "prompts": {},
+  "sessions": {
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
