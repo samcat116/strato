@@ -1,0 +1,29 @@
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_d5e22336a13eea::t_5107a5d31b582d 657-658,660-661,669-672
+control-plane/Sources/App/Services/AgentMaintenanceLoop.swift
+  s_d5e22336a13eea::t_f88aee1b53b41c 110
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  s_d5e22336a13eea::t_5107a5d31b582d 127-144
+  s_d5e22336a13eea::t_ea295103a4f6ca 65-66,69-71
+control-plane/Sources/App/Services/Sweeps/StrandedVolumeAttachmentSweep.swift
+  s_d5e22336a13eea::t_f88aee1b53b41c 9,11-13,50-54
+  s_d5e22336a13eea::t_9a8fc47584fbcb 10
+control-plane/Sources/App/Services/Sweeps/AgentAutoUpdateSweep.swift
+  s_d5e22336a13eea::t_ea295103a4f6ca 49-54,224-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c2fff1098c1b12797fa0dac2cd1343f901dc7785",
+  "prompts": {},
+  "sessions": {
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
