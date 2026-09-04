@@ -342,6 +342,10 @@ extension VM: FinalizableResource {
         guard reaped else { return false }
 
         if let agentId = vm.hypervisorId {
+            Telemetry.removeWorkloadResourceTelemetry(
+                agentID: agentId,
+                workloadID: vmID.uuidString,
+                kind: .vm)
             await app.coordination.releaseReservation(agentId: agentId, vmId: vmID.uuidString)
         }
         return true
@@ -380,6 +384,10 @@ extension Sandbox: FinalizableResource {
         guard reaped else { return false }
 
         if let agentId = sandbox.hypervisorId {
+            Telemetry.removeWorkloadResourceTelemetry(
+                agentID: agentId,
+                workloadID: sandboxID.uuidString,
+                kind: .sandbox)
             await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxID.uuidString)
         }
         return true

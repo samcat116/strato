@@ -141,6 +141,17 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "dependency_observations_received_at")
     var dependencyObservationsReceivedAt: Date?
 
+    /// Latest pressure/reclaim/swap snapshot reported by the agent. Every
+    /// signal embeds availability, so nil is reserved for "no v59 sample has
+    /// arrived yet" rather than overloading zero.
+    @OptionalField(key: "resource_telemetry")
+    var resourceTelemetry: HostResourceTelemetry?
+
+    /// Control-plane receipt time for `resourceTelemetry`; placement must not
+    /// trust the agent's wall clock when evaluating freshness.
+    @OptionalField(key: "resource_telemetry_received_at")
+    var resourceTelemetryReceivedAt: Date?
+
     /// Owning organization (exactly one of organization / organizational unit;
     /// see `organizationScope`). Agents are dedicated capacity: the scheduler
     /// only places a VM on an agent whose root organization matches the VM's.
@@ -272,6 +283,8 @@ final class Agent: Model, Content, @unchecked Sendable {
         metadataServiceCapable: Bool = false,
         dependencyObservations: [NodeDependencyObservation] = [],
         dependencyObservationsReceivedAt: Date? = nil,
+        resourceTelemetry: HostResourceTelemetry? = nil,
+        resourceTelemetryReceivedAt: Date? = nil,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -297,6 +310,8 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.metadataServiceCapable = metadataServiceCapable
         self.dependencyObservations = dependencyObservations
         self.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
+        self.resourceTelemetry = resourceTelemetry
+        self.resourceTelemetryReceivedAt = resourceTelemetryReceivedAt
         self.autoUpdate = false
         self.lastHeartbeat = lastHeartbeat
     }
@@ -469,7 +484,8 @@ extension Agent {
     /// clock that stamped its heartbeat.
     func isOnline(at instant: ClusterInstant) -> Bool {
         guard let lastHeartbeat = lastHeartbeat else { return false }
-        return instant.date.timeIntervalSince(lastHeartbeat) < 60
+        let heartbeatAge = instant.date.timeIntervalSince(lastHeartbeat)
+        return heartbeatAge >= 0 && heartbeatAge < 60
     }
 
     /// Host CPU architecture as a typed value; nil for agents that registered
@@ -675,6 +691,10 @@ struct AgentResponse: Content {
     let dependencyObservations: [NodeDependencyObservation]
     /// Control-plane receipt time used to determine snapshot freshness.
     let dependencyObservationsReceivedAt: Date?
+    /// Latest host PSI, reclaim, swap, OOM, and MGLRU snapshot.
+    let resourceTelemetry: HostResourceTelemetry?
+    /// Control-plane receipt time for the snapshot above.
+    let resourceTelemetryReceivedAt: Date?
     /// Descriptive hardware/platform/OS details for operator display; nil for
     /// agents that registered before host-info reporting.
     let hostInfo: HostInfo?
@@ -778,6 +798,8 @@ struct AgentResponse: Content {
         self.metadataServiceCapable = agent.metadataServiceCapable
         self.dependencyObservations = agent.dependencyObservations
         self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
+        self.resourceTelemetry = agent.resourceTelemetry
+        self.resourceTelemetryReceivedAt = agent.resourceTelemetryReceivedAt
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
         self.organizationId = agent.$organization.id

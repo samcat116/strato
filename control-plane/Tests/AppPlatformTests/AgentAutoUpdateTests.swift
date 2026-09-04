@@ -132,6 +132,8 @@ final class AgentAutoUpdateTests {
                 assignmentInstant.date.addingTimeInterval(-300))
             let agent = try await self.makeAgent(
                 app: app, org: org, name: "fresh-assignment-agent")
+            agent.lastHeartbeat = assignmentInstant.date.addingTimeInterval(-1)
+            try await agent.save(on: app.db)
 
             await self.sweep(
                 app, at: tickInstant, assignmentAt: assignmentInstant)

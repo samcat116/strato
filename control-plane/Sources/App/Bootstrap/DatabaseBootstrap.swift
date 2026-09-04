@@ -194,5 +194,13 @@ extension Application {
         // The exact-match registration handshake makes a persisted wire version
         // redundant. Fresh baselines omit it; preserved databases drop it here.
         migrations.add(DropAgentWireProtocolVersion())
+
+        // STR-266: explicit host PSI/reclaim/swap and per-workload cgroup
+        // contention snapshots, sampled outside the heartbeat path.
+        migrations.add(AddResourceContentionTelemetry())
+
+        // STR-292: timestamps written by pre-cluster-clock replicas can be in
+        // PostgreSQL's future. Fail them closed until a current report arrives.
+        migrations.add(NormalizeLegacyAgentClockTimestamps())
     }
 }

@@ -182,7 +182,10 @@ actor AgentMaintenanceLoop {
             // replica keeps a live presence key and is skipped.
             for agent in onlineAgents {
                 let heartbeatAge = agent.lastHeartbeat.map { now.timeIntervalSince($0) } ?? .infinity
-                guard heartbeatAge > staleThreshold else { continue }
+                // A future heartbeat was stamped by a legacy replica's local
+                // clock. It is not evidence of current liveness and must fail
+                // closed until a cluster-clock heartbeat replaces it.
+                guard heartbeatAge < 0 || heartbeatAge > staleThreshold else { continue }
 
                 // A live presence key means *some* replica is hearing from
                 // the agent even though the row hasn't been touched — e.g. a

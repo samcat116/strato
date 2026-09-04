@@ -56,6 +56,21 @@ extension ObservedStateApplier {
             try await clearMemoryStats(vm: vm, on: db)
         }
 
+        var resourceTelemetryChanged = false
+        if let telemetry = observed.resourceTelemetry, vm.resourceTelemetry != telemetry {
+            vm.resourceTelemetry = telemetry
+            vm.resourceTelemetryReceivedAt = instant.date
+            resourceTelemetryChanged = true
+        }
+        if let agentID = vm.hypervisorId {
+            Telemetry.recordWorkloadResourceTelemetry(
+                agentID: agentID,
+                workloadID: vmID.uuidString,
+                kind: .vm,
+                telemetry: observed.resourceTelemetry,
+                balloon: observed.memoryStats)
+        }
+
         // Mirror the report's convergence progress onto the row (STR-142) so
         // the API can project it as the VM's `conditions` block. Recorded on
         // both the converging and settled paths — the phase only exists on the
@@ -75,6 +90,7 @@ extension ObservedStateApplier {
             failedGeneration: observed.failedGeneration,
             at: instant
         )
+        changed = resourceTelemetryChanged || changed
 
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
@@ -444,6 +460,20 @@ extension ObservedStateApplier {
         let wasConverged = sandbox.isConverged
         let failedBefore = sandbox.failedGeneration
 
+        var resourceTelemetryChanged = false
+        if let telemetry = observed.resourceTelemetry, sandbox.resourceTelemetry != telemetry {
+            sandbox.resourceTelemetry = telemetry
+            sandbox.resourceTelemetryReceivedAt = instant.date
+            resourceTelemetryChanged = true
+        }
+        if let agentID = sandbox.hypervisorId {
+            Telemetry.recordWorkloadResourceTelemetry(
+                agentID: agentID,
+                workloadID: sandboxID.uuidString,
+                kind: .sandbox,
+                telemetry: observed.resourceTelemetry)
+        }
+
         // Convergence progress for the `conditions` block (STR-142) — same
         // contract as VMs, recorded on both paths for the same reasons.
         var changed = sandbox.recordTimestampedConvergence(
@@ -452,6 +482,7 @@ extension ObservedStateApplier {
             failedGeneration: observed.failedGeneration,
             at: instant
         )
+        changed = resourceTelemetryChanged || changed
 
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {

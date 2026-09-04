@@ -929,7 +929,6 @@ extension FirecrackerSandboxRuntime {
         }
         sandboxes[sandboxId]?.guestControlProtocolVersion =
             capability.controlProtocolVersion
-
         logger.info(
             "Sandbox guest agent healthy",
             metadata: [

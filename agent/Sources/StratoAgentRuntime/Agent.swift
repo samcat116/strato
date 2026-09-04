@@ -316,6 +316,12 @@ actor Agent {
     // late, but can never make a live agent miss liveness reports.
     var dependencyManager: NodeDependencyManager?
     var dependencyObservationTask: Task<Void, Never>?
+    // Host and per-workload pressure samples are refreshed on their own
+    // detached utility loop. Heartbeats and reconciliation only read these
+    // caches, so procfs/cgroup latency is never on either liveness path.
+    var resourceTelemetryTask: Task<Void, Never>?
+    var hostResourceTelemetry: HostResourceTelemetry?
+    var workloadResourceTelemetry: [String: WorkloadResourceTelemetry] = [:]
     let installMode: AgentInstallMode
     let imageCachePath: String?
     // Byte budgets for the image caches; nil means unbounded (see

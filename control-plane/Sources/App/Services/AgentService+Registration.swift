@@ -569,6 +569,7 @@ extension AgentService {
         if applyPeriodicAgentState(
             message.resources,
             dependencyObservations: message.dependencyObservations,
+            hostResourceTelemetry: message.hostResourceTelemetry,
             to: agent,
             at: instant)
         {
@@ -588,6 +589,7 @@ extension AgentService {
     func applyPeriodicAgentState(
         _ resources: AgentResources,
         dependencyObservations: [NodeDependencyObservation]?,
+        hostResourceTelemetry: HostResourceTelemetry? = nil,
         to agent: Agent,
         at instant: ClusterInstant
     ) -> Bool {
@@ -622,6 +624,18 @@ extension AgentService {
                             "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
                         ])
                 }
+            }
+        }
+        if let hostResourceTelemetry {
+            if let agentID = agent.id?.uuidString {
+                Telemetry.recordHostResourceTelemetry(
+                    agentID: agentID,
+                    telemetry: hostResourceTelemetry)
+            }
+            if agent.resourceTelemetry != hostResourceTelemetry {
+                agent.resourceTelemetry = hostResourceTelemetry
+                agent.resourceTelemetryReceivedAt = now
+                changed = true
             }
         }
         if agent.status != .online {

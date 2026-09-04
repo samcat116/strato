@@ -67,6 +67,25 @@ final class AgentServiceLifecycleTests {
         }
     }
 
+    @Test("heartbeat monitor rejects a legacy future heartbeat")
+    func heartbeatMonitorRejectsFutureHeartbeat() async throws {
+        try await withTestApp { app in
+            let instant = ClusterInstant.testing(Date(timeIntervalSince1970: 1_000))
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Future Heartbeat Org")
+            let agent = try await builder.createAgent(
+                named: "future-heartbeat-agent",
+                status: .online,
+                lastHeartbeat: instant.date.addingTimeInterval(120),
+                organizationScope: .organization(try organization.requireID()))
+
+            await app.agentMaintenance.checkStaleAgents(at: instant)
+
+            let persisted = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(persisted.status == .offline)
+        }
+    }
+
     @Test("app shutdown cancels the agent maintenance heartbeat loop")
     func shutdownCancelsHeartbeat() async throws {
         let app = try await Application.makeForTesting()

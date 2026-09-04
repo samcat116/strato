@@ -78,6 +78,7 @@ struct ClusterClockTests {
             "Models/SnapshotArtifact.swift",
             "Services/AgentMaintenanceLoop.swift",
             "Services/ResourceMutation.swift",
+            "Services/WorkloadObservedMerge.swift",
             "Services/Sweeps/AgentAutoUpdateSweep.swift",
             "Services/Sweeps/OrphanedTerminatingSweep.swift",
             "Services/VMCommandExecutionService.swift",
@@ -94,6 +95,7 @@ struct ClusterClockTests {
             "overdueForConvergence(at now: Date",
             "expired(at now: Date",
             "let now = Date()",
+            "resourceTelemetryReceivedAt = Date()",
         ]
 
         for file in files {

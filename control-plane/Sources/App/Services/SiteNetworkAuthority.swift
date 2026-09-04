@@ -137,6 +137,7 @@ enum SiteNetworkAuthority {
         if let capability = capabilityFault(controller, at: instant) { return capability }
         guard let lastHeartbeat = controller.lastHeartbeat else { return .offline(staleFor: nil) }
         let staleFor = instant.date.timeIntervalSince(lastHeartbeat)
+        guard staleFor >= 0 else { return .offline(staleFor: nil) }
         guard staleFor > offlineGrace else { return nil }
         return .offline(staleFor: staleFor)
     }

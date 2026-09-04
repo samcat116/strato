@@ -1,6 +1,8 @@
 import Fluent
 import Foundation
+import Metrics
 import NIOConcurrencyHelpers
+import SQLKit
 import Tracing
 import Vapor
 
@@ -43,17 +45,99 @@ struct IAMDecisionLogConfig: Sendable {
 
 /// One decision waiting to be written. The row is built in the drain, not at
 /// the check site, so the request path pays nothing beyond the enqueue.
-enum PendingIAMDecision: Sendable {
-    /// A decision the evaluator reached.
-    case evaluated(IAMDecisionRecord)
-    /// A request refused because a restricted credential reached a surface the
-    /// evaluator does not gate — the only credential denial left without a
-    /// Cedar verdict behind it, recorded so every authorization refusal is
-    /// attributable here (STR-116, STR-115).
-    case credentialRestricted(
+struct PendingIAMDecision: Sendable {
+    enum Value: Sendable {
+        /// A decision the evaluator reached.
+        case evaluated(IAMDecisionRecord)
+        /// A request refused because a restricted credential reached a surface the
+        /// evaluator does not gate — the only credential denial left without a
+        /// Cedar verdict behind it, recorded so every authorization refusal is
+        /// attributable here (STR-116, STR-115).
+        case credentialRestricted(
+            subject: String,
+            credential: CredentialReference?,
+            context: IAMCheckContext)
+    }
+
+    let id: UUID
+    let timestamp: Date
+    let value: Value
+
+    private init(value: Value, id: UUID = UUID(), timestamp: Date = Date()) {
+        self.id = id
+        self.timestamp = timestamp
+        self.value = value
+    }
+
+    static func evaluated(_ record: IAMDecisionRecord) -> Self {
+        Self(value: .evaluated(record))
+    }
+
+    static func credentialRestricted(
         subject: String,
         credential: CredentialReference?,
-        context: IAMCheckContext)
+        context: IAMCheckContext
+    ) -> Self {
+        Self(
+            value: .credentialRestricted(
+                subject: subject, credential: credential, context: context))
+    }
+}
+
+protocol IAMDecisionBackend: Sendable {
+    func write(_ entries: [IAMDecisionLog]) async -> Bool
+}
+
+final class DatabaseIAMDecisionBackend: IAMDecisionBackend, Sendable {
+    private let app: Application
+
+    init(app: Application) {
+        self.app = app
+    }
+
+    func write(_ entries: [IAMDecisionLog]) async -> Bool {
+        guard !entries.isEmpty else { return true }
+        // `liveDB`, not `app.db`: a recording cancelled by shutdown's drain
+        // must bail rather than force-unwrap cleared application storage.
+        guard let db = app.liveDB else {
+            app.logger.warning(
+                "Cannot write IAM decision log because the database is unavailable during shutdown",
+                metadata: ["count": .stringConvertible(entries.count)])
+            return false
+        }
+        guard let sql = db as? any SQLDatabase else {
+            app.logger.error("IAM decision-log idempotency requires a SQL database")
+            return false
+        }
+        do {
+            let insert = sql.insert(into: IAMDecisionLog.schema)
+                .columns(
+                    "id", "request_id", "path", "method", "subject", "action", "node_type",
+                    "node_id", "organization_id", "decision", "determining_policies", "tier",
+                    "cedar_errors", "policy_version", "skipped_conditioned_bindings",
+                    "credential_type", "credential_id", "created_at")
+            for entry in entries {
+                insert.values(
+                    SQLBind(entry.id), SQLBind(entry.requestID), SQLBind(entry.path),
+                    SQLBind(entry.method), SQLBind(entry.subject), SQLBind(entry.action),
+                    SQLBind(entry.nodeType), SQLBind(entry.nodeID), SQLBind(entry.organizationID),
+                    SQLBind(entry.decision), SQLBind(entry.determiningPoliciesJSON),
+                    SQLBind(entry.tier), SQLBind(entry.cedarErrors), SQLBind(entry.policyVersion),
+                    SQLBind(entry.skippedConditionedBindings), SQLBind(entry.credentialType),
+                    SQLBind(entry.credentialID), SQLBind(entry.createdAt))
+            }
+            try await insert.ignoringConflicts(with: "id").run()
+            return true
+        } catch {
+            app.logger.error(
+                "Failed to write IAM decision log entries",
+                metadata: [
+                    "count": .stringConvertible(entries.count),
+                    "error": .string("\(error)"),
+                ])
+            return false
+        }
+    }
 }
 
 /// Why a restricted credential was refused without an evaluator decision. Each
@@ -141,6 +225,7 @@ actor IAMDecisionQueue {
     /// empty `pending` is not the same as "everything is written": the batch
     /// in the air belongs to whoever claimed it.
     private var inFlight = 0
+    private var inFlightRecords = 0
 
     init(maxQueueDepth: Int, maxBatchSize: Int) {
         self.maxQueueDepth = max(1, maxQueueDepth)
@@ -184,12 +269,14 @@ actor IAMDecisionQueue {
         let batch = Array(pending.prefix(maxBatchSize))
         pending.removeFirst(batch.count)
         inFlight += 1
+        inFlightRecords += batch.count
         return batch
     }
 
     /// Report a claimed batch written (or given up on).
-    func finishBatch() {
+    func finishBatch(recordCount: Int) {
         inFlight = max(0, inFlight - 1)
+        inFlightRecords = max(0, inFlightRecords - recordCount)
     }
 
     /// Nothing queued and nothing in the air — the condition `flush` waits for.
@@ -204,8 +291,16 @@ actor IAMDecisionQueue {
     }
 
     /// Snapshot for tests and diagnostics.
-    var stats: (queued: Int, draining: Bool, shed: Int) {
-        (pending.count, draining, shedTotal)
+    var stats:
+        (
+            queued: Int,
+            inFlight: Int,
+            inFlightRecords: Int,
+            draining: Bool,
+            shed: Int
+        )
+    {
+        (pending.count, inFlight, inFlightRecords, draining, shedTotal)
     }
 }
 
@@ -231,6 +326,9 @@ final class IAMDecisionRecorder: Sendable {
     private let app: Application
     let config: IAMDecisionLogConfig
     private let logger: Logger
+    private let backend: any IAMDecisionBackend
+    private let retryPolicy: SecurityRecordRetryPolicy
+    private let metricsFactory: (any MetricsFactory)?
     private let retentionTask = NIOLockedValueBox<Task<Void, Never>?>(nil)
     /// The buffer feeding the drain; keeps recording off the request path and
     /// off all but one connection.
@@ -241,10 +339,19 @@ final class IAMDecisionRecorder: Sendable {
     /// number rather than as a slow endpoint nobody profiled.
     let writeCount = NIOLockedValueBox<Int>(0)
 
-    init(app: Application, config: IAMDecisionLogConfig) {
+    init(
+        app: Application,
+        config: IAMDecisionLogConfig,
+        backend: (any IAMDecisionBackend)? = nil,
+        retryPolicy: SecurityRecordRetryPolicy = .standard,
+        metricsFactory: (any MetricsFactory)? = nil
+    ) {
         self.app = app
         self.config = config
         self.logger = app.logger
+        self.backend = backend ?? DatabaseIAMDecisionBackend(app: app)
+        self.retryPolicy = retryPolicy
+        self.metricsFactory = metricsFactory
         self.queue = IAMDecisionQueue(
             maxQueueDepth: config.maxQueueDepth, maxBatchSize: config.maxBatchSize)
         if config.maxBatchSize > IAMDecisionQueue.maxSupportedBatchSize {
@@ -291,6 +398,12 @@ final class IAMDecisionRecorder: Sendable {
         guard config.recordDecisions, !decisions.isEmpty else { return }
         let outcome = await queue.enqueue(decisions)
         if outcome.shed > 0 {
+            Telemetry.securityRecordsLost(
+                stream: .iamDecision,
+                cause: .queueCountLimit,
+                destination: .all,
+                count: outcome.shed,
+                factory: metricsFactory)
             // Log the first drop and then every hundredth: a saturated queue
             // is a standing condition, not an incident to repeat per decision.
             let total = outcome.shedTotal
@@ -321,8 +434,8 @@ final class IAMDecisionRecorder: Sendable {
     /// recording never holds more than one connection.
     private func drainQueue() async {
         while !Task.isCancelled, let batch = await queue.nextBatch() {
-            await write(batch)
-            await queue.finishBatch()
+            await deliverWithRetry(batch)
+            await queue.finishBatch(recordCount: batch.count)
         }
         // Cancelled (shutdown's grace period expired) rather than run dry:
         // retire the drain explicitly, so anything enqueued afterwards starts
@@ -332,13 +445,39 @@ final class IAMDecisionRecorder: Sendable {
         }
     }
 
-    /// Build every row in the batch and write them together. Internal so tests
-    /// can drive a pass directly. Never throws: a recording failure is a log
-    /// line, never a request failure (the request's verdict was already
-    /// enforced inline).
-    func write(_ decisions: [PendingIAMDecision]) async {
-        guard !decisions.isEmpty else { return }
-        await save(decisions.map(entry(for:)))
+    /// One database attempt. The retry loop calls this with a fresh set of
+    /// models each time, avoiding any Fluent state retained by a failed create.
+    private func write(_ decisions: [PendingIAMDecision]) async -> Bool {
+        guard !decisions.isEmpty else { return true }
+        writeCount.withLockedValue { $0 += 1 }
+        return await backend.write(decisions.map(entry(for:)))
+    }
+
+    private func deliverWithRetry(
+        _ decisions: [PendingIAMDecision],
+        retryFailures: Bool = true,
+        deadline: ContinuousClock.Instant? = nil
+    ) async {
+        let outcome = await retrySecurityRecordDelivery(
+            decisions,
+            policy: retryFailures ? retryPolicy : SecurityRecordRetryPolicy(delays: []),
+            deadline: deadline
+        ) { [self] pending in
+            await write(pending) ? [] : pending
+        }
+        guard !outcome.undelivered.isEmpty else { return }
+        logger.error(
+            "IAM decision-log delivery exhausted retries; decisions were lost",
+            metadata: [
+                "count": .stringConvertible(outcome.undelivered.count),
+                "attempts": .stringConvertible(outcome.attempts),
+            ])
+        Telemetry.securityRecordsLost(
+            stream: .iamDecision,
+            cause: .deliveryFailure,
+            destination: .database,
+            count: outcome.undelivered.count,
+            factory: metricsFactory)
     }
 
     /// Write everything queued and return once the queue is idle — the
@@ -350,32 +489,53 @@ final class IAMDecisionRecorder: Sendable {
     /// in the air would hand callers the same false "everything is written" an
     /// empty queue used to imply. Bounded by `timeout`, so a wedged database
     /// cannot stall shutdown.
-    func flush(waitingUpTo timeout: Duration = .seconds(10)) async {
+    func flush(
+        waitingUpTo timeout: Duration = .seconds(10),
+        recordIncompleteShutdownLoss: Bool = false
+    ) async {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
             if let batch = await queue.nextBatch(endDrainWhenEmpty: false) {
-                await write(batch)
-                await queue.finishBatch()
+                // Match the audit service: shutdown gets one final attempt so
+                // its five-second budget cannot expand into the full retry
+                // schedule. Ordinary drains retain all eight attempts.
+                await deliverWithRetry(
+                    batch,
+                    retryFailures: !recordIncompleteShutdownLoss,
+                    deadline: deadline)
+                await queue.finishBatch(recordCount: batch.count)
                 continue
             }
             if await queue.isIdle { return }
             try? await Task.sleep(for: .milliseconds(5))
         }
         let remaining = await queue.stats
-        if remaining.queued > 0 {
+        if remaining.queued > 0 || remaining.inFlight > 0 {
+            if recordIncompleteShutdownLoss {
+                Telemetry.securityRecordsLost(
+                    stream: .iamDecision,
+                    cause: .incompleteShutdown,
+                    destination: .all,
+                    count: remaining.queued + remaining.inFlightRecords,
+                    factory: metricsFactory)
+            }
             logger.warning(
-                "IAM decision-log flush timed out with decisions still queued",
-                metadata: ["queued": .stringConvertible(remaining.queued)])
+                "IAM decision-log flush timed out with decisions still pending",
+                metadata: [
+                    "queued": .stringConvertible(remaining.queued),
+                    "in_flight_batches": .stringConvertible(remaining.inFlight),
+                ])
         }
     }
 
     private func entry(for decision: PendingIAMDecision) -> IAMDecisionLog {
-        switch decision {
+        let entry: IAMDecisionLog
+        switch decision.value {
         case .evaluated(let record):
-            return entry(for: record)
+            entry = self.entry(for: record)
         case .credentialRestricted(let subject, let credential, let context):
-            let entry = IAMDecisionLog()
+            entry = IAMDecisionLog()
             entry.requestID = context.requestID
             entry.path = context.path
             entry.method = context.method
@@ -384,8 +544,10 @@ final class IAMDecisionRecorder: Sendable {
             entry.tier = CedarCheckDecision.credentialTier
             entry.credentialType = credential?.kind.rawValue
             entry.credentialID = credential?.id
-            return entry
         }
+        entry.id = decision.id
+        entry.createdAt = decision.timestamp
+        return entry
     }
 
     private func entry(for record: IAMDecisionRecord) -> IAMDecisionLog {
@@ -422,26 +584,6 @@ final class IAMDecisionRecorder: Sendable {
         entry.credentialID = record.credential?.id
 
         return entry
-    }
-
-    private func save(_ entries: [IAMDecisionLog]) async {
-        // `liveDB`, not `app.db`: a recording cancelled by shutdown's drain
-        // must bail rather than force-unwrap cleared storage (the
-        // FluentProvider teardown crash, see `Application.liveDB`).
-        guard let db = app.liveDB, !entries.isEmpty else { return }
-        writeCount.withLockedValue { $0 += 1 }
-        do {
-            // One statement for the whole batch — Fluent's array `create`
-            // is a multi-row INSERT.
-            try await entries.create(on: db)
-        } catch {
-            logger.error(
-                "Failed to write IAM decision log entries",
-                metadata: [
-                    "count": .stringConvertible(entries.count),
-                    "error": .string("\(error)"),
-                ])
-        }
     }
 
     // MARK: Retention sweep
@@ -550,7 +692,8 @@ struct IAMDecisionLogLifecycleHandler: LifecycleHandler {
         // drain task is tracked by the background-task registry, but that
         // registry's own drain is bounded and runs from a different lifecycle
         // handler, so an explicit flush here leaves nothing behind either way.
-        await recorder.flush(waitingUpTo: .seconds(5))
+        await recorder.flush(
+            waitingUpTo: .seconds(5), recordIncompleteShutdownLoss: true)
         recorder.shutdown()
     }
 }

@@ -1,8 +1,10 @@
 import AsyncHTTPClient
 import Fluent
 import Foundation
+import Metrics
 import NIOConcurrencyHelpers
 import NIOCore
+import SQLKit
 import Tracing
 import Vapor
 
@@ -56,6 +58,10 @@ enum AuditEventType: String, Sendable {
 /// The value handed to audit backends. Decoupled from the `AuditEvent` Fluent
 /// model so non-database backends (Loki, webhook, log) can encode it directly.
 struct AuditRecord: Content, Sendable {
+    /// Stable identity generated at the producer. Every destination sees the
+    /// same value on every retry, so an ambiguous acknowledgement can be
+    /// replayed without creating a second logical event.
+    var id: UUID = UUID()
     var eventType: String
     var timestamp: Date = Date()
     var userID: UUID?
@@ -174,21 +180,45 @@ struct AuditConfig: Sendable {
 
 // MARK: - Backend protocol
 
-/// A destination audit events are shipped to. Writes must never throw: a
-/// failing audit destination logs its own error and must not fail the request
+/// A destination audit events are shipped to. Failures are values rather than
+/// thrown errors: the background drain retries them without failing the request
 /// that produced the event.
 protocol AuditBackend: Sendable {
     var name: String { get }
-    func write(_ record: AuditRecord) async
+    var metricDestination: Telemetry.SecurityRecordDestination { get }
+    /// Return true only when this destination accepted the record.
+    func write(_ record: AuditRecord) async -> Bool
     /// Ship a drained batch. The default writes them one at a time; backends
     /// with a cheaper bulk form (the database's multi-row insert) override it.
-    func write(_ records: [AuditRecord]) async
+    /// The return value contains only records that still need delivery.
+    func write(_ records: [AuditRecord]) async -> [AuditRecord]
 }
 
 extension AuditBackend {
-    func write(_ records: [AuditRecord]) async {
-        for record in records {
-            await write(record)
+    func write(_ records: [AuditRecord]) async -> [AuditRecord] {
+        guard !records.isEmpty else { return [] }
+        let maximumConcurrentWrites = 8
+        return await withTaskGroup(of: (Int, Bool).self) { group in
+            var nextIndex = 0
+            var undelivered: [(Int, AuditRecord)] = []
+
+            func submit(_ index: Int) {
+                let record = records[index]
+                group.addTask { (index, await write(record)) }
+            }
+
+            while nextIndex < min(maximumConcurrentWrites, records.count) {
+                submit(nextIndex)
+                nextIndex += 1
+            }
+            while let (index, delivered) = await group.next() {
+                if !delivered { undelivered.append((index, records[index])) }
+                if nextIndex < records.count {
+                    submit(nextIndex)
+                    nextIndex += 1
+                }
+            }
+            return undelivered.sorted { $0.0 < $1.0 }.map(\.1)
         }
     }
 }
@@ -209,35 +239,60 @@ private let auditJSONEncoder: JSONEncoder = {
 /// remain within that write operation; no mutable model crosses a child task.
 final class DatabaseAuditBackend: AuditBackend, Sendable {
     let name = "database"
+    let metricDestination = Telemetry.SecurityRecordDestination.database
     private let app: Application
 
     init(app: Application) {
         self.app = app
     }
 
-    func write(_ record: AuditRecord) async {
-        await write([record])
+    func write(_ record: AuditRecord) async -> Bool {
+        await write([record]).isEmpty
     }
 
     /// One multi-row insert per drained batch. Fluent's collection `create`
     /// issues a single statement, so a burst of mutations costs one round trip
     /// rather than one per event.
-    func write(_ records: [AuditRecord]) async {
-        guard !records.isEmpty else { return }
+    func write(_ records: [AuditRecord]) async -> [AuditRecord] {
+        guard !records.isEmpty else { return [] }
         // `liveDB`, not `app.db`: the drain runs in a background task that
         // shutdown may have cancelled, and reading `app.db` after storage is
         // cleared force-unwraps nil (see `Application.liveDB`).
         guard let db = app.liveDB else {
             app.logger.warning(
-                "Dropping audit events because the database is unavailable during shutdown",
+                "Cannot persist audit events because the database is unavailable during shutdown",
                 metadata: [
                     "count": .stringConvertible(records.count),
                     "eventTypes": .string(Set(records.map(\.eventType)).sorted().joined(separator: ",")),
                 ])
-            return
+            return records
+        }
+        guard let sql = db as? any SQLDatabase else {
+            app.logger.error("Audit event idempotency requires a SQL database")
+            return records
         }
         do {
-            try await records.map(AuditEvent.init(from:)).create(on: db)
+            let insert = sql.insert(into: AuditEvent.schema)
+                .columns(
+                    "id", "event_type", "user_id", "username", "api_key_id",
+                    "organization_id", "method", "path", "status", "resource_type",
+                    "resource_id", "action", "source_ip", "admin_bypass", "metadata",
+                    "created_at")
+            for record in records {
+                let metadataJSON = record.metadata.flatMap { metadata -> String? in
+                    guard let data = try? JSONEncoder().encode(metadata) else { return nil }
+                    return String(data: data, encoding: .utf8)
+                }
+                insert.values(
+                    SQLBind(record.id), SQLBind(record.eventType), SQLBind(record.userID),
+                    SQLBind(record.username), SQLBind(record.apiKeyID),
+                    SQLBind(record.organizationID), SQLBind(record.method), SQLBind(record.path),
+                    SQLBind(record.status), SQLBind(record.resourceType), SQLBind(record.resourceID),
+                    SQLBind(record.action), SQLBind(record.sourceIP), SQLBind(record.adminBypass),
+                    SQLBind(metadataJSON), SQLBind(record.timestamp))
+            }
+            try await insert.ignoringConflicts(with: "id").run()
+            return []
         } catch {
             app.logger.error(
                 "Failed to persist audit events",
@@ -246,6 +301,7 @@ final class DatabaseAuditBackend: AuditBackend, Sendable {
                     "eventTypes": .string(Set(records.map(\.eventType)).sorted().joined(separator: ",")),
                     "error": .string(String(reflecting: error)),
                 ])
+            return records
         }
     }
 }
@@ -257,10 +313,12 @@ final class DatabaseAuditBackend: AuditBackend, Sendable {
 /// export is enabled).
 struct LogAuditBackend: AuditBackend {
     let name = "log"
+    let metricDestination = Telemetry.SecurityRecordDestination.log
     let logger: Logger
 
-    func write(_ record: AuditRecord) async {
+    func write(_ record: AuditRecord) async -> Bool {
         var metadata: Logger.Metadata = [
+            "eventID": .string(record.id.uuidString),
             "eventType": .string(record.eventType),
             // The logger's own timestamp is delivery time. Preserve producer
             // time explicitly so a log-only backend can reconstruct causal
@@ -287,6 +345,7 @@ struct LogAuditBackend: AuditBackend {
             }
         }
         logger.info("audit_event", metadata: metadata)
+        return true
     }
 }
 
@@ -299,6 +358,7 @@ struct LogAuditBackend: AuditBackend {
 /// its shared client and requests are method-local values.
 final class LokiAuditBackend: AuditBackend, Sendable {
     let name = "loki"
+    let metricDestination = Telemetry.SecurityRecordDestination.loki
     private let endpoint: String
     private let httpClient: HTTPClient
     private let logger: Logger
@@ -309,7 +369,7 @@ final class LokiAuditBackend: AuditBackend, Sendable {
         self.logger = logger
     }
 
-    func write(_ record: AuditRecord) async {
+    func write(_ record: AuditRecord) async -> Bool {
         do {
             let line = String(data: try auditJSONEncoder.encode(record), encoding: .utf8) ?? "{}"
             let push = LokiPushRequest(streams: [
@@ -335,9 +395,12 @@ final class LokiAuditBackend: AuditBackend, Sendable {
                 logger.error(
                     "Failed to push audit event to Loki",
                     metadata: ["status": .stringConvertible(response.status.code)])
+                return false
             }
+            return true
         } catch {
             logger.error("Error pushing audit event to Loki: \(error)")
+            return false
         }
     }
 }
@@ -350,6 +413,7 @@ final class LokiAuditBackend: AuditBackend, Sendable {
 /// its shared client and requests are method-local values.
 final class WebhookAuditBackend: AuditBackend, Sendable {
     let name = "webhook"
+    let metricDestination = Telemetry.SecurityRecordDestination.webhook
     private let url: String
     private let httpClient: HTTPClient
     private let logger: Logger
@@ -360,20 +424,24 @@ final class WebhookAuditBackend: AuditBackend, Sendable {
         self.logger = logger
     }
 
-    func write(_ record: AuditRecord) async {
+    func write(_ record: AuditRecord) async -> Bool {
         do {
             var request = HTTPClientRequest(url: url)
             request.method = .POST
             request.headers.add(name: "Content-Type", value: "application/json")
+            request.headers.add(name: "Idempotency-Key", value: record.id.uuidString)
             request.body = .bytes(ByteBuffer(data: try auditJSONEncoder.encode(record)))
             let response = try await httpClient.execute(request, timeout: .seconds(5))
             if response.status.code >= 400 {
                 logger.error(
                     "Audit webhook rejected event",
                     metadata: ["status": .stringConvertible(response.status.code)])
+                return false
             }
+            return true
         } catch {
             logger.error("Error delivering audit event to webhook: \(error)")
+            return false
         }
     }
 }
@@ -426,6 +494,7 @@ actor AuditEventQueue {
     /// empty `pending` is not the same as "everything is written": the batch
     /// in the air belongs to whoever claimed it.
     private var inFlight = 0
+    private var inFlightRecords = 0
 
     /// Ceiling on how many events one batch may carry.
     ///
@@ -502,12 +571,14 @@ actor AuditEventQueue {
         pending.removeFirst(batchCount)
         pendingBytes = max(0, pendingBytes - batchBytes)
         inFlight += 1
+        inFlightRecords += queuedBatch.count
         return queuedBatch.map(\.record)
     }
 
     /// Report a claimed batch delivered (or given up on).
-    func finishBatch() {
+    func finishBatch(recordCount: Int) {
         inFlight = max(0, inFlight - 1)
+        inFlightRecords = max(0, inFlightRecords - recordCount)
     }
 
     /// Nothing queued and nothing in the air — the condition `flush` waits for.
@@ -522,12 +593,26 @@ actor AuditEventQueue {
     }
 
     /// Snapshot for tests and diagnostics.
-    var stats: (queued: Int, queuedBytes: Int, inFlight: Int, draining: Bool, shed: Int) {
-        (pending.count, pendingBytes, inFlight, draining, shedTotal)
+    var stats:
+        (
+            queued: Int,
+            queuedBytes: Int,
+            inFlight: Int,
+            inFlightRecords: Int,
+            draining: Bool,
+            shed: Int
+        )
+    {
+        (pending.count, pendingBytes, inFlight, inFlightRecords, draining, shedTotal)
     }
 }
 
 // MARK: - Service
+
+private struct AuditDestination: Sendable {
+    let backend: any AuditBackend
+    let queue: AuditEventQueue
+}
 
 /// Fans audit events out to the configured backends.
 ///
@@ -541,9 +626,11 @@ actor AuditEventQueue {
 /// `NIOLockedValueBox`.
 final class AuditService: Sendable {
     let config: AuditConfig
-    private let backends: [any AuditBackend]
+    private let destinations: [AuditDestination]
     private let logger: Logger
     private let app: Application
+    private let retryPolicy: SecurityRecordRetryPolicy
+    private let metricsFactory: (any MetricsFactory)?
     /// The buffer feeding the background drain; unused in synchronous mode.
     let queue: AuditEventQueue
 
@@ -552,15 +639,23 @@ final class AuditService: Sendable {
     private let retentionTask = NIOLockedValueBox<Task<Void, Never>?>(nil)
 
     var isEnabled: Bool {
-        config.enabled && !backends.isEmpty
+        config.enabled && !destinations.isEmpty
     }
 
     /// - Parameter backends: overrides the destinations named by `config`;
     ///   the seam tests use to observe delivery without a live Loki or SIEM.
-    init(app: Application, config: AuditConfig, backends backendOverride: [any AuditBackend]? = nil) {
+    init(
+        app: Application,
+        config: AuditConfig,
+        backends backendOverride: [any AuditBackend]? = nil,
+        retryPolicy: SecurityRecordRetryPolicy = .standard,
+        metricsFactory: (any MetricsFactory)? = nil
+    ) {
         self.config = config
         self.logger = app.logger
         self.app = app
+        self.retryPolicy = retryPolicy
+        self.metricsFactory = metricsFactory
         self.queue = AuditEventQueue(
             maxQueueDepth: config.maxQueueDepth,
             maxQueueBytes: config.maxQueueBytes,
@@ -575,13 +670,10 @@ final class AuditService: Sendable {
                 ])
         }
 
-        if let backendOverride {
-            self.backends = backendOverride
-            return
-        }
-
         var backends: [any AuditBackend] = []
-        if config.enabled {
+        if let backendOverride {
+            backends = backendOverride
+        } else if config.enabled {
             for backendName in config.backendNames {
                 switch backendName {
                 case "database":
@@ -612,7 +704,15 @@ final class AuditService: Sendable {
                 }
             }
         }
-        self.backends = backends
+        self.destinations = backends.map { backend in
+            AuditDestination(
+                backend: backend,
+                queue: AuditEventQueue(
+                    maxQueueDepth: config.maxQueueDepth,
+                    maxQueueBytes: config.maxQueueBytes,
+                    maxBatchSize: config.maxBatchSize,
+                    maxBatchBytes: config.maxBatchBytes))
+        }
     }
 
     /// Record an event. Returns as soon as the event is buffered unless
@@ -620,7 +720,10 @@ final class AuditService: Sendable {
     func record(_ record: AuditRecord) async {
         guard isEnabled else { return }
         guard !config.synchronousWrites else {
-            await deliver([record])
+            // This explicit compatibility/testing mode remains one inline
+            // attempt: opting into synchronous delivery must not add an
+            // eleven-second retry budget to an API request.
+            await deliverSynchronously([record])
             return
         }
         await enqueue(record)
@@ -641,6 +744,17 @@ final class AuditService: Sendable {
     private func enqueue(_ record: AuditRecord) async {
         switch await queue.enqueue(record) {
         case .shed(let total, let reason):
+            let cause: Telemetry.SecurityRecordLossCause =
+                switch reason {
+                case .countLimit: .queueCountLimit
+                case .byteLimit: .queueByteLimit
+                case .recordTooLarge: .recordTooLarge
+                }
+            Telemetry.securityRecordsLost(
+                stream: .audit,
+                cause: cause,
+                destination: .all,
+                factory: metricsFactory)
             // Log the first drop and then every hundredth: a saturated queue
             // is a standing condition, not an incident to repeat per event.
             if total == 1 || total % 100 == 0 {
@@ -669,19 +783,13 @@ final class AuditService: Sendable {
         }
     }
 
-    /// Ship queued events until the buffer is empty. Only one drain task runs
-    /// at a time — the queue hands out the drain flag — so the fan-out cannot
-    /// outgrow one in-flight write per backend.
-    ///
-    /// That bounds concurrency; it does not promise delivery order. A `flush`
-    /// (shutdown, or a test hook) claims batches alongside a live drain, so two
-    /// `deliver` calls can briefly overlap and a backend can see batches out of
-    /// order. Nothing is lost or duplicated — `nextBatch` removes its prefix
-    /// atomically — and the trail is read back ordered by timestamp.
+    /// Fan queued events into one bounded queue per destination. A slow SIEM
+    /// advances independently and cannot hold the database behind its retry
+    /// schedule.
     private func drainQueue() async {
         while !Task.isCancelled, let batch = await queue.nextBatch() {
-            await deliver(batch)
-            await queue.finishBatch()
+            await enqueueForDelivery(batch)
+            await queue.finishBatch(recordCount: batch.count)
         }
         // Cancelled (shutdown's grace period expired) rather than run dry:
         // retire the drain explicitly, so anything enqueued afterwards starts
@@ -692,15 +800,108 @@ final class AuditService: Sendable {
         }
     }
 
-    /// Write one batch to every configured backend, concurrently: the
-    /// destinations are independent, and the database insert must not queue
-    /// behind a five-second HTTP timeout.
-    private func deliver(_ records: [AuditRecord]) async {
+    private func enqueueForDelivery(_ records: [AuditRecord]) async {
         guard !records.isEmpty else { return }
-        await withTaskGroup(of: Void.self) { group in
-            for backend in backends {
-                group.addTask { await backend.write(records) }
+        for destination in destinations {
+            var startDrain = false
+            for record in records {
+                switch await destination.queue.enqueue(record) {
+                case .enqueued(let shouldStart):
+                    startDrain = startDrain || shouldStart
+                case .shed(let total, let reason):
+                    recordDestinationShed(
+                        total: total, reason: reason, backend: destination.backend)
+                }
             }
+            if startDrain {
+                app.backgroundTasks.spawn { [self] in
+                    await ServiceContext.$current.withValue(nil) {
+                        await drain(destination)
+                    }
+                }
+            }
+        }
+    }
+
+    private func drain(_ destination: AuditDestination) async {
+        while !Task.isCancelled, let batch = await destination.queue.nextBatch() {
+            await deliver(batch, to: destination.backend)
+            await destination.queue.finishBatch(recordCount: batch.count)
+        }
+        if Task.isCancelled {
+            await destination.queue.endDrain()
+        }
+    }
+
+    private func deliver(_ records: [AuditRecord], to backend: any AuditBackend) async {
+        let outcome = await retrySecurityRecordDelivery(
+            records, policy: retryPolicy, write: backend.write)
+        guard !outcome.undelivered.isEmpty else { return }
+        logger.error(
+            "Audit backend exhausted delivery retries; records were lost",
+            metadata: [
+                "backend": .string(backend.name),
+                "count": .stringConvertible(outcome.undelivered.count),
+                "attempts": .stringConvertible(outcome.attempts),
+            ])
+        Telemetry.securityRecordsLost(
+            stream: .audit,
+            cause: .deliveryFailure,
+            destination: backend.metricDestination,
+            count: outcome.undelivered.count,
+            factory: metricsFactory)
+    }
+
+    private func deliverSynchronously(_ records: [AuditRecord]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for destination in destinations {
+                group.addTask { [logger, metricsFactory] in
+                    let backend = destination.backend
+                    let outcome = await retrySecurityRecordDelivery(
+                        records,
+                        policy: SecurityRecordRetryPolicy(delays: []),
+                        write: backend.write)
+                    guard !outcome.undelivered.isEmpty else { return }
+                    logger.error(
+                        "Audit backend exhausted delivery retries; records were lost",
+                        metadata: [
+                            "backend": .string(backend.name),
+                            "count": .stringConvertible(outcome.undelivered.count),
+                            "attempts": .stringConvertible(outcome.attempts),
+                        ])
+                    Telemetry.securityRecordsLost(
+                        stream: .audit,
+                        cause: .deliveryFailure,
+                        destination: backend.metricDestination,
+                        count: outcome.undelivered.count,
+                        factory: metricsFactory)
+                }
+            }
+        }
+    }
+
+    private func recordDestinationShed(
+        total: Int, reason: AuditEventQueue.ShedReason, backend: any AuditBackend
+    ) {
+        let cause: Telemetry.SecurityRecordLossCause =
+            switch reason {
+            case .countLimit: .queueCountLimit
+            case .byteLimit: .queueByteLimit
+            case .recordTooLarge: .recordTooLarge
+            }
+        Telemetry.securityRecordsLost(
+            stream: .audit,
+            cause: cause,
+            destination: backend.metricDestination,
+            factory: metricsFactory)
+        if total == 1 || total % 100 == 0 {
+            logger.warning(
+                "Audit destination shed events under backpressure",
+                metadata: [
+                    "backend": .string(backend.name),
+                    "shed_total": .stringConvertible(total),
+                    "reason": .string(reason.rawValue),
+                ])
         }
     }
 
@@ -714,28 +915,81 @@ final class AuditService: Sendable {
     /// an empty queue used to imply. So this writes what it can claim and then
     /// waits out anyone else's batch, polling as `BackgroundTaskRegistry.drain`
     /// does. Bounded by `timeout`, so a wedged backend cannot stall shutdown.
-    func flush(waitingUpTo timeout: Duration = .seconds(10)) async {
+    func flush(
+        waitingUpTo timeout: Duration = .seconds(10),
+        recordIncompleteShutdownLoss: Bool = false
+    ) async {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
             if let batch = await queue.nextBatch(endDrainWhenEmpty: false) {
-                await deliver(batch)
-                await queue.finishBatch()
+                await enqueueForDelivery(batch)
+                await queue.finishBatch(recordCount: batch.count)
                 continue
             }
-            if await queue.isIdle { return }
+            // Establish that no source drain still owns a batch before
+            // checking the destinations. Otherwise that drain can fan out
+            // after the destination check and make this flush return while a
+            // destination has newly pending work.
+            if await queue.isIdle {
+                var destinationsIdle = true
+                for destination in destinations where !(await destination.queue.isIdle) {
+                    destinationsIdle = false
+                    break
+                }
+                if destinationsIdle { return }
+            }
             try? await Task.sleep(for: .milliseconds(5))
         }
-        let remaining = await queue.stats
-        if remaining.queued > 0 || remaining.inFlight > 0 {
+        let sourceRemaining = await queue.stats
+        var destinationRemaining: [(any AuditBackend, queued: Int, inFlight: Int)] = []
+        for destination in destinations {
+            let stats = await destination.queue.stats
+            if stats.queued > 0 || stats.inFlight > 0 {
+                destinationRemaining.append(
+                    (destination.backend, stats.queued, stats.inFlightRecords))
+            }
+        }
+        if sourceRemaining.queued > 0 || sourceRemaining.inFlight > 0
+            || !destinationRemaining.isEmpty
+        {
+            if recordIncompleteShutdownLoss {
+                let sourceCount = sourceRemaining.queued + sourceRemaining.inFlightRecords
+                if sourceCount > 0 {
+                    Telemetry.securityRecordsLost(
+                        stream: .audit,
+                        cause: .incompleteShutdown,
+                        destination: .all,
+                        count: sourceCount,
+                        factory: metricsFactory)
+                }
+                for (backend, queued, inFlight) in destinationRemaining {
+                    Telemetry.securityRecordsLost(
+                        stream: .audit,
+                        cause: .incompleteShutdown,
+                        destination: backend.metricDestination,
+                        count: queued + inFlight,
+                        factory: metricsFactory)
+                }
+            }
             logger.warning(
                 "Audit flush timed out with events still pending delivery",
                 metadata: [
-                    "queued": .stringConvertible(remaining.queued),
-                    "queued_bytes": .stringConvertible(remaining.queuedBytes),
-                    "in_flight_batches": .stringConvertible(remaining.inFlight),
+                    "queued": .stringConvertible(sourceRemaining.queued),
+                    "queued_bytes": .stringConvertible(sourceRemaining.queuedBytes),
+                    "in_flight_batches": .stringConvertible(sourceRemaining.inFlight),
+                    "destination_pending": .stringConvertible(
+                        destinationRemaining.reduce(0) { $0 + $1.queued + $1.inFlight }),
                 ])
         }
+    }
+
+    func destinationStats(named name: String) async -> (queued: Int, inFlight: Int)? {
+        guard let destination = destinations.first(where: { $0.backend.name == name }) else {
+            return nil
+        }
+        let stats = await destination.queue.stats
+        return (stats.queued, stats.inFlight)
     }
 
     // MARK: Retention sweep
@@ -881,7 +1135,8 @@ struct AuditRetentionLifecycleHandler: LifecycleHandler {
         // the external backends' own request timeout — long enough for one
         // in-flight POST to land, short enough that a wedged SIEM cannot hold
         // the process open.
-        await audit.flush(waitingUpTo: .seconds(5))
+        await audit.flush(
+            waitingUpTo: .seconds(5), recordIncompleteShutdownLoss: true)
         audit.shutdown()
     }
 }

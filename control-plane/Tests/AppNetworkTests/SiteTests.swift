@@ -977,6 +977,23 @@ final class SiteTests {
         }
     }
 
+    @Test("resolve rejects a controller with a legacy future heartbeat")
+    func resolveFutureHeartbeatController() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let site = try await self.makeSite(app: app, name: "dc-future-heartbeat")
+            let siteID = try #require(site.id)
+            let controllerId = try await self.registerAgent(
+                app: app, named: "future-ctl", siteID: siteID)
+            let databaseNow = try await ClusterClock.read(on: app.db)
+            let controller = try #require(
+                try await Agent.find(UUID(uuidString: controllerId), on: app.db))
+            controller.lastHeartbeat = databaseNow.date.addingTimeInterval(120)
+
+            let fault = SiteNetworkAuthority.controllerFault(controller, at: databaseNow)
+            #expect(fault == .offline(staleFor: nil))
+        }
+    }
+
     @Test("resolve re-applies the designation bar to a standing controller")
     func resolveRegressedController() async throws {
         try await withSiteTestApp { app, _, _, _ in

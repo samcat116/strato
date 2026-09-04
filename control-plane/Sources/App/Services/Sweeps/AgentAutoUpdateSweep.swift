@@ -191,11 +191,12 @@ extension AgentMaintenanceLoop {
             // Eligibility mirrors the update endpoint's checks, minus the
             // hosted-workload guard — that precondition is evaluated live on
             // the agent, which is the only side that actually knows.
+            let eligibilityInstant = try await currentInstant(db)
             let next = candidates.first { agent in
                 agent.autoUpdate
                     && agent.updateDesiredVersion == nil
                     && AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target)
-                    && agent.isOnline(at: instant)
+                    && agent.isOnline(at: eligibilityInstant)
                     && agent.hostOperatingSystem != nil
                     && agent.cpuArchitecture != nil
             }
