@@ -183,6 +183,11 @@ struct DNSController: RouteCollection {
                     guard next != network.domainName else { continue }
                     network.domainName = next
                     try await network.save(on: db)
+                    try await DesiredStateGenerationWriter.advanceOrThrow(
+                        schema: LogicalNetwork.schema,
+                        id: try network.requireID(),
+                        resource: "Network",
+                        on: db)
                 }
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -432,7 +437,14 @@ struct DNSController: RouteCollection {
             // answers with.
             network.domainName = promotedDomainName
             network.$primaryDNSZone.id = zoneID
-            try await network.save(on: req.db)
+            try await req.db.transaction { db in
+                try await network.save(on: db)
+                try await DesiredStateGenerationWriter.advanceOrThrow(
+                    schema: LogicalNetwork.schema,
+                    id: networkID,
+                    resource: "Network",
+                    on: db)
+            }
         }
 
         await req.application.agentService.syncDesiredStateToFleet()

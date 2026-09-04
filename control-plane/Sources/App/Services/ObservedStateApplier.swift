@@ -589,11 +589,16 @@ struct ObservedStateApplier {
         } else if previousError != error || previousFailed != failed {
             resource.lastErrorAt = Date()
         }
-        if error != nil, failureClassification != .blocked {
+        if error != nil,
+            failureClassification != .blocked,
+            failed == resource.generation
+        {
             // The authority did answer; the resource is already explicitly
             // degraded rather than silently stuck, so the silence deadline has
-            // served its purpose. A blocked result is different: it retains
-            // the deadline while the missing dependency remains retryable.
+            // served its purpose. A blocked result retains the deadline while
+            // the missing dependency remains retryable. A superseded failure
+            // also retains it because the authority has not answered for the
+            // resource's newer generation yet.
             resource.convergenceDeadline = nil
         }
     }

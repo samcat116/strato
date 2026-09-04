@@ -131,7 +131,11 @@ extension NetworkServiceLinux {
             if let failure = await attemptDHCPConvergence(
                 for: network, dhcpEnabled: network.dhcpEnabled)
             {
-                networkFailures.append(failure)
+                networkFailures.append(
+                    ReconcileStepFailure(
+                        message: failure.message,
+                        classification: failure.classification,
+                        affectedNetworkIds: [network.networkId]))
             }
         }
 
@@ -227,11 +231,13 @@ extension NetworkServiceLinux {
         let observedMemberships = await SecurityGroupReconciler.reconcileMembership(
             memberships: portMemberships, actuator: self, logger: logger)
 
-        let observedNetworks: [ObservedNetworkState]
-        if let failure = networkFailures.first {
-            observedNetworks = current.map { failedNetworkObservation($0, failure: failure) }
-        } else {
-            observedNetworks = current.map { network in
+        let observedNetworks = current.map { network in
+            let failure = networkFailures.first { failure in
+                failure.affectedNetworkIds?.contains(network.networkId) ?? true
+            }
+            if let failure {
+                return failedNetworkObservation(network, failure: failure)
+            } else {
                 // Stamp only after every topology/DHCP/NACL write completed.
                 // Equal generations still re-drive level-triggered side state.
                 networkGenerations[network.networkId] = network.generation

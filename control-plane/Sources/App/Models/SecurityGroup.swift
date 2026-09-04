@@ -100,13 +100,16 @@ final class SecurityGroup: Model, @unchecked Sendable {
         self.name = name
         self.groupDescription = description
         self.isDefault = isDefault
-        self.generation = 0
+        // Generation zero is the unobserved sentinel. Start desired state at
+        // one so a new group cannot appear converged before an authority has
+        // reported its ACL realization.
+        self.generation = 1
         self.observedGeneration = 0
         self.convergencePhase = nil
         self.lastError = nil
         self.failedGeneration = nil
         self.lastErrorAt = nil
-        self.convergenceDeadline = nil
+        self.convergenceDeadline = Date().addingTimeInterval(180)
         self.$createdBy.id = createdByID
     }
 }

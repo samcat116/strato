@@ -359,6 +359,7 @@ final class DNSZoneTests {
             let builder = TestDataBuilder(db: app.db)
             let network = try await builder.createNetwork(name: "net-search", project: project)
             let networkID = try network.requireID()
+            let initialGeneration = network.generation
             let zone = try await createZone(app: app, token: token, project: project)
 
             // Attaching without promoting is not a statement about resolution
@@ -371,6 +372,7 @@ final class DNSZoneTests {
             }
             var reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
             #expect(reloaded.domainName == nil)
+            #expect(reloaded.generation == initialGeneration)
 
             try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -380,6 +382,8 @@ final class DNSZoneTests {
             }
             reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
             #expect(reloaded.domainName == "acme.internal")
+            #expect(reloaded.generation == initialGeneration + 1)
+            #expect(reloaded.convergenceDeadline != nil)
         }
     }
 
@@ -488,6 +492,12 @@ final class DNSZoneTests {
                     #expect(res.status == .ok)
                 }
             }
+            let followingGenerationBeforeRename = try #require(
+                try await LogicalNetwork.find(following.id, on: app.db)
+            ).generation
+            let chosenGenerationBeforeRename = try #require(
+                try await LogicalNetwork.find(chosen.id, on: app.db)
+            ).generation
 
             try await app.test(.PUT, "/api/dns-zones/\(zone.id)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -502,6 +512,9 @@ final class DNSZoneTests {
             let untouched = try #require(try await LogicalNetwork.find(chosen.id, on: app.db))
             #expect(moved.domainName == "renamed.internal")
             #expect(untouched.domainName == "chosen.example")
+            #expect(moved.generation == followingGenerationBeforeRename + 1)
+            #expect(moved.convergenceDeadline != nil)
+            #expect(untouched.generation == chosenGenerationBeforeRename)
 
             // The new spelling still follows: demotion recognizes and clears
             // it instead of treating a stale old name as operator-authored.

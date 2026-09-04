@@ -364,6 +364,7 @@ struct SecurityGroupController: RouteCollection {
                         reason: "Interface already has \(SecurityGroup.maxGroupsPerNIC) security groups attached")
                 }
                 try await target.attach(groupID: groupId, on: db)
+                try await target.invalidateMembershipObservation(on: db)
                 return true
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -420,6 +421,7 @@ struct SecurityGroupController: RouteCollection {
                 )
             }
             try await target.detach(groupID: groupId, on: db)
+            try await target.invalidateMembershipObservation(on: db)
             return true
         }
         guard changed else { return .noContent }
@@ -495,6 +497,31 @@ struct SecurityGroupController: RouteCollection {
                     .filter(\.$interface.$id == interfaceID)
                     .filter(\.$securityGroup.$id == groupID)
                     .delete()
+            }
+        }
+
+        /// A membership verdict describes the exact join-table set that the
+        /// reporting agent compared. Changing that set invalidates the verdict
+        /// in the same transaction so the API cannot claim the replacement set
+        /// is already active.
+        func invalidateMembershipObservation(on db: Database) async throws {
+            switch workload {
+            case .vm:
+                guard let nic = try await VMNetworkInterface.find(interfaceID, on: db) else {
+                    throw Abort(.notFound, reason: "VM network interface not found")
+                }
+                nic.securityGroupStatus = nil
+                nic.securityGroupLastError = nil
+                nic.securityGroupLastErrorAt = nil
+                try await nic.save(on: db)
+            case .sandbox:
+                guard let nic = try await SandboxNetworkInterface.find(interfaceID, on: db) else {
+                    throw Abort(.notFound, reason: "Sandbox network interface not found")
+                }
+                nic.securityGroupStatus = nil
+                nic.securityGroupLastError = nil
+                nic.securityGroupLastErrorAt = nil
+                try await nic.save(on: db)
             }
         }
     }

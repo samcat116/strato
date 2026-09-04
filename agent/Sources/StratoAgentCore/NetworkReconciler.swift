@@ -784,6 +784,95 @@ public enum NetworkReconciler {
     private static func dnatOrder(_ a: DNATRuleKey, _ b: DNATRuleKey) -> Bool {
         (a.router, a.externalIP) < (b.router, b.externalIP)
     }
+
+    private static func switchOwners(
+        _ switchName: String, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        Set(networks.filter { OVNNaming.switchName(networkId: $0.networkId) == switchName }.map(\.networkId))
+    }
+
+    private static func routerOwners(
+        _ routerName: String, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        Set(
+            networks.filter { network in
+                guard
+                    OVNNaming.routerName(routerKey: network.routerKey) == routerName,
+                    let gateway = network.gateway
+                else { return false }
+                return OVNNaming.routerPortMAC(gateway: gateway) != nil
+                    && prefixLength(ofCIDR: network.subnet) != nil
+            }.map(\.networkId))
+    }
+
+    private static func routerPortOwners(
+        _ portName: String, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        let direct = Set(
+            networks.filter {
+                OVNNaming.routerPortName(networkId: $0.networkId) == portName
+                    || OVNNaming.switchRouterPortName(networkId: $0.networkId) == portName
+            }.map(\.networkId))
+        if !direct.isEmpty { return direct }
+        return Set(
+            networks.filter {
+                OVNNaming.externalRouterPortName(routerKey: $0.routerKey) == portName
+                    || OVNNaming.externalSwitchRouterPortName(routerKey: $0.routerKey) == portName
+            }.map(\.networkId))
+    }
+
+    private static func servicePortOwners(
+        _ portName: String, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        Set(
+            networks.filter {
+                OVNNaming.serviceLocalPortName(networkId: $0.networkId) == portName
+                    || OVNNaming.resolverPortName(networkId: $0.networkId) == portName
+            }.map(\.networkId))
+    }
+
+    private static func snatOwners(
+        router: String, logicalIP: String, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        Set(
+            networks.filter { network in
+                guard OVNNaming.routerName(routerKey: network.routerKey) == router else { return false }
+                if network.subnet == logicalIP { return true }
+                return network.subnet6.flatMap(IPv6CIDR.init)?.description == logicalIP
+            }.map(\.networkId))
+    }
+
+    private static func dnatOwners(
+        router: String, externalIP: String, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        Set(
+            networks.filter { network in
+                OVNNaming.routerName(routerKey: network.routerKey) == router
+                    && network.floatingIPs.contains { $0.externalIP == externalIP }
+            }.map(\.networkId))
+    }
+
+    private static func teardownOwners(
+        _ action: NetworkTeardownAction, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        switch action {
+        case .dnat(let router, let externalIP):
+            return dnatOwners(router: router, externalIP: externalIP, in: networks)
+        case .snat(let router, let logicalIP):
+            return snatOwners(router: router, logicalIP: logicalIP, in: networks)
+        case .serviceLocalPort(let name):
+            return servicePortOwners(name, in: networks)
+        case .switchRouterPort(let name), .routerPort(let name):
+            return routerPortOwners(name, in: networks)
+        case .externalSwitch(let name):
+            return Set(
+                networks.filter {
+                    OVNNaming.externalSwitchName(routerKey: $0.routerKey) == name
+                }.map(\.networkId))
+        case .router(let name):
+            return routerOwners(name, in: networks)
+        }
+    }
 }
 
 // MARK: - Actuator and apply orchestration
@@ -858,8 +947,10 @@ extension NetworkReconciler {
         var failures: [ReconcileStepFailure] = []
 
         for desired in topology.switches {
+            let owners = switchOwners(desired.name, in: networks)
             if let failure = await observeAttempt(
                 logger, "ensure switch \(desired.name)",
+                affectedNetworkIds: owners,
                 {
                     try await actuator.ensureSwitch(desired)
                 })
@@ -870,6 +961,7 @@ extension NetworkReconciler {
             if let metadata = desired.serviceLocalPort,
                 let failure = await observeAttempt(
                     logger, "ensure metadata port \(metadata.name)",
+                    affectedNetworkIds: owners,
                     {
                         try await actuator.ensureServiceLocalPort(metadata)
                     })
@@ -879,6 +971,7 @@ extension NetworkReconciler {
             if let resolver = desired.resolverPort,
                 let failure = await observeAttempt(
                     logger, "ensure resolver port \(resolver.name)",
+                    affectedNetworkIds: owners,
                     {
                         try await actuator.ensureServiceLocalPort(resolver)
                     })
@@ -888,8 +981,10 @@ extension NetworkReconciler {
         }
 
         for router in topology.routers {
+            let affectedRouterIDs = routerOwners(router.name, in: networks)
             if let failure = await observeAttempt(
                 logger, "ensure router \(router.name)",
+                affectedNetworkIds: affectedRouterIDs,
                 {
                     try await actuator.ensureRouter(router)
                 })
@@ -901,6 +996,7 @@ extension NetworkReconciler {
             for port in router.ports {
                 if let failure = await observeAttempt(
                     logger, "ensure router port \(port.name)",
+                    affectedNetworkIds: routerPortOwners(port.name, in: networks),
                     {
                         try await actuator.ensureRouterPort(port, onRouter: router.name)
                     })
@@ -912,6 +1008,7 @@ extension NetworkReconciler {
             guard router.needsUplink else {
                 if let failure = await observeAttempt(
                     logger, "ensure dynamic routing on \(router.name)",
+                    affectedNetworkIds: affectedRouterIDs,
                     {
                         try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
                     })
@@ -923,6 +1020,7 @@ extension NetworkReconciler {
             var uplinkReady = false
             if let failure = await observeAttempt(
                 logger, "ensure uplink for \(router.name)",
+                affectedNetworkIds: affectedRouterIDs,
                 {
                     uplinkReady = try await actuator.ensureUplink(for: router)
                 })
@@ -936,9 +1034,11 @@ extension NetworkReconciler {
                 failures.append(
                     ReconcileStepFailure(
                         message: "No detectable host uplink for \(router.name); SNAT is not realized",
-                        classification: .blocked))
+                        classification: .blocked,
+                        affectedNetworkIds: affectedRouterIDs))
                 if let failure = await observeAttempt(
                     logger, "ensure dynamic routing on \(router.name)",
+                    affectedNetworkIds: affectedRouterIDs,
                     {
                         try await actuator.ensureDynamicRouting(for: router, uplinkReady: false)
                     })
@@ -950,6 +1050,8 @@ extension NetworkReconciler {
             for subnet in router.snatSubnets {
                 if let failure = await observeAttempt(
                     logger, "ensure SNAT \(subnet) on \(router.name)",
+                    affectedNetworkIds: snatOwners(
+                        router: router.name, logicalIP: subnet, in: networks),
                     {
                         try await actuator.ensureSNAT(router: router.name, logicalIP: subnet)
                     })
@@ -960,6 +1062,8 @@ extension NetworkReconciler {
             for rule in router.dnatRules {
                 if let failure = await observeAttempt(
                     logger, "ensure floating IP \(rule.externalIP) on \(router.name)",
+                    affectedNetworkIds: dnatOwners(
+                        router: router.name, externalIP: rule.externalIP, in: networks),
                     { try await actuator.ensureDNAT(router: router.name, rule: rule) })
                 {
                     failures.append(failure)
@@ -967,6 +1071,7 @@ extension NetworkReconciler {
             }
             if let failure = await observeAttempt(
                 logger, "ensure dynamic routing on \(router.name)",
+                affectedNetworkIds: affectedRouterIDs,
                 {
                     try await actuator.ensureDynamicRouting(for: router, uplinkReady: true)
                 })
@@ -979,6 +1084,7 @@ extension NetworkReconciler {
         for action in teardownActions(desired: topology, observed: observed, protected: protected) {
             if let failure = await observeAttempt(
                 logger, "teardown \(action)",
+                affectedNetworkIds: teardownOwners(action, in: networks),
                 {
                     switch action {
                     case .dnat(let router, let externalIP):

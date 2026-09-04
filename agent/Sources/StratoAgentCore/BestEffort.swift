@@ -1,3 +1,4 @@
+import Foundation
 import Logging
 
 /// Runs an independent reconciliation side effect without aborting the rest
@@ -27,10 +28,18 @@ public func attempt(
 public struct ReconcileStepFailure: Sendable, Equatable {
     public let message: String
     public let classification: FailureClassification
+    /// Nil means the failed step was global and affects every network in the
+    /// pass. An empty set means the failure belonged only to retired objects.
+    public let affectedNetworkIds: Set<UUID>?
 
-    public init(message: String, classification: FailureClassification) {
+    public init(
+        message: String,
+        classification: FailureClassification,
+        affectedNetworkIds: Set<UUID>? = nil
+    ) {
         self.message = message
         self.classification = classification
+        self.affectedNetworkIds = affectedNetworkIds
     }
 }
 
@@ -39,6 +48,7 @@ public struct ReconcileStepFailure: Sendable, Equatable {
 public func observeAttempt(
     _ logger: Logger,
     _ step: String,
+    affectedNetworkIds: Set<UUID>? = nil,
     _ body: () async throws -> Void
 ) async -> ReconcileStepFailure? {
     do {
@@ -53,6 +63,7 @@ public func observeAttempt(
             ])
         return ReconcileStepFailure(
             message: "\(step): \(error.localizedDescription)",
-            classification: (error as? any ClassifiableError)?.failureClassification ?? .transient)
+            classification: (error as? any ClassifiableError)?.failureClassification ?? .transient,
+            affectedNetworkIds: affectedNetworkIds)
     }
 }

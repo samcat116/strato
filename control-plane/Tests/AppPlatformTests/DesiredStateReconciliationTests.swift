@@ -592,6 +592,40 @@ final class DesiredStateReconciliationTests {
         }
     }
 
+    @Test("A superseded fabric failure preserves the current generation's deadline")
+    func supersededFabricFailurePreservesDeadline() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            let network = try await self.network(app: app, vm: vm, named: "superseded-fabric-failure")
+            network.generation = 2
+            network.observedGeneration = 1
+            let deadline = Date().addingTimeInterval(300)
+            network.convergenceDeadline = deadline
+            try await network.save(on: app.db)
+
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [],
+                networks: [
+                    ObservedNetworkState(
+                        id: try network.requireID(), observedGeneration: 1, status: .error,
+                        lastError: "generation 1 failed", failedGeneration: 1,
+                        failureClassification: .transient)
+                ],
+                manifestStatus: ObservedManifestStatus(
+                    inventoryComplete: false, quarantinedEntries: 0,
+                    reason: "stale fabric failure"))
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("recon-agent"))
+
+            let stored = try #require(try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(stored.conditions.targetGeneration == 2)
+            #expect(stored.conditions.degraded?.sinceGeneration == 1)
+            #expect(abs(try #require(stored.convergenceDeadline).timeIntervalSince(deadline)) < 0.01)
+        }
+    }
+
     @Test("Only the site's topology authority can update network observations")
     func nonAuthorityNetworkObservationIsIgnored() async throws {
         try await withVMTestApp { app, _, vm, _ in
@@ -640,6 +674,35 @@ final class DesiredStateReconciliationTests {
             #expect(stored.conditions.degraded?.sinceGeneration == 4)
             #expect(stored.conditions.degraded?.reason.contains("did not report convergence") == true)
             #expect(stored.convergenceDeadline == nil)
+        }
+    }
+
+    @Test("The network fabric migration backfills outstanding generations and deadlines")
+    func networkFabricMigrationBackfillsDeadlines() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let network = try await self.network(app: app, vm: vm, named: "fabric-upgrade")
+            network.generation = 3
+            network.observedGeneration = 0
+            network.convergenceDeadline = nil
+            try await network.save(on: app.db)
+
+            let group = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: vm.$project.id, on: app.db)
+            group.generation = 0
+            group.observedGeneration = 0
+            group.convergenceDeadline = nil
+            try await group.save(on: app.db)
+
+            try await AddNetworkFabricObservations().prepare(on: app.db)
+
+            let upgradedNetwork = try #require(
+                try await LogicalNetwork.find(network.id, on: app.db))
+            #expect(upgradedNetwork.convergenceDeadline != nil)
+            let upgradedGroup = try #require(
+                try await SecurityGroup.find(group.id, on: app.db))
+            #expect(upgradedGroup.generation == 1)
+            #expect(upgradedGroup.observedGeneration == 0)
+            #expect(upgradedGroup.convergenceDeadline != nil)
         }
     }
 
