@@ -128,6 +128,21 @@ struct OCIRootfsCacheTests {
         #expect(!FileManager.default.fileExists(atPath: entryDir))
     }
 
+    @Test("a same-size rootfs overwrite is invalidated on lookup")
+    func sameSizeRootfsDamageMisses() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root)
+        let published = try await stageAndPublish(cache, digest: digest)
+
+        try Data("wrong".utf8).write(to: URL(fileURLWithPath: published.rootfsPath))
+        let result = await cache.lookup(manifestDigest: digest)
+
+        #expect(result == nil)
+        let entryDir = (published.rootfsPath as NSString).deletingLastPathComponent
+        #expect(!FileManager.default.fileExists(atPath: entryDir))
+    }
+
     @Test("malformed digests never become filesystem paths")
     func malformedDigests() async throws {
         let root = try makeTempDir()

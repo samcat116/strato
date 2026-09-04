@@ -199,6 +199,20 @@ struct WarmSandboxSnapshotCacheTests {
         #expect(!FileManager.default.fileExists(atPath: entry.directory))
     }
 
+    @Test("a same-size rootfs overwrite is invalidated on lookup")
+    func sameSizeRootfsDamageMisses() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+        let key = makeKey()
+
+        let entry = try publishEntry(cache, key: key, fill: "complete")
+        try Data("damaged!".utf8).write(to: URL(fileURLWithPath: entry.rootfsPath))
+
+        #expect(cache.lookup(key) == nil)
+        #expect(!FileManager.default.fileExists(atPath: entry.directory))
+    }
+
     @Test("a pre-durability entry without artifact integrity is never served")
     func entryWithoutArtifactIntegrityMisses() throws {
         let root = try makeTempRoot()

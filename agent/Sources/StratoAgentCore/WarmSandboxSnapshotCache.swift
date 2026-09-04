@@ -246,7 +246,9 @@ public struct WarmSandboxSnapshotCache: Sendable {
             integrity.rootfsSHA256.allSatisfy({ $0.isHexDigit }),
             fileSize(at: entry.memoryPath, fileManager: fileManager) == integrity.memorySizeBytes,
             fileSize(at: entry.vmstatePath, fileManager: fileManager) == integrity.vmstateSizeBytes,
-            fileSize(at: entry.rootfsPath, fileManager: fileManager) == integrity.rootfsSizeBytes
+            fileSize(at: entry.rootfsPath, fileManager: fileManager) == integrity.rootfsSizeBytes,
+            let rootfsSHA256 = try? FileHashing.sha256Hex(ofFileAt: entry.rootfsPath),
+            rootfsSHA256 == integrity.rootfsSHA256
         else {
             try? fileManager.removeItem(atPath: entry.directory)
             return nil

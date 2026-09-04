@@ -139,14 +139,6 @@ public actor SandboxImageService {
         }
     }
 
-    /// Invalidates the exact materialized artifact that backed a sandbox
-    /// whose first cold boot failed. The runtime calls this at most once for
-    /// that sandbox incarnation so a genuinely unbootable image does not
-    /// trigger a pull on every boot retry.
-    public func invalidateCachedRootfs(manifestDigest: String) async {
-        await cache.invalidate(manifestDigest: manifestDigest)
-    }
-
     // MARK: - Pipeline
 
     private func performMaterialization(

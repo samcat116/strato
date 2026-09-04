@@ -95,10 +95,13 @@ public actor OCIRootfsCache {
             completion.rootfsSizeBytes >= 0,
             completion.rootfsSHA256.count == 64,
             completion.rootfsSHA256.allSatisfy({ $0.isHexDigit }),
-            fileSize(at: rootfsPath) == completion.rootfsSizeBytes
+            fileSize(at: rootfsPath) == completion.rootfsSizeBytes,
+            let rootfsSHA256 = try? FileHashing.sha256Hex(ofFileAt: rootfsPath),
+            rootfsSHA256 == completion.rootfsSHA256
         else {
             // Missing sidecars are pre-durability entries. A size mismatch is
-            // a torn or subsequently damaged rootfs. Neither is safe to boot.
+            // a torn rootfs; a hash mismatch catches same-size damage. Neither
+            // is safe to boot.
             logger.warning(
                 "Removing incomplete rootfs cache entry",
                 metadata: ["digest": .string(manifestDigest)])
