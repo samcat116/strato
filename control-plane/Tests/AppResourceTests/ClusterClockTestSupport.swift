@@ -86,10 +86,6 @@ extension AgentMaintenanceLoop {
         await sweepStuckConvergence(at: .testing(Date()))
     }
 
-    func sweepStrandedVolumeAttachments() async {
-        await sweepStrandedVolumeAttachments(at: .testing(Date()))
-    }
-
     func sweepOrphanedTerminatingResources() async {
         await sweepOrphanedTerminatingResources(at: .testing(Date()))
     }

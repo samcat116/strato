@@ -62,10 +62,13 @@ final class AgentAutoUpdateTests {
     /// sweep call a fresh in-memory coordination store so none is skipped.
     private func sweep(
         _ app: Application,
-        at instant: ClusterInstant = .testing(Date())
+        at instant: ClusterInstant = .testing(Date()),
+        assignmentAt assignmentInstant: ClusterInstant? = nil
     ) async {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
-        await app.agentMaintenance.sweepAgentAutoUpdates(at: instant)
+        await app.agentMaintenance.sweepAgentAutoUpdates(
+            at: instant,
+            currentInstant: { _ in assignmentInstant ?? instant })
     }
 
     @discardableResult
@@ -118,6 +121,24 @@ final class AgentAutoUpdateTests {
             let stored = try await self.reload(agent, on: app)
             #expect(stored.updateDesiredVersion == Self.target)
             #expect(stored.updateAttemptedAt == instant.date)
+        }
+    }
+
+    @Test("a rollout assignment starts from a fresh database instant")
+    func assignmentUsesFreshDatabaseInstant() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let assignmentInstant = try await ClusterClock.read(on: app.db)
+            let tickInstant = ClusterInstant.testing(
+                assignmentInstant.date.addingTimeInterval(-300))
+            let agent = try await self.makeAgent(
+                app: app, org: org, name: "fresh-assignment-agent")
+
+            await self.sweep(
+                app, at: tickInstant, assignmentAt: assignmentInstant)
+
+            let stored = try await self.reload(agent, on: app)
+            #expect(stored.updateDesiredVersion == Self.target)
+            #expect(stored.updateAttemptedAt == assignmentInstant.date)
         }
     }
 

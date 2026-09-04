@@ -46,7 +46,12 @@ extension AgentMaintenanceLoop {
     /// Only when nothing is failed or waiting does the sweep assign the next
     /// eligible *enrolled* agent (deterministic name order), after proving the
     /// release actually publishes an artifact for that agent's platform.
-    func sweepAgentAutoUpdates(at instant: ClusterInstant) async {
+    func sweepAgentAutoUpdates(
+        at instant: ClusterInstant,
+        currentInstant: @Sendable (any Database) async throws -> ClusterInstant = {
+            try await ClusterClock.read(on: $0)
+        }
+    ) async {
         guard !isShutDown, !app.didShutdown else { return }
         guard await app.coordination.acquireSweepLock("agent_auto_update") else {
             app.logger.debug("Skipping auto-update sweep; lock held by another control-plane instance")
@@ -216,7 +221,13 @@ extension AgentMaintenanceLoop {
                 return
             }
 
-            next.assignUpdate(version: target, source: .rollout, at: instant)
+            // Artifact resolution and every earlier sweep may take time. Use a
+            // current database instant for the assignment itself so none of
+            // that work consumes the agent's health budget. Recheck liveness
+            // against the same instant before committing the assignment.
+            let assignmentInstant = try await currentInstant(db)
+            guard next.isOnline(at: assignmentInstant) else { return }
+            next.assignUpdate(version: target, source: .rollout, at: assignmentInstant)
             try await next.save(on: db)
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(

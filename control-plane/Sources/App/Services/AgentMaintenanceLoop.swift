@@ -107,7 +107,7 @@ actor AgentMaintenanceLoop {
         try checkTickPreconditions()
         await sweepSteadyStateDivergence(at: instant)
         try checkTickPreconditions()
-        await sweepStrandedVolumeAttachments(at: instant)
+        await sweepStrandedVolumeAttachments()
         try checkTickPreconditions()
         await sweepOrphanedTerminatingResources(at: instant)
         try checkTickPreconditions()
