@@ -206,7 +206,8 @@ struct VolumeController: RouteCollection {
             status: .creating,
             createdByID: user.id!,
             poolID: pool.id,
-            sourceImageID: request.sourceImageId
+            sourceImageID: request.sourceImageId,
+            blockMode: request.blockMode ?? .conservative
         )
         // Set before the insert rather than through a follow-up mutation, so a
         // volume never exists uncapped even briefly (STR-19).
@@ -581,6 +582,7 @@ struct VolumeController: RouteCollection {
 
         let userID = try user.requireID()
         let readonly = request.readonly ?? false
+        let blockMode = request.blockMode
         let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
         let project = try await volume.project(on: req.db)
@@ -636,6 +638,10 @@ struct VolumeController: RouteCollection {
                 bootOrder: bootOrder,
                 readonly: readonly,
                 on: tx)
+            if let blockMode {
+                volume.blockMode = blockMode
+                try await volume.save(on: tx)
+            }
 
             // `claim` locks and refreshes the VM row. Resolve reachability only
             // after that refresh: placement may have moved while this request
@@ -1093,7 +1099,8 @@ struct VolumeController: RouteCollection {
             status: .creating,
             createdByID: user.id!,
             poolID: sourceVolume.$pool.id,
-            sourceVolumeID: sourceVolume.id
+            sourceVolumeID: sourceVolume.id,
+            blockMode: sourceVolume.blockMode
         )
         newVolume.extendConvergenceDeadline(
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))

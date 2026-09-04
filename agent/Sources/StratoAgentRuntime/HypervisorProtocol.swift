@@ -232,7 +232,7 @@ public protocol HypervisorService: Actor, Sendable {
     ///   hot-plug disks
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, orderedBootVolumeIds: [String]
+        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?, orderedBootVolumeIds: [String]
     ) async throws
 
     /// Detaches a disk from a running VM (hot-unplug)

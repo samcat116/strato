@@ -177,16 +177,38 @@ public struct VMManifestEntry: Codable, Sendable {
     }
 
     /// Records the desired spec after re-adopting a surviving VM without
-    /// claiming that Firecracker's immutable MMDS allow-list changed with it.
+    /// claiming that immutable hypervisor policy changed with it.
     ///
     /// A Firecracker entry carrying the policy marker describes a VMM that was
     /// already configured from the manifest's network list. Desired state may
     /// have changed while the agent was down, but reconnecting to that process
     /// does not apply the new list. Keep the realized networks until the
     /// reconciler replaces the VMM; every other part of the desired spec can be
-    /// recorded immediately. Legacy entries have no reliable realized policy,
-    /// so their one-time upgrade path decides what to record instead.
+    /// recorded immediately. A legacy QEMU volume with no applied-policy field
+    /// is known to use the historical XML (no cache, discard, rotation, or
+    /// queue override), so its one-time upgrade records that conservative fact
+    /// explicitly. A desired volume absent from the old manifest is left
+    /// unknown until its hot-plug actually succeeds.
     public func recordingAdoption(of desiredSpec: VMSpec) -> VMManifestEntry {
+        if hypervisorType == .qemu {
+            let policies = Dictionary(
+                spec.volumes.map { volume in
+                    let policy =
+                        volume.appliedBlockPolicy
+                        ?? AppliedBlockDevicePolicy(
+                            active: volume.attachment != nil,
+                            requestedMode: volume.blockMode,
+                            fallbackReason:
+                                "the surviving domain predates QEMU block-policy reporting; "
+                                + "historical conservative attributes remain active until it is recreated")
+                    return (volume.volumeId, policy)
+                },
+                uniquingKeysWith: { first, _ in first })
+            let adoptedVolumes = desiredSpec.volumes.map { volume in
+                volume.withAppliedBlockPolicy(policies[volume.volumeId])
+            }
+            return with(spec: desiredSpec.withVolumes(adoptedVolumes))
+        }
         guard hypervisorType == .firecracker, firecrackerMMDSPolicyApplied == true else {
             return with(spec: desiredSpec)
         }

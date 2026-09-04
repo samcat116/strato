@@ -194,5 +194,9 @@ extension Application {
         // The exact-match registration handshake makes a persisted wire version
         // redundant. Fresh baselines omit it; preserved databases drop it here.
         migrations.add(DropAgentWireProtocolVersion())
+
+        // STR-269: opt-in cache policy plus the agent's exact applied/fallback
+        // report. Existing volumes remain conservative.
+        migrations.add(AddVolumeBlockPolicy())
     }
 }

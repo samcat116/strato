@@ -28,14 +28,18 @@ public struct ResolvedDisk: Sendable, Equatable {
     /// a model of — the STR-129 rule, applied to a document instead of to a QMP
     /// device id.
     public let volumeId: String?
+    /// Agent-selected QEMU attributes for this concrete attachment. Nil keeps
+    /// the historical conservative XML for legacy callers and bootstrap media.
+    public let blockPolicy: AppliedBlockDevicePolicy?
 
     public init(
         attachment: DiskAttachment, readonly: Bool = false, bootOrder: Int? = nil,
-        volumeId: String? = nil
+        volumeId: String? = nil, blockPolicy: AppliedBlockDevicePolicy? = nil
     ) {
         self.attachment = attachment
         self.readonly = readonly
         self.bootOrder = bootOrder
         self.volumeId = volumeId
+        self.blockPolicy = blockPolicy
     }
 }

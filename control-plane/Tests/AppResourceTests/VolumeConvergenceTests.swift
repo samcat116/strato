@@ -65,6 +65,7 @@ final class VolumeConvergenceTests {
         desired: DesiredVolumeStatus = .present,
         generation: Int64 = 1,
         observedGeneration: Int64 = 1,
+        blockMode: VolumeBlockMode = .conservative,
         storagePath: String? = "/var/lib/strato/volumes/v/volume.qcow2"
     ) async throws -> Volume {
         let volume = Volume(
@@ -73,7 +74,8 @@ final class VolumeConvergenceTests {
             projectID: project.id!, environment: "development",
             size: size,
             status: status,
-            createdByID: user.id!
+            createdByID: user.id!,
+            blockMode: blockMode
         )
         volume.desiredStatus = desired
         volume.generation = generation
@@ -123,6 +125,20 @@ final class VolumeConvergenceTests {
             // Neither the pool nor the path travels: placement is expressed by
             // whose sync the entry is on, and the agent owns path layout.
             #expect(entry.source == nil)
+        }
+    }
+
+    @Test("Requested block mode rides the volume desired-state entry")
+    func blockModeIsAssembledForItsAgent() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let agentId = try await registerAgent(app: app, named: "block-mode-agent")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                blockMode: .direct)
+
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let entry = try #require(message.volumes.first { $0.volumeId == volume.id })
+            #expect(entry.blockMode == .direct)
         }
     }
 
@@ -259,6 +275,49 @@ final class VolumeConvergenceTests {
                     == .file(path: "/agent/chosen/path.qcow2", format: .qcow2))
             #expect(replica?.state == .healthy)
             #expect(replica?.generation == 1)
+        }
+    }
+
+    @Test("An agent's applied block policy is persisted without treating silence as removal")
+    func appliedBlockPolicyIsRecorded() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let agentId = try await registerAgent(app: app, named: "block-policy-agent")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                generation: 2, observedGeneration: 1, blockMode: .direct)
+            let policy = AppliedBlockDevicePolicy(
+                active: true, requestedMode: .direct,
+                cacheMode: BlockDeviceCacheMode.none, ioMode: .ioUring,
+                discard: true, nonRotational: true, queueCount: 8)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try volume.requireID(), present: true,
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2",
+                                format: .qcow2),
+                            observedGeneration: 2, blockPolicy: policy)
+                    ]))
+            var stored = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(stored.appliedBlockPolicy == policy)
+
+            // Nil is a legacy agent's silence, not an explicit fallback.
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try volume.requireID(), present: true,
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2",
+                                format: .qcow2),
+                            observedGeneration: 2, blockPolicy: nil)
+                    ]))
+            stored = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(stored.appliedBlockPolicy == policy)
         }
     }
 

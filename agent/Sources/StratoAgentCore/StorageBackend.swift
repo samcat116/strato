@@ -31,6 +31,36 @@ public struct VolumeInfoResult: Codable, Sendable {
     }
 }
 
+/// Storage-side facts needed before QEMU may opt into discard or direct I/O.
+///
+/// Reasons are operator-facing and deliberately travel separately from the
+/// booleans: a failed probe is a safe, supported fallback rather than a volume
+/// convergence failure, but it still needs to be diagnosable.
+public struct StorageBlockDeviceCapabilities: Equatable, Sendable {
+    public let discardSupported: Bool
+    public let discardUnavailableReason: String?
+    public let directIOSupported: Bool
+    public let directIOUnavailableReason: String?
+
+    public init(
+        discardSupported: Bool,
+        discardUnavailableReason: String? = nil,
+        directIOSupported: Bool,
+        directIOUnavailableReason: String? = nil
+    ) {
+        self.discardSupported = discardSupported
+        self.discardUnavailableReason = discardUnavailableReason
+        self.directIOSupported = directIOSupported
+        self.directIOUnavailableReason = directIOUnavailableReason
+    }
+
+    public static let unsupported = Self(
+        discardSupported: false,
+        discardUnavailableReason: "the storage backend did not advertise safe deallocation",
+        directIOSupported: false,
+        directIOUnavailableReason: "the storage backend did not advertise direct I/O")
+}
+
 // MARK: - Storage Backend Protocol
 
 /// Storage driver interface: everything that turns images and empty space into
@@ -115,6 +145,11 @@ public protocol StorageBackend: Actor {
     /// Local and krbd paths need no preparation.
     func prepareAttachmentForQEMU(_ attachment: DiskAttachment) async throws
 
+    /// Probes whether this concrete attachment can safely carry QEMU discard
+    /// and cache-none/io_uring semantics. A negative result is not an error:
+    /// callers emit only the supported subset and report the reason.
+    func qemuBlockCapabilities(for attachment: DiskAttachment) async -> StorageBlockDeviceCapabilities
+
     /// Every volume whose data this backend currently holds, by id (STR-148).
     ///
     /// This is the agent's presence set for volume reconciliation: the
@@ -145,6 +180,10 @@ extension StorageBackend {
     }
 
     public func prepareAttachmentForQEMU(_: DiskAttachment) async throws {}
+
+    public func qemuBlockCapabilities(for _: DiskAttachment) async -> StorageBlockDeviceCapabilities {
+        .unsupported
+    }
 
     /// Source-compatible conveniences for filesystem-only callers and tests.
     /// New reconciliation code carries the typed attachment end to end.

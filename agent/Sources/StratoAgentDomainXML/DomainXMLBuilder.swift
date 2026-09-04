@@ -560,7 +560,7 @@ public enum DomainXMLBuilder {
                 diskNode(
                     attachment: disk.attachment, index: index, readonly: disk.readonly,
                     bootOrder: bootOrders[index],
-                    volumeId: disk.volumeId))
+                    volumeId: disk.volumeId, blockPolicy: disk.blockPolicy))
         }
         if let isoPath = input.cloudInitISOPath {
             // A read-only virtio *disk*, not a cdrom, matching the QEMU path's
@@ -569,7 +569,7 @@ public enum DomainXMLBuilder {
             devices.append(
                 diskNode(
                     attachment: .file(path: isoPath, format: .raw), index: input.disks.count, readonly: true,
-                    bootOrder: nil, volumeId: nil))
+                    bootOrder: nil, volumeId: nil, blockPolicy: nil))
         }
 
         // The root complex itself, declared before any port hangs off it. Both
@@ -827,7 +827,7 @@ public enum DomainXMLBuilder {
     /// including the serial a detach resolves by.
     static func diskNode(
         attachment: DiskAttachment, target: String, readonly: Bool, bootOrder: Int?,
-        volumeId: String?
+        volumeId: String?, blockPolicy: AppliedBlockDevicePolicy?
     ) -> DomainXMLNode {
         let diskType: String
         let driverFormat: String
@@ -879,14 +879,25 @@ public enum DomainXMLBuilder {
         }
 
         var disk = DomainXMLNode("disk", [("type", diskType), ("device", "disk")])
-        // No cache/discard/io tuning: the QEMU path passes none, and adding it
-        // here would be a behaviour change disguised as a translation.
-        disk.append(DomainXMLNode("driver", [("name", "qemu"), ("type", driverFormat)]))
+        var driverAttributes: [(String, String?)] = [("name", "qemu"), ("type", driverFormat)]
+        if blockPolicy?.active == true {
+            driverAttributes.append(("cache", blockPolicy?.cacheMode?.rawValue))
+            driverAttributes.append(("io", blockPolicy?.ioMode?.rawValue))
+            if blockPolicy?.discard == true {
+                driverAttributes.append(("discard", "unmap"))
+                driverAttributes.append(("detect_zeroes", "unmap"))
+            }
+            driverAttributes.append(("queues", blockPolicy?.queueCount.map(String.init)))
+        }
+        disk.append(DomainXMLNode("driver", driverAttributes))
         disk.append(source)
         if let authentication {
             disk.append(authentication)
         }
-        disk.append(DomainXMLNode("target", [("dev", target), ("bus", "virtio")]))
+        disk.append(
+            DomainXMLNode(
+                "target",
+                [("dev", target), ("bus", "virtio")]))
         if readonly {
             disk.append(DomainXMLNode("readonly"))
         }
@@ -905,11 +916,12 @@ public enum DomainXMLBuilder {
 
     private static func diskNode(
         attachment: DiskAttachment, index: Int, readonly: Bool, bootOrder: Int?,
-        volumeId: String?
+        volumeId: String?, blockPolicy: AppliedBlockDevicePolicy?
     ) -> DomainXMLNode {
         diskNode(
             attachment: attachment, target: targetDeviceName(index: index),
-            readonly: readonly, bootOrder: bootOrder, volumeId: volumeId)
+            readonly: readonly, bootOrder: bootOrder, volumeId: volumeId,
+            blockPolicy: blockPolicy)
     }
 
     /// Libvirt models a monitor endpoint as separate host and port attributes.

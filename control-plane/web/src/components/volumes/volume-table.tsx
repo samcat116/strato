@@ -107,6 +107,29 @@ export function VolumeTable({
               <TableCell className="text-foreground/80">
                 {volume.volumeType}
                 <span className="text-muted-foreground"> · {volume.format}</span>
+                <p className="text-xs text-muted-foreground">
+                  Block: {volume.blockMode}
+                  {volume.appliedBlockPolicy?.active && (
+                    <>
+                      {" · "}
+                      {volume.appliedBlockPolicy.cacheMode ?? "default cache"}
+                      {volume.appliedBlockPolicy.ioMode
+                        ? `/${volume.appliedBlockPolicy.ioMode}`
+                        : ""}
+                      {volume.appliedBlockPolicy.queueCount
+                        ? ` · ${volume.appliedBlockPolicy.queueCount} queues`
+                        : ""}
+                    </>
+                  )}
+                </p>
+                {volume.appliedBlockPolicy?.fallbackReason && (
+                  <p
+                    className="max-w-xs text-xs text-amber-700"
+                    title={volume.appliedBlockPolicy.fallbackReason}
+                  >
+                    {volume.appliedBlockPolicy.fallbackReason}
+                  </p>
+                )}
               </TableCell>
               <TableCell className="text-foreground/80">
                 <VolumeSize volume={volume} />

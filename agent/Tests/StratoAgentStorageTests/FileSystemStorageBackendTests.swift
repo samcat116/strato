@@ -210,6 +210,82 @@ struct FileSystemStorageBackendTests {
         #expect(invocations[0].arguments.contains("raw"))
     }
 
+    #if os(Linux)
+    @Test("QEMU block capabilities probe the backing filesystem and exact direct-I/O mode")
+    func qemuBlockCapabilityProbes() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let volumePath = "\(root)/volume.qcow2"
+        FileManager.default.createFile(
+            atPath: volumePath, contents: Data(repeating: 0, count: 4096))
+        let recorder = SubprocessRecorder()
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        let capabilities = await backend.qemuBlockCapabilities(
+            for: .file(path: volumePath, format: .qcow2))
+
+        #expect(capabilities.discardSupported)
+        #expect(capabilities.directIOSupported)
+        let invocations = await recorder.invocations
+        let holePunch = try #require(
+            invocations.first { $0.executable == "/usr/bin/fallocate" })
+        #expect(
+            Array(holePunch.arguments.dropLast())
+                == ["--keep-size", "--punch-hole", "--offset", "0", "--length", "4096"])
+        let direct = try #require(
+            invocations.first { $0.arguments.first == "bench" })
+        #expect(direct.executable == "/fake/qemu-img")
+        #expect(
+            direct.arguments
+                == [
+                    "bench", "-c", "1", "-d", "1", "-f", "qcow2",
+                    "-i", "io_uring", "-t", "none", "-s", "512", volumePath,
+                ])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: root)
+                .allSatisfy { !$0.hasPrefix(".strato-discard-probe-") })
+    }
+
+    @Test("A rejected direct-I/O probe is a reasoned capability fallback")
+    func qemuBlockDirectIOFallback() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let volumePath = "\(root)/volume.raw"
+        FileManager.default.createFile(
+            atPath: volumePath, contents: Data(repeating: 0, count: 4096))
+        let recorder = SubprocessRecorder()
+        await recorder.stub(
+            subcommand: "bench",
+            result: ProcessResult(
+                terminationStatus: 1, standardOutput: Data(), standardError: Data()))
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        let capabilities = await backend.qemuBlockCapabilities(
+            for: .file(path: volumePath, format: .raw))
+
+        #expect(capabilities.discardSupported)
+        #expect(!capabilities.directIOSupported)
+        #expect(capabilities.directIOUnavailableReason?.contains("exit 1") == true)
+    }
+    #else
+    @Test("QEMU file optimizations fail closed away from Linux hypervisor hosts")
+    func qemuBlockCapabilitiesAreLinuxOnly() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        let capabilities = await backend.qemuBlockCapabilities(
+            for: .file(path: "\(root)/volume.qcow2", format: .qcow2))
+
+        #expect(!capabilities.discardSupported)
+        #expect(!capabilities.directIOSupported)
+        #expect(capabilities.discardUnavailableReason?.contains("Linux") == true)
+        #expect(capabilities.directIOUnavailableReason?.contains("Linux") == true)
+        #expect(await recorder.invocations.isEmpty)
+    }
+    #endif
+
     @Test func adoptsHistoricalDiskByIdentityAndDeletesBothLinks() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }

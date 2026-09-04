@@ -214,6 +214,16 @@ extension ObservedStateApplier {
             }
         }
 
+        // Nil is a pre-v59 agent saying nothing, not an instruction to erase a
+        // previously observed policy. Current agents send an explicit inactive
+        // value when a volume is detached, so that transition is unambiguous.
+        if let applied = observed.blockPolicy,
+            volume.appliedBlockPolicy != applied
+        {
+            volume.appliedBlockPolicy = applied
+            changed = true
+        }
+
         if aggregateObservedGeneration > volume.observedGeneration {
             volume.observedGeneration = aggregateObservedGeneration
             changed = true

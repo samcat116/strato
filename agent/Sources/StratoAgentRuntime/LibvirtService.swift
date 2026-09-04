@@ -1436,7 +1436,7 @@ actor LibvirtService: HypervisorService {
     /// definition rewrite failed.
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, orderedBootVolumeIds: [String]
+        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?, orderedBootVolumeIds: [String]
     ) async throws {
         try await perform("attach-disk", vmId: vmId) {
             let dom = try await domain(vmId)
@@ -1451,7 +1451,8 @@ actor LibvirtService: HypervisorService {
             } else {
                 let target = DomainDiskInventory.nextTargetDevice(after: disks)
                 let xml = DomainDeviceXML.hotplugDisk(
-                    attachment: attachment, target: target, readonly: readonly, volumeId: volumeId)
+                    attachment: attachment, target: target, readonly: readonly, volumeId: volumeId,
+                    blockPolicy: blockPolicy)
                 let flags = try await deviceFlags(dom, vmId: vmId)
 
                 logger.info(
@@ -2299,7 +2300,8 @@ actor LibvirtService: HypervisorService {
                     bootOrder: volume.bootOrder,
                     // Written into the document as `<serial>`, so a detach can
                     // resolve this disk by managed identity after a restart.
-                    volumeId: volume.volumeId.uuidString))
+                    volumeId: volume.volumeId.uuidString,
+                    blockPolicy: volume.appliedBlockPolicy))
         }
 
         if disks.isEmpty {

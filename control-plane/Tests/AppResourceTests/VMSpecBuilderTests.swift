@@ -406,6 +406,20 @@ struct VMSpecBuilderTests {
         #expect(reversed == forward)
     }
 
+    @Test("Volume specs carry the requested QEMU block mode")
+    func volumeSpecsCarryBlockMode() throws {
+        let volume = attachedVolume(id: UUID(), deviceName: "disk1", bootOrder: 1)
+        volume.blockMode = .cachedShared
+
+        let spec = try #require(
+            VMSpecBuilder.volumeSpecs(
+                from: [volume], diskAttachmentsByVolumeID: diskAttachments(for: [volume])
+            ).first)
+
+        #expect(spec.blockMode == .cachedShared)
+        #expect(spec.appliedBlockPolicy == nil)
+    }
+
     @Test("Volumes with identical names and orders still sort deterministically")
     func testVolumeOrderFallsBackToID() throws {
         // Only reachable through data that predates the unique index, but the
