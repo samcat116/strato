@@ -792,6 +792,29 @@ struct NetworkReconcilerTests {
         #expect(uplinkIndex != nil && dnatIndex != nil && uplinkIndex! < dnatIndex!)
     }
 
+    @Test("Retired NAT teardown failures retain router ownership")
+    func reconcileAttributesRetiredNATFailures() async throws {
+        let network = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
+        let observed = ObservedNetworkTopology(
+            routerNames: ["lr-p"],
+            snatRules: [SNATRuleKey(router: "lr-p", logicalIP: "10.0.5.0/24")],
+            dnatRules: [DNATRuleKey(router: "lr-p", externalIP: "203.0.113.31")])
+        let actuator = RecordingNetworkActuator(
+            observed: observed,
+            failingSNATRemovals: ["10.0.5.0/24"],
+            failingDNATRemovals: ["203.0.113.31"])
+
+        let failures = try await NetworkReconciler.reconcile(
+            networks: [network], actuator: actuator, logger: Logger(label: "test"))
+
+        let natFailures = failures.filter {
+            $0.message.contains("203.0.113.31") || $0.message.contains("10.0.5.0/24")
+        }
+        #expect(natFailures.count == 2)
+        #expect(natFailures.allSatisfy { $0.affectedNetworkIds == [network.networkId] })
+    }
+
     @Test("reconcile skips DNAT (like SNAT) when no uplink is available")
     func reconcileSkipsDNATWithoutUplink() async throws {
         let web = network(
@@ -878,15 +901,21 @@ private actor RecordingNetworkActuator: NetworkActuator {
     private let observed: ObservedNetworkTopology
     private let uplinkAvailable: Bool
     private let failingSwitchNames: Set<String>
+    private let failingSNATRemovals: Set<String>
+    private let failingDNATRemovals: Set<String>
 
     init(
         observed: ObservedNetworkTopology,
         uplinkAvailable: Bool = true,
-        failingSwitchNames: Set<String> = []
+        failingSwitchNames: Set<String> = [],
+        failingSNATRemovals: Set<String> = [],
+        failingDNATRemovals: Set<String> = []
     ) {
         self.observed = observed
         self.uplinkAvailable = uplinkAvailable
         self.failingSwitchNames = failingSwitchNames
+        self.failingSNATRemovals = failingSNATRemovals
+        self.failingDNATRemovals = failingDNATRemovals
     }
 
     func observeTopology() async throws -> ObservedNetworkTopology { observed }
@@ -911,12 +940,18 @@ private actor RecordingNetworkActuator: NetworkActuator {
     }
     func removeSNAT(router routerName: String, logicalIP: String) async throws {
         calls.append("removeSNAT(\(routerName),\(logicalIP))")
+        if failingSNATRemovals.contains(logicalIP) {
+            throw RecordingNetworkActuatorError.expectedFailure
+        }
     }
     func ensureDNAT(router routerName: String, rule: DesiredDNATRule) async throws {
         calls.append("ensureDNAT(\(routerName),\(rule.externalIP)->\(rule.logicalIP))")
     }
     func removeDNAT(router routerName: String, externalIP: String) async throws {
         calls.append("removeDNAT(\(routerName),\(externalIP))")
+        if failingDNATRemovals.contains(externalIP) {
+            throw RecordingNetworkActuatorError.expectedFailure
+        }
     }
     func ensureDynamicRouting(for router: DesiredRouter, uplinkReady: Bool) async throws {
         calls.append("ensureDynamicRouting(\(router.name),\(uplinkReady ? "ready" : "noUplink"))")

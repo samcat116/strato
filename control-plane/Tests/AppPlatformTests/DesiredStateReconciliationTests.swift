@@ -677,7 +677,7 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("The network fabric migration backfills outstanding generations and deadlines")
+    @Test("The network fabric migration backfills only authority-addressable deadlines")
     func networkFabricMigrationBackfillsDeadlines() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let network = try await self.network(app: app, vm: vm, named: "fabric-upgrade")
@@ -702,7 +702,7 @@ final class DesiredStateReconciliationTests {
                 try await SecurityGroup.find(group.id, on: app.db))
             #expect(upgradedGroup.generation == 1)
             #expect(upgradedGroup.observedGeneration == 0)
-            #expect(upgradedGroup.convergenceDeadline != nil)
+            #expect(upgradedGroup.convergenceDeadline == nil)
         }
     }
 

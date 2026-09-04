@@ -202,12 +202,13 @@ extension NetworkServiceLinux {
         if current.contains(where: { $0.networkACLs != nil }) {
             if securityGroupTiersReady {
                 do {
-                    try await NetworkACLReconciler.reconcile(
+                    let failures = try await NetworkACLReconciler.reconcile(
                         networks: current,
                         protectedSwitchNames: Set(
                             stale.map { OVNNaming.switchName(networkId: $0.networkId) }),
                         actuator: self,
                         logger: logger)
+                    networkFailures.append(contentsOf: failures)
                 } catch {
                     logger.error(
                         "Network ACL reconciliation could not complete",

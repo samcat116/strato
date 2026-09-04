@@ -561,16 +561,20 @@ public enum NetworkACLReconciler {
 
     /// Authority-side convergence. Nil networkACLs are protected no-opinion;
     /// an explicit empty list participates in observed-minus-desired teardown.
+    @discardableResult
     public static func reconcile(
         networks: [DesiredNetworkState],
         protectedSwitchNames extraProtection: Set<String> = [],
         actuator: any NetworkACLActuator,
         logger: Logger
-    ) async throws {
+    ) async throws -> [ReconcileStepFailure] {
         let result = plan(networks: networks)
-        guard result.hasOpinion else { return }
+        guard result.hasOpinion else { return [] }
+
+        var failures: [ReconcileStepFailure] = []
 
         for item in result.invalid {
+            let message = "Network ACL desired state is invalid: \(item.reason)"
             logger.error(
                 "Network ACL desired state is invalid; leaving the switch's existing ACLs untouched",
                 metadata: [
@@ -579,16 +583,28 @@ public enum NetworkACLReconciler {
                     "ruleIds": .array(item.ruleIDs.map { .string($0.uuidString) }),
                     "reason": .string(item.reason),
                 ])
+            failures.append(
+                ReconcileStepFailure(
+                    message: message,
+                    classification: .permanent,
+                    affectedNetworkIds: [item.networkID]))
         }
 
         let observed = try await actuator.observeNetworkACLs()
         let observedBySwitch = Dictionary(uniqueKeysWithValues: observed.map { ($0.switchName, $0) })
         for plan in result.plans {
-            await attempt(logger, "converge network ACL on \(plan.switchName)") {
-                try await converge(
-                    plan: plan,
-                    observed: observedBySwitch[plan.switchName],
-                    actuator: actuator)
+            if let failure = await observeAttempt(
+                logger,
+                "converge network ACL on \(plan.switchName)",
+                affectedNetworkIds: [plan.networkID],
+                {
+                    try await converge(
+                        plan: plan,
+                        observed: observedBySwitch[plan.switchName],
+                        actuator: actuator)
+                })
+            {
+                failures.append(failure)
             }
         }
 
@@ -596,9 +612,21 @@ public enum NetworkACLReconciler {
         let protected = result.protectedSwitchNames.union(extraProtection)
         for row in observed.sorted(by: { $0.switchName < $1.switchName })
         where !desiredSwitches.contains(row.switchName) && !protected.contains(row.switchName) {
-            await attempt(logger, "tear down network ACL on \(row.switchName)") {
-                try await tearDown(observed: row, actuator: actuator)
+            let affectedNetworkIDs = Set(
+                networks.filter {
+                    OVNNaming.switchName(networkId: $0.networkId) == row.switchName
+                }.map(\.networkId))
+            if let failure = await observeAttempt(
+                logger,
+                "tear down network ACL on \(row.switchName)",
+                affectedNetworkIds: affectedNetworkIDs,
+                {
+                    try await tearDown(observed: row, actuator: actuator)
+                })
+            {
+                failures.append(failure)
             }
         }
+        return failures
     }
 }

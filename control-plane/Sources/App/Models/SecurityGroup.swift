@@ -109,7 +109,10 @@ final class SecurityGroup: Model, @unchecked Sendable {
         self.lastError = nil
         self.failedGeneration = nil
         self.lastErrorAt = nil
-        self.convergenceDeadline = Date().addingTimeInterval(180)
+        // An unattached group is absent from every authority's desired-state
+        // closure. Assembly starts the deadline when a group first enters that
+        // closure, so legitimate agent silence cannot age into degradation.
+        self.convergenceDeadline = nil
         self.$createdBy.id = createdByID
     }
 }

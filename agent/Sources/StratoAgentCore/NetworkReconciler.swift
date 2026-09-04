@@ -805,6 +805,18 @@ public enum NetworkReconciler {
             }.map(\.networkId))
     }
 
+    /// Retired router-scoped rows have already disappeared from the desired
+    /// subnet or floating-IP list. Attribute their removal by the stable
+    /// router key instead of the obsolete value being removed.
+    private static func routerIdentityOwners(
+        _ routerName: String, in networks: [DesiredNetworkState]
+    ) -> Set<UUID> {
+        Set(
+            networks.filter {
+                OVNNaming.routerName(routerKey: $0.routerKey) == routerName
+            }.map(\.networkId))
+    }
+
     private static func routerPortOwners(
         _ portName: String, in networks: [DesiredNetworkState]
     ) -> Set<UUID> {
@@ -856,10 +868,8 @@ public enum NetworkReconciler {
         _ action: NetworkTeardownAction, in networks: [DesiredNetworkState]
     ) -> Set<UUID> {
         switch action {
-        case .dnat(let router, let externalIP):
-            return dnatOwners(router: router, externalIP: externalIP, in: networks)
-        case .snat(let router, let logicalIP):
-            return snatOwners(router: router, logicalIP: logicalIP, in: networks)
+        case .dnat(let router, _), .snat(let router, _):
+            return routerIdentityOwners(router, in: networks)
         case .serviceLocalPort(let name):
             return servicePortOwners(name, in: networks)
         case .switchRouterPort(let name), .routerPort(let name):
@@ -870,7 +880,7 @@ public enum NetworkReconciler {
                     OVNNaming.externalSwitchName(routerKey: $0.routerKey) == name
                 }.map(\.networkId))
         case .router(let name):
-            return routerOwners(name, in: networks)
+            return routerIdentityOwners(name, in: networks)
         }
     }
 }

@@ -173,7 +173,7 @@ final class SecurityGroupControllerTests {
             #expect(group.name == SecurityGroup.defaultGroupName)
             #expect(group.generation == 1)
             #expect(group.observedGeneration == 0)
-            #expect(group.convergenceDeadline != nil)
+            #expect(group.convergenceDeadline == nil)
 
             let rules = try await SecurityGroupRule.query(on: app.db)
                 .filter(\.$securityGroup.$id == group.id!)
@@ -838,6 +838,11 @@ final class SecurityGroupControllerTests {
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
 
+            let beforeAssembly = try await SecurityGroup.query(on: app.db)
+                .filter(\.$id ~~ [web.id, db_.id])
+                .all()
+            #expect(beforeAssembly.allSatisfy { $0.convergenceDeadline == nil })
+
             let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
             let groups = try #require(message.securityGroups)
             #expect(Set(groups.map(\.id)) == [web.id, db_.id])
@@ -845,6 +850,10 @@ final class SecurityGroupControllerTests {
             #expect(webDesired?.generation == 2)
             #expect(webDesired?.rules.count == 1)
             #expect(webDesired?.rules.first?.remoteGroupId == db_.id)
+            let afterAssembly = try await SecurityGroup.query(on: app.db)
+                .filter(\.$id ~~ [web.id, db_.id])
+                .all()
+            #expect(afterAssembly.allSatisfy { $0.convergenceDeadline != nil })
             let nicSpec = try #require(message.vms.first?.spec.networks.first)
             #expect(nicSpec.securityGroupIds == [web.id])
         }

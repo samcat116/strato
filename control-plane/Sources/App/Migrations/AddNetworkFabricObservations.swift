@@ -30,20 +30,19 @@ struct AddNetworkFabricObservations: AsyncMigration {
             "UPDATE security_groups SET generation = 1 WHERE generation = 0"
         ).run()
 
-        // Existing rows did not pass through the new mutation writer and
-        // therefore have no silence deadline. Give every outstanding fabric
-        // generation the same initial budget as a newly accepted mutation.
+        // Existing networks did not pass through the new mutation writer and
+        // therefore have no silence deadline. Security-group deadlines start
+        // only when desired-state assembly includes them for an authority;
+        // otherwise unused groups would time out despite legitimate silence.
         let convergenceDeadline = Date().addingTimeInterval(180)
-        for table in ["logical_networks", "security_groups"] {
-            try await sql.raw(
-                """
-                UPDATE \(ident: table)
-                SET convergence_deadline = \(bind: convergenceDeadline)
-                WHERE observed_generation < generation
-                  AND convergence_deadline IS NULL
-                """
-            ).run()
-        }
+        try await sql.raw(
+            """
+            UPDATE logical_networks
+            SET convergence_deadline = \(bind: convergenceDeadline)
+            WHERE observed_generation < generation
+              AND convergence_deadline IS NULL
+            """
+        ).run()
         for table in ["vm_network_interfaces", "sandbox_network_interfaces"] {
             try await sql.raw(
                 """

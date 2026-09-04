@@ -39,7 +39,10 @@ enum DesiredStateGenerationWriter {
         guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
 
         let advanced: GenerationRow?
-        let tracksNetworkFabric = schema == LogicalNetwork.schema || schema == SecurityGroup.schema
+        // Security-group deadlines start when desired-state assembly proves a
+        // topology authority will receive the group. Unattached groups are
+        // intentionally absent from every agent's closure.
+        let tracksNetworkFabric = schema == LogicalNetwork.schema
         let convergenceDeadline = Date().addingTimeInterval(180)
         if let expectedGeneration, tracksNetworkFabric {
             advanced = try await sql.raw(
