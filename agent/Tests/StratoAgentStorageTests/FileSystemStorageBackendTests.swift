@@ -156,6 +156,7 @@ struct FileSystemStorageBackendTests {
         copyItem: @escaping @Sendable (String, String) throws -> Void = {
             try FileManager.default.copyItem(atPath: $0, toPath: $1)
         },
+        freeDiskSpace: @escaping @Sendable (String) -> Int64? = { _ in Int64.max },
         publishItem: @escaping @Sendable (String, String) throws -> Void = {
             try DurableFileWriter().publish(stagingPath: $0, to: $1)
         }
@@ -167,6 +168,7 @@ struct FileSystemStorageBackendTests {
             imageSource: imageSource,
             enumerateVolumeStore: enumerateVolumeStore,
             copyItem: copyItem,
+            freeDiskSpace: freeDiskSpace,
             publishItem: publishItem,
             runSubprocess: { executable, arguments in
                 await recorder.record(executable: executable, arguments: arguments)
@@ -546,6 +548,29 @@ struct FileSystemStorageBackendTests {
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-2/volume.qcow2"))
     }
 
+    @Test func cloneRefusesBeforeWritingWhenSourceFootprintExceedsFreeSpace() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root,
+            recorder: recorder,
+            freeDiskSpace: { _ in 313_459 })
+
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.cloneVolume(
+                sourceVolumeId: "source",
+                sourcePath: "\(root)/source/volume.qcow2",
+                targetVolumeId: "target")
+        }
+
+        let invocations = await recorder.invocations
+        #expect(invocations.filter { $0.arguments.first == "convert" }.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: "\(root)/target"))
+        #expect(!FileManager.default.fileExists(atPath: "\(root)/target/volume.qcow2.partial"))
+    }
+
     /// The invariant `listVolumes` rests on: presence means *complete*. A
     /// directory a crashed create left behind is not a volume, so the next sync
     /// re-drives it rather than reading a truncated disk as converged.
@@ -682,6 +707,29 @@ struct FileSystemStorageBackendTests {
                 == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath + ".partial"])
         #expect(FileManager.default.contents(atPath: snapshotPath) == Data("created-bytes".utf8))
         #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
+    }
+
+    @Test func snapshotRefusesBeforeWritingWhenParentFootprintExceedsFreeSpace() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root,
+            recorder: recorder,
+            freeDiskSpace: { _ in 313_459 })
+
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.createSnapshot(
+                volumeId: "vol-1",
+                snapshotId: "snap-1",
+                volumePath: "\(root)/vol-1/volume.qcow2")
+        }
+
+        let invocations = await recorder.invocations
+        #expect(invocations.filter { $0.arguments.first == "create" }.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: "\(root)/vol-1/snapshots"))
+        #expect(!FileManager.default.fileExists(atPath: "\(root)/vol-1/snapshots/snap-1.qcow2.partial"))
     }
 
     @Test func createSnapshotIsIdempotent() async throws {

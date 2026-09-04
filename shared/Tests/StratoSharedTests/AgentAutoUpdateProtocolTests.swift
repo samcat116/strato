@@ -71,7 +71,7 @@ struct AgentAutoUpdateProtocolTests {
         let noBlocker = """
             {"requestId":"r","timestamp":0,"agentId":"agent-1","vms":[],"sandboxes":[],
              "resources":{"totalCPU":8,"availableCPU":4,"totalMemory":16,"availableMemory":8,
-                          "totalDisk":100,"availableDisk":50},"unrecognized":[]}
+                          "totalDisk":100,"availableDisk":50,"physicalFreeDisk":50},"unrecognized":[]}
             """
         let decoded = try decodeJSON(ObservedStateReport.self, from: noBlocker)
         #expect(decoded.agentUpdateStatus == nil)

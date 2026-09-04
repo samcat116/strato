@@ -141,10 +141,13 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
         </StatCard>
         <StatCard title="Disk" icon={<HardDrive className="h-4 w-4" />}>
             <div className="text-xl font-bold text-foreground">
-              {formatCapacity(agent.resources.availableDisk)}
+              {formatCapacity(agent.resources.physicalFreeDisk)}
             </div>
             <p className="text-sm text-muted-foreground">
-              of {formatCapacity(agent.resources.totalDisk)} available
+              of {formatCapacity(agent.resources.totalDisk)} physically available
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {formatCapacity(agent.resources.availableDisk)} available for new commitments
             </p>
         </StatCard>
         <StatCard title="Last Heartbeat" icon={<Clock className="h-4 w-4" />}>

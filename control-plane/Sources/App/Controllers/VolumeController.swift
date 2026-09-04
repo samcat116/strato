@@ -195,7 +195,9 @@ struct VolumeController: RouteCollection {
         }
 
         // Create volume record
+        let volumeId = UUID()
         let volume = Volume(
+            id: volumeId,
             name: request.name,
             description: request.description ?? "",
             projectID: projectId,
@@ -219,6 +221,29 @@ struct VolumeController: RouteCollection {
         // immutable copy rather than the mutable `sourceImage` var.
         let poolID = try pool.requireID()
 
+        // Close the sparse-volume placement race before accepting the request.
+        // A fleet with no eligible local agent retains the historical async
+        // degradation path, but a fleet with hosts and no committed capacity
+        // receives a synchronous, host-naming refusal.
+        let preselectedLocalAgentID: String?
+        if pool.mode == .local {
+            do {
+                let selected = try await VolumeService.selectAndReserveVolumeAgent(
+                    sizeBytes: sizeBytes,
+                    volumeId: volumeId,
+                    agents: await app.agentService.getAgentList(),
+                    memberAgentIds: pool.memberAgentIds,
+                    coordination: app.coordination)
+                preselectedLocalAgentID = selected.id?.uuidString
+            } catch let error as VolumeService.InsufficientHostDisk where error.candidates.isEmpty {
+                preselectedLocalAgentID = nil
+            } catch let error as VolumeService.InsufficientHostDisk {
+                throw Abort(.conflict, reason: error.localizedDescription)
+            }
+        } else {
+            preselectedLocalAgentID = nil
+        }
+
         // How long the create has to converge before the stuck-convergence
         // sweep marks the volume degraded, stamped with the insert so a
         // control-plane crash between here and placement still leaves a
@@ -241,6 +266,13 @@ struct VolumeController: RouteCollection {
                     for: project, environment: environment, size: sizeBytes, on: db)
                 try await volume.save(on: db)
                 let volumeID = try volume.requireID()
+                if let preselectedLocalAgentID {
+                    try await VolumeReplica(
+                        volumeID: volumeID,
+                        agentId: preselectedLocalAgentID,
+                        state: .provisioning
+                    ).create(on: db)
+                }
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: userID,
@@ -264,19 +296,29 @@ struct VolumeController: RouteCollection {
                     on: db)
                 return accepted
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
-            throw Abort(
-                .conflict,
-                reason: "A volume named '\(volume.name)' already exists in this project")
+        } catch {
+            if let preselectedLocalAgentID {
+                await app.coordination.releaseReservation(
+                    agentId: preselectedLocalAgentID,
+                    vmId: VolumeService.volumeReservationID(volumeId))
+            }
+            if let databaseError = error as? any DatabaseError,
+                databaseError.isConstraintFailure
+            {
+                throw Abort(
+                    .conflict,
+                    reason: "A volume named '\(volume.name)' already exists in this project")
+            }
+            throw error
         }
 
-        let volumeId = try volume.requireID()
-
-        // Placement is a `.placement` dispatch rather than something resolved
-        // in-band, and it has to *commit* before the sync can carry the volume:
-        // `DesiredStateAssembler` finds volumes through active replica rows, so
-        // an unplaced one is in nobody's desired state. On throw, `dispatch`
-        // degrades the volume with the reason.
+        // Local placement normally committed its replica in the acceptance
+        // transaction above, closing the capacity race before the 202. Ceph
+        // and the no-agent local fallback still place asynchronously. In every
+        // case a replica has to commit before sync: `DesiredStateAssembler`
+        // finds volumes through active replica rows, so an unplaced one is in
+        // nobody's desired state. On throw, `dispatch` degrades the volume with
+        // the reason.
         req.resourceMutation.dispatch(
             .create, resourceType: Volume.self, resourceID: volumeId,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
@@ -303,17 +345,40 @@ struct VolumeController: RouteCollection {
                         await app.agentService.syncDesiredState(agentId: agentId)
                     }
                 case .local:
-                    guard
-                        let agentId = VolumeService.selectVolumeAgent(
-                            from: agents, memberAgentIds: currentPool.memberAgentIds)?.id?.uuidString
-                    else {
+                    if let preselectedLocalAgentID {
+                        await app.agentService.syncDesiredState(agentId: preselectedLocalAgentID)
+                        return
+                    }
+                    let selected: Agent
+                    do {
+                        selected = try await VolumeService.selectAndReserveVolumeAgent(
+                            sizeBytes: sizeBytes,
+                            volumeId: volumeId,
+                            agents: agents,
+                            memberAgentIds: currentPool.memberAgentIds,
+                            coordination: app.coordination)
+                    } catch let error as VolumeService.InsufficientHostDisk
+                        where error.candidates.isEmpty
+                    {
                         throw ResourceMutation.WorkError(
                             "No agent is available to host this volume: it needs an online, "
                                 + "QEMU-capable agent in the volume's local pool.")
+                    } catch {
+                        throw ResourceMutation.WorkError(error.localizedDescription)
                     }
-                    try await VolumeReplica(
-                        volumeID: volumeId, agentId: agentId, state: .provisioning
-                    ).create(on: db)
+                    guard let agentId = selected.id?.uuidString else {
+                        throw ResourceMutation.WorkError("Selected volume agent has no ID")
+                    }
+                    do {
+                        try await VolumeReplica(
+                            volumeID: volumeId, agentId: agentId, state: .provisioning
+                        ).create(on: db)
+                    } catch {
+                        await app.coordination.releaseReservation(
+                            agentId: agentId,
+                            vmId: VolumeService.volumeReservationID(volumeId))
+                        throw error
+                    }
                     await app.agentService.syncDesiredState(agentId: agentId)
                 case .replicated:
                     throw ResourceMutation.WorkError("Replicated storage pools are not executable")

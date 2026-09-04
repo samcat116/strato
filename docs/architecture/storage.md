@@ -628,16 +628,30 @@ exists today.
 
 ### Volume placement across agents
 
-Volumes are host-local. `VolumeService.selectVolumeAgent` places a volume on an
-online, QEMU-capable agent (attachment goes through QEMU's block layer) that
-speaks wire v31 or later, and attachment requires the VM's agent to be able to
-reach the volume's data — for a local pool, the same agent that holds it.
+Volumes are host-local. `VolumeService.selectAndReserveVolumeAgent` places a
+volume on an online, QEMU-capable agent whose committed disk availability can
+hold the requested virtual size. It atomically reserves that capacity in the
+coordination store, so concurrent sparse-volume creates cannot all spend the
+same advertised bytes. Attachment requires the VM's agent to reach the
+volume's data — for a local pool, the same agent that holds it.
 
 Placement is a committed database fact *before* any sync can carry the volume,
-because sync assembly finds a volume by its `hypervisor_id`. It therefore runs
-as the create mutation's dispatch rather than in-band, and a create with no
-eligible agent degrades the volume with that reason instead of failing the
-request.
+because sync assembly finds a volume through its replica row. When eligible
+hosts exist, create selects and reserves one before acceptance and commits that
+replica in the same transaction as the volume. A fleet with eligible hosts but
+insufficient committed disk therefore returns `409` before a volume row is
+created. A create made while no eligible agent exists retains the established
+asynchronous behavior: it is accepted, then degraded with that reason.
+
+Wire v59 separates the two local-disk quantities that sparse images made easy
+to conflate. `availableDisk` is provisioned availability (`total - committed`)
+and is the placement/admission input. `physicalFreeDisk` is the live filesystem
+free-byte observation used for operational utilization. Local volume virtual
+sizes and the worst-case growth of local snapshot overlays are committed;
+Ceph-backed volumes are not charged to the agent's local filesystem.
+The current allocation ratio is explicitly 1:1. A site-scoped ratio can widen
+that bound at this placement seam when controlled overcommit is introduced;
+physical headroom remains a separate pressure signal either way.
 
 The wire-version filter is the one placement gate here that refuses rather than
 degrades: with the imperative volume frames gone, a volume on a pre-v31 agent

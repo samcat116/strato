@@ -118,9 +118,13 @@ struct HostCapacityAdmissionTests {
 
     @Test("arithmetic saturates instead of wrapping capacity")
     func overflowSafety() throws {
-        let saturated = HostReservation(cpus: Int.max, memoryBytes: Int64.max)
-            .addingSaturating(HostReservation(cpus: 1, memoryBytes: 1))
-        #expect(saturated == HostReservation(cpus: Int.max, memoryBytes: Int64.max))
+        let saturated = HostReservation(
+            cpus: Int.max, memoryBytes: Int64.max, diskBytes: Int64.max
+        ).addingSaturating(HostReservation(cpus: 1, memoryBytes: 1, diskBytes: 1))
+        #expect(
+            saturated
+                == HostReservation(
+                    cpus: Int.max, memoryBytes: Int64.max, diskBytes: Int64.max))
 
         var ledger = HostCapacityAdmissionLedger()
         let snapshot = HostCapacitySnapshot(
@@ -134,6 +138,82 @@ struct HostCapacityAdmissionTests {
             try ledger.claim(
                 HostReservation(cpus: 1), desiredWorkloadReservation: HostReservation(cpus: 1),
                 snapshot: snapshot, agentName: "hv")
+        }
+    }
+
+    @Test("disk claims admit exact fit, block contention, and reject impossible requests")
+    func diskAdmission() throws {
+        let snapshot = HostCapacitySnapshot(
+            total: HostReservation(diskBytes: 100 * gib),
+            reserved: HostReservation(diskBytes: 60 * gib))
+        var ledger = HostCapacityAdmissionLedger()
+
+        let exact = try #require(
+            try ledger.claim(
+                HostReservation(diskBytes: 40 * gib),
+                desiredWorkloadReservation: HostReservation(diskBytes: 40 * gib),
+                snapshot: snapshot,
+                agentName: "disk-host"))
+        #expect(exact.reservation.diskBytes == 40 * gib)
+
+        do {
+            _ = try ledger.claim(
+                HostReservation(diskBytes: gib),
+                desiredWorkloadReservation: HostReservation(diskBytes: gib),
+                snapshot: snapshot,
+                agentName: "disk-host")
+            Issue.record("a concurrent disk claim should be refused")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.resource == .disk)
+            #expect(error.failureClassification == .blocked)
+        }
+
+        ledger.release(exact)
+        do {
+            _ = try ledger.claim(
+                HostReservation(diskBytes: 101 * gib),
+                desiredWorkloadReservation: HostReservation(diskBytes: 101 * gib),
+                snapshot: snapshot,
+                agentName: "disk-host")
+            Issue.record("a volume larger than the host should be refused")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.resource == .disk)
+            #expect(error.failureClassification == .permanent)
+        }
+    }
+
+    @Test("disk shrink has no positive claim and unknown disk inventory fails closed")
+    func diskShrinkAndUnknownInventory() throws {
+        let current = HostReservation(diskBytes: 80 * gib)
+        let desired = HostReservation(diskBytes: 40 * gib)
+        #expect(HostReservation.positiveDelta(from: current, to: desired).diskBytes == 0)
+
+        var ledger = HostCapacityAdmissionLedger()
+        let full = HostCapacitySnapshot(
+            total: HostReservation(diskBytes: 80 * gib),
+            reserved: current)
+        #expect(
+            try ledger.claim(
+                .positiveDelta(from: current, to: desired),
+                desiredWorkloadReservation: desired,
+                snapshot: full,
+                agentName: "disk-host") == nil)
+
+        let unknown = HostCapacitySnapshot(
+            total: HostReservation(cpus: 8, memoryBytes: 16 * gib, diskBytes: 100 * gib),
+            reserved: HostReservation(),
+            inventoryKnown: true,
+            diskInventoryKnown: false)
+        do {
+            _ = try ledger.claim(
+                HostReservation(diskBytes: gib),
+                desiredWorkloadReservation: HostReservation(diskBytes: gib),
+                snapshot: unknown,
+                agentName: "disk-host")
+            Issue.record("unknown disk inventory should be refused")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.resource == .inventory)
+            #expect(error.failureClassification == .blocked)
         }
     }
 

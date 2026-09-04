@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 57). The required registration fields
+currently 59). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -73,6 +73,10 @@ Wire v46 adds authoritative native-OVN load-balancer desired state, programming,
 and backend-health observations.
 
 Wire v47 adds typed dependency observations to agent registration and heartbeats.
+
+Wire v59 splits host-local disk reporting into committed availability
+(`availableDisk`) and live filesystem headroom (`physicalFreeDisk`). Placement
+uses the former; operational utilization uses the latter.
 The control plane uses the latest received snapshot for feature-scoped placement
 gates without terminating workloads that are already running.
 

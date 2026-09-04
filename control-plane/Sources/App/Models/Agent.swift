@@ -47,6 +47,10 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "available_disk")
     var availableDisk: Int64
 
+    /// Physical filesystem headroom, distinct from provisioned capacity.
+    @Field(key: "physical_free_disk")
+    var physicalFreeDisk: Int64
+
     @Timestamp(key: "last_heartbeat", on: .none)
     var lastHeartbeat: Date?
 
@@ -287,6 +291,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
         self.availableDisk = resources.availableDisk
+        self.physicalFreeDisk = resources.physicalFreeDisk
         self.architecture = architecture?.rawValue
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability?.rawValue
@@ -311,10 +316,12 @@ final class Agent: Model, Content, @unchecked Sendable {
             availableCPU != resources.availableCPU
                 || availableMemory != resources.availableMemory
                 || availableDisk != resources.availableDisk
+                || physicalFreeDisk != resources.physicalFreeDisk
         else { return false }
         availableCPU = resources.availableCPU
         availableMemory = resources.availableMemory
         availableDisk = resources.availableDisk
+        physicalFreeDisk = resources.physicalFreeDisk
         return true
     }
 
@@ -325,7 +332,8 @@ final class Agent: Model, Content, @unchecked Sendable {
             totalMemory: totalMemory,
             availableMemory: availableMemory,
             totalDisk: totalDisk,
-            availableDisk: availableDisk
+            availableDisk: availableDisk,
+            physicalFreeDisk: physicalFreeDisk
         )
     }
 }
@@ -428,6 +436,7 @@ extension Agent {
         availableCPU = registration.resources.availableCPU
         availableMemory = registration.resources.availableMemory
         availableDisk = registration.resources.availableDisk
+        physicalFreeDisk = registration.resources.physicalFreeDisk
         lastHeartbeat = receivedAt
         status = .online
     }

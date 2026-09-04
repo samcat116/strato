@@ -255,7 +255,10 @@ public struct AgentResources: Codable, Sendable {
     public let totalMemory: Int64
     public let availableMemory: Int64
     public let totalDisk: Int64
+    /// Provisioned local-disk bytes still available for new commitments.
     public let availableDisk: Int64
+    /// Bytes physically free on the filesystem backing local volumes.
+    public let physicalFreeDisk: Int64
 
     public init(
         totalCPU: Int,
@@ -263,7 +266,8 @@ public struct AgentResources: Codable, Sendable {
         totalMemory: Int64,
         availableMemory: Int64,
         totalDisk: Int64,
-        availableDisk: Int64
+        availableDisk: Int64,
+        physicalFreeDisk: Int64? = nil
     ) {
         self.totalCPU = totalCPU
         self.availableCPU = availableCPU
@@ -271,6 +275,7 @@ public struct AgentResources: Codable, Sendable {
         self.availableMemory = availableMemory
         self.totalDisk = totalDisk
         self.availableDisk = availableDisk
+        self.physicalFreeDisk = physicalFreeDisk ?? availableDisk
     }
 }
 

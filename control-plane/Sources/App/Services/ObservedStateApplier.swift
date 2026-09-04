@@ -335,6 +335,16 @@ struct ObservedStateApplier {
                 uniquingKeysWith: { first, _ in first }
             )
             let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
+            let accountedVolumeReservationIDs = dbVolumes.compactMap { volume -> String? in
+                guard let id = volume.id, volume.observedGeneration == 0, reportedVolumes[id] != nil
+                else { return nil }
+                return VolumeService.volumeReservationID(id)
+            }
+            if !accountedVolumeReservationIDs.isEmpty {
+                await app.coordination.releaseReservations(
+                    agentId: report.agentId,
+                    vmIds: accountedVolumeReservationIDs)
+            }
             for volume in dbVolumes {
                 guard let volumeID = volume.id else { continue }
                 if let observed = reportedVolumes[volumeID] {

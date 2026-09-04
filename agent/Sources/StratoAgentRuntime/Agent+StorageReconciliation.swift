@@ -103,6 +103,25 @@ extension Agent {
                 throw ConvergenceError.sourceNotReady(
                     "volume \(parentId) is not present on this host yet")
             }
+            let parentDesired = desiredVolumeStates[parentId]
+            let snapshotStorage = VolumeSnapshotStorageRouting.resolve(
+                desiredStorage: desired.volumeStorage,
+                recordedStorage: nil,
+                currentParentStorage: parentDesired?.storage)
+            let reservedDiskBytes = snapshotStorage == .local ? parentDesired?.sizeBytes : nil
+            let claim: HostCapacityClaim?
+            if let reservedDiskBytes {
+                let reservation = HostReservation(diskBytes: reservedDiskBytes)
+                let raw = await rawHostCapacitySnapshot()
+                claim = try capacityAdmissionLedger.claim(
+                    reservation,
+                    desiredWorkloadReservation: reservation,
+                    snapshot: raw,
+                    agentName: initialAgentID)
+            } else {
+                claim = nil
+            }
+            defer { capacityAdmissionLedger.release(claim) }
             let path = try await backend.createSnapshot(
                 volumeId: parentId, snapshotId: snapshotId, attachment: disk)
             facts = ObservedSnapshotFacts(
@@ -145,6 +164,10 @@ extension Agent {
         snapshotRecords[desired.snapshotId] = SnapshotRecord(
             snapshotId: desired.snapshotId, kind: desired.kind, parentId: desired.parentId,
             volumeStorage: desired.kind == .volumeSnapshot ? desired.volumeStorage : nil,
+            reservedDiskBytes: desired.kind == .volumeSnapshot
+                ? (desiredVolumeStates[desired.parentId.uuidString]?.storage == .local
+                    ? desiredVolumeStates[desired.parentId.uuidString]?.sizeBytes : nil)
+                : nil,
             facts: facts)
         persistSnapshotRecords()
         logger.info(
@@ -351,6 +374,19 @@ extension Agent {
                 "managed volume \(item.id) has historical bytes that could not be adopted: \(adoptionFailure)")
         }
         let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        let claim: HostCapacityClaim?
+        if desired.storage == .local {
+            let reservation = HostReservation(diskBytes: desired.sizeBytes)
+            let raw = await rawHostCapacitySnapshot()
+            claim = try capacityAdmissionLedger.claim(
+                reservation,
+                desiredWorkloadReservation: reservation,
+                snapshot: raw,
+                agentName: initialAgentID)
+        } else {
+            claim = nil
+        }
+        defer { capacityAdmissionLedger.release(claim) }
 
         // The create strategy is read only here, when the volume does not yet
         // exist. A present volume never re-runs it, which is what makes a
@@ -410,6 +446,9 @@ extension Agent {
         // A cloned or image-backed volume inherits the source's size, which may
         // be smaller than what was asked for; the next sync plans the grow.
         volumeSizes[item.id] = try? await backend.volumeInfo(attachment: attachment).virtualSize
+        if desired.storage == .local {
+            volumeCommittedSizes[item.id] = desired.sizeBytes
+        }
         logger.info(
             "Volume converged into existence",
             metadata: [
@@ -502,7 +541,25 @@ extension Agent {
                             + "has no online grow path")
                 }
             }
+            let claim: HostCapacityClaim?
+            if desired.storage == .local {
+                let committed = max(current, volumeCommittedSizes[item.id] ?? 0)
+                let currentReservation = HostReservation(diskBytes: committed)
+                let desiredReservation = HostReservation(diskBytes: desired.sizeBytes)
+                let raw = await rawHostCapacitySnapshot()
+                claim = try capacityAdmissionLedger.claim(
+                    .positiveDelta(from: currentReservation, to: desiredReservation),
+                    desiredWorkloadReservation: desiredReservation,
+                    snapshot: raw,
+                    agentName: initialAgentID)
+            } else {
+                claim = nil
+            }
+            defer { capacityAdmissionLedger.release(claim) }
             try await backend.resizeVolume(attachment: disk, newSizeBytes: desired.sizeBytes)
+            if desired.storage == .local {
+                volumeCommittedSizes[item.id] = desired.sizeBytes
+            }
         }
         volumeSizes[item.id] = desired.sizeBytes
     }
@@ -519,6 +576,7 @@ extension Agent {
         }
         try await backend.deleteVolume(volumeId: item.id)
         volumeSizes.removeValue(forKey: item.id)
+        volumeCommittedSizes.removeValue(forKey: item.id)
         logger.info("Volume removed from this host", metadata: ["volumeId": .string(item.id)])
     }
 

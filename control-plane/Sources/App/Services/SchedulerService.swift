@@ -29,6 +29,7 @@ struct SchedulableAgent: Sendable {
     let availableMemory: Int64
     let totalDisk: Int64
     let availableDisk: Int64
+    let physicalFreeDisk: Int64
     let status: AgentStatus
     let runningVMCount: Int
     /// Hypervisor backends this agent can actually run, from its structured registration report.
@@ -66,6 +67,7 @@ struct SchedulableAgent: Sendable {
         availableMemory: Int64,
         totalDisk: Int64,
         availableDisk: Int64,
+        physicalFreeDisk: Int64? = nil,
         status: AgentStatus,
         runningVMCount: Int,
         supportedHypervisors: [HypervisorType] = [.qemu],
@@ -86,6 +88,7 @@ struct SchedulableAgent: Sendable {
         self.availableMemory = availableMemory
         self.totalDisk = totalDisk
         self.availableDisk = availableDisk
+        self.physicalFreeDisk = physicalFreeDisk ?? availableDisk
         self.status = status
         self.runningVMCount = runningVMCount
         self.supportedHypervisors = supportedHypervisors
@@ -143,6 +146,7 @@ struct SchedulableAgent: Sendable {
             availableMemory: max(0, availableMemory - reserved.memory),
             totalDisk: totalDisk,
             availableDisk: max(0, availableDisk - reserved.disk),
+            physicalFreeDisk: physicalFreeDisk,
             status: status,
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,

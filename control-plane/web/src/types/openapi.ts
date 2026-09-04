@@ -8627,8 +8627,16 @@ export interface components {
              * @description Bytes.
              */
             totalDisk: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Bytes available for new provisioned commitments.
+             */
             availableDisk: number;
+            /**
+             * Format: int64
+             * @description Bytes physically free on the local volume filesystem.
+             */
+            physicalFreeDisk: number;
         };
         /**
          * @description CPU architecture of a hypervisor host.

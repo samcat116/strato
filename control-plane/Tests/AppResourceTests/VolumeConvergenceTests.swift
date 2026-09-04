@@ -236,6 +236,12 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: agentId,
                 status: .creating, observedGeneration: 0, storagePath: nil)
             let volumeID = try #require(volume.id)
+            #expect(
+                await app.coordination.reserveCapacity(
+                    agentId: agentId,
+                    vmId: VolumeService.volumeReservationID(volumeID),
+                    amounts: ReservationAmounts(cpu: 0, memory: 0, disk: volume.size),
+                    capacity: ReservationAmounts(cpu: 0, memory: 0, disk: 1 << 40)))
 
             _ = try await app.observedStateApplier.apply(
                 report(
@@ -259,6 +265,8 @@ final class VolumeConvergenceTests {
                     == .file(path: "/agent/chosen/path.qcow2", format: .qcow2))
             #expect(replica?.state == .healthy)
             #expect(replica?.generation == 1)
+            let remainingReservation = await app.coordination.activeReservations(agentIds: [agentId])
+            #expect(remainingReservation[agentId] == .zero)
         }
     }
 

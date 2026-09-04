@@ -194,5 +194,9 @@ extension Application {
         // The exact-match registration handshake makes a persisted wire version
         // redundant. Fresh baselines omit it; preserved databases drop it here.
         migrations.add(DropAgentWireProtocolVersion())
+
+        // STR-278: preserve both committed disk availability and the physical
+        // filesystem headroom sparse volumes can consume later.
+        migrations.add(AddAgentPhysicalFreeDisk())
     }
 }

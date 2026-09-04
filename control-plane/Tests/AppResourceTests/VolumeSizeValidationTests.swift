@@ -154,6 +154,34 @@ final class VolumeSizeValidationTests {
         }
     }
 
+    @Test("POST /api/volumes refuses committed host-disk exhaustion before returning 202")
+    func createRejectsInsufficientCommittedHostDisk() async throws {
+        try await withVolumeTestApp { app, builder, _, project, token in
+            _ = try await builder.registerAgent(
+                on: app,
+                named: "disk-full-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 100.gbToBytes!,
+                    availableDisk: 5.gbToBytes!,
+                    physicalFreeDisk: 80.gbToBytes!))
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(self.createBody(project: project, sizeGB: 10))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("disk-full-host"))
+                #expect(res.body.string.contains("5 GiB"))
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
+        }
+    }
+
     @Test("POST /api/volumes rejects a Firecracker-only source image")
     func createRejectsSourceImageWithoutDiskArtifact() async throws {
         try await withVolumeTestApp { app, _, user, project, token in

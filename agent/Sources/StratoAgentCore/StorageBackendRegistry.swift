@@ -87,6 +87,10 @@ public actor StorageBackendRegistry {
         try await local.listVolumes()
     }
 
+    public func localVolumeInfo(attachment: DiskAttachment) async throws -> VolumeInfoResult {
+        try await local.volumeInfo(attachment: attachment)
+    }
+
     /// Applies one permanent credential tombstone after proving this sync no
     /// longer asks the agent to use it. Cache eviction happens before cleanup,
     /// so even a failed cleanup cannot leave a prepared backend available to
