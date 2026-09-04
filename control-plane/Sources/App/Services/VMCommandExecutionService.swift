@@ -736,7 +736,7 @@ actor VMCommandExecutionService {
         let expiredCaptures = captures.filter { $0.value.deadline <= now }
         guard app.db is any SQLDatabase else { return }
         do {
-            let (transitions, payloadWrites) = try await app.db.transaction { db in
+            let (transitions, payloadWrites, evictableCaptureIDs) = try await app.db.transaction { db in
                 guard let sql = db as? any SQLDatabase else {
                     throw Abort(.internalServerError)
                 }
@@ -771,6 +771,7 @@ actor VMCommandExecutionService {
                     ).run()
                 }
                 var payloadWrites: Set<UUID> = []
+                var evictableCaptureIDs: Set<UUID> = []
                 for (id, originalCapture) in expiredCaptures {
                     var capture = originalCapture
                     let ownsTimedOutRow: Bool
@@ -786,6 +787,7 @@ actor VMCommandExecutionService {
                             && execution?.timedOutBySweeper == true
                     }
                     guard ownsTimedOutRow else { continue }
+                    evictableCaptureIDs.insert(id)
                     capture.truncated = true
                     if try await self.recordPayload(
                         id: id, capture: capture, exitCode: nil, on: db)
@@ -803,7 +805,7 @@ actor VMCommandExecutionService {
                             context: try await Self.auditContext(id: execution.id, on: db),
                             timestamp: execution.completedAt))
                 }
-                return (transitions, payloadWrites)
+                return (transitions, payloadWrites, evictableCaptureIDs)
             }
 
             // Also bound actor-local memory if a database state transition
@@ -812,6 +814,7 @@ actor VMCommandExecutionService {
             // transaction commits so every newly timed-out capture is flushed
             // before eviction.
             for (id, expiredCapture) in expiredCaptures {
+                guard evictableCaptureIDs.contains(id) else { continue }
                 guard var current = captures[id] else { continue }
                 if current.mutationToken == expiredCapture.mutationToken {
                     captures.removeValue(forKey: id)
