@@ -337,17 +337,20 @@ extension Agent {
         let totalCPU: Int
         let totalMemory: Int64
         let totalDisk: Int64
+        let diskCapacity: (total: Int64, free: Int64)?
         var diskInventoryKnown = true
         if let simulation, simulation.enabled {
             totalCPU = simulation.resolvedCPUCores
             totalMemory = simulation.resolvedMemoryBytes
             totalDisk = simulation.resolvedDiskBytes
+            diskCapacity = nil
             // Mock volumes write no physical bytes; this figure is the
             // operational media signal, not commitment availability.
         } else {
             totalCPU = HostResources.logicalCoreCount
             totalMemory = HostResources.physicalMemoryBytes
             let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
+            diskCapacity = disk
             if disk == nil {
                 logger.warning(
                     "Unable to determine disk capacity for managed volume storage path",
@@ -441,13 +444,27 @@ extension Agent {
         // volumes as well as VM boot/data volumes. Legacy VM manifests with no
         // managed-volume identities retain their historical disk reservation;
         // current manifests do not, or their boot volume would be charged twice.
+        var managedDiskAllocated = HostReservation()
         if let storageBackends {
             do {
                 let inventory = try await storageBackends.localInventory()
-                for (volumeId, attachment) in inventory where volumeCommittedSizes[volumeId] == nil {
-                    let info = try await storageBackends.localVolumeInfo(attachment: attachment)
-                    volumeSizes[volumeId] = info.virtualSize
-                    volumeCommittedSizes[volumeId] = max(0, info.virtualSize)
+                for (volumeId, attachment) in inventory {
+                    if case .file(let path, _) = attachment,
+                        let allocated = SnapshotFootprint.allocatedBytes(at: path)
+                    {
+                        managedDiskAllocated = managedDiskAllocated.addingSaturating(
+                            HostReservation(diskBytes: allocated))
+                    } else {
+                        diskInventoryKnown = false
+                        logger.warning(
+                            "Unable to measure managed local volume footprint",
+                            metadata: ["volumeId": .string(volumeId)])
+                    }
+                    if volumeCommittedSizes[volumeId] == nil {
+                        let info = try await storageBackends.localVolumeInfo(attachment: attachment)
+                        volumeSizes[volumeId] = info.virtualSize
+                        volumeCommittedSizes[volumeId] = max(0, info.virtualSize)
+                    }
                 }
                 volumeCommittedSizes = volumeCommittedSizes.filter { inventory[$0.key] != nil }
                 for bytes in volumeCommittedSizes.values {
@@ -492,6 +509,30 @@ extension Agent {
                 ?? desiredVolumeStates[record.parentId.uuidString]?.sizeBytes
                 ?? 0
             reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
+            if let path = record.facts.storagePath,
+                let allocated = SnapshotFootprint.allocatedBytes(at: path)
+            {
+                managedDiskAllocated = managedDiskAllocated.addingSaturating(
+                    HostReservation(diskBytes: allocated))
+            } else {
+                diskInventoryKnown = false
+                logger.warning(
+                    "Unable to measure managed local snapshot footprint",
+                    metadata: ["snapshotId": .string(record.snapshotId.uuidString)])
+            }
+        }
+
+        // Filesystem total includes bytes already occupied by the OS, logs,
+        // image caches, and other unmanaged data. Charge those bytes as a
+        // baseline reservation. Managed volume and snapshot allocations are
+        // excluded because their full virtual sizes are already reserved.
+        if let diskCapacity {
+            reserved = reserved.addingSaturating(
+                HostReservation(
+                    diskBytes: HostResources.unmanagedDiskUsage(
+                        total: diskCapacity.total,
+                        free: diskCapacity.free,
+                        managedAllocated: managedDiskAllocated.diskBytes)))
         }
 
         // An unreadable manifest means this host's contents are unknown, and

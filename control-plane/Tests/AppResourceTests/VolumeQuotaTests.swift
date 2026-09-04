@@ -57,9 +57,22 @@ final class VolumeQuotaTests {
             iopsTotal: nil, bpsTotal: nil)
     }
 
-    private func registerAgent(app: Application, named name: String) async throws -> String {
+    private func registerAgent(
+        app: Application,
+        named name: String,
+        availableDisk: Int64 = 1 << 40
+    ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
-            on: app, named: name, hostname: "\(name).test")
+            on: app,
+            named: name,
+            hostname: "\(name).test",
+            resources: AgentResources(
+                totalCPU: 16,
+                availableCPU: 16,
+                totalMemory: 1 << 34,
+                availableMemory: 1 << 34,
+                totalDisk: 1 << 40,
+                availableDisk: availableDisk))
     }
 
     /// A volume the caller owns and can act on, inserted directly so the tests
@@ -522,6 +535,40 @@ final class VolumeQuotaTests {
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
             #expect(try await Volume.query(on: app.db).count() == 1)
+            let reservations = await app.coordination.activeReservations(agentIds: [agentId])
+            #expect(reservations[agentId] == .zero)
+        }
+    }
+
+    @Test("Local clones reserve their fixed agent before acceptance")
+    func localCloneReservesSourceAgentCapacity() async throws {
+        try await withVolumeQuotaApp { app, _, user, project, token in
+            let agentId = try await registerAgent(
+                app: app, named: "clone-capacity-host", availableDisk: gb(50))
+            let source = try await seedVolume(
+                app: app, user: user, project: project, name: "clone-capacity-source",
+                sizeGB: 30, agentId: agentId)
+            let volumeID = try source.requireID()
+
+            try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(CloneVolumeRequest(name: "first-copy", description: nil))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let reservations = await app.coordination.activeReservations(agentIds: [agentId])
+            #expect(reservations[agentId]?.disk == gb(30))
+
+            try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(CloneVolumeRequest(name: "second-copy", description: nil))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("clone-capacity-host"))
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 2)
         }
     }
 

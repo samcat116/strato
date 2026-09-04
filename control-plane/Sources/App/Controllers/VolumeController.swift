@@ -1145,7 +1145,9 @@ struct VolumeController: RouteCollection {
         // The clone is materialized on the source's agent — a clone reads the
         // source's file, so the two must be co-located — and therefore lives in
         // the source's pool and is placed at create time rather than scheduled.
+        let newVolumeID = UUID()
         let newVolume = Volume(
+            id: newVolumeID,
             name: request.name,
             description: request.description ?? "Clone of \(sourceVolume.name)",
             projectID: sourceVolume.$project.id,
@@ -1169,61 +1171,84 @@ struct VolumeController: RouteCollection {
         }
 
         let userID = try user.requireID()
+        let sourceProject = try await sourceVolume.project(on: req.db)
+        let reservedLocalAgentID: String?
+        if sourceIsCeph {
+            reservedLocalAgentID = nil
+        } else {
+            do {
+                _ = try await VolumeService.selectAndReserveVolumeAgent(
+                    sizeBytes: sourceVolume.size,
+                    volumeId: newVolumeID,
+                    agents: await req.application.agentService.getAgentList(),
+                    memberAgentIds: [sourceAgentId],
+                    coordination: req.application.coordination)
+                reservedLocalAgentID = sourceAgentId
+            } catch let error as VolumeService.InsufficientHostDisk {
+                throw Abort(.conflict, reason: error.localizedDescription)
+            }
+        }
+
         // Same create-only transaction as the ordinary volume path: reserve
         // the clone's full storage footprint first, then make generation 1,
         // attribution, and creator access visible together.
-        let sourceProject = try await sourceVolume.project(on: req.db)
-        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            try await IdempotencyService.reserve(
-                req.idempotencyContext, actor: .user(userID), on: db)
-            try await QuotaEnforcementService.reserveVolume(
-                for: sourceProject, environment: sourceVolume.environment,
-                size: sourceVolume.size, on: db)
-            try await newVolume.save(on: db)
-            let newVolumeID = try newVolume.requireID()
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: userID,
-                role: .admin,
-                nodeType: .volume,
-                nodeID: newVolumeID,
-                createdBy: userID,
-                on: db
-            )
-            let event = try await ResourceEvent.record(
-                .create, resourceKind: .volume, resourceID: newVolumeID,
-                actor: .user(userID), on: db)
-            let accepted = ResourceMutation.Accepted(
-                mutationID: try event.requireID(), targetGeneration: newVolume.generation)
-            try await IdempotencyService.complete(
-                req.idempotencyContext,
-                actor: .user(userID),
-                resourceKind: .volume,
-                resourceID: newVolumeID,
-                accepted: accepted,
-                on: db)
-            return accepted
+        let accepted: ResourceMutation.Accepted
+        do {
+            accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+                try await IdempotencyService.reserve(
+                    req.idempotencyContext, actor: .user(userID), on: db)
+                try await QuotaEnforcementService.reserveVolume(
+                    for: sourceProject, environment: sourceVolume.environment,
+                    size: sourceVolume.size, on: db)
+                try await newVolume.save(on: db)
+                if let reservedLocalAgentID {
+                    try await VolumeReplica(
+                        volumeID: newVolumeID,
+                        agentId: reservedLocalAgentID,
+                        state: .provisioning
+                    ).create(on: db)
+                }
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: userID,
+                    role: .admin,
+                    nodeType: .volume,
+                    nodeID: newVolumeID,
+                    createdBy: userID,
+                    on: db
+                )
+                let event = try await ResourceEvent.record(
+                    .create, resourceKind: .volume, resourceID: newVolumeID,
+                    actor: .user(userID), on: db)
+                let accepted = ResourceMutation.Accepted(
+                    mutationID: try event.requireID(), targetGeneration: newVolume.generation)
+                try await IdempotencyService.complete(
+                    req.idempotencyContext,
+                    actor: .user(userID),
+                    resourceKind: .volume,
+                    resourceID: newVolumeID,
+                    accepted: accepted,
+                    on: db)
+                return accepted
+            }
+        } catch {
+            if let reservedLocalAgentID {
+                await req.application.coordination.releaseReservation(
+                    agentId: reservedLocalAgentID,
+                    vmId: VolumeService.volumeReservationID(newVolumeID))
+            }
+            throw error
         }
 
         // The clone is a create *strategy* on the new volume's desired entry,
         // not an operation on the source (ADR 0001 stage 5). The source is
         // therefore never marked busy and never has to be restored afterwards —
         // it is simply read, by an agent that already holds it.
-        let newVolumeID = try newVolume.requireID()
         let app = req.application
         req.resourceMutation.dispatch(
             .create, resourceType: Volume.self, resourceID: newVolumeID,
             targetGeneration: accepted.targetGeneration, agentIDs: sourceAgentIds,
             strategy: .placement { @Sendable db in
-                if !sourceIsCeph {
-                    try await db.transaction { tx in
-                        for agentId in sourceAgentIds {
-                            try await VolumeReplica(
-                                volumeID: newVolumeID, agentId: agentId, state: .provisioning
-                            ).create(on: tx)
-                        }
-                    }
-                }
                 for agentId in sourceAgentIds {
                     await app.agentService.syncDesiredState(agentId: agentId)
                 }

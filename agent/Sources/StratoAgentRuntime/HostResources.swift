@@ -45,4 +45,17 @@ enum HostResources {
 
         return (total: total, free: free)
     }
+
+    /// Physical bytes already unavailable to managed sparse-disk commitments.
+    ///
+    /// Managed files are charged by virtual size elsewhere, so their allocated
+    /// blocks must not also be charged here. Everything else already occupying
+    /// the filesystem reduces the commitment pool byte-for-byte.
+    static func unmanagedDiskUsage(total: Int64, free: Int64, managedAllocated: Int64) -> Int64 {
+        let boundedTotal = max(0, total)
+        let boundedFree = min(boundedTotal, max(0, free))
+        let physicallyUsed = boundedTotal - boundedFree
+        let managed = min(physicallyUsed, max(0, managedAllocated))
+        return physicallyUsed - managed
+    }
 }
