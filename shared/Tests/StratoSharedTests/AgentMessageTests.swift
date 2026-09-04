@@ -34,6 +34,19 @@ struct AgentMessageTests {
         #expect(decoded.resources.availableMemory == Fixtures.resources.availableMemory)
         #expect(decoded.resources.totalDisk == Fixtures.resources.totalDisk)
         #expect(decoded.resources.availableDisk == Fixtures.resources.availableDisk)
+        #expect(decoded.resources.physicalFreeDisk == Fixtures.resources.physicalFreeDisk)
+    }
+
+    @Test("Agent resources from the previous wire version preserve disk availability")
+    func legacyAgentResourcesDecodeWithoutPhysicalFreeDisk() throws {
+        let json = """
+            {"totalCPU":4,"availableCPU":3,"totalMemory":16,"availableMemory":8,
+             "totalDisk":100,"availableDisk":40}
+            """
+
+        let decoded = try decodeJSON(AgentResources.self, from: json)
+        #expect(decoded.availableDisk == 40)
+        #expect(decoded.physicalFreeDisk == 40)
     }
 
     @Test("Persisted hypervisor reports from before vsock probing still decode as unknown")

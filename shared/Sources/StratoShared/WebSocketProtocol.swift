@@ -250,6 +250,16 @@ public struct AgentRegisterResponseMessage: WebSocketMessage {
 }
 
 public struct AgentResources: Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case totalCPU
+        case availableCPU
+        case totalMemory
+        case availableMemory
+        case totalDisk
+        case availableDisk
+        case physicalFreeDisk
+    }
+
     public let totalCPU: Int
     public let availableCPU: Int
     public let totalMemory: Int64
@@ -276,6 +286,19 @@ public struct AgentResources: Codable, Sendable {
         self.totalDisk = totalDisk
         self.availableDisk = availableDisk
         self.physicalFreeDisk = physicalFreeDisk ?? availableDisk
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.totalCPU = try container.decode(Int.self, forKey: .totalCPU)
+        self.availableCPU = try container.decode(Int.self, forKey: .availableCPU)
+        self.totalMemory = try container.decode(Int64.self, forKey: .totalMemory)
+        self.availableMemory = try container.decode(Int64.self, forKey: .availableMemory)
+        self.totalDisk = try container.decode(Int64.self, forKey: .totalDisk)
+        self.availableDisk = try container.decode(Int64.self, forKey: .availableDisk)
+        self.physicalFreeDisk =
+            try container.decodeIfPresent(Int64.self, forKey: .physicalFreeDisk)
+            ?? self.availableDisk
     }
 }
 
