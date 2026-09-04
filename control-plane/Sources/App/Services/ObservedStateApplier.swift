@@ -336,8 +336,15 @@ struct ObservedStateApplier {
             )
             let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
             let accountedVolumeReservationIDs = dbVolumes.compactMap { volume -> String? in
-                guard let id = volume.id, volume.observedGeneration == 0, reportedVolumes[id] != nil
+                guard let id = volume.id, volume.observedGeneration == 0,
+                    let observed = reportedVolumes[id]
                 else { return nil }
+                let terminalCreateFailure =
+                    observed.lastError != nil
+                    && observed.failedGeneration == volume.generation
+                    && (observed.failureClassification == nil
+                        || observed.failureClassification == .permanent)
+                guard observed.present || terminalCreateFailure else { return nil }
                 return VolumeService.volumeReservationID(id)
             }
             if !accountedVolumeReservationIDs.isEmpty {
@@ -358,10 +365,19 @@ struct ObservedStateApplier {
                     unrecognizedOutcome.desiredStateChanged =
                         unrecognizedOutcome.desiredStateChanged || desiredStateChanged == true
                 } else {
-                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
+                    let abandonedCreate = try await withLockedCurrent(
+                        volume, reportedBy: report.agentId, on: db
+                    ) {
                         volume, tx in
+                        let wasTerminating = volume.isTerminating
                         try await handleReportedVolumeAbsence(
                             volume: volume, agentId: report.agentId, on: tx)
+                        return wasTerminating
+                    }
+                    if abandonedCreate == true {
+                        await app.coordination.releaseReservation(
+                            agentId: report.agentId,
+                            vmId: VolumeService.volumeReservationID(volumeID))
                     }
                 }
             }

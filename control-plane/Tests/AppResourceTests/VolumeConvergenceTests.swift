@@ -450,6 +450,13 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: agentId,
                 status: .creating, generation: 3, observedGeneration: 0, storagePath: nil)
             let volumeID = try #require(volume.id)
+            let reservation = ReservationAmounts(cpu: 0, memory: 0, disk: volume.size)
+            #expect(
+                await app.coordination.reserveCapacity(
+                    agentId: agentId,
+                    vmId: VolumeService.volumeReservationID(volumeID),
+                    amounts: reservation,
+                    capacity: reservation))
 
             _ = try await app.observedStateApplier.apply(
                 report(
@@ -457,13 +464,60 @@ final class VolumeConvergenceTests {
                     volumes: [
                         ObservedVolumeState(
                             volumeId: volumeID, present: false, observedGeneration: 0,
-                            lastError: "no space left on device", failedGeneration: 3)
+                            lastError: "no space left on device", failedGeneration: 3,
+                            failureClassification: .transient)
                     ]))
 
             let degraded = try await #require(try await Volume.find(volumeID, on: app.db))
             #expect(degraded.status == .error)
             #expect(degraded.conditions.degraded?.reason == "no space left on device")
             #expect(degraded.conditions.degraded?.sinceGeneration == 3)
+            #expect(
+                await app.coordination.activeReservations(agentIds: [agentId])[agentId]
+                    == reservation)
+        }
+    }
+
+    @Test("Only a current terminal create failure releases a volume reservation")
+    func terminalCreateFailureReleasesReservation() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let agentId = try await registerAgent(app: app, named: "terminal-create-agent")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                status: .creating, generation: 3, observedGeneration: 0, storagePath: nil)
+            let volumeID = try #require(volume.id)
+            let reservation = ReservationAmounts(cpu: 0, memory: 0, disk: volume.size)
+            #expect(
+                await app.coordination.reserveCapacity(
+                    agentId: agentId,
+                    vmId: VolumeService.volumeReservationID(volumeID),
+                    amounts: reservation,
+                    capacity: reservation))
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: false, observedGeneration: 0,
+                            lastError: "stale permanent failure", failedGeneration: 2,
+                            failureClassification: .permanent)
+                    ]))
+            #expect(
+                await app.coordination.activeReservations(agentIds: [agentId])[agentId]
+                    == reservation)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: false, observedGeneration: 0,
+                            lastError: "unsupported image", failedGeneration: 3,
+                            failureClassification: .permanent)
+                    ]))
+            #expect(
+                await app.coordination.activeReservations(agentIds: [agentId])[agentId] == .zero)
         }
     }
 
@@ -589,10 +643,19 @@ final class VolumeConvergenceTests {
             volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
             try await volume.save(on: app.db)
             let volumeID = try #require(volume.id)
+            let reservation = ReservationAmounts(cpu: 0, memory: 0, disk: volume.size)
+            #expect(
+                await app.coordination.reserveCapacity(
+                    agentId: agentId,
+                    vmId: VolumeService.volumeReservationID(volumeID),
+                    amounts: reservation,
+                    capacity: reservation))
 
             _ = try await app.observedStateApplier.apply(report(agentId: agentId, volumes: []))
 
             #expect(try await Volume.find(volumeID, on: app.db) == nil)
+            #expect(
+                await app.coordination.activeReservations(agentIds: [agentId])[agentId] == .zero)
             // The reap appends the terminal event a client polling the façade
             // with its `mutationId` is waiting for.
             let terminal = try await ResourceEvent.latest(
