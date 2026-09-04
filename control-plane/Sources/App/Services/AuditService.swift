@@ -927,12 +927,18 @@ final class AuditService: Sendable {
                 await queue.finishBatch(recordCount: batch.count)
                 continue
             }
-            var destinationsIdle = true
-            for destination in destinations where !(await destination.queue.isIdle) {
-                destinationsIdle = false
-                break
+            // Establish that no source drain still owns a batch before
+            // checking the destinations. Otherwise that drain can fan out
+            // after the destination check and make this flush return while a
+            // destination has newly pending work.
+            if await queue.isIdle {
+                var destinationsIdle = true
+                for destination in destinations where !(await destination.queue.isIdle) {
+                    destinationsIdle = false
+                    break
+                }
+                if destinationsIdle { return }
             }
-            if await queue.isIdle, destinationsIdle { return }
             try? await Task.sleep(for: .milliseconds(5))
         }
         let sourceRemaining = await queue.stats
