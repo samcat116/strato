@@ -181,9 +181,11 @@ struct AgentDependencyHealthTests {
         let metrics = TestMetrics()
 
         Telemetry.recordDependency(
-            agentName: "node-1", observation: libvirt, receivedAt: now, factory: metrics)
+            agentName: "node-1", observation: libvirt, receivedAt: now,
+            at: .testing(now), factory: metrics)
         Telemetry.recordDependency(
-            agentName: "node-1", observation: networking, receivedAt: now, factory: metrics)
+            agentName: "node-1", observation: networking, receivedAt: now,
+            at: .testing(now), factory: metrics)
         let libvirtAvailability = try metrics.expectGauge(
             "strato_agent_dependency_available",
             [("agent", "node-1"), ("dependency", NodeDependencyID.libvirt.rawValue)])
@@ -199,6 +201,26 @@ struct AgentDependencyHealthTests {
 
         #expect(libvirtAvailability.lastValue == 1)
         #expect(networkingAvailability.lastValue == 0)
+    }
+
+    @Test("Dependency availability metrics use the cluster clock")
+    func dependencyMetricsUseClusterClock() throws {
+        let instant = ClusterInstant.testing(Date(timeIntervalSince1970: 1_000))
+        let dependency = observation(
+            .libvirt, capability: .qemuPlacement, state: .healthy, checkedAt: instant.date)
+        let metrics = TestMetrics()
+
+        Telemetry.recordDependency(
+            agentName: "clock-node",
+            observation: dependency,
+            receivedAt: instant.date,
+            at: instant,
+            factory: metrics)
+
+        let availability = try metrics.expectGauge(
+            "strato_agent_dependency_available",
+            [("agent", "clock-node"), ("dependency", NodeDependencyID.libvirt.rawValue)])
+        #expect(availability.lastValue == 1)
     }
 
     private func makeAgent(

@@ -1319,19 +1319,27 @@ struct AgentController: RouteCollection {
         // deliberate — re-issuing the update is how an operator retries past a
         // recorded failure, and it restarts the health budget with a freshly
         // supplied artifact.
-        agent.assignUpdate(
+        let assignmentInstant = try await ClusterClock.read(on: req.db)
+        guard let assignmentAgent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent was removed before the update could be assigned")
+        }
+        assignmentAgent.status = assignmentAgent.statusBasedOnHeartbeat(at: assignmentInstant)
+        guard assignmentAgent.isOnline(at: assignmentInstant) else {
+            throw Abort(.conflict, reason: "Agent went offline before the update could be assigned")
+        }
+        assignmentAgent.assignUpdate(
             version: targetVersion,
             source: .manual,
             artifact: artifactOverride,
-            at: instant)
-        try await agent.save(on: req.db)
+            at: assignmentInstant)
+        try await assignmentAgent.save(on: req.db)
 
         req.logger.notice(
             "Agent update assigned",
             metadata: [
                 "strato.agent.id": .string(agentId.uuidString),
-                "strato.agent.name": .string(agent.name),
-                "currentVersion": .string(agent.version),
+                "strato.agent.name": .string(assignmentAgent.name),
+                "currentVersion": .string(assignmentAgent.version),
                 "targetVersion": .string(targetVersion),
                 // Redacted: explicit overrides may be presigned URLs whose
                 // query string is a credential.

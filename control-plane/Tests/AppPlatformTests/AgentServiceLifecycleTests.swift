@@ -52,6 +52,7 @@ final class AgentServiceLifecycleTests {
                 agentName: agent.name,
                 observation: dependency,
                 receivedAt: checkedAt,
+                at: .testing(checkedAt),
                 factory: metrics)
             let availability = try metrics.expectGauge(
                 "strato_agent_dependency_available",

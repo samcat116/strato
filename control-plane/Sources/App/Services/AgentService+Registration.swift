@@ -295,7 +295,8 @@ extension AgentService {
             Telemetry.recordDependency(
                 agentName: agent.name,
                 observation: observation,
-                receivedAt: registrationInstant.date)
+                receivedAt: registrationInstant.date,
+                at: registrationInstant)
         }
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: true, reason: "registered", on: db, logger: app.logger)
@@ -610,7 +611,8 @@ extension AgentService {
                 Telemetry.recordDependency(
                     agentName: agent.name,
                     observation: observation,
-                    receivedAt: now)
+                    receivedAt: now,
+                    at: instant)
                 if previous[observation.id]?.functionalState != observation.functionalState
                     || previous[observation.id]?.reason?.code != observation.reason?.code
                 {

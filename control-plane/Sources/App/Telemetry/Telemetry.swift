@@ -320,12 +320,13 @@ enum Telemetry {
         agentName: String,
         observation: NodeDependencyObservation,
         receivedAt: Date,
+        at instant: ClusterInstant,
         factory: (any MetricsFactory)? = nil
     ) {
         let dimensions = [("agent", agentName), ("dependency", observation.id.rawValue)]
         let available = observation.allowsNewWork(
             receivedAt: receivedAt,
-            at: Date(),
+            at: instant.date,
             staleAfter: Agent.dependencyObservationStaleAfter)
         recordDependencyAvailability(
             dimensions: dimensions, available: available, factory: factory)

@@ -134,5 +134,10 @@ struct ClusterClockTests {
             encoding: .utf8)
         #expect(clusterClockSource.contains("SELECT clock_timestamp() AS database_time"))
         #expect(!clusterClockSource.contains("SELECT now() AS database_time"))
+
+        let telemetrySource = try String(
+            contentsOf: sources.appendingPathComponent("Telemetry/Telemetry.swift"),
+            encoding: .utf8)
+        #expect(!telemetrySource.contains("at: Date()"))
     }
 }
