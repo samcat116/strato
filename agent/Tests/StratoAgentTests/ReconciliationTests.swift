@@ -233,7 +233,7 @@ struct ReconciliationTests {
             case .reboot: presence[item.id] = .managed(.running)
             case .restore: presence[item.id] = .managed(.running)
             case .adopt, .export, .reconfigureNetworks: break
-            case .attach, .detach: break  // volume-only steps; never planned for a VM
+            case .attach, .detach, .throttle: break  // volume-only steps; never planned for a VM
             }
         }
 

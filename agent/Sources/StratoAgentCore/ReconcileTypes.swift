@@ -93,17 +93,26 @@ public struct ObservedVolumeFacts: Equatable, Sendable {
     /// from the agent's durable attachment record.
     public let attachedVMId: String?
     public let deviceName: String?
+    /// The limits read back from the attached backend. Present-but-empty means
+    /// a successful uncapped read; nil means no authoritative answer.
+    public let ioLimits: VolumeIOLimits?
+    /// Measured live rate used only for operator telemetry.
+    public let ioObservedRate: VolumeIOObservedRate?
 
     public init(
         attachment: DiskAttachment,
         sizeBytes: Int64? = nil,
         attachedVMId: String? = nil,
-        deviceName: String? = nil
+        deviceName: String? = nil,
+        ioLimits: VolumeIOLimits? = nil,
+        ioObservedRate: VolumeIOObservedRate? = nil
     ) {
         self.attachment = attachment
         self.sizeBytes = sizeBytes
         self.attachedVMId = attachedVMId
         self.deviceName = deviceName
+        self.ioLimits = ioLimits
+        self.ioObservedRate = ioObservedRate
     }
 }
 
@@ -216,6 +225,9 @@ public enum ReconcileStep: Equatable, Sendable {
     case attach
     /// Remove a volume from the VM it is presented to (STR-148). Volume-only.
     case detach
+    /// Replace an attached QEMU disk's live and persistent I/O ceilings and
+    /// verify them by read-back (STR-270). Volume-only.
+    case throttle
     /// Stream a snapshot artifact to the export slots its desired entry names
     /// (STR-150). Snapshot-only, and idempotent at the "already satisfied"
     /// level like every other step: an artifact this host has already exported

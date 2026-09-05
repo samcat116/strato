@@ -198,11 +198,10 @@ extension ObservedStateApplier {
         // mutation.
         //
         // Written *only* when the agent said something. Nil here means "this
-        // agent does not report applied limits" — which is every agent until
-        // the agent-side work lands — and writing that through would record an
-        // agent's silence as "the caps were removed". An agent reporting an
-        // explicitly uncapped disk sends a present-but-empty value instead, and
-        // that one does clear the columns.
+        // agent does not report applied limits" — and writing that through
+        // would record an agent's silence as "the caps were removed". An agent
+        // reporting an explicitly uncapped disk sends a present-but-empty
+        // value instead, and that one does clear the columns.
         if let applied = observed.ioLimits {
             if volume.appliedIOPSTotal != applied.iopsTotal {
                 volume.appliedIOPSTotal = applied.iopsTotal
@@ -214,7 +213,7 @@ extension ObservedStateApplier {
             }
         }
 
-        // Nil is a pre-v60 agent saying nothing, not an instruction to erase a
+        // Nil is a pre-v61 agent saying nothing, not an instruction to erase a
         // previously observed policy. A storage-only replica also reports an
         // explicit inactive policy, so accept policy only from the agent that
         // claims the attachment or from the persisted attachment owner clearing
@@ -231,8 +230,18 @@ extension ObservedStateApplier {
             changed = true
         }
 
-        if aggregateObservedGeneration > volume.observedGeneration {
-            volume.observedGeneration = aggregateObservedGeneration
+        // A generation acknowledgement is incomplete when an attached volume
+        // (including a requested clear) or a stored non-empty policy lacks the
+        // applied-value echo. Keep the last known columns for operator
+        // visibility, but do not let that stale fact satisfy the current
+        // generation. A later libvirt read-back advances it normally.
+        let requiresAppliedIOLimitsEcho = observed.attachedVMId != nil || volume.ioLimits != nil
+        let verifiedObservedGeneration =
+            requiresAppliedIOLimitsEcho && observed.ioLimits == nil
+            ? min(aggregateObservedGeneration, generationBeforeTarget)
+            : aggregateObservedGeneration
+        if verifiedObservedGeneration > volume.observedGeneration {
+            volume.observedGeneration = verifiedObservedGeneration
             changed = true
         }
 

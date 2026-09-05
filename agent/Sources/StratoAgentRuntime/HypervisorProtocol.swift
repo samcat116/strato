@@ -151,6 +151,11 @@ public protocol HypervisorService: Actor, Sendable {
     /// the reconciliation still appears successful.
     func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws
 
+    /// Rewrites a stopped persistent domain with the freshly probed block
+    /// policy that its next boot will use. Backends without persistent domain
+    /// XML use the default no-op.
+    func convergeDiskBlockPolicies(vmId: String, volumes: [VolumeSpec]) async throws
+
     /// Converges guest-bootstrap state that a persistent backend created with
     /// an older agent before a stopped VM boots. Backends that rebuild their
     /// process from the current spec have no stored bootstrap state and use the
@@ -232,8 +237,23 @@ public protocol HypervisorService: Actor, Sendable {
     ///   hot-plug disks
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?, orderedBootVolumeIds: [String]
+        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?,
+        orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws
+
+    /// Replaces both absolute I/O ceilings for an already attached disk and
+    /// persists them for the next boot. Nil clears both dimensions.
+    func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws
+
+    /// Reads the ceilings the backend is actually enforcing. A successful
+    /// uncapped read returns a present-but-empty value; failure is thrown so
+    /// callers never turn silence into an applied echo.
+    func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits
+
+    /// Cumulative live-domain I/O counters and the domain incarnation that
+    /// produced them. Nil is normal for a stopped domain or a backend without
+    /// observable counters.
+    func diskIOCounterSample(vmId: String, volumeId: String) async -> VolumeIOCounterSample?
 
     /// Detaches a disk from a running VM (hot-unplug)
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
@@ -400,6 +420,18 @@ public extension HypervisorService {
             "\(hypervisorType.displayName) does not support VM network hot-unplug")
     }
 
+    func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support per-volume I/O limits")
+    }
+
+    func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not report per-volume I/O limits")
+    }
+
+    func diskIOCounterSample(vmId: String, volumeId: String) async -> VolumeIOCounterSample? { nil }
+
     /// Backends must opt in to running resize. The default refuses rather than
     /// implying any online resize support.
     func resizeVM(vmId: String, spec: VMSpec) async throws {
@@ -450,6 +482,8 @@ public extension HypervisorService {
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
 
     func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws {}
+
+    func convergeDiskBlockPolicies(vmId: String, volumes: [VolumeSpec]) async throws {}
 
     func convergeGuestBootstrap(
         vmId: String, spec: VMSpec,

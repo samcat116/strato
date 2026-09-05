@@ -183,6 +183,29 @@ cache-mode comparison matrix live in
 Keep the default `conservative` until that benchmark evidence has been
 captured and reviewed.
 
+### Volume I/O-limit contract
+
+`deploy/compose/volume-io-limits-test.sh` exercises STR-270 on the libvirt
+agent host. It attaches a capped volume before boot, runs 60-second `fio`
+samples after a 10-second ramp, and requires the measured rate to stay within
+10% of each ceiling. It then raises and lowers both IOPS and bandwidth on the
+running VM, checking the API applied echo and libvirt's live and persistent
+domain definitions at every step. Finally it restarts the agent, reboots the
+VM, and hot-detaches and reattaches the volume, with another `fio` sample after
+each transition:
+
+```bash
+sudo deploy/compose/volume-io-limits-test.sh \
+  --origin "$ORIGIN" --api-key "$(cat "$KEY_FILE")" \
+  --project "$PROJECT_ID" --network "$NET_ID" --image "$IMAGE_ID" \
+  --restart-agent-command "systemctl restart strato-agent"
+```
+
+The image must contain the Strato guest agent and `fio`, and the API key must
+include `vm:runCommand`. The script is deliberately a real-host test:
+it needs KVM and permission to inspect `qemu:///system` and restart the agent.
+It deletes its VM and data volume on exit.
+
 One carve-out keeps the older machinery:
 
 - **Delete** is the one mutation whose success is the resource's *absence*, so

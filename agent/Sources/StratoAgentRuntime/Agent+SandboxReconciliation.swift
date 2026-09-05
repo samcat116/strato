@@ -42,7 +42,8 @@ extension Agent {
             try await sandboxReconcileDelete(item)
         case .restore:
             try await sandboxReconcileRestore(item)
-        case .pause, .resume, .resize, .reboot, .attach, .detach, .export, .reconfigureNetworks:
+        case .pause, .resume, .resize, .reboot, .attach, .detach, .throttle, .export,
+            .reconfigureNetworks:
             // Not in the sandbox step vocabulary (v1); the planner never
             // emits these for sandbox items. `.reboot` in particular is a VM
             // edge only: `POST /api/sandboxes/:id/restart` is expressed as a
@@ -872,10 +873,12 @@ extension Agent {
                     lastError: convergence.lastError,
                     failedGeneration: convergence.failedGeneration,
                     failureClassification: convergence.failureClassification,
+                    ioLimits: facts.ioLimits,
                     blockPolicy: facts.attachedVMId == nil
                         ? .inactive(
                             requestedMode: desiredVolumeStates[volumeId]?.blockMode ?? .conservative)
-                        : appliedPolicies[volumeId]
+                        : appliedPolicies[volumeId],
+                    ioObservedRate: facts.ioObservedRate
                 ))
             reported.insert(volumeId)
         }

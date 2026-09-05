@@ -48,11 +48,12 @@ public enum DomainDeviceXML {
     /// attach this function feeds failed with "No more available PCI slots".
     public static func hotplugDisk(
         attachment: DiskAttachment, target: String, readonly: Bool, volumeId: String,
-        blockPolicy: AppliedBlockDevicePolicy? = nil
+        blockPolicy: AppliedBlockDevicePolicy? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) -> String {
         DomainXMLBuilder.diskNode(
             attachment: attachment, target: target, readonly: readonly, bootOrder: nil,
-            volumeId: volumeId, blockPolicy: blockPolicy
+            volumeId: volumeId, blockPolicy: blockPolicy, ioLimits: ioLimits
         ).render()
     }
 

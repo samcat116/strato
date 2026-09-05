@@ -1177,11 +1177,9 @@ export interface paths {
          * Replace a volume's I/O limits
          * @description Replaces the volume's absolute I/O ceilings. This is a **full replacement**: a field you omit clears that cap. Zero is rejected with `400` rather than treated as unlimited, so a typo cannot be mistaken for a deliberate removal — omit the field instead.
          *
-         *     **`conditions` converging does not mean the caps are in effect.** For every other volume mutation, convergence is the outcome; for this one it only means the owning agent accepted the sync carrying the request. An agent with no throttling support plans no work, reports the new generation, and converges — so a client that polls `conditions` alone will record an unenforced cap as applied.
+         *     A non-empty policy is accepted only when the volume's QEMU agent advertises per-volume I/O-limit support. Firecracker and legacy agents are rejected before the desired state changes.
          *
-         *     The applied signal is `appliedIOLimits` on the volume. Compare it against `ioLimits`: equal means the ceilings are in force, and a set `ioLimits` with `appliedIOLimits` omitted means they are not.
-         *
-         *     No agent enforces ceilings yet, so today `appliedIOLimits` is always absent and every request is a recorded intent rather than an enforced limit.
+         *     The applied signal is `appliedIOLimits` on the volume. Compare it against `ioLimits`: equal means libvirt read back the requested ceilings. `conditions.converged` remains false until that echo arrives, so generation acknowledgement alone cannot report success.
          */
         post: operations["setVolumeIOLimits"];
         delete?: never;
@@ -6468,12 +6466,12 @@ export interface components {
             sourceImageId?: string;
             /**
              * Format: int64
-             * @description Total (read + write) IOPS ceiling. Omit for uncapped; zero is rejected. Not enforced by any agent yet.
+             * @description Total (read + write) IOPS ceiling. Omit for uncapped; zero is rejected. Enforced by capable QEMU agents through libvirt.
              */
             iopsTotal?: number;
             /**
              * Format: int64
-             * @description Total (read + write) throughput ceiling in bytes per second. Omit for uncapped; zero is rejected. Not enforced by any agent yet.
+             * @description Total (read + write) throughput ceiling in bytes per second. Omit for uncapped; zero is rejected. Enforced by capable QEMU agents through libvirt.
              */
             bpsTotal?: number;
             blockMode?: components["schemas"]["VolumeBlockMode"];
@@ -6573,14 +6571,10 @@ export interface components {
             conditions: components["schemas"]["ResourceConditions"];
             /** @description The I/O ceilings requested for this volume. **Omitted entirely** when the volume is uncapped — the key is absent, not null, so test for presence rather than comparing against null. */
             ioLimits?: components["schemas"]["VolumeIOLimits"];
-            /**
-             * @description The ceilings the owning agent reports it has actually applied, and the only signal that a cap is in force — `conditions` converging says the sync was accepted, not that the ceilings took effect. Compare against `ioLimits`: equal means in force.
-             *
-             *     **Omitted** (again absent, not null) means they are *not* in effect, either because the agent has not reported any or because it reported none. No agent applies ceilings yet, so this key is absent on every volume; a set `ioLimits` alongside an absent `appliedIOLimits` is the expected reading today, not a fault.
-             */
+            /** @description The ceilings the owning agent read back from libvirt. Compare against `ioLimits`: equal on an attached volume means the policy is in force, and attached convergence requires that equality. **Omitted** (again absent, not null) means no applied cap was reported. A successful explicit clear is also represented as an omitted response value because the database columns are null; the observed-state protocol keeps those cases distinct while merging. */
             appliedIOLimits?: components["schemas"]["VolumeIOLimits"];
             blockMode: components["schemas"]["VolumeBlockMode"];
-            /** @description Exact attributes selected by the agent. Omitted until an agent supporting wire v59 reports; `active: false` explicitly means the volume is detached. `fallbackReason` explains any safe downgrade. */
+            /** @description Exact attributes selected by the agent. Omitted until an agent supporting wire v61 reports; `active: false` explicitly means the volume is detached. `fallbackReason` explains any safe downgrade. */
             appliedBlockPolicy?: components["schemas"]["AppliedBlockDevicePolicy"];
             /** Format: uuid */
             sourceImageId?: string;
@@ -8791,6 +8785,8 @@ export interface components {
             supportsVsock?: boolean | null;
             /** @description Whether this agent can bridge guest-exec sessions to VMs using this hypervisor; null for agents that predate VM guest exec. */
             supportsGuestExec?: boolean | null;
+            /** @description Whether this backend can enforce and read back per-volume total IOPS and bytes-per-second ceilings; null is treated as unsupported. */
+            supportsVolumeIOLimits?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
         };

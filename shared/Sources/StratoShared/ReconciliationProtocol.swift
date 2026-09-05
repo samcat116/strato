@@ -329,6 +329,23 @@ public struct VolumeIOLimits: Codable, Sendable, Equatable {
     }
 }
 
+/// The measured aggregate I/O rate for one attached volume (STR-270).
+///
+/// This is deliberately a rate rather than raw libvirt counters. A QEMU
+/// process resets those counters on every restart, while operators need a
+/// directly comparable value beside the configured and applied ceilings.
+/// Nil on `ObservedVolumeState` means no two live samples were available yet
+/// (including a stopped or newly adopted domain), never zero activity.
+public struct VolumeIOObservedRate: Codable, Sendable, Equatable {
+    public let iops: Double
+    public let bytesPerSecond: Double
+
+    public init(iops: Double, bytesPerSecond: Double) {
+        self.iops = iops
+        self.bytesPerSecond = bytesPerSecond
+    }
+}
+
 /// Where a volume should be plugged in. Nil on the desired entry means
 /// "detached"; a value means the agent should have this volume presented to
 /// `vmId` as `deviceName`.
@@ -1463,20 +1480,23 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// not a derivation, and the only thing that distinguishes "capped" from
     /// "ignored".
     ///
-    /// STR-19 ships no capability gate, so an agent that has never heard of
-    /// ceilings drops `DesiredVolumeState.ioLimits` on the floor and still
-    /// advances `observedGeneration`. The generation pair alone would call that
-    /// mutation converged. This field is what makes the disagreement visible.
+    /// The capability gate prevents new work from reaching an agent that has
+    /// never heard of ceilings, while this field proves that a capable agent
+    /// actually read the requested values back. The generation pair alone is
+    /// not sufficient evidence for this mutation.
     ///
-    /// Nil means **this agent does not report applied limits** — which is every
-    /// agent until the online-throttling work lands. It must never be written
-    /// through as a clear. "Applied, and the answer is uncapped" is spelled
+    /// Nil means **this agent does not report applied limits**. It must never be
+    /// written through as a clear. "Applied, and the answer is uncapped" is spelled
     /// `VolumeIOLimits(iopsTotal: nil, bpsTotal: nil)`: present but empty. So
     /// unlike the desired side, this one is deliberately *not* normalized.
     public let ioLimits: VolumeIOLimits?
     /// Block policy this agent actually applied, or an explicit inactive value
-    /// for a detached volume. Nil is reserved for agents predating wire v60.
+    /// for a detached volume. Nil is reserved for agents predating wire v61.
     public let blockPolicy: AppliedBlockDevicePolicy?
+    /// Measured read + write rate between two live libvirt block-stat samples.
+    /// Optional because a first sample, a stopped domain, or a failed stats
+    /// read has no honest rate to report.
+    public let ioObservedRate: VolumeIOObservedRate?
 
     public init(
         volumeId: UUID,
@@ -1490,7 +1510,8 @@ public struct ObservedVolumeState: Codable, Sendable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
         ioLimits: VolumeIOLimits? = nil,
-        blockPolicy: AppliedBlockDevicePolicy? = nil
+        blockPolicy: AppliedBlockDevicePolicy? = nil,
+        ioObservedRate: VolumeIOObservedRate? = nil
     ) {
         self.volumeId = volumeId
         self.present = present
@@ -1504,6 +1525,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.failureClassification = failureClassification
         self.ioLimits = ioLimits
         self.blockPolicy = blockPolicy
+        self.ioObservedRate = ioObservedRate
     }
 }
 

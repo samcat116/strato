@@ -24,7 +24,8 @@ struct VolumeReconciliationTests {
         sizeBytes: Int64 = 10 << 30,
         format: String = "qcow2",
         source: DesiredVolumeSource? = nil,
-        attachment: DesiredVolumeAttachment? = nil
+        attachment: DesiredVolumeAttachment? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) -> DesiredVolumeState {
         DesiredVolumeState(
             volumeId: volumeId,
@@ -33,7 +34,8 @@ struct VolumeReconciliationTests {
             sizeBytes: sizeBytes,
             format: format,
             source: source,
-            attachment: attachment
+            attachment: attachment,
+            ioLimits: ioLimits
         )
     }
 
@@ -42,11 +44,12 @@ struct VolumeReconciliationTests {
         format: DiskFormat = .qcow2,
         sizeBytes: Int64? = 10 << 30,
         attachedVMId: String? = nil,
-        deviceName: String? = nil
+        deviceName: String? = nil,
+        ioLimits: VolumeIOLimits? = VolumeIOLimits()
     ) -> ObservedVolumeFacts {
         ObservedVolumeFacts(
             attachment: .file(path: path, format: format), sizeBytes: sizeBytes,
-            attachedVMId: attachedVMId, deviceName: deviceName)
+            attachedVMId: attachedVMId, deviceName: deviceName, ioLimits: ioLimits)
     }
 
     /// Actuator double that holds volumes and records the steps driven at them.
@@ -121,7 +124,8 @@ struct VolumeReconciliationTests {
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
                         attachment: current.attachment, sizeBytes: desired.sizeBytes,
-                        attachedVMId: current.attachedVMId, deviceName: current.deviceName))
+                        attachedVMId: current.attachedVMId, deviceName: current.deviceName,
+                        ioLimits: current.ioLimits, ioObservedRate: current.ioObservedRate))
             case .attach:
                 guard case .managed(let current)? = volumes[item.id],
                     let attachment = desired.attachment
@@ -129,12 +133,21 @@ struct VolumeReconciliationTests {
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
                         attachment: current.attachment, sizeBytes: current.sizeBytes,
-                        attachedVMId: attachment.vmId.uuidString, deviceName: attachment.deviceName.rawValue))
+                        attachedVMId: attachment.vmId.uuidString, deviceName: attachment.deviceName.rawValue,
+                        ioLimits: desired.ioLimits ?? VolumeIOLimits()))
             case .detach:
                 guard case .managed(let current)? = volumes[item.id] else { return }
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
-                        attachment: current.attachment, sizeBytes: current.sizeBytes))
+                        attachment: current.attachment, sizeBytes: current.sizeBytes,
+                        ioLimits: VolumeIOLimits()))
+            case .throttle:
+                guard case .managed(let current)? = volumes[item.id] else { return }
+                volumes[item.id] = .managed(
+                    ObservedVolumeFacts(
+                        attachment: current.attachment, sizeBytes: current.sizeBytes,
+                        attachedVMId: current.attachedVMId, deviceName: current.deviceName,
+                        ioLimits: desired.ioLimits ?? VolumeIOLimits()))
             case .delete:
                 volumes.removeValue(forKey: item.id)
             case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
@@ -178,6 +191,80 @@ struct VolumeReconciliationTests {
             present: [id.uuidString: .managed(Self.facts())],
             lastApplied: [id.uuidString: 1])
         #expect(plan.items.isEmpty)
+    }
+
+    @Test("A changed I/O ceiling on an attached volume plans a live throttle update")
+    func changedIOLimitsPlanThrottle() {
+        let id = UUID()
+        let vmId = UUID()
+        let attachment = DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(1))
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, generation: 2, attachment: attachment,
+                    ioLimits: VolumeIOLimits(iopsTotal: 1_000, bpsTotal: 8_000_000))
+            ],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(
+                        attachedVMId: vmId.uuidString, deviceName: "disk1",
+                        ioLimits: VolumeIOLimits(iopsTotal: 500, bpsTotal: 4_000_000)))
+            ],
+            lastApplied: [id.uuidString: 1])
+
+        #expect(plan.items.map(\.steps) == [[.throttle]])
+    }
+
+    @Test("An absent applied-limit echo never reports an attached volume as converged")
+    func missingAppliedIOLimitsPlansThrottle() {
+        let id = UUID()
+        let vmId = UUID()
+        let attachment = DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(1))
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, attachment: attachment)],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(
+                        attachedVMId: vmId.uuidString, deviceName: "disk1", ioLimits: nil))
+            ],
+            lastApplied: [:])
+
+        #expect(plan.items.map(\.steps) == [[.throttle]])
+    }
+
+    @Test("A live throttle update is not starved by a grow that may be blocked")
+    func throttlePrecedesGrow() {
+        let id = UUID()
+        let vmId = UUID()
+        let attachment = DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(1))
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, generation: 2, sizeBytes: 20 << 30, attachment: attachment,
+                    ioLimits: VolumeIOLimits(iopsTotal: 2_000))
+            ],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(
+                        sizeBytes: 10 << 30, attachedVMId: vmId.uuidString,
+                        deviceName: "disk1", ioLimits: VolumeIOLimits(iopsTotal: 1_000)))
+            ],
+            lastApplied: [id.uuidString: 1])
+
+        #expect(plan.items.map(\.steps) == [[.throttle]])
+    }
+
+    @Test("A detached volume has no backend on which to enforce its stored ceiling")
+    func detachedIOLimitsDoNotPlanThrottle() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(id, ioLimits: VolumeIOLimits(iopsTotal: 1_000))
+            ],
+            present: [id.uuidString: .managed(Self.facts())],
+            lastApplied: [:])
+
+        #expect(plan.items.first?.steps == [])
     }
 
     @Test("A volume smaller than its desired size is grown")

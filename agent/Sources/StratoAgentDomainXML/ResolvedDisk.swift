@@ -31,15 +31,19 @@ public struct ResolvedDisk: Sendable, Equatable {
     /// Agent-selected QEMU attributes for this concrete attachment. Nil keeps
     /// the historical conservative XML for legacy callers and bootstrap media.
     public let blockPolicy: AppliedBlockDevicePolicy?
+    /// Absolute total I/O ceilings emitted as libvirt `<iotune>` values.
+    public let ioLimits: VolumeIOLimits?
 
     public init(
         attachment: DiskAttachment, readonly: Bool = false, bootOrder: Int? = nil,
-        volumeId: String? = nil, blockPolicy: AppliedBlockDevicePolicy? = nil
+        volumeId: String? = nil, blockPolicy: AppliedBlockDevicePolicy? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) {
         self.attachment = attachment
         self.readonly = readonly
         self.bootOrder = bootOrder
         self.volumeId = volumeId
         self.blockPolicy = blockPolicy
+        self.ioLimits = ioLimits
     }
 }

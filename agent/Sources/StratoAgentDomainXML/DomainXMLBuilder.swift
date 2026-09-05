@@ -560,7 +560,8 @@ public enum DomainXMLBuilder {
                 diskNode(
                     attachment: disk.attachment, index: index, readonly: disk.readonly,
                     bootOrder: bootOrders[index],
-                    volumeId: disk.volumeId, blockPolicy: disk.blockPolicy))
+                    volumeId: disk.volumeId, blockPolicy: disk.blockPolicy,
+                    ioLimits: disk.ioLimits))
         }
         if let isoPath = input.cloudInitISOPath {
             // A read-only virtio *disk*, not a cdrom, matching the QEMU path's
@@ -827,7 +828,8 @@ public enum DomainXMLBuilder {
     /// including the serial a detach resolves by.
     static func diskNode(
         attachment: DiskAttachment, target: String, readonly: Bool, bootOrder: Int?,
-        volumeId: String?, blockPolicy: AppliedBlockDevicePolicy?
+        volumeId: String?, blockPolicy: AppliedBlockDevicePolicy? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) -> DomainXMLNode {
         let diskType: String
         let driverFormat: String
@@ -894,10 +896,19 @@ public enum DomainXMLBuilder {
         if let authentication {
             disk.append(authentication)
         }
-        disk.append(
-            DomainXMLNode(
-                "target",
-                [("dev", target), ("bus", "virtio")]))
+        disk.append(DomainXMLNode("target", [("dev", target), ("bus", "virtio")]))
+        if let ioLimits, !ioLimits.isEmpty {
+            var iotune = DomainXMLNode("iotune")
+            iotune.append(
+                ioLimits.iopsTotal.map {
+                    DomainXMLNode("total_iops_sec", text: String($0))
+                })
+            iotune.append(
+                ioLimits.bpsTotal.map {
+                    DomainXMLNode("total_bytes_sec", text: String($0))
+                })
+            disk.append(iotune)
+        }
         if readonly {
             disk.append(DomainXMLNode("readonly"))
         }
@@ -916,12 +927,13 @@ public enum DomainXMLBuilder {
 
     private static func diskNode(
         attachment: DiskAttachment, index: Int, readonly: Bool, bootOrder: Int?,
-        volumeId: String?, blockPolicy: AppliedBlockDevicePolicy?
+        volumeId: String?, blockPolicy: AppliedBlockDevicePolicy? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) -> DomainXMLNode {
         diskNode(
             attachment: attachment, target: targetDeviceName(index: index),
             readonly: readonly, bootOrder: bootOrder, volumeId: volumeId,
-            blockPolicy: blockPolicy)
+            blockPolicy: blockPolicy, ioLimits: ioLimits)
     }
 
     /// Libvirt models a monitor endpoint as separate host and port attributes.

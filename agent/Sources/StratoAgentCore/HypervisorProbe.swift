@@ -201,6 +201,10 @@ public enum HypervisorProbe {
                 available: support.available,
                 accelerated: support.accelerated,
                 unavailabilityReason: support.unavailabilityReason,
+                supportsSnapshots: support.supportsSnapshots,
+                supportsVsock: support.supportsVsock,
+                supportsGuestExec: support.supportsGuestExec,
+                supportsVolumeIOLimits: support.supportsVolumeIOLimits,
                 version: version
             )
         }

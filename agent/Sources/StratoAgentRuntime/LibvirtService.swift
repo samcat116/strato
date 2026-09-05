@@ -764,6 +764,32 @@ actor LibvirtService: HypervisorService {
         }
     }
 
+    func convergeDiskBlockPolicies(vmId: String, volumes: [VolumeSpec]) async throws {
+        try await perform("converge-disk-block-policies", vmId: vmId) {
+            let dom = try await domain(vmId)
+            // Adoption of a running or paused domain must preserve the live
+            // disk policy until the guest is stopped.
+            guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
+                return
+            }
+            guard
+                let persistentXML = try DomainRedefinition.applyingBlockPolicies(
+                    toInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
+                    volumes: volumes)
+            else { return }
+
+            _ = try await call(
+                "libvirt-define-disk-block-policies", vmId: vmId,
+                seconds: StageBudget.hypervisorSpawnSeconds
+            ) { client, deadline in
+                try await client.domainDefineXML(xml: persistentXML, deadline: deadline)
+            }
+            logger.info(
+                "Updated persistent libvirt disk block policies for the next start",
+                metadata: ["strato.vm.id": .string(vmId)])
+        }
+    }
+
     /// Migrates the persistent bootstrap state of IMDS VMs created by an older
     /// agent. The seed is rebuilt from current desired state so its local
     /// network document no longer tries to rename an already-active interface,
@@ -1436,7 +1462,8 @@ actor LibvirtService: HypervisorService {
     /// definition rewrite failed.
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?, orderedBootVolumeIds: [String]
+        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?,
+        orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws {
         try await perform("attach-disk", vmId: vmId) {
             let dom = try await domain(vmId)
@@ -1452,7 +1479,7 @@ actor LibvirtService: HypervisorService {
                 let target = DomainDiskInventory.nextTargetDevice(after: disks)
                 let xml = DomainDeviceXML.hotplugDisk(
                     attachment: attachment, target: target, readonly: readonly, volumeId: volumeId,
-                    blockPolicy: blockPolicy)
+                    blockPolicy: blockPolicy, ioLimits: ioLimits)
                 let flags = try await deviceFlags(dom, vmId: vmId)
 
                 logger.info(
@@ -1492,6 +1519,17 @@ actor LibvirtService: HypervisorService {
                     ])
             }
 
+            // Replace both dimensions even on an idempotent attach. A retry
+            // after the device landed but before its throttle did must repair
+            // the same disk rather than report the attachment as complete.
+            let attachedDisks = try await domainDisks(dom, vmId: vmId)
+            guard let attached = DomainDiskInventory.disk(forVolume: volumeId, in: attachedDisks) else {
+                throw HypervisorServiceError.diskError(
+                    "volume \(volumeId) was not present after libvirt attached it to VM \(vmId)")
+            }
+            try await applyDiskIOLimits(
+                dom: dom, vmId: vmId, target: attached.target, limits: ioLimits)
+
             // A live hot-plug cannot change what the guest already booted
             // from, so its device fragment intentionally carries no `<boot>`.
             // The CONFIG half above first makes the new disk durable; this
@@ -1517,6 +1555,113 @@ actor LibvirtService: HypervisorService {
                     "orderedVolumeIds": .string(orderedBootVolumeIds.joined(separator: ",")),
                 ])
         }
+    }
+
+    /// Replaces a disk's live and persistent throttle and proves the result by
+    /// reading the values back from libvirt before returning to reconciliation.
+    func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws {
+        try await perform("set-disk-io-limits", vmId: vmId) {
+            let dom = try await domain(vmId)
+            let disks = try await domainDisks(dom, vmId: vmId)
+            guard let disk = DomainDiskInventory.disk(forVolume: volumeId, in: disks) else {
+                throw HypervisorServiceError.diskError(
+                    "volume \(volumeId) is not attached to VM \(vmId)")
+            }
+            try await applyDiskIOLimits(
+                dom: dom, vmId: vmId, target: disk.target, limits: limits)
+        }
+    }
+
+    func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits {
+        try await perform("read-disk-io-limits", vmId: vmId) {
+            let dom = try await domain(vmId)
+            let disks = try await domainDisks(dom, vmId: vmId)
+            guard let disk = DomainDiskInventory.disk(forVolume: volumeId, in: disks) else {
+                throw HypervisorServiceError.diskError(
+                    "volume \(volumeId) is not attached to VM \(vmId)")
+            }
+            return try await readDiskIOLimits(dom: dom, vmId: vmId, target: disk.target)
+        }
+    }
+
+    func diskIOCounterSample(vmId: String, volumeId: String) async -> VolumeIOCounterSample? {
+        do {
+            let dom = try await domain(vmId)
+            guard LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
+                return nil
+            }
+            guard let incarnation = await qemuProcessIncarnation(vmId: vmId) else { return nil }
+            let disks = try await domainDisks(dom, vmId: vmId)
+            guard let disk = DomainDiskInventory.disk(forVolume: volumeId, in: disks) else { return nil }
+            let stats = try await call("libvirt-disk-io-stats", vmId: vmId) { client, deadline in
+                try await client.domainBlockStats(
+                    dom: dom, path: disk.target, deadline: deadline)
+            }
+            // Pair the counters only with a process identity that remained
+            // stable for the whole read. A restart on either side of the
+            // libvirt call establishes a fresh baseline next time.
+            let incarnationAfterRead = await qemuProcessIncarnation(vmId: vmId)
+            guard incarnation == incarnationAfterRead,
+                let counters = VolumeIOCounters(stats)
+            else { return nil }
+            return VolumeIOCounterSample(counters: counters, incarnation: incarnation)
+        } catch {
+            logger.debug(
+                "Could not sample live disk I/O counters",
+                metadata: [
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
+                    "error": .string(error.localizedDescription),
+                ])
+            return nil
+        }
+    }
+
+    private func qemuProcessIncarnation(vmId: String) async -> String? {
+        await Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            guard
+                let pidData = fileManager.contents(atPath: "/run/libvirt/qemu/\(vmId).pid")
+            else { return nil }
+            let pidFile = String(decoding: pidData, as: UTF8.self)
+            guard let processID = LinuxProcessIncarnation.processID(fromPIDFile: pidFile),
+                let statData = fileManager.contents(atPath: "/proc/\(processID)/stat")
+            else { return nil }
+            return LinuxProcessIncarnation.token(
+                processID: processID,
+                processStat: String(decoding: statData, as: UTF8.self))
+        }.value
+    }
+
+    private func applyDiskIOLimits(
+        dom: Domain, vmId: String, target: String, limits: VolumeIOLimits?
+    ) async throws {
+        let flags = try await deviceFlags(dom, vmId: vmId)
+        let parameters = DomainBlockIOTune.parameters(for: limits)
+        try await call("libvirt-set-disk-io-limits", vmId: vmId) { client, deadline in
+            try await client.domainSetBlockIOTune(
+                dom: dom, disk: target, params: parameters,
+                flags: flags, deadline: deadline)
+        }
+
+        let applied = try await readDiskIOLimits(dom: dom, vmId: vmId, target: target)
+        guard applied.iopsTotal == limits?.iopsTotal, applied.bpsTotal == limits?.bpsTotal else {
+            throw HypervisorServiceError.diskError(
+                "libvirt read back volume target \(target) with IOPS/BPS limits "
+                    + "\(String(describing: applied.iopsTotal))/\(String(describing: applied.bpsTotal)); "
+                    + "requested \(String(describing: limits?.iopsTotal))/\(String(describing: limits?.bpsTotal))")
+        }
+    }
+
+    private func readDiskIOLimits(
+        dom: Domain, vmId: String, target: String
+    ) async throws -> VolumeIOLimits {
+        let result = try await call("libvirt-read-disk-io-limits", vmId: vmId) { client, deadline in
+            try await client.domainGetBlockIOTune(
+                dom: dom, disk: target,
+                nparams: Int32(RemoteProtocolConstants.domainBlockIOTuneParametersMax),
+                flags: 0, deadline: deadline)
+        }
+        return DomainBlockIOTune.limits(from: result.params)
     }
 
     /// Unplugs `volumeId` from the VM's domain, live and in its definition.
@@ -2301,7 +2446,8 @@ actor LibvirtService: HypervisorService {
                     // Written into the document as `<serial>`, so a detach can
                     // resolve this disk by managed identity after a restart.
                     volumeId: volume.volumeId.uuidString,
-                    blockPolicy: volume.appliedBlockPolicy))
+                    blockPolicy: volume.appliedBlockPolicy,
+                    ioLimits: volume.ioLimits))
         }
 
         if disks.isEmpty {

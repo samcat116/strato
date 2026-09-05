@@ -938,6 +938,7 @@ public actor Reconciler {
         case .delete: return "deleting"
         case .attach: return "attaching"
         case .detach: return "detaching"
+        case .throttle: return "applying I/O limits"
         case .export: return "exporting"
         case .reboot: return "restarting"
         case .restore: return "restoring"

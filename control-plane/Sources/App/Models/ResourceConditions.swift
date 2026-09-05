@@ -578,6 +578,12 @@ extension Volume {
     /// Spelled out rather than delegating to `bytesAtRest` — which asks the same
     /// question today and is the one free to diverge. See the note there.
     var desiredSatisfied: Bool {
-        desiredStatus == .present && (status == .available || status == .attached)
+        desiredStatus == .present
+            // A detached volume has policy to apply on its next attachment but
+            // no running block device to throttle. Once attached, the applied
+            // pair is written only from libvirt read-back, so equality closes
+            // STR-19's false-convergence path.
+            && (status == .available
+                || (status == .attached && ioLimits == appliedIOLimits))
     }
 }
