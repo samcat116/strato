@@ -1,0 +1,24 @@
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  s_3af79fd703f9fa::t_d62022208aabe4 201-203
+  s_3af79fd703f9fa::t_2217b5f2c0f138 184-194,199-200,204-216
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  s_3af79fd703f9fa::t_2217b5f2c0f138 531-549,552-560,563-598
+  s_3af79fd703f9fa::t_84e90ef00510ce 6
+  s_3af79fd703f9fa::t_bd6f7eeda00acd 550-551,561-562
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "7a0a2154af269d4d31a347eb3533235533dac97a",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
