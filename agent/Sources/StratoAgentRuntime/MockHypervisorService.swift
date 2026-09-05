@@ -133,8 +133,20 @@ actor MockHypervisorService: HypervisorService {
 
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, orderedBootVolumeIds: [String]
+        readonly: Bool, orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws {
+        guard var vm = vms[vmId] else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        let volumes = vm.spec.volumes.map { volume in
+            guard volume.volumeId.uuidString == volumeId else { return volume }
+            return VolumeSpec(
+                volumeId: volume.volumeId, deviceName: volume.deviceName,
+                attachment: attachment, readonly: readonly,
+                bootOrder: volume.bootOrder, ioLimits: ioLimits)
+        }
+        vm.spec = vm.spec.withVolumes(volumes)
+        vms[vmId] = vm
         logger.info(
             "Mock: attaching disk to VM (mock mode)",
             metadata: [
@@ -144,6 +156,46 @@ actor MockHypervisorService: HypervisorService {
                 "deviceName": .string(deviceName),
                 "orderedBootVolumeIds": .string(orderedBootVolumeIds.joined(separator: ",")),
             ])
+    }
+
+    func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws {
+        guard hypervisorType == .qemu else {
+            throw HypervisorServiceError.notSupported(
+                "\(hypervisorType.displayName) does not support per-volume I/O limits")
+        }
+        guard var vm = vms[vmId] else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        var found = false
+        let volumes = vm.spec.volumes.map { volume in
+            guard volume.volumeId.uuidString == volumeId else { return volume }
+            found = true
+            return VolumeSpec(
+                volumeId: volume.volumeId, deviceName: volume.deviceName,
+                attachment: volume.attachment, readonly: volume.readonly,
+                bootOrder: volume.bootOrder, ioLimits: limits)
+        }
+        guard found else {
+            throw HypervisorServiceError.diskError("volume \(volumeId) is not attached")
+        }
+        vm.spec = vm.spec.withVolumes(volumes)
+        vms[vmId] = vm
+    }
+
+    func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits {
+        guard hypervisorType == .qemu else {
+            throw HypervisorServiceError.notSupported(
+                "\(hypervisorType.displayName) does not report per-volume I/O limits")
+        }
+        guard let vm = vms[vmId] else {
+            throw HypervisorServiceError.vmNotFound(vmId)
+        }
+        guard let volume = vm.spec.volumes.first(where: { $0.volumeId.uuidString == volumeId }) else {
+            throw HypervisorServiceError.diskError("volume \(volumeId) is not attached")
+        }
+        return VolumeIOLimits(
+            iopsTotal: volume.ioLimits?.iopsTotal,
+            bpsTotal: volume.ioLimits?.bpsTotal)
     }
 
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {

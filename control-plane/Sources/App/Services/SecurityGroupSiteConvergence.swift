@@ -117,7 +117,17 @@ enum SecurityGroupSiteConvergence {
             else { return }
 
             if observed.status == .active {
-                guard observed.observedGeneration >= siteObservation.observedGeneration else { return }
+                // A blocked failure can retain the site's last successful
+                // generation. Do not let a delayed success for that older
+                // generation erase the current generation's failure.
+                let wouldClearCurrentFailure =
+                    siteObservation.observedStatus == .error
+                    && siteObservation.failedGeneration == group.generation
+                    && observed.observedGeneration < group.generation
+                guard
+                    !wouldClearCurrentFailure,
+                    observed.observedGeneration >= siteObservation.observedGeneration
+                else { return }
             } else {
                 guard
                     observed.failedGeneration == group.generation

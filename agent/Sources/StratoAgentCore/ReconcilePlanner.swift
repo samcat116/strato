@@ -629,6 +629,16 @@ extension Reconciler {
         if desired.attachment == nil, observed.attachedVMId != nil {
             return [.detach]
         }
+        // Once the disk is attached in the right slot, a limit change outranks
+        // a grow. A live grow may remain blocked while the guest runs; that
+        // must not starve an independently enforceable fairness policy.
+        if let attachment = desired.attachment,
+            observed.attachedVMId == attachment.vmId.uuidString,
+            observed.deviceName == attachment.deviceName.rawValue,
+            !ioLimitsMatch(desired: desired.ioLimits, observed: observed.ioLimits)
+        {
+            return [.throttle]
+        }
         if let size = observed.sizeBytes, desired.sizeBytes > size {
             return [.resize]
         }
@@ -654,6 +664,17 @@ extension Reconciler {
             return [.detach]
         }
         return [.attach]
+    }
+
+    /// Desired nil and an observed present-but-empty value are both uncapped.
+    /// Observed nil is different: it means the agent could not read the
+    /// backend, so even a clear must be re-driven rather than called applied.
+    private static func ioLimitsMatch(
+        desired: VolumeIOLimits?, observed: VolumeIOLimits?
+    ) -> Bool {
+        guard let observed else { return false }
+        return desired?.iopsTotal == observed.iopsTotal
+            && desired?.bpsTotal == observed.bpsTotal
     }
 
     /// What to do about a volume whose size the agent could not read, once

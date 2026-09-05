@@ -685,6 +685,92 @@ final class DesiredStateReconciliationTests {
         }
     }
 
+    @Test("A stale active report cannot erase a current blocked security-group failure")
+    func staleActivePreservesBlockedSecurityGroupFailure() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentID = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            let agentUUID = try #require(UUID(uuidString: agentID))
+            let agent = try #require(try await Agent.find(agentUUID, on: app.db))
+
+            let group = SecurityGroup(projectID: vm.$project.id, name: "blocked-site")
+            group.generation = 2
+            group.observedGeneration = 1
+            let deadline = Date().addingTimeInterval(300)
+            group.convergenceDeadline = deadline
+            try await group.save(on: app.db)
+            let groupID = try group.requireID()
+
+            let siteObservation = SecurityGroupSiteObservation(
+                securityGroupID: groupID, siteID: agent.$site.id)
+            siteObservation.observedGeneration = 1
+            siteObservation.observedStatus = .active
+            try await siteObservation.save(on: app.db)
+
+            let blocked = try self.report(
+                agentId: agentID,
+                vms: [],
+                securityGroups: [
+                    ObservedSecurityGroupState(
+                        id: groupID, observedGeneration: 1, status: .error,
+                        lastError: "port group is not realized", failedGeneration: 2,
+                        failureClassification: .blocked)
+                ])
+            await app.agentService.applyObservedStateReport(
+                blocked, fromAgentKey: agentKey("recon-agent"))
+
+            let degraded = try #require(try await SecurityGroup.find(groupID, on: app.db))
+            let failureAt = try #require(degraded.lastErrorAt)
+            #expect(degraded.conditions.degraded?.reason == "port group is not realized")
+            #expect(degraded.conditions.degraded?.sinceGeneration == 2)
+            #expect(abs(try #require(degraded.convergenceDeadline).timeIntervalSince(deadline)) < 0.01)
+
+            let staleActive = try self.report(
+                agentId: agentID,
+                vms: [],
+                securityGroups: [
+                    ObservedSecurityGroupState(
+                        id: groupID, observedGeneration: 1, status: .active)
+                ])
+            await app.agentService.applyObservedStateReport(
+                staleActive, fromAgentKey: agentKey("recon-agent"))
+
+            let stillDegraded = try #require(
+                try await SecurityGroup.find(groupID, on: app.db))
+            #expect(stillDegraded.lastError == "port group is not realized")
+            #expect(stillDegraded.failedGeneration == 2)
+            #expect(stillDegraded.lastErrorAt == failureAt)
+            #expect(stillDegraded.conditions.degraded?.sinceGeneration == 2)
+            #expect(
+                abs(try #require(stillDegraded.convergenceDeadline).timeIntervalSince(deadline))
+                    < 0.01)
+
+            let storedSite = try #require(
+                try await SecurityGroupSiteObservation.query(on: app.db)
+                    .filter(\.$securityGroup.$id == groupID)
+                    .filter(\.$site.$id == agent.$site.id)
+                    .first())
+            #expect(storedSite.observedStatus == .error)
+            #expect(storedSite.failedGeneration == 2)
+            #expect(storedSite.lastError == "port group is not realized")
+
+            let currentActive = try self.report(
+                agentId: agentID,
+                vms: [],
+                securityGroups: [
+                    ObservedSecurityGroupState(
+                        id: groupID, observedGeneration: 2, status: .active)
+                ])
+            await app.agentService.applyObservedStateReport(
+                currentActive, fromAgentKey: agentKey("recon-agent"))
+
+            let converged = try #require(try await SecurityGroup.find(groupID, on: app.db))
+            #expect(converged.conditions.converged)
+            #expect(converged.lastError == nil)
+            #expect(converged.convergenceDeadline == nil)
+        }
+    }
+
     @Test("A superseded fabric failure preserves the current generation's deadline")
     func supersededFabricFailurePreservesDeadline() async throws {
         try await withVMTestApp { app, _, vm, _ in

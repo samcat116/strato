@@ -28,14 +28,17 @@ public struct ResolvedDisk: Sendable, Equatable {
     /// a model of — the STR-129 rule, applied to a document instead of to a QMP
     /// device id.
     public let volumeId: String?
+    /// Absolute total I/O ceilings emitted as libvirt `<iotune>` values.
+    public let ioLimits: VolumeIOLimits?
 
     public init(
         attachment: DiskAttachment, readonly: Bool = false, bootOrder: Int? = nil,
-        volumeId: String? = nil
+        volumeId: String? = nil, ioLimits: VolumeIOLimits? = nil
     ) {
         self.attachment = attachment
         self.readonly = readonly
         self.bootOrder = bootOrder
         self.volumeId = volumeId
+        self.ioLimits = ioLimits
     }
 }
