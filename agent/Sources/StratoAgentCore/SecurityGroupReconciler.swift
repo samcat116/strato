@@ -577,6 +577,11 @@ public struct ObservedPortGroup: Equatable, Sendable {
 /// as-is — absence of the field is "no opinion",
 /// never "remove from all groups".
 public struct DesiredPortMembership: Equatable, Sendable {
+    /// Stable control-plane identity used to apply the observed result to the
+    /// right interface row. Nil only for a legacy manifest/spec whose identity
+    /// has not yet been hydrated; such a port is still converged but cannot
+    /// safely produce an authoritative report.
+    public let interfaceId: UUID?
     public let portName: String
     public let securityGroupIds: [UUID]?
     /// Whether this port's workload has its per-instance metadata switch off
@@ -595,7 +600,13 @@ public struct DesiredPortMembership: Equatable, Sendable {
     /// the packet off the chassis, not the layer that decides.
     public let metadataDenied: Bool
 
-    public init(portName: String, securityGroupIds: [UUID]?, metadataDenied: Bool = false) {
+    public init(
+        interfaceId: UUID? = nil,
+        portName: String,
+        securityGroupIds: [UUID]?,
+        metadataDenied: Bool = false
+    ) {
+        self.interfaceId = interfaceId
         self.portName = portName
         self.securityGroupIds = securityGroupIds
         self.metadataDenied = metadataDenied
@@ -622,6 +633,7 @@ public enum VMPortMembershipPlanner {
             let metadataDenied = vm.metadata.map { !$0.isServiceEnabled } ?? false
             return vm.spec.networks.enumerated().map { fallbackIndex, spec in
                 DesiredPortMembership(
+                    interfaceId: spec.interfaceId,
                     portName: OVNNaming.vmPortName(
                         vmId: vm.vmId.uuidString,
                         nicIndex: spec.orderIndex ?? fallbackIndex),
@@ -756,32 +768,79 @@ public protocol SecurityGroupActuator: Sendable {
     func removePort(named portName: String, fromGroup group: String) async throws
 }
 
+/// Authority-side result of one security-group pass. Site-singleton
+/// implementation groups stay internal; callers receive one observation per
+/// desired tenant group plus the independent readiness gate for network ACLs.
+public struct SecurityGroupReconcileResult: Sendable, Equatable {
+    public let observations: [ObservedSecurityGroupState]
+    public let networkACLTierReady: Bool
+
+    public init(observations: [ObservedSecurityGroupState], networkACLTierReady: Bool) {
+        self.observations = observations
+        self.networkACLTierReady = networkACLTierReady
+    }
+}
+
 extension SecurityGroupReconciler {
     /// Authority-side convergence: ensure every planned port group + ACL set,
     /// then tear down managed groups the plan no longer wants. Best-effort
     /// per object (a failing group is retried by the next level-triggered
     /// sync); throws only when the NB snapshot itself can't be read.
-    @discardableResult
     public static func reconcile(
         securityGroups: [DesiredSecurityGroup],
         actuator: any SecurityGroupActuator,
         logger: Logger
-    ) async throws -> Bool {
+    ) async throws -> SecurityGroupReconcileResult {
         let (plans, unexpressed) = plan(securityGroups: securityGroups)
         var fullyConverged = true
+        var failedByGroup: [UUID: (message: String, classification: ObservedFailureClassification)] = [:]
+        var globalFailure: (message: String, classification: ObservedFailureClassification)?
+        let groupIDByPlanName = Dictionary(
+            uniqueKeysWithValues: securityGroups.map {
+                (OVNNaming.portGroupName(securityGroupId: $0.id), $0.id)
+            })
         if !unexpressed.isEmpty {
             logger.error(
                 "Security-group rules from a newer control plane could not be expressed as ACLs; they are NOT enforced",
                 metadata: ["ruleIds": .array(unexpressed.map { .string($0.uuidString) })])
+            let unexpressedSet = Set(unexpressed)
+            for group in securityGroups where group.rules.contains(where: { unexpressedSet.contains($0.id) }) {
+                failedByGroup[group.id] = (
+                    "One or more security-group rules cannot be expressed by this agent",
+                    .permanent
+                )
+            }
         }
 
         for plan in plans {
             do {
                 if try await !actuator.ensurePortGroup(plan) {
                     fullyConverged = false
+                    if let groupID = groupIDByPlanName[plan.name] {
+                        failedByGroup[groupID] = (
+                            "The security-group port group did not reach the current ACL schema",
+                            .transient
+                        )
+                    } else if globalFailure == nil {
+                        globalFailure = (
+                            "A security-group safety port group did not reach the current ACL schema",
+                            .transient
+                        )
+                    }
                 }
             } catch {
                 fullyConverged = false
+                let classification: ObservedFailureClassification =
+                    switch (error as? any ClassifiableError)?.failureClassification {
+                    case .permanent: .permanent
+                    case .blocked, .waitingOnDependency: .blocked
+                    case .transient, nil: .transient
+                    }
+                if let groupID = groupIDByPlanName[plan.name] {
+                    failedByGroup[groupID] = (error.localizedDescription, classification)
+                } else if globalFailure == nil {
+                    globalFailure = (error.localizedDescription, classification)
+                }
                 logger.error(
                     "Failed to converge security-group port group",
                     metadata: [
@@ -802,8 +861,59 @@ extension SecurityGroupReconciler {
         // not prove readiness: a missing planned group or an old tier-0 group
         // left behind after a failed teardown must hold the NACL rollout back.
         let finalObserved = try await actuator.observeSecurityGroups()
-        return fullyConverged
-            && isNetworkACLTierReady(planned: plans, observed: finalObserved)
+        let finalByName = Dictionary(uniqueKeysWithValues: finalObserved.map { ($0.name, $0) })
+        for plan in plans where groupIDByPlanName[plan.name] == nil {
+            guard let row = finalByName[plan.name], let generation = row.generation,
+                generation >= plan.generation,
+                row.builderRevision == SecurityGroupACLBuilder.aclSchemaRevision
+            else {
+                if globalFailure == nil {
+                    globalFailure = (
+                        "A security-group safety port group is missing or has not reached the desired generation",
+                        .transient
+                    )
+                }
+                continue
+            }
+        }
+        let observations = securityGroups.map { group -> ObservedSecurityGroupState in
+            if failedByGroup[group.id] == nil, let globalFailure {
+                failedByGroup[group.id] = globalFailure
+            }
+            if failedByGroup[group.id] == nil {
+                let name = OVNNaming.portGroupName(securityGroupId: group.id)
+                if let observed = finalByName[name],
+                    let generation = observed.generation,
+                    generation >= group.generation,
+                    observed.builderRevision == SecurityGroupACLBuilder.aclSchemaRevision
+                {
+                    return ObservedSecurityGroupState(
+                        id: group.id,
+                        observedGeneration: group.generation,
+                        status: .active)
+                }
+                failedByGroup[group.id] = (
+                    "The security-group port group is missing or has not reached the desired generation",
+                    .transient
+                )
+            }
+            let failure = failedByGroup[group.id]!
+            let observedGeneration =
+                finalByName[
+                    OVNNaming.portGroupName(securityGroupId: group.id)
+                ]?.generation ?? 0
+            return ObservedSecurityGroupState(
+                id: group.id,
+                observedGeneration: min(observedGeneration, max(0, group.generation - 1)),
+                status: .error,
+                lastError: failure.message,
+                failedGeneration: group.generation,
+                failureClassification: failure.classification)
+        }
+        return SecurityGroupReconcileResult(
+            observations: observations,
+            networkACLTierReady: fullyConverged
+                && isNetworkACLTierReady(planned: plans, observed: finalObserved))
     }
 
     /// How early a port group is joined: the two site-singleton groups whose
@@ -825,13 +935,37 @@ extension SecurityGroupReconciler {
     /// doesn't exist yet (the authority's sync hasn't realized it) is logged
     /// and left for the next sync — same wait-for-the-authority semantics as
     /// a missing switch.
+    @discardableResult
     public static func reconcileMembership(
         memberships: [DesiredPortMembership],
         actuator: any SecurityGroupActuator,
         logger: Logger
-    ) async {
+    ) async -> [ObservedPortMembershipState] {
         let managed = memberships.filter { $0.securityGroupIds != nil }
-        guard !managed.isEmpty else { return }
+        guard !managed.isEmpty else { return [] }
+
+        func observation(
+            for membership: DesiredPortMembership,
+            status: ObservedNetworkFabricStatus,
+            error: (any Error)? = nil
+        ) -> ObservedPortMembershipState? {
+            guard let interfaceId = membership.interfaceId,
+                let securityGroupIds = membership.securityGroupIds
+            else { return nil }
+            let classification: ObservedFailureClassification? =
+                switch (error as? any ClassifiableError)?.failureClassification {
+                case .permanent: .permanent
+                case .blocked, .waitingOnDependency: .blocked
+                case .transient, nil: error == nil ? nil : .transient
+                }
+            return ObservedPortMembershipState(
+                interfaceId: interfaceId,
+                portName: membership.portName,
+                securityGroupIds: securityGroupIds.sorted { $0.uuidString < $1.uuidString },
+                status: status,
+                lastError: error?.localizedDescription,
+                failureClassification: classification)
+        }
 
         let observed: [String: Set<String>]
         do {
@@ -840,9 +974,10 @@ extension SecurityGroupReconciler {
             logger.error(
                 "Could not read port-group membership; skipping membership convergence this pass",
                 metadata: ["error": .string(error.localizedDescription)])
-            return
+            return managed.compactMap { observation(for: $0, status: .error, error: error) }
         }
 
+        var results: [ObservedPortMembershipState] = []
         for membership in managed {
             guard let desired = membership.desiredGroups else { continue }
             let current = observed[membership.portName] ?? []
@@ -859,11 +994,13 @@ extension SecurityGroupReconciler {
                 (Self.additionRank(of: $0), $0) < (Self.additionRank(of: $1), $1)
             }
             var portPending = false
+            var firstError: (any Error)?
             for group in additions {
                 if portPending { break }
                 do {
                     try await actuator.addPort(named: membership.portName, toGroup: group)
                 } catch {
+                    if firstError == nil { firstError = error }
                     // Only the drop group's failure abandons the port. A failed
                     // metadata-deny add leaves IMDS reachable at the network
                     // layer for a sync, which the listener's own refusal already
@@ -884,6 +1021,7 @@ extension SecurityGroupReconciler {
                 do {
                     try await actuator.removePort(named: membership.portName, fromGroup: group)
                 } catch {
+                    if firstError == nil { firstError = error }
                     logger.warning(
                         "Could not remove port from security-group port group (retried next sync)",
                         metadata: [
@@ -893,6 +1031,14 @@ extension SecurityGroupReconciler {
                         ])
                 }
             }
+            if let firstError {
+                if let result = observation(for: membership, status: .error, error: firstError) {
+                    results.append(result)
+                }
+            } else if let result = observation(for: membership, status: .active) {
+                results.append(result)
+            }
         }
+        return results
     }
 }

@@ -123,6 +123,11 @@ distinguishes a blocked refusal, which retains the desired state and retries,
 from a terminal failure, which ends the mutation. The exact-version handshake
 prevents an older control plane from treating a blocked report as terminal.
 
+Wire v59 adds optional network-fabric observations to `ObservedStateReport`:
+authority-scoped logical-network and security-group results plus per-agent port
+membership results. Nil topology fields mean the reporting agent has no
+authority-side opinion; they must never be interpreted as an empty healthy set.
+
 Two consequences worth knowing:
 
 - **A rejected agent cannot self-update.** Declarative self-update rides the
