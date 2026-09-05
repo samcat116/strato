@@ -181,11 +181,39 @@ enum VMCreationWorkflow {
         }
         let resolvedRequestedGroupsByIndex = requestedGroupsByIndex
 
+        // Choose the hypervisor: an explicit request wins; otherwise infer
+        // it from the image when its artifact set is compatible with exactly
+        // one hypervisor; otherwise fall back to the model default (QEMU).
+        let chosenHypervisor: HypervisorType
+        if let requested = createRequest.hypervisorType {
+            chosenHypervisor = requested
+        } else {
+            let compatible = image.compatibleHypervisors()
+            chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
+        }
+
         // Create the VM instance from the image.
         // Pre-compute values to avoid complex expression
         let cpuValue = createRequest.cpu ?? image.defaultCpu ?? 1
         let memoryValue = createRequest.memory ?? image.defaultMemory ?? Int64(1024 * 1024 * 1024)
-        let diskValue = createRequest.disk ?? image.defaultDisk ?? Int64(10 * 1024 * 1024 * 1024)
+        let requestedDiskValue =
+            createRequest.disk ?? image.defaultDisk ?? Int64(10 * 1024 * 1024 * 1024)
+        guard requestedDiskValue > 0 else {
+            throw Abort(.badRequest, reason: "'disk' must be positive")
+        }
+        let diskValue: Int64
+        if chosenHypervisor == .qemu, let artifact = image.usableDiskArtifact {
+            guard let virtualSize = artifact.virtualSize else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Source image disk size is unknown. Re-upload the disk artifact so Strato can measure its virtual size."
+                )
+            }
+            diskValue = max(requestedDiskValue, virtualSize)
+        } else {
+            diskValue = requestedDiskValue
+        }
         guard cpuValue > 0 else {
             throw Abort(.badRequest, reason: "'cpu' must be positive")
         }
@@ -196,9 +224,6 @@ enum VMCreationWorkflow {
             throw Abort(
                 .badRequest,
                 reason: "'memory' must not exceed \(WorkloadSizeLimits.maxMemoryBytes) bytes")
-        }
-        guard diskValue > 0 else {
-            throw Abort(.badRequest, reason: "'disk' must be positive")
         }
         guard diskValue <= WorkloadSizeLimits.maxDiskBytes else {
             throw Abort(
@@ -245,17 +270,6 @@ enum VMCreationWorkflow {
             guard !cmdline.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
                 throw Abort(.badRequest, reason: "'cmdline' contains disallowed control characters")
             }
-        }
-
-        // Choose the hypervisor: an explicit request wins; otherwise infer
-        // it from the image when its artifact set is compatible with exactly
-        // one hypervisor; otherwise fall back to the model default (QEMU).
-        let chosenHypervisor: HypervisorType
-        if let requested = createRequest.hypervisorType {
-            chosenHypervisor = requested
-        } else {
-            let compatible = image.compatibleHypervisors()
-            chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
         }
 
         let metadataEnabled = createRequest.metadataEnabled ?? true

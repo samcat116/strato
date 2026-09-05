@@ -181,6 +181,10 @@ public actor MockStorageBackend: StorageBackend {
         persist()
     }
 
+    public func rejectVolume(volumeId: String) async throws {
+        try await deleteVolume(volumeId: volumeId)
+    }
+
     public func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {
         guard case .file(let volumePath, _) = attachment else {
             throw StorageBackendError.volumeNotFound(String(describing: attachment))

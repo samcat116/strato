@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import Synchronization
 import Testing
 import StratoAgentTestSupport
 import StratoShared
@@ -78,9 +79,13 @@ private actor SubprocessRecorder {
     }
 }
 
-private func imageInfoJSON(format: String, virtualSize: Int64 = 1_073_741_824) -> ProcessResult {
+private func imageInfoJSON(
+    format: String,
+    virtualSize: Int64 = 1_073_741_824,
+    actualSize: Int64 = 313_460
+) -> ProcessResult {
     let json = """
-        {"filename": "img", "format": "\(format)", "virtual-size": \(virtualSize), "actual-size": 313460}
+        {"filename": "img", "format": "\(format)", "virtual-size": \(virtualSize), "actual-size": \(actualSize)}
         """
     return ProcessResult(terminationStatus: 0, standardOutput: Data(json.utf8), standardError: Data())
 }
@@ -130,6 +135,25 @@ private struct FailingVolumeEnumerator: Sendable {
     }
 }
 
+private final class TemporarilyFailingVolumeRemover: Sendable {
+    private let failuresRemaining = Mutex(2)
+    private let rejectedVolumeDirectory: String
+
+    init(rejectedVolumeDirectory: String) {
+        self.rejectedVolumeDirectory = rejectedVolumeDirectory
+    }
+
+    func remove(atPath path: String) throws {
+        let shouldFail = failuresRemaining.withLock { remaining in
+            guard path == rejectedVolumeDirectory, remaining > 0 else { return false }
+            remaining -= 1
+            return true
+        }
+        if shouldFail { throw POSIXError(.EIO) }
+        try FileManager.default.removeItem(atPath: path)
+    }
+}
+
 private func makeImageInfo() -> ImageInfo {
     ImageInfo(
         imageId: UUID(),
@@ -156,6 +180,10 @@ struct FileSystemStorageBackendTests {
         copyItem: @escaping @Sendable (String, String) throws -> Void = {
             try FileManager.default.copyItem(atPath: $0, toPath: $1)
         },
+        removeItem: @escaping @Sendable (String) throws -> Void = {
+            try FileManager.default.removeItem(atPath: $0)
+        },
+        freeDiskSpace: @escaping @Sendable (String) -> Int64? = { _ in Int64.max },
         publishItem: @escaping @Sendable (String, String) throws -> Void = {
             try DurableFileWriter().publish(stagingPath: $0, to: $1)
         }
@@ -167,6 +195,8 @@ struct FileSystemStorageBackendTests {
             imageSource: imageSource,
             enumerateVolumeStore: enumerateVolumeStore,
             copyItem: copyItem,
+            removeItem: removeItem,
+            freeDiskSpace: freeDiskSpace,
             publishItem: publishItem,
             runSubprocess: { executable, arguments in
                 await recorder.record(executable: executable, arguments: arguments)
@@ -546,6 +576,29 @@ struct FileSystemStorageBackendTests {
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-2/volume.qcow2"))
     }
 
+    @Test func cloneRefusesBeforeWritingWhenSourceFootprintExceedsFreeSpace() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let backend = makeBackend(
+            root: root,
+            recorder: recorder,
+            freeDiskSpace: { _ in 313_459 })
+
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.cloneVolume(
+                sourceVolumeId: "source",
+                sourcePath: "\(root)/source/volume.qcow2",
+                targetVolumeId: "target")
+        }
+
+        let invocations = await recorder.invocations
+        #expect(invocations.filter { $0.arguments.first == "convert" }.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: "\(root)/target"))
+        #expect(!FileManager.default.fileExists(atPath: "\(root)/target/volume.qcow2.partial"))
+    }
+
     /// The invariant `listVolumes` rests on: presence means *complete*. A
     /// directory a crashed create left behind is not a volume, so the next sync
     /// re-drives it rather than reading a truncated disk as converged.
@@ -684,6 +737,34 @@ struct FileSystemStorageBackendTests {
         #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
     }
 
+    @Test func snapshotDoesNotRequireParentFootprintToBeFree() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        let gibibyte: Int64 = 1_073_741_824
+        await recorder.stub(
+            subcommand: "info",
+            result: imageInfoJSON(
+                format: "qcow2",
+                virtualSize: 100 * gibibyte,
+                actualSize: 70 * gibibyte))
+        let backend = makeBackend(
+            root: root,
+            recorder: recorder,
+            freeDiskSpace: { _ in 30 * gibibyte })
+
+        let snapshotPath = try await backend.createSnapshot(
+            volumeId: "vol-1",
+            snapshotId: "snap-1",
+            volumePath: "\(root)/vol-1/volume.qcow2")
+
+        #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
+        let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
+        #expect(create.arguments.last == snapshotPath + ".partial")
+        #expect(FileManager.default.fileExists(atPath: snapshotPath))
+        #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
+    }
+
     @Test func createSnapshotIsIdempotent() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -728,6 +809,38 @@ struct FileSystemStorageBackendTests {
         #expect(!FileManager.default.fileExists(atPath: "\(root)/vol-1"))
         // Idempotent: deleting again must not throw.
         try await backend.deleteVolume(volumeId: "vol-1")
+    }
+
+    @Test func rejectedVolumeSurvivesFailedDeletionWithoutReenteringInventory() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let volumeId = UUID().uuidString
+        let volumeDirectory = "\(root)/\(volumeId)"
+        try FileManager.default.createDirectory(atPath: volumeDirectory, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: "\(volumeDirectory)/volume.qcow2", contents: Data())
+        let remover = TemporarilyFailingVolumeRemover(
+            rejectedVolumeDirectory: volumeDirectory)
+        let backend = makeBackend(
+            root: root,
+            recorder: SubprocessRecorder(),
+            removeItem: { try remover.remove(atPath: $0) })
+
+        // The first deletion failure leaves a durable rejection marker. A
+        // subsequent inventory refuses the whole answer while cleanup still
+        // fails, rather than returning the published qcow2 as healthy.
+        try await backend.rejectVolume(volumeId: volumeId)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: "\(volumeDirectory)/.rejected-by-admission"))
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.listVolumes()
+        }
+
+        // Cleanup is retried from durable state and only then can inventory
+        // authoritatively report the volume absent.
+        #expect(try await backend.listVolumes().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: volumeDirectory))
     }
 
     @Test func resizeVolumePassesNewSize() async throws {

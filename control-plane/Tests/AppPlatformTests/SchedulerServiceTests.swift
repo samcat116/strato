@@ -36,6 +36,7 @@ struct SchedulerServiceTests {
         availableMemory: Int64 = 12000,
         totalDisk: Int64 = 100000,
         availableDisk: Int64 = 80000,
+        physicalFreeDisk: Int64? = nil,
         status: AgentStatus = .online,
         runningVMCount: Int = 0,
         supportedHypervisors: [HypervisorType] = [.qemu],
@@ -57,6 +58,7 @@ struct SchedulerServiceTests {
             availableMemory: availableMemory,
             totalDisk: totalDisk,
             availableDisk: availableDisk,
+            physicalFreeDisk: physicalFreeDisk,
             status: status,
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
@@ -109,10 +111,13 @@ struct SchedulerServiceTests {
         #expect(fullyUtilized.memoryUtilization == 1.0)
     }
 
-    @Test("SchedulableAgent calculates disk utilization correctly")
+    @Test("SchedulableAgent ranks disk by commitments, not sparse physical usage")
     func testDiskUtilization() throws {
-        let agent = createTestAgent(totalDisk: 100000, availableDisk: 80000)
-        #expect(agent.diskUtilization == 0.2)  // (100000-80000)/100000 = 0.2
+        let agent = createTestAgent(
+            totalDisk: 100000,
+            availableDisk: 20000,
+            physicalFreeDisk: 80000)
+        #expect(agent.diskUtilization == 0.8)
     }
 
     @Test("SchedulableAgent calculates overall utilization correctly")

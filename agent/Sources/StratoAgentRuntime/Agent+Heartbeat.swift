@@ -309,7 +309,7 @@ extension Agent {
         }
     }
 
-    /// Raw CPU/memory accounting, before availability is clamped. Admission
+    /// Raw CPU, memory, and local-disk accounting, before availability is clamped. Admission
     /// needs to distinguish exact fit from a host that is already overcommitted.
     func rawHostCapacitySnapshot() async -> HostCapacitySnapshot {
         while true {
@@ -337,12 +337,21 @@ extension Agent {
         // is probed live from the machine the agent runs on.
         let totalCPU: Int
         let totalMemory: Int64
+        let simulatedDiskBytes: Int64?
+        let diskCapacityBefore: (total: Int64, free: Int64)?
+        var diskInventoryKnown = true
         if let simulation, simulation.enabled {
             totalCPU = simulation.resolvedCPUCores
             totalMemory = simulation.resolvedMemoryBytes
+            simulatedDiskBytes = simulation.resolvedDiskBytes
+            diskCapacityBefore = nil
+            // Mock volumes write no physical bytes; this figure is the
+            // operational media signal, not commitment availability.
         } else {
             totalCPU = HostResources.logicalCoreCount
             totalMemory = HostResources.physicalMemoryBytes
+            simulatedDiskBytes = nil
+            diskCapacityBefore = HostResources.diskCapacity(forPath: volumeStoragePath)
         }
 
         // Resources committed to VMs currently managed on this host. We report
@@ -419,7 +428,154 @@ extension Agent {
         // last thing whose capacity should be handed to a new placement.
         for entry in quarantinedWorkloads.values {
             reserved = reserved.addingSaturating(
-                HostReservation(cpus: entry.cpus, memoryBytes: entry.memoryBytes))
+                HostReservation(
+                    cpus: entry.cpus, memoryBytes: entry.memoryBytes,
+                    diskBytes: entry.diskBytes))
+        }
+
+        // Local volume virtual sizes are the current durable disk promises.
+        // They are independent of sparse allocation and include standalone
+        // volumes as well as VM boot/data volumes. Legacy VM manifests with no
+        // managed-volume identities retain their historical disk reservation;
+        // current manifests do not, or their boot volume would be charged twice.
+        var managedDiskPaths: Set<String> = []
+        if let storageBackends {
+            do {
+                let inventory = try await storageBackends.localInventory()
+                for (volumeId, attachment) in inventory {
+                    if simulation?.enabled != true {
+                        if case .file(let path, _) = attachment {
+                            managedDiskPaths.insert(path)
+                        } else {
+                            diskInventoryKnown = false
+                            logger.warning(
+                                "Managed local volume has no measurable filesystem path",
+                                metadata: ["volumeId": .string(volumeId)])
+                        }
+                    }
+                    if volumeCommittedSizes[volumeId] == nil {
+                        let info = try await storageBackends.localVolumeInfo(attachment: attachment)
+                        volumeSizes[volumeId] = info.virtualSize
+                        volumeCommittedSizes[volumeId] = max(0, info.virtualSize)
+                    }
+                }
+                volumeCommittedSizes = volumeCommittedSizes.filter { inventory[$0.key] != nil }
+                for bytes in volumeCommittedSizes.values {
+                    reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
+                }
+            } catch {
+                diskInventoryKnown = false
+                logger.warning(
+                    "Unable to inventory committed local volume capacity",
+                    metadata: ["error": .string(error.localizedDescription)])
+            }
+        } else {
+            diskInventoryKnown = false
+        }
+
+        for entry in managedVMs.values where entry.spec.volumes.isEmpty {
+            reserved = reserved.addingSaturating(
+                HostReservation(diskBytes: entry.spec.diskBytes ?? 0))
+        }
+        for entry in orphanedVMs.values where entry.spec.volumes.isEmpty {
+            reserved = reserved.addingSaturating(
+                HostReservation(diskBytes: entry.spec.diskBytes ?? 0))
+        }
+
+        // An external local qcow2 overlay can eventually consume its parent's
+        // whole virtual size. Charge that bound rather than today's tiny file.
+        if snapshotInventoryUnreadable {
+            diskInventoryKnown = false
+        } else {
+            for record in snapshotRecords.values where record.kind == .volumeSnapshot {
+                let storage = VolumeSnapshotStorageRouting.resolve(
+                    desiredStorage: nil,
+                    recordedStorage: record.volumeStorage,
+                    currentParentStorage: desiredVolumeStates[record.parentId.uuidString]?.storage)
+                guard storage == .local else { continue }
+                let bytes =
+                    record.reservedDiskBytes
+                    ?? desiredVolumeStates[record.parentId.uuidString]?.sizeBytes
+                    ?? 0
+                reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
+                if simulation?.enabled != true {
+                    if let path = record.facts.storagePath {
+                        managedDiskPaths.insert(path)
+                    } else {
+                        diskInventoryKnown = false
+                        logger.warning(
+                            "Managed local snapshot has no measurable filesystem path",
+                            metadata: ["snapshotId": .string(record.snapshotId.uuidString)])
+                    }
+                }
+            }
+        }
+
+        // Measure every managed path twice, in opposite orders, and bracket
+        // both sweeps with filesystem samples. A sequential sum is not a real
+        // point-in-time value: one volume can trim before a later volume grows
+        // by the same amount, making the sum larger than managed allocation was
+        // at either endpoint. Only subtract an allocation map that is stable
+        // across both sweeps and physically possible. Otherwise charge all
+        // observed filesystem use as unmanaged for this snapshot; that can
+        // temporarily under-admit, but it cannot manufacture free capacity.
+        let totalDisk: Int64
+        let diskCapacitySamples: [(total: Int64, free: Int64)]
+        let managedDiskAllocated: Int64
+        if let simulatedDiskBytes {
+            totalDisk = simulatedDiskBytes
+            diskCapacitySamples = []
+            managedDiskAllocated = 0
+        } else {
+            let orderedPaths = managedDiskPaths.sorted()
+            let firstAllocations = HostResources.managedDiskAllocations(
+                paths: orderedPaths, measure: SnapshotFootprint.allocatedBytes(at:))
+            let diskCapacityBetween = HostResources.diskCapacity(forPath: volumeStoragePath)
+            let secondAllocations = HostResources.managedDiskAllocations(
+                paths: Array(orderedPaths.reversed()), measure: SnapshotFootprint.allocatedBytes(at:))
+            let diskCapacityAfter = HostResources.diskCapacity(forPath: volumeStoragePath)
+            var samples: [(total: Int64, free: Int64)] = []
+            if let diskCapacityBefore { samples.append(diskCapacityBefore) }
+            if let diskCapacityBetween { samples.append(diskCapacityBetween) }
+            if let diskCapacityAfter { samples.append(diskCapacityAfter) }
+            diskCapacitySamples = samples
+            if diskCapacityBefore == nil || diskCapacityBetween == nil || diskCapacityAfter == nil {
+                logger.warning(
+                    "Unable to determine disk capacity for managed volume storage path",
+                    metadata: ["path": .string(volumeStoragePath)])
+                diskInventoryKnown = false
+            }
+            totalDisk = samples.map { $0.total }.min() ?? 0
+            if let firstAllocations, let secondAllocations,
+                let validated = HostResources.validatedManagedDiskAllocation(
+                    first: firstAllocations,
+                    second: secondAllocations,
+                    capacitySamples: samples)
+            {
+                managedDiskAllocated = validated
+            } else {
+                managedDiskAllocated = 0
+                if firstAllocations == nil || secondAllocations == nil {
+                    diskInventoryKnown = false
+                    logger.warning("Unable to measure every managed local disk footprint")
+                } else {
+                    logger.warning(
+                        "Managed local disk allocation changed during capacity sampling; charging all physical use as unmanaged for this snapshot"
+                    )
+                }
+            }
+        }
+
+        // Filesystem total includes bytes already occupied by the OS, logs,
+        // image caches, and other unmanaged data. Charge those bytes as a
+        // baseline reservation. Managed volume and snapshot allocations are
+        // excluded because their full virtual sizes are already reserved.
+        if !diskCapacitySamples.isEmpty {
+            reserved = reserved.addingSaturating(
+                HostReservation(
+                    diskBytes: HostResources.conservativeUnmanagedDiskUsage(
+                        capacitySamples: diskCapacitySamples,
+                        managedAllocated: managedDiskAllocated)))
         }
 
         // An unreadable manifest means this host's contents are unknown, and
@@ -429,8 +585,10 @@ extension Agent {
         // `least_loaded` preferentially filled it — over-committing memory on a
         // host whose guests are all live.
         return HostCapacitySnapshot(
-            total: HostReservation(cpus: totalCPU, memoryBytes: totalMemory),
-            reserved: reserved, inventoryKnown: manifestReadFailure == nil)
+            total: HostReservation(
+                cpus: totalCPU, memoryBytes: totalMemory, diskBytes: totalDisk),
+            reserved: reserved, inventoryKnown: manifestReadFailure == nil,
+            diskInventoryKnown: diskInventoryKnown && manifestReadFailure == nil)
     }
 
     func getAgentResources() async -> AgentResources {
@@ -440,51 +598,21 @@ extension Agent {
         let accounted = HostCapacitySnapshot(
             total: raw.total,
             reserved: raw.reserved.addingSaturating(capacityAdmissionLedger.provisionalReservation),
-            inventoryKnown: raw.inventoryKnown)
+            inventoryKnown: raw.inventoryKnown,
+            diskInventoryKnown: raw.diskInventoryKnown)
         let available = accounted.available
-        let inventoryUnknown = !raw.inventoryKnown
 
-        // Disk. In simulation mode the total is the configured fake capacity
-        // (the real filesystem is shared by every dummy and has nothing to do
-        // with the sizes we're modeling), and committed disk is subtracted from
-        // it manifest-side, mirroring the CPU/memory accounting above: the
-        // manifest carries each VM's `diskBytes` from both the vmCreate and
-        // reconciliation paths, and orphans keep reserving across restarts
-        // (issue #473). Sandboxes reserve no disk, matching the scheduler.
-        // Otherwise query the managed-volume filesystem live. Every VM boot
-        // disk is a managed volume now, and the scheduler compares this value
-        // with `vm.disk`; measuring `vmStoragePath` would make placement wrong
-        // whenever the two directories are on different filesystems. A live
-        // filesystem probe naturally accounts for existing volumes without
-        // tracking reservations.
-        let totalDisk: Int64
-        let availableDisk: Int64
-        if let simulation, simulation.enabled {
-            totalDisk = simulation.resolvedDiskBytes
-            let reservedDisk =
-                managedVMs.values.totalReservedDiskBytes + orphanedVMs.values.totalReservedDiskBytes
-                + quarantinedWorkloads.values.reduce(0) { $0 + $1.diskBytes }
-            availableDisk = inventoryUnknown ? 0 : max(0, totalDisk - reservedDisk)
-        } else {
-            let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
-            if disk == nil {
-                logger.warning(
-                    "Unable to determine disk capacity for managed volume storage path",
-                    metadata: [
-                        "path": .string(volumeStoragePath)
-                    ])
-            }
-            totalDisk = disk?.total ?? 0
-            availableDisk = inventoryUnknown ? 0 : (disk?.free ?? 0)
-        }
+        let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
+        let physicalFreeDisk = simulation?.enabled == true ? raw.total.diskBytes : (disk?.free ?? 0)
 
         return AgentResources(
             totalCPU: raw.total.cpus,
             availableCPU: available.cpus,
             totalMemory: raw.total.memoryBytes,
             availableMemory: available.memoryBytes,
-            totalDisk: totalDisk,
-            availableDisk: availableDisk
+            totalDisk: raw.total.diskBytes,
+            availableDisk: available.diskBytes,
+            physicalFreeDisk: physicalFreeDisk
         )
     }
 

@@ -168,7 +168,7 @@ struct AgentWebSocketIntegrationTests {
 
             let org = try await self.makeOrg(app: app)
             for (agentName, version) in [
-                ("agent-v38", 38),
+                ("agent-legacy", WireProtocol.currentVersion - 1),
                 ("agent-future", WireProtocol.currentVersion + 1),
             ] {
                 let enrollment = AgentEnrollment(
@@ -181,7 +181,12 @@ struct AgentWebSocketIntegrationTests {
                 let client = try await AgentTestClient.connect(
                     app: app, port: port, name: agentName,
                     headers: self.xfccHeaders(agentName: agentName))
-                client.send(try encodeRegister(agentName: agentName, protocolVersion: version))
+                let registration =
+                    version < WireProtocol.currentVersion
+                    ? try encodeRegisterOmittingPhysicalFreeDisk(
+                        agentName: agentName, protocolVersion: version)
+                    : try encodeRegister(agentName: agentName, protocolVersion: version)
+                client.send(registration)
 
                 let envelope = try await client.nextEnvelope()
                 #expect(envelope.type == .error)
@@ -649,5 +654,22 @@ private func encodeRegisterOmittingProtocolVersion(agentName: String) throws -> 
     registration.removeValue(forKey: "protocolVersion")
     let missingVersionPayload = try JSONSerialization.data(withJSONObject: registration)
     envelope["payload"] = missingVersionPayload.base64EncodedString()
+    return String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
+}
+
+private func encodeRegisterOmittingPhysicalFreeDisk(
+    agentName: String, protocolVersion: Int
+) throws -> String {
+    let encoded = try encodeRegister(agentName: agentName, protocolVersion: protocolVersion)
+    let envelopeData = Data(encoded.utf8)
+    var envelope = try #require(JSONSerialization.jsonObject(with: envelopeData) as? [String: Any])
+    let encodedPayload = try #require(envelope["payload"] as? String)
+    let payload = try #require(Data(base64Encoded: encodedPayload))
+    var registration = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+    var resources = try #require(registration["resources"] as? [String: Any])
+    resources.removeValue(forKey: "physicalFreeDisk")
+    registration["resources"] = resources
+    let legacyPayload = try JSONSerialization.data(withJSONObject: registration)
+    envelope["payload"] = legacyPayload.base64EncodedString()
     return String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
 }

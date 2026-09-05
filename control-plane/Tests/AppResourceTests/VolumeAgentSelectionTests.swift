@@ -21,7 +21,8 @@ struct VolumeAgentSelectionTests {
     private func makeAgent(
         id: String,
         hypervisors: [HypervisorSupport],
-        status: AgentStatus = .online
+        status: AgentStatus = .online,
+        availableDisk: Int64 = 50
     ) -> Agent {
         let checkedAt = Date()
         let dependencyObservations =
@@ -46,7 +47,8 @@ struct VolumeAgentSelectionTests {
                 totalMemory: 16,
                 availableMemory: 8,
                 totalDisk: 100,
-                availableDisk: 50
+                availableDisk: availableDisk,
+                physicalFreeDisk: 75
             ),
             hypervisors: hypervisors,
             dependencyObservations: dependencyObservations,
@@ -127,6 +129,45 @@ struct VolumeAgentSelectionTests {
         let agents = [makeAgent(id: "any", hypervisors: [hypervisor(.qemu)])]
 
         #expect(VolumeService.selectVolumeAgent(from: agents, memberAgentIds: [])?.name == "any")
+    }
+
+    @Test("selection filters on committed disk rather than physical free bytes")
+    func committedDiskFiltersSelection() throws {
+        let committedFull = makeAgent(
+            id: "committed-full", hypervisors: [hypervisor(.qemu)], availableDisk: 5)
+        let fits = makeAgent(
+            id: "fits", hypervisors: [hypervisor(.qemu)], availableDisk: 25)
+
+        let selected = try #require(
+            VolumeService.selectVolumeAgent(
+                from: [committedFull, fits], sizeBytes: 20))
+        #expect(selected.name == "fits")
+        #expect(committedFull.physicalFreeDisk == 75)
+    }
+
+    @Test("coordination reservations prevent sparse volumes from stacking past host capacity")
+    func volumeReservationsClosePlacementRace() async throws {
+        let agent = makeAgent(
+            id: "one-host", hypervisors: [hypervisor(.qemu)], availableDisk: 50)
+        let coordination = CoordinationService(
+            store: InMemoryCoordinationStore(),
+            logger: .init(label: "volume-placement-test"))
+
+        _ = try await VolumeService.selectAndReserveVolumeAgent(
+            sizeBytes: 30,
+            volumeId: UUID(),
+            agents: [agent],
+            memberAgentIds: [],
+            coordination: coordination)
+
+        await #expect(throws: VolumeService.InsufficientHostDisk.self) {
+            _ = try await VolumeService.selectAndReserveVolumeAgent(
+                sizeBytes: 30,
+                volumeId: UUID(),
+                agents: [agent],
+                memberAgentIds: [],
+                coordination: coordination)
+        }
     }
 
     @Test("I/O-limited volumes fail closed to an explicitly capable QEMU agent")

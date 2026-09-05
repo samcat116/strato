@@ -154,6 +154,141 @@ final class VolumeSizeValidationTests {
         }
     }
 
+    @Test("POST /api/volumes refuses committed host-disk exhaustion before returning 202")
+    func createRejectsInsufficientCommittedHostDisk() async throws {
+        try await withVolumeTestApp { app, builder, _, project, token in
+            let key = UUID().uuidString
+            _ = try await builder.registerAgent(
+                on: app,
+                named: "disk-full-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 100.gbToBytes!,
+                    availableDisk: 5.gbToBytes!,
+                    physicalFreeDisk: 80.gbToBytes!))
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(self.createBody(project: project, sizeGB: 10))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("disk-full-host"))
+                #expect(res.body.string.contains("5 GiB"))
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
+            #expect(try await IdempotencyKey.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("An idempotent volume-create replay bypasses exhausted host capacity")
+    func createReplayBypassesHostAdmission() async throws {
+        try await withVolumeTestApp { app, builder, _, project, token in
+            let agentId = try await builder.registerAgent(
+                on: app,
+                named: "idempotent-create-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 10.gbToBytes!,
+                    availableDisk: 10.gbToBytes!))
+            let key = UUID().uuidString
+            let body = self.createBody(project: project, sizeGB: 10)
+
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/volumes") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                    try req.content.encode(body)
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                }
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 1)
+            #expect(
+                await app.coordination.activeReservations(agentIds: [agentId])[agentId]?.disk
+                    == 10.gbToBytes!)
+        }
+    }
+
+    @Test("Image-backed volume placement reserves the source size bound")
+    func createFromImageSkipsHostThatOnlyFitsRequestedSize() async throws {
+        try await withVolumeTestApp { app, builder, user, project, token in
+            let smallAgentID = try await builder.registerAgent(
+                on: app,
+                named: "small-image-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 30.gbToBytes!,
+                    availableDisk: 30.gbToBytes!))
+            let largeAgentID = try await builder.registerAgent(
+                on: app,
+                named: "large-image-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: 1 << 34,
+                    availableMemory: 1 << 34,
+                    totalDisk: 50.gbToBytes!,
+                    availableDisk: 50.gbToBytes!))
+
+            let image = try await builder.createImage(
+                name: "large-sparse-image",
+                project: project,
+                size: 2.gbToBytes!,
+                virtualSize: 40.gbToBytes!,
+                uploadedBy: user)
+            image.defaultDisk = 10.gbToBytes!
+            try await image.save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: try user.requireID(),
+                role: .admin,
+                nodeType: .image,
+                nodeID: try image.requireID(),
+                createdBy: try user.requireID(),
+                on: app.db)
+
+            let body = CreateVolumeRequest(
+                name: "from-large-image",
+                description: "must use the image size for placement",
+                projectId: try project.requireID(),
+                environment: nil,
+                sizeGB: 10,
+                format: "qcow2",
+                volumeType: "data",
+                sourceImageId: try image.requireID(),
+                iopsTotal: nil,
+                bpsTotal: nil)
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(body)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let replica = try #require(try await VolumeReplica.query(on: app.db).first())
+            #expect(replica.agentId == largeAgentID)
+            #expect(replica.agentId != smallAgentID)
+            let volume = try #require(try await Volume.query(on: app.db).first())
+            #expect(volume.size == 40.gbToBytes!)
+            let reservations = await app.coordination.activeReservations(
+                agentIds: [smallAgentID, largeAgentID])
+            #expect(reservations[smallAgentID]?.disk ?? 0 == 0)
+            #expect(reservations[largeAgentID]?.disk == 40.gbToBytes!)
+        }
+    }
+
     @Test("POST /api/volumes rejects a Firecracker-only source image")
     func createRejectsSourceImageWithoutDiskArtifact() async throws {
         try await withVolumeTestApp { app, _, user, project, token in

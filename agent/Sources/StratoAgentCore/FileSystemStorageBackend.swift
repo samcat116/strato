@@ -32,7 +32,9 @@ public actor FileSystemStorageBackend: StorageBackend {
     private let runSubprocess: SubprocessRunner
     private let enumerateVolumeStore: @Sendable (String) throws -> [String]
     private let copyItem: @Sendable (String, String) throws -> Void
+    private let removeItem: @Sendable (String) throws -> Void
     private let publishItem: @Sendable (String, String) throws -> Void
+    private let freeDiskSpace: @Sendable (String) -> Int64?
 
     /// Default storage path for volumes (platform-specific)
     public static var defaultStoragePath: String {
@@ -67,6 +69,12 @@ public actor FileSystemStorageBackend: StorageBackend {
         copyItem: @escaping @Sendable (String, String) throws -> Void = {
             try FileManager.default.copyItem(atPath: $0, toPath: $1)
         },
+        removeItem: @escaping @Sendable (String) throws -> Void = {
+            try FileManager.default.removeItem(atPath: $0)
+        },
+        freeDiskSpace: @escaping @Sendable (String) -> Int64? = {
+            HostPreflight.freeDiskSpace(atPath: $0)
+        },
         publishItem: (@Sendable (String, String) throws -> Void)? = nil,
         runSubprocess: @escaping SubprocessRunner = { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
     ) {
@@ -77,6 +85,8 @@ public actor FileSystemStorageBackend: StorageBackend {
         self.runSubprocess = runSubprocess
         self.enumerateVolumeStore = enumerateVolumeStore
         self.copyItem = copyItem
+        self.removeItem = removeItem
+        self.freeDiskSpace = freeDiskSpace
         self.publishItem =
             publishItem ?? {
                 try DurableFileWriter().publish(stagingPath: $0, to: $1)
@@ -114,6 +124,10 @@ public actor FileSystemStorageBackend: StorageBackend {
 
     private func legacyPathRecord(volumeId: String) -> String {
         "\(volumeDirectory(volumeId: volumeId))/.adopted-path"
+    }
+
+    private func rejectedVolumeMarker(volumeId: String) -> String {
+        "\(volumeDirectory(volumeId: volumeId))/.rejected-by-admission"
     }
 
     private func snapshotPath(volumeId: String, snapshotId: String) -> String {
@@ -224,7 +238,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         // with an opaque I/O error. The source's on-disk size is the upper
         // bound of what gets written (conversion output is sparse-friendly).
         if let sourceSize = (try? FileManager.default.attributesOfItem(atPath: sourcePath))?[.size] as? Int64,
-            let free = HostPreflight.freeDiskSpace(atPath: destinationDirectory),
+            let free = freeDiskSpace(destinationDirectory),
             free < sourceSize
         {
             throw StorageBackendError.insufficientDiskSpace(
@@ -348,9 +362,9 @@ public actor FileSystemStorageBackend: StorageBackend {
                 let legacy = try? FileManager.default.attributesOfItem(atPath: legacyPath),
                 Self.sameFile(managed, legacy)
             {
-                try FileManager.default.removeItem(atPath: legacyPath)
+                try removeItem(legacyPath)
             }
-            try FileManager.default.removeItem(atPath: volumeDir)
+            try removeItem(volumeDir)
             logger.info("Volume deleted", metadata: ["volumeId": .string(volumeId)])
         } else {
             logger.warning(
@@ -358,6 +372,27 @@ public actor FileSystemStorageBackend: StorageBackend {
                 metadata: [
                     "volumeId": .string(volumeId),
                     "path": .string(volumeDir),
+                ])
+        }
+    }
+
+    public func rejectVolume(volumeId: String) async throws {
+        let volumeDir = volumeDirectory(volumeId: volumeId)
+        guard FileManager.default.fileExists(atPath: volumeDir) else { return }
+
+        // The marker is the durable safety boundary. If deletion fails after
+        // this write, a restarted agent still cannot inventory the artifact as
+        // a healthy volume and bypass the admission refusal that created it.
+        try DurableFileWriter().write(
+            Data(), to: rejectedVolumeMarker(volumeId: volumeId), permissions: 0o600)
+        do {
+            try await deleteVolume(volumeId: volumeId)
+        } catch {
+            logger.error(
+                "Admission-rejected volume remains quarantined until deletion succeeds",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "error": .string(error.localizedDescription),
                 ])
         }
     }
@@ -455,10 +490,16 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "volumePath": .string(volumePath),
             ])
 
-        let backingFormat = try await detectFormat(of: volumePath)
+        let sourceInfo = try await queryImageInfo(path: volumePath)
+        let backingFormat = sourceInfo.format
 
-        try DurableFileWriter().createDirectory(
-            at: (snapshotPath as NSString).deletingLastPathComponent)
+        let snapshotDirectory = (snapshotPath as NSString).deletingLastPathComponent
+        // An external snapshot starts as a small qcow2 overlay; it does not
+        // copy the backing image's allocated blocks. Capacity admission
+        // reserves its possible future growth separately. Let qemu-img report
+        // an actual ENOSPC while creating the overlay rather than refusing
+        // based on the unrelated footprint of the parent.
+        try DurableFileWriter().createDirectory(at: snapshotDirectory)
 
         try await publishAtomically(to: snapshotPath) { stagingPath in
             let result = try await self.runQemuImg([
@@ -529,7 +570,8 @@ public actor FileSystemStorageBackend: StorageBackend {
             throw StorageBackendError.cloneFailed(
                 "filesystem storage cannot clone non-file attachment \(sourceAttachment)")
         }
-        let sourceFormatString = try await detectFormat(of: sourcePath)
+        let sourceInfo = try await queryImageInfo(path: sourcePath)
+        let sourceFormatString = sourceInfo.format
         guard let format = DiskFormat(rawValue: sourceFormatString) else {
             throw StorageBackendError.unsupportedFormat(sourceFormatString)
         }
@@ -553,6 +595,11 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "format": .string(format.rawValue),
             ])
 
+        try requireCopyCapacity(
+            requiredBytes: sourceInfo.actualSize,
+            destinationPath: targetPath,
+            destinationDirectory: volumeStoragePath,
+            operation: "clone volume")
         try DurableFileWriter().createDirectory(
             at: volumeDirectory(volumeId: targetVolumeId))
 
@@ -586,6 +633,23 @@ public actor FileSystemStorageBackend: StorageBackend {
             ])
 
         return .file(path: targetPath, format: format)
+    }
+
+    /// Refuse copy-shaped operations before their first destination write.
+    /// `qemu-img info`'s actual-size figure is the source's allocated
+    /// footprint, unlike the sparse file's apparent virtual length.
+    private func requireCopyCapacity(
+        requiredBytes required: Int64,
+        destinationPath: String,
+        destinationDirectory: String,
+        operation: String
+    ) throws {
+        guard let free = freeDiskSpace(destinationDirectory), free < required else { return }
+        throw StorageBackendError.insufficientDiskSpace(
+            "not enough free disk space to \(operation) at \(destinationPath): "
+                + "need \(HostPreflight.byteString(required)), "
+                + "have \(HostPreflight.byteString(free)). Free up space on the filesystem backing "
+                + "\(destinationDirectory).")
     }
 
     // MARK: - Volume Info
@@ -668,6 +732,16 @@ public actor FileSystemStorageBackend: StorageBackend {
         var volumes: [String: DiskAttachment] = [:]
         for entry in entries {
             guard let volumeId = UUID(uuidString: entry)?.uuidString else { continue }
+            if FileManager.default.fileExists(atPath: rejectedVolumeMarker(volumeId: entry)) {
+                do {
+                    try await deleteVolume(volumeId: entry)
+                } catch {
+                    throw StorageBackendError.deleteFailed(
+                        "admission-rejected volume \(volumeId) remains quarantined at "
+                            + "\(volumeDirectory(volumeId: entry)): \(error.localizedDescription)")
+                }
+                continue
+            }
             for format in DiskFormat.allCases {
                 let path = volumePath(volumeId: entry, format: format)
                 if FileManager.default.fileExists(atPath: path) {
