@@ -259,6 +259,13 @@ public struct VolumeSpec: Codable, Sendable {
     /// reading a property off only one of them is how they start to disagree —
     /// the same reason the attachment itself appears in both.
     public let ioLimits: VolumeIOLimits?
+    /// Requested host-cache behavior. Existing callers and manifests decode to
+    /// the conservative mode, so neither optimized mode becomes a default as a
+    /// side effect of introducing the policy.
+    public let blockMode: VolumeBlockMode
+    /// Agent-selected policy persisted in the VM manifest. Control-plane specs
+    /// leave this nil; a QEMU agent fills it after probing the concrete disk.
+    public let appliedBlockPolicy: AppliedBlockDevicePolicy?
 
     public init(
         volumeId: UUID,
@@ -266,7 +273,9 @@ public struct VolumeSpec: Codable, Sendable {
         attachment: DiskAttachment? = nil,
         readonly: Bool = false,
         bootOrder: Int? = nil,
-        ioLimits: VolumeIOLimits? = nil
+        ioLimits: VolumeIOLimits? = nil,
+        blockMode: VolumeBlockMode = .conservative,
+        appliedBlockPolicy: AppliedBlockDevicePolicy? = nil
     ) {
         self.volumeId = volumeId
         self.deviceName = deviceName
@@ -274,6 +283,43 @@ public struct VolumeSpec: Codable, Sendable {
         self.readonly = readonly
         self.bootOrder = bootOrder
         self.ioLimits = ioLimits
+        self.blockMode = blockMode
+        self.appliedBlockPolicy = appliedBlockPolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case volumeId, deviceName, attachment, readonly, bootOrder, ioLimits
+        case blockMode, appliedBlockPolicy
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            volumeId: try c.decode(UUID.self, forKey: .volumeId),
+            deviceName: try c.decode(VolumeDeviceName.self, forKey: .deviceName),
+            attachment: try c.decodeIfPresent(DiskAttachment.self, forKey: .attachment),
+            readonly: try c.decode(Bool.self, forKey: .readonly),
+            bootOrder: try c.decodeIfPresent(Int.self, forKey: .bootOrder),
+            ioLimits: try c.decodeIfPresent(VolumeIOLimits.self, forKey: .ioLimits),
+            blockMode: try c.decodeIfPresent(VolumeBlockMode.self, forKey: .blockMode) ?? .conservative,
+            appliedBlockPolicy: try c.decodeIfPresent(
+                AppliedBlockDevicePolicy.self, forKey: .appliedBlockPolicy))
+    }
+
+    /// A copy carrying the policy this agent actually installed. Used only by
+    /// the agent manifest/adoption path; desired-state producers leave it nil.
+    public func withAppliedBlockPolicy(
+        _ policy: AppliedBlockDevicePolicy?
+    ) -> VolumeSpec {
+        VolumeSpec(
+            volumeId: volumeId,
+            deviceName: deviceName,
+            attachment: attachment,
+            readonly: readonly,
+            bootOrder: bootOrder,
+            ioLimits: ioLimits,
+            blockMode: blockMode,
+            appliedBlockPolicy: policy)
     }
 }
 

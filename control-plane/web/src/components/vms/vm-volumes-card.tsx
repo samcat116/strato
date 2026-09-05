@@ -36,7 +36,7 @@ import { volumesApi } from "@/lib/api/volumes";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useVolumes, useInvalidateVolumes } from "@/lib/hooks/use-volumes";
 import { toast } from "sonner";
-import type { VM } from "@/types/api";
+import type { VM, VolumeBlockMode } from "@/types/api";
 
 const selectClassName =
   "w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
@@ -47,6 +47,7 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
 
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachVolumeId, setAttachVolumeId] = useState("");
+  const [attachBlockMode, setAttachBlockMode] = useState<VolumeBlockMode | "">("");
   const { isLoading: isAttaching, run: runAttach } = useAcceptedMutation();
   const { busyKey: busyVolumeId, run: runDetach } = useAcceptedMutation();
 
@@ -68,7 +69,10 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
       return;
     }
     const attaching = volumes.find((v) => v.id === attachVolumeId);
-    const payload = { vmId: vm.id };
+    const payload = {
+      vmId: vm.id,
+      blockMode: attachBlockMode || undefined,
+    };
     await runAttach({
       intentKey: JSON.stringify(["POST", `/api/volumes/${attachVolumeId}/attach`, payload]),
       request: (idempotencyKey) =>
@@ -83,6 +87,7 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
       onSuccess: () => {
         setAttachOpen(false);
         setAttachVolumeId("");
+        setAttachBlockMode("");
         invalidateVolumes();
       },
     });
@@ -244,6 +249,31 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
                   </select>
                 )}
               </div>
+              {vm.hypervisorType !== "firecracker" && (
+                <div className="space-y-2">
+                  <Label htmlFor="vmAttachBlockMode" className="text-foreground">
+                    QEMU block I/O mode
+                  </Label>
+                  <select
+                    id="vmAttachBlockMode"
+                    value={attachBlockMode}
+                    onChange={(event) =>
+                      setAttachBlockMode(event.target.value as VolumeBlockMode | "")
+                    }
+                    disabled={isAttaching}
+                    className={selectClassName}
+                  >
+                    <option value="">Use volume setting</option>
+                    <option value="conservative">Conservative</option>
+                    <option value="direct">Direct I/O when supported</option>
+                    <option value="cachedShared">Cached shared base</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Direct I/O falls back safely when the concrete attachment
+                    does not pass the host capability probe.
+                  </p>
+                </div>
+              )}
             </div>
             <DialogSubmitFooter
               submitLabel="Attach"

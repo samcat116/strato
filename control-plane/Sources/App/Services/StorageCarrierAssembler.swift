@@ -247,7 +247,8 @@ extension DesiredStateAssembler {
                     // is a property of the volume, latent while it is detached
                     // and realized by the attach. `Volume.ioLimits` normalizes,
                     // so an uncapped volume omits the field entirely.
-                    ioLimits: volume.ioLimits))
+                    ioLimits: volume.ioLimits,
+                    blockMode: volume.blockMode))
         }
         return entries
     }

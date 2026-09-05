@@ -845,6 +845,13 @@ extension Agent {
 
         var observed: [ObservedVolumeState] = []
         var reported = Set<String>()
+        let appliedPolicies = Dictionary(
+            (Array(managedVMs.values) + Array(orphanedVMs.values))
+                .flatMap(\.spec.volumes)
+                .compactMap { volume in
+                    volume.appliedBlockPolicy.map { (volume.volumeId.uuidString, $0) }
+                },
+            uniquingKeysWith: { first, _ in first })
 
         for (volumeId, presence) in present {
             guard let uuid = UUID(uuidString: volumeId), case .managed(let facts) = presence else { continue }
@@ -867,6 +874,10 @@ extension Agent {
                     failedGeneration: convergence.failedGeneration,
                     failureClassification: convergence.failureClassification,
                     ioLimits: facts.ioLimits,
+                    blockPolicy: facts.attachedVMId == nil
+                        ? .inactive(
+                            requestedMode: desiredVolumeStates[volumeId]?.blockMode ?? .conservative)
+                        : appliedPolicies[volumeId],
                     ioObservedRate: facts.ioObservedRate
                 ))
             reported.insert(volumeId)

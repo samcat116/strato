@@ -59,6 +59,16 @@ struct VolumeCommand: AsyncParsableCommand {
                     table.addRow(["type", volume.volumeType.rawValue])
                     table.addRow(["status", volume.status.rawValue])
                     table.addRow(["attached vm", volume.vmId ?? ""])
+                    table.addRow(["block mode", volume.blockMode.rawValue])
+                    if let policy = volume.appliedBlockPolicy?.value1 {
+                        table.addRow(["block policy active", String(policy.active)])
+                        table.addRow(["block cache", policy.cacheMode?.rawValue ?? "default"])
+                        table.addRow(["block I/O", policy.ioMode?.rawValue ?? "default"])
+                        table.addRow(["discard", String(policy.discard)])
+                        table.addRow(["non-rotational", String(policy.nonRotational)])
+                        table.addRow(["block queues", policy.queueCount.map(String.init) ?? ""])
+                        table.addRow(["block fallback", policy.fallbackReason ?? ""])
+                    }
                     table.addRow(["created", formatDate(volume.createdAt)])
                     return table
                 }
@@ -83,6 +93,11 @@ struct VolumeCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Description.")
         var description: String?
 
+        @Option(
+            name: .long,
+            help: "QEMU block mode: conservative, direct, or cached-shared.")
+        var blockMode: String?
+
         @Flag(name: .long, help: "Return immediately instead of waiting for the volume to converge.")
         var noWait = false
 
@@ -90,13 +105,15 @@ struct VolumeCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
+                let requestedBlockMode = try parseVolumeBlockMode(blockMode)
                 // Accepted, not created: the agent still has to place and
                 // materialize it (backend STR-148).
                 let accepted = try await client.createVolume(
                     body: .json(
                         .init(
                             name: name, description: description,
-                            projectId: try resolveProject(project, environment: env), sizeGB: size))
+                            projectId: try resolveProject(project, environment: env), sizeGB: size,
+                            blockMode: requestedBlockMode))
                 ).accepted.body.json
                 try await handleMutation(
                     AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,

@@ -173,6 +173,16 @@ sudo deploy/compose/memory-growth-test.sh \
 Run it as an account that can read `qemu:///system`; the script deletes its VM
 on exit.
 
+### QEMU block policy, TRIM, and multiqueue
+
+STR-269 needs a guest with the Strato guest agent plus `fio` and `fstrim`, and
+it needs host-side allocated-byte evidence for both local files and RBD. The
+complete cold/hot/re-adoption check, TRIM commands, multiqueue proof, and
+cache-mode comparison matrix live in
+[QEMU block policy validation](../operations/qemu-block-policy-benchmark.md).
+Keep the default `conservative` until that benchmark evidence has been
+captured and reviewed.
+
 ### Volume I/O-limit contract
 
 `deploy/compose/volume-io-limits-test.sh` exercises STR-270 on the libvirt

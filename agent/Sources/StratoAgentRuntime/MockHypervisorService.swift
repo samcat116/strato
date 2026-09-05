@@ -133,7 +133,8 @@ actor MockHypervisorService: HypervisorService {
 
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
+        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?,
+        orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws {
         guard var vm = vms[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)
@@ -143,7 +144,8 @@ actor MockHypervisorService: HypervisorService {
             return VolumeSpec(
                 volumeId: volume.volumeId, deviceName: volume.deviceName,
                 attachment: attachment, readonly: readonly,
-                bootOrder: volume.bootOrder, ioLimits: ioLimits)
+                bootOrder: volume.bootOrder, ioLimits: ioLimits,
+                blockMode: volume.blockMode, appliedBlockPolicy: blockPolicy)
         }
         vm.spec = vm.spec.withVolumes(volumes)
         vms[vmId] = vm
@@ -173,7 +175,9 @@ actor MockHypervisorService: HypervisorService {
             return VolumeSpec(
                 volumeId: volume.volumeId, deviceName: volume.deviceName,
                 attachment: volume.attachment, readonly: volume.readonly,
-                bootOrder: volume.bootOrder, ioLimits: limits)
+                bootOrder: volume.bootOrder, ioLimits: limits,
+                blockMode: volume.blockMode,
+                appliedBlockPolicy: volume.appliedBlockPolicy)
         }
         guard found else {
             throw HypervisorServiceError.diskError("volume \(volumeId) is not attached")
