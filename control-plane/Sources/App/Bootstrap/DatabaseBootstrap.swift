@@ -202,5 +202,10 @@ extension Application {
         // STR-292: timestamps written by pre-cluster-clock replicas can be in
         // PostgreSQL's future. Fail them closed until a current report arrives.
         migrations.add(NormalizeLegacyAgentClockTimestamps())
+
+        // Legacy convergence and snapshot-retention deadlines cannot reveal
+        // the replica offset that stamped them. Restart their safe runway from
+        // PostgreSQL time before database-clock sweeps judge them.
+        migrations.add(RebaseLegacyClusterClockDeadlines())
     }
 }

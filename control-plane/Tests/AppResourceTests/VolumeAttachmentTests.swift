@@ -289,6 +289,26 @@ struct VolumeAttachmentTests {
         }
     }
 
+    // MARK: - Backend validation
+
+    @Test("A Firecracker VM rejects data-volume attachment before placement")
+    func firecrackerAttachmentIsRefused() async throws {
+        try await withAttachmentApp { app, _, admin, project, vm, token in
+            vm.hypervisorType = .firecracker
+            try await vm.save(on: app.db)
+            let volume = try await makeVolume(
+                named: "firecracker-data-volume", on: app, user: admin, project: project)
+
+            try await attach(
+                volume, to: vm, token: token, on: app, expecting: .badRequest,
+                reason: "not supported for Firecracker VMs")
+
+            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            #expect(stored.$vm.id == nil)
+            #expect(stored.generation == 0)
+        }
+    }
+
     // MARK: - Deleting a VM
 
     @Test("Deleting a VM detaches its volumes instead of stranding them")

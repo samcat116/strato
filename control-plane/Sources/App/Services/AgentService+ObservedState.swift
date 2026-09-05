@@ -148,6 +148,7 @@ extension AgentService {
             for (reason, count) in outcome.heldByReason {
                 Telemetry.workloadClaimsHeld(agentName: agent.name, reason: reason, count: count)
             }
+            await recordVolumeIOTelemetry(report: report, agentName: agent.name)
             // A newly authorized teardown (STR-98) is worth a sync right away:
             // until the tombstone reaches the agent it keeps holding — and
             // re-reporting — a workload nothing describes.
@@ -157,6 +158,31 @@ extension AgentService {
         } catch {
             app.logger.error(
                 "Failed to apply observed-state report: \(error)",
+                metadata: ["strato.agent.id": .string(report.agentId)])
+        }
+    }
+
+    /// Build bounded, agent-level I/O aggregates from the same authoritative
+    /// full volume report that drove convergence. Unknown/spoofed volume ids do
+    /// not enter metrics: only rows currently placed on this agent are sampled.
+    private func recordVolumeIOTelemetry(report: ObservedStateReport, agentName: String) async {
+        guard let observedVolumes = report.volumes else { return }
+        do {
+            let volumes = try await VolumeService.volumes(onAgent: report.agentId, on: app.db)
+            let observedByID = Dictionary(
+                observedVolumes.map { ($0.volumeId, $0) },
+                uniquingKeysWith: { first, _ in first })
+            let samples = volumes.map { volume in
+                let observed = volume.id.flatMap { observedByID[$0] }
+                return Telemetry.VolumeIOSample(
+                    configured: volume.ioLimits,
+                    applied: observed?.ioLimits,
+                    observedRate: observed?.ioObservedRate)
+            }
+            Telemetry.recordVolumeIO(agentName: agentName, samples: samples)
+        } catch {
+            app.logger.warning(
+                "Failed to record volume I/O telemetry: \(error)",
                 metadata: ["strato.agent.id": .string(report.agentId)])
         }
     }

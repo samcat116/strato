@@ -548,6 +548,16 @@ extension Agent {
         }
     }
 
+    /// Whether this registration explicitly proves that its QEMU/libvirt path
+    /// can apply and read back per-volume I/O ceilings. Missing is fail-closed
+    /// so a pre-STR-270 registration cannot accept an unenforceable policy.
+    func supportsVolumeIOLimits(at instant: ClusterInstant) -> Bool {
+        hypervisors.contains {
+            $0.type == .qemu && $0.available && $0.supportsVolumeIOLimits == true
+                && dependencyAllows(.qemuPlacement, at: instant)
+        }
+    }
+
     /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
     /// (SLIRP) agents cannot. Absence is not capability.
     func supportsInterVMNetworking(at instant: ClusterInstant) -> Bool {

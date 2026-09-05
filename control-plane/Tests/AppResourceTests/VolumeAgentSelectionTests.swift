@@ -6,11 +6,15 @@ import StratoShared
 @Suite("VolumeService agent selection Tests")
 struct VolumeAgentSelectionTests {
 
-    private func hypervisor(_ type: HypervisorType, available: Bool = true) -> HypervisorSupport {
+    private func hypervisor(
+        _ type: HypervisorType, available: Bool = true,
+        supportsVolumeIOLimits: Bool? = nil
+    ) -> HypervisorSupport {
         HypervisorSupport(
             type: type,
             available: available,
-            accelerated: true
+            accelerated: true,
+            supportsVolumeIOLimits: supportsVolumeIOLimits
         )
     }
 
@@ -125,6 +129,24 @@ struct VolumeAgentSelectionTests {
         #expect(
             VolumeService.selectVolumeAgent(
                 from: agents, memberAgentIds: [], at: .testing(Date()))?.name == "any")
+    }
+
+    @Test("I/O-limited volumes fail closed to an explicitly capable QEMU agent")
+    func testIOLimitsRequireExplicitCapability() throws {
+        let agents = [
+            makeAgent(id: "legacy-qemu", hypervisors: [hypervisor(.qemu)]),
+            makeAgent(
+                id: "capable-qemu",
+                hypervisors: [hypervisor(.qemu, supportsVolumeIOLimits: true)]),
+            makeAgent(
+                id: "firecracker-with-bit",
+                hypervisors: [hypervisor(.firecracker, supportsVolumeIOLimits: true)]),
+        ]
+
+        let selected = try #require(
+            VolumeService.selectVolumeAgent(
+                from: agents, requiresIOLimits: true, at: .testing(Date())))
+        #expect(selected.name == "capable-qemu")
     }
 
 }

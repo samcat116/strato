@@ -188,6 +188,18 @@ struct DomainDiskInventoryTests {
         #expect(!xml.contains("<address"))
     }
 
+    @Test("a hot-plugged disk carries both requested I/O ceilings")
+    func hotplugIOTuneFragment() {
+        let xml = DomainDeviceXML.hotplugDisk(
+            attachment: .file(path: "/volumes/data.qcow2", format: .qcow2),
+            target: "vdc", readonly: false, volumeId: Self.dataVolumeId,
+            ioLimits: VolumeIOLimits(iopsTotal: 750, bpsTotal: 16_000_000))
+
+        #expect(xml.contains("<iotune>"))
+        #expect(xml.contains("<total_iops_sec>750</total_iops_sec>"))
+        #expect(xml.contains("<total_bytes_sec>16000000</total_bytes_sec>"))
+    }
+
     @Test("a read-only volume stays read-only when hot-plugged")
     func readonlyHotplugFragment() {
         let xml = DomainDeviceXML.hotplugDisk(
