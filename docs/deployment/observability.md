@@ -224,6 +224,12 @@ FROM hashed;
 | `strato_agent_send_failures_total` | counter | `kind` = `message` \| `success` \| `error` | Failed to encode/send a message to an agent over its WebSocket |
 | `strato_agent_up` | gauge | `agent` = agent name | `1` while connected, `0` once disconnected. Durable per-agent up/down signal — keeps reporting `0` after the stale sweep, so it's the basis for the "agent down" alert |
 | `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
+| `strato_volume_io_configured_limit_total` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Sum of configured per-volume ceilings on the agent. Compare with the applied total; a mismatch means desired policy is not in force |
+| `strato_volume_io_applied_limit_total` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Sum of ceilings the agent read back from libvirt |
+| `strato_volume_io_observed_rate_total` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Sum of live rates calculated from consecutive libvirt block-stat samples |
+| `strato_volume_io_configured_volumes` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Number of placed volumes configured with a ceiling in this dimension |
+| `strato_volume_io_applied_volumes` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Number of placed volumes whose libvirt readback contains a ceiling in this dimension |
+| `strato_volume_io_observed_at_ceiling_volumes` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Number of volumes currently at or above 90% of the applied ceiling |
 | `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `convergence_failed` \| `stuck_convergence` \| `mutation_failed` | A VM transitioned into `.error` |
 | `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no mutation in flight (issue #260) |
 | `strato_desired_state_assembly_failures_total` | counter | `kind` = `vm`, `reason` = `boot_volume_count` \| `non_canonical_boot_volume` \| `terminating_boot_volume` \| `missing_volume_identity` \| `invalid_volume_device_name` \| `unexpected` | One workload entry could not be assembled and was omitted while the rest of the host payload continued. Alert on any increase; inspect the named VM in the paired error log and its degraded condition |

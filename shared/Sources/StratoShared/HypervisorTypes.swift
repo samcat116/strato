@@ -73,6 +73,12 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
     /// be treated as not capable.
     public let supportsGuestExec: Bool?
 
+    /// Whether this backend can enforce and read back per-volume total IOPS
+    /// and bytes-per-second ceilings. Optional/additive so registrations
+    /// persisted before STR-270 decode as not capable rather than inheriting
+    /// support from the backend name alone.
+    public let supportsVolumeIOLimits: Bool?
+
     /// The hypervisor binary's version, probed at agent startup (e.g. "1.7.0"
     /// from `firecracker --version`). Optional/additive: nil from agents that
     /// predate version probing, or when the probe failed. Snapshot mobility
@@ -88,6 +94,7 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         supportsSnapshots: Bool? = nil,
         supportsVsock: Bool? = nil,
         supportsGuestExec: Bool? = nil,
+        supportsVolumeIOLimits: Bool? = nil,
         version: String? = nil
     ) {
         self.type = type
@@ -97,11 +104,12 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         self.supportsSnapshots = supportsSnapshots ?? type.supportsSnapshots
         self.supportsVsock = supportsVsock
         self.supportsGuestExec = supportsGuestExec
+        self.supportsVolumeIOLimits = supportsVolumeIOLimits
         self.version = version
     }
     private enum CodingKeys: String, CodingKey {
         case type, available, accelerated, unavailabilityReason, supportsSnapshots
-        case supportsVsock, supportsGuestExec, version
+        case supportsVsock, supportsGuestExec, supportsVolumeIOLimits, version
     }
 
     public init(from decoder: Decoder) throws {
@@ -115,6 +123,7 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
             ?? type.supportsSnapshots
         supportsVsock = try container.decodeIfPresent(Bool.self, forKey: .supportsVsock)
         supportsGuestExec = try container.decodeIfPresent(Bool.self, forKey: .supportsGuestExec)
+        supportsVolumeIOLimits = try container.decodeIfPresent(Bool.self, forKey: .supportsVolumeIOLimits)
         version = try container.decodeIfPresent(String.self, forKey: .version)
     }
 }

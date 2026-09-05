@@ -190,12 +190,10 @@ final class Volume: Model, @unchecked Sendable {
     // state and travels on the sync; the applied pair is the agent's echo of
     // what it actually put in place.
     //
-    // Two pairs rather than one column plus a boolean, because STR-19 ships no
-    // wire capability gate: an agent that has never heard of ceilings drops the
-    // field and still advances `observed_generation`, so the generation pair
-    // alone would call an ignored mutation converged. NULL on the applied pair
-    // means *the agent said nothing* — never that the caps were cleared. It
-    // will read NULL for every row until the agent-side work lands.
+    // Two pairs rather than one column plus a boolean because a capability gate
+    // proves only that the backend can enforce limits, not that it did. NULL on
+    // the applied pair means *the agent said nothing* — never that the caps were
+    // cleared. A current read-back echo is required for attached convergence.
 
     @OptionalField(key: "iops_total")
     var iopsTotal: Int64?
@@ -412,8 +410,7 @@ extension Volume {
         .normalized(iopsTotal: iopsTotal, bpsTotal: bpsTotal)
     }
 
-    /// The ceilings the owning agent last reported applied. Nil until the
-    /// agent-side work lands, for every volume.
+    /// The ceilings the owning agent last read back from its backend.
     ///
     /// The wire distinguishes "said nothing" (nil) from "applied, and the
     /// answer is uncapped" (present but empty); these two columns cannot, and
@@ -570,9 +567,8 @@ struct VolumeResponse: Content {
     let ioLimits: VolumeIOLimits?
     /// The ceilings the owning agent reports it has actually applied. Null
     /// means they are **not in effect** — either the agent has not reported, or
-    /// it reported no caps. No agent applies ceilings yet, so this is null for
-    /// every volume until the agent-side work lands; a non-null `ioLimits` with
-    /// a null `appliedIOLimits` is the expected reading, not a fault.
+    /// it reported no caps. When `ioLimits` is non-null, convergence requires
+    /// this echo to match it exactly.
     let appliedIOLimits: VolumeIOLimits?
     let sourceImageId: UUID?
     let sourceVolumeId: UUID?

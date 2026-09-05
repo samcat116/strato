@@ -377,16 +377,60 @@ extension Agent: ReconcileActuator {
         for (volumeId, disk) in inventory {
             let attachment = attachments[volumeId]
             let sizeBytes = await volumeVirtualSize(volumeId: volumeId, attachment: disk)
+            let appliedLimits: VolumeIOLimits?
+            var observedRate: VolumeIOObservedRate?
+            if let attachment,
+                let entry = managedVMs[attachment.vmId] ?? orphanedVMs[attachment.vmId],
+                entry.hypervisorType == .qemu,
+                let service = getHypervisorServiceForVM(vmId: attachment.vmId)
+            {
+                // Read-back is the source of the applied echo. A failure stays
+                // nil so the planner re-drives `.throttle`; copying desired
+                // state here would recreate the false-convergence bug this
+                // feature closes.
+                appliedLimits = try? await service.diskIOLimits(
+                    vmId: attachment.vmId, volumeId: volumeId)
+
+                if let sample = await service.diskIOCounterSample(
+                    vmId: attachment.vmId, volumeId: volumeId)
+                {
+                    let now = ContinuousClock.now
+                    if let previous = volumeIOCounterSamples[volumeId] {
+                        let elapsed = previous.sampledAt.duration(to: now).components
+                        let elapsedSeconds =
+                            Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+                        observedRate = sample.rate(
+                            since: previous.sample, elapsedSeconds: elapsedSeconds)
+                    }
+                    volumeIOCounterSamples[volumeId] = (sample, now)
+                } else {
+                    // Do not average across a stopped interval or a QEMU
+                    // counter reset. The next live read establishes a new
+                    // baseline and intentionally reports no rate once.
+                    volumeIOCounterSamples.removeValue(forKey: volumeId)
+                }
+            } else if attachment == nil {
+                // Detached is an authoritative "nothing is throttled" answer,
+                // unlike a failed or unsupported attached-backend read.
+                appliedLimits = VolumeIOLimits()
+                volumeIOCounterSamples.removeValue(forKey: volumeId)
+            } else {
+                appliedLimits = nil
+                volumeIOCounterSamples.removeValue(forKey: volumeId)
+            }
             presence[volumeId] = .managed(
                 ObservedVolumeFacts(
                     attachment: disk,
                     sizeBytes: sizeBytes,
                     attachedVMId: attachment?.vmId,
-                    deviceName: attachment?.deviceName))
+                    deviceName: attachment?.deviceName,
+                    ioLimits: appliedLimits,
+                    ioObservedRate: observedRate))
         }
         // Sizes for volumes that no longer exist would leak across a long
         // uptime; the inventory is authoritative, so prune to it.
         volumeSizes = volumeSizes.filter { inventory[$0.key] != nil }
+        volumeIOCounterSamples = volumeIOCounterSamples.filter { inventory[$0.key] != nil }
         return presence
     }
 
@@ -578,7 +622,7 @@ extension Agent: ReconcileActuator {
                 try await reconcileReboot(item)
             case .restore:
                 try await reconcileRestore(item)
-            case .attach, .detach, .export:
+            case .attach, .detach, .throttle, .export:
                 // Volume- and snapshot-only steps; both kinds were handled above
                 // and the planner never emits these for a VM or sandbox.
                 throw HypervisorServiceError.invalidConfiguration(

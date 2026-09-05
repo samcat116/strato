@@ -195,7 +195,8 @@ enum VolumeService {
                 let agents = try await Agent.query(on: tx).all()
                 guard
                     let replacement = selectCephReconciler(
-                        from: agents, pool: committedPool)?.id?.uuidString
+                        from: agents, pool: committedPool,
+                        requiresIOLimits: committed.ioLimits != nil)?.id?.uuidString
                 else {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: previous, recordedAgentID: previous)
@@ -323,9 +324,13 @@ enum VolumeService {
     /// restricts candidates to those members; an empty list (the default
     /// local pool) leaves all agents eligible.
     ///
-    static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {
+    static func selectVolumeAgent(
+        from agents: [Agent], memberAgentIds: [String] = [],
+        requiresIOLimits: Bool = false
+    ) -> Agent? {
         agents.first {
             $0.status == .online && $0.supportedHypervisors.contains(.qemu)
+                && (!requiresIOLimits || $0.supportsVolumeIOLimits)
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
         }
     }
@@ -333,11 +338,16 @@ enum VolumeService {
     /// Pick one lifecycle executor for a shared RBD volume. Site membership
     /// plus a fresh functional Ceph-client observation is the complete client
     /// configuration gate; the selected id is not data placement.
-    static func selectCephReconciler(from agents: [Agent], pool: StoragePool) -> Agent? {
+    static func selectCephReconciler(
+        from agents: [Agent], pool: StoragePool, requiresIOLimits: Bool = false
+    ) -> Agent? {
         guard pool.mode == .ceph else { return nil }
         return
             agents
-            .filter { StoragePool.agentCanReach(agent: $0, pool: pool, replicaAgentIds: []) }
+            .filter {
+                StoragePool.agentCanReach(agent: $0, pool: pool, replicaAgentIds: [])
+                    && (!requiresIOLimits || $0.supportsVolumeIOLimits)
+            }
             .sorted { ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "") }
             .first
     }

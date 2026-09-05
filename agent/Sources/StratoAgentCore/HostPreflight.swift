@@ -375,7 +375,12 @@ public enum HostPreflight {
                     type: hypervisor.type,
                     available: false,
                     accelerated: hypervisor.accelerated,
-                    unavailabilityReason: unavailabilityReason
+                    unavailabilityReason: unavailabilityReason,
+                    supportsSnapshots: hypervisor.supportsSnapshots,
+                    supportsVsock: hypervisor.supportsVsock,
+                    supportsGuestExec: hypervisor.supportsGuestExec,
+                    supportsVolumeIOLimits: hypervisor.supportsVolumeIOLimits,
+                    version: hypervisor.version
                 )
             }
         }

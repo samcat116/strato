@@ -15,7 +15,8 @@ struct AgentMessageTests {
             hypervisors: [
                 HypervisorSupport(
                     type: .qemu, available: true, accelerated: true,
-                    supportsVsock: true, supportsGuestExec: true)
+                    supportsVsock: true, supportsGuestExec: true,
+                    supportsVolumeIOLimits: true)
             ]
         )
         let decoded = try throughEnvelope(message)
@@ -28,6 +29,7 @@ struct AgentMessageTests {
         #expect(decoded.hypervisors.map(\.type) == [.qemu])
         #expect(decoded.hypervisors.first?.supportsVsock == true)
         #expect(decoded.hypervisors.first?.supportsGuestExec == true)
+        #expect(decoded.hypervisors.first?.supportsVolumeIOLimits == true)
         #expect(decoded.resources.totalCPU == Fixtures.resources.totalCPU)
         #expect(decoded.resources.availableCPU == Fixtures.resources.availableCPU)
         #expect(decoded.resources.totalMemory == Fixtures.resources.totalMemory)
@@ -58,6 +60,7 @@ struct AgentMessageTests {
         let decoded = try JSONDecoder().decode(HypervisorSupport.self, from: Data(json.utf8))
         #expect(decoded.supportsVsock == nil)
         #expect(decoded.supportsGuestExec == nil)
+        #expect(decoded.supportsVolumeIOLimits == nil)
     }
 
     @Test("Sandbox capability defaults to false unless the runtime advertises it")
