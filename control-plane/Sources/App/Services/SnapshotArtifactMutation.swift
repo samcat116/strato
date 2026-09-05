@@ -235,7 +235,8 @@ enum SnapshotArtifactMutation {
         guard info.status == .online else {
             throw Abort(.conflict, reason: "Agent '\(agentId)' is offline")
         }
-        guard info.supportsSnapshotArtifact(kind) else {
+        let instant = try await ClusterClock.read(on: app.db)
+        guard info.supportsSnapshotArtifact(kind, at: instant) else {
             throw Abort(
                 .conflict,
                 reason: "Agent '\(agentId)' cannot capture \(kind.rawValue) artifacts "

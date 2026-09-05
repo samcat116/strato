@@ -51,23 +51,25 @@ struct StoragePoolTests {
 
     @Test("local pool reachability remains replica-local")
     func localPoolRequiresReplicaAgent() {
+        let instant = ClusterInstant.testing(Date())
         let pool = makePool(mode: .local)
         let holder = makeAgent()
         let other = makeAgent()
         let holderID = holder.id!.uuidString
 
-        #expect(StoragePool.agentCanReach(agent: holder, pool: pool, replicaAgentIds: [holderID]))
-        #expect(!StoragePool.agentCanReach(agent: other, pool: pool, replicaAgentIds: [holderID]))
-        #expect(StoragePool.agentCanReach(agent: other, pool: pool, replicaAgentIds: []))
+        #expect(StoragePool.agentCanReach(agent: holder, pool: pool, replicaAgentIds: [holderID], at: instant))
+        #expect(!StoragePool.agentCanReach(agent: other, pool: pool, replicaAgentIds: [holderID], at: instant))
+        #expect(StoragePool.agentCanReach(agent: other, pool: pool, replicaAgentIds: [], at: instant))
     }
 
     @Test("no pool behaves like local")
     func nilPoolBehavesLikeLocal() {
+        let instant = ClusterInstant.testing(Date())
         let holder = makeAgent()
         let other = makeAgent()
         let holderID = holder.id!.uuidString
-        #expect(StoragePool.agentCanReach(agent: holder, pool: nil, replicaAgentIds: [holderID]))
-        #expect(!StoragePool.agentCanReach(agent: other, pool: nil, replicaAgentIds: [holderID]))
+        #expect(StoragePool.agentCanReach(agent: holder, pool: nil, replicaAgentIds: [holderID], at: instant))
+        #expect(!StoragePool.agentCanReach(agent: other, pool: nil, replicaAgentIds: [holderID], at: instant))
     }
 
     @Test("replicated pools remain fail closed")
@@ -75,26 +77,29 @@ struct StoragePoolTests {
         let agent = makeAgent()
         #expect(
             !StoragePool.agentCanReach(
-                agent: agent, pool: makePool(mode: .replicated), replicaAgentIds: [agent.id!.uuidString]))
+                agent: agent, pool: makePool(mode: .replicated),
+                replicaAgentIds: [agent.id!.uuidString], at: .testing(Date())))
     }
 
     @Test("Ceph requires same site and a fresh healthy client capability")
     func cephReachability() {
+        let now = Date()
+        let instant = ClusterInstant.testing(now)
         let siteID = UUID()
         let pool = makePool(mode: .ceph, siteID: siteID)
-        let eligible = makeAgent(siteID: siteID, cephState: .healthy)
-        let wrongSite = makeAgent(siteID: UUID(), cephState: .healthy)
+        let eligible = makeAgent(siteID: siteID, cephState: .healthy, receivedAt: now)
+        let wrongSite = makeAgent(siteID: UUID(), cephState: .healthy, receivedAt: now)
         let missing = makeAgent(siteID: siteID)
-        let unhealthy = makeAgent(siteID: siteID, cephState: .unhealthy)
+        let unhealthy = makeAgent(siteID: siteID, cephState: .unhealthy, receivedAt: now)
         let stale = makeAgent(
             siteID: siteID, cephState: .healthy,
-            receivedAt: Date().addingTimeInterval(-Agent.dependencyObservationStaleAfter - 1))
+            receivedAt: now.addingTimeInterval(-Agent.dependencyObservationStaleAfter - 1))
 
-        #expect(StoragePool.agentCanReach(agent: eligible, pool: pool, replicaAgentIds: []))
-        #expect(!StoragePool.agentCanReach(agent: wrongSite, pool: pool, replicaAgentIds: []))
-        #expect(!StoragePool.agentCanReach(agent: missing, pool: pool, replicaAgentIds: []))
-        #expect(!StoragePool.agentCanReach(agent: unhealthy, pool: pool, replicaAgentIds: []))
-        #expect(!StoragePool.agentCanReach(agent: stale, pool: pool, replicaAgentIds: []))
+        #expect(StoragePool.agentCanReach(agent: eligible, pool: pool, replicaAgentIds: [], at: instant))
+        #expect(!StoragePool.agentCanReach(agent: wrongSite, pool: pool, replicaAgentIds: [], at: instant))
+        #expect(!StoragePool.agentCanReach(agent: missing, pool: pool, replicaAgentIds: [], at: instant))
+        #expect(!StoragePool.agentCanReach(agent: unhealthy, pool: pool, replicaAgentIds: [], at: instant))
+        #expect(!StoragePool.agentCanReach(agent: stale, pool: pool, replicaAgentIds: [], at: instant))
     }
 
     @Test("the schema baseline seeds the default local pool")

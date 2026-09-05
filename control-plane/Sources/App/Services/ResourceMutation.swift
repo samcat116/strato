@@ -133,7 +133,7 @@ struct ResourceMutation {
     /// `observedGeneration` would be written *backwards*.
     ///
     @discardableResult
-    func accept<R: ConvergingResource>(
+    func accept<R: FinalizableResource>(
         _ kind: VMOperationKind,
         on resource: R,
         actor: MutationActor,
@@ -153,7 +153,7 @@ struct ResourceMutation {
     /// removed, notably deletes. Requiring the label keeps ordinary trailing
     /// mutation closures source-compatible with the original overload.
     @discardableResult
-    func accept<R: ConvergingResource>(
+    func accept<R: FinalizableResource>(
         _ kind: VMOperationKind,
         on resource: R,
         actor: MutationActor,
@@ -176,7 +176,7 @@ struct ResourceMutation {
     /// first statement in the same transaction. Both closures are required and
     /// labeled so an ordinary trailing mutation closure cannot bind here.
     @discardableResult
-    func accept<R: ConvergingResource>(
+    func accept<R: FinalizableResource>(
         _ kind: VMOperationKind,
         on resource: R,
         actor: MutationActor,
@@ -223,9 +223,17 @@ struct ResourceMutation {
                     reason: "Desired-state generation advanced unexpectedly from "
                         + "\(expectedGeneration) to \(actualGeneration) while its row was locked")
             }
+            // Start the convergence budget only after every admission and row
+            // lock has completed. A lock wait must not consume the agent's
+            // opportunity to realize the mutation after this transaction.
+            let acceptedAt = try await ClusterClock.read(on: db)
             resource.extendConvergenceDeadline(
-                by: R.operationResourceKind.completionBudgetSeconds(for: kind))
+                by: R.operationResourceKind.completionBudgetSeconds(for: kind),
+                from: acceptedAt)
             try await resource.save(on: db)
+            if kind == .delete {
+                try await ResourceFinalizerService.stampOrphanReapAge(for: resource, on: db)
+            }
 
             scope.generation = resource.generation
             let event = try await ResourceEvent.record(
@@ -352,9 +360,10 @@ struct ResourceMutation {
                     ])
                 return
             }
+            let instant = try await ClusterClock.read(on: db)
             let outcome = try await ResourceConvergence.recordFailure(
                 resource, mutation: mutation, reason: reason,
-                telemetryReason: "mutation_failed", on: db)
+                telemetryReason: "mutation_failed", at: instant, on: db)
             if case .superseded(let actualGeneration) = outcome {
                 logger.warning(
                     "Dropped a mutation failure after newer desired state superseded it",
@@ -447,7 +456,7 @@ enum ResourceConvergence {
     static func recordExpiredDeadline<R: ConvergingResource>(
         _ resource: R,
         mutation: VMOperationKind,
-        now: Date,
+        at instant: ClusterInstant,
         timeoutReason: String,
         on db: any Database
     ) async throws -> WriteOutcome {
@@ -457,7 +466,7 @@ enum ResourceConvergence {
             guard resource.generation == expectedGeneration else {
                 return .superseded(actualGeneration: resource.generation)
             }
-            guard let deadline = resource.convergenceDeadline, deadline <= now else {
+            guard let deadline = resource.convergenceDeadline, deadline <= instant.date else {
                 return .alreadyRecorded
             }
 
@@ -476,7 +485,8 @@ enum ResourceConvergence {
                 : timeoutReason
             return try await recordFailure(
                 resource, mutation: mutation, reason: reason,
-                telemetryReason: "stuck_convergence", context: .expiredDeadline, on: tx)
+                telemetryReason: "stuck_convergence", context: .expiredDeadline,
+                at: instant, on: tx)
         }
     }
 
@@ -528,6 +538,7 @@ enum ResourceConvergence {
         reason: String,
         telemetryReason: String,
         context: FailureRecordingContext = .resourceState,
+        at instant: ClusterInstant,
         on db: any Database
     ) async throws -> WriteOutcome {
         let expectedGeneration = resource.generation
@@ -573,12 +584,12 @@ enum ResourceConvergence {
             // mutation verdict. Preserve that first-observed instant; direct
             // dispatch and sweep failures still need a timestamp of their own.
             if failurePairChanged || timestamped.lastErrorAt == nil {
-                timestamped.lastErrorAt = Date()
+                timestamped.lastErrorAt = instant.date
             }
         }
         resource.convergenceDeadline = nil
         let desiredStateChanged = resource.resolveForStuckOperation(
-            mutation: mutation, telemetryReason: telemetryReason)
+            mutation: mutation, telemetryReason: telemetryReason, at: instant)
 
         let outcome = try await db.transaction { tx -> WriteOutcome in
             switch try await DesiredStateGenerationWriter.lockCurrent(

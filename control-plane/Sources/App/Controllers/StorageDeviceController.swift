@@ -33,15 +33,19 @@ struct StorageDeviceEligibility: Sendable {
         let blockedReason: StorageDeviceEligibilityBlockedReason?
     }
 
-    static func evaluate(_ device: StorageDevice, agent: Agent, now: Date = Date()) -> Result {
-        let agentOnline = agent.lastHeartbeat.map { now.timeIntervalSince($0) < 60 } ?? false
-        return evaluate(device, agentOnline: agentOnline, now: now)
+    static func evaluate(
+        _ device: StorageDevice, agent: Agent, at instant: ClusterInstant
+    ) -> Result {
+        evaluate(
+            device,
+            agentOnline: agent.isOnline(at: instant),
+            now: instant.date)
     }
 
-    static func evaluate(
+    private static func evaluate(
         _ device: StorageDevice,
         agentOnline: Bool,
-        now: Date = Date()
+        now: Date
     ) -> Result {
         let blocker: StorageDeviceEligibilityBlockedReason?
         if device.identity == nil {
@@ -94,8 +98,8 @@ struct StorageDeviceResponse: Content, Sendable {
     let canMarkOsdEligible: Bool
     let osdEligibilityBlockedReason: StorageDeviceEligibilityBlockedReason?
 
-    init(device: StorageDevice, agent: Agent, now: Date = Date()) throws {
-        let eligibility = StorageDeviceEligibility.evaluate(device, agent: agent, now: now)
+    init(device: StorageDevice, agent: Agent, at instant: ClusterInstant) throws {
+        let eligibility = StorageDeviceEligibility.evaluate(device, agent: agent, at: instant)
         id = try device.requireID()
         agentId = try agent.requireID()
         siteId = agent.$site.id
@@ -178,7 +182,7 @@ struct StorageDeviceController: RouteCollection {
                 site.id.map { ($0, site.name) }
             })
         let agentNameByID = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0.name) })
-        let now = Date()
+        let instant = try await ClusterClock.read(on: req.db)
         let devices = try await StorageDevice.query(on: req.db)
             .filter(\.$agent.$id ~~ Array(visibleIDs))
             .all()
@@ -197,7 +201,7 @@ struct StorageDeviceController: RouteCollection {
         }
         let responses = try sorted.compactMap { device -> StorageDeviceResponse? in
             guard let agent = agentByID[device.$agent.id] else { return nil }
-            return try StorageDeviceResponse(device: device, agent: agent, now: now)
+            return try StorageDeviceResponse(device: device, agent: agent, at: instant)
         }
         return paging.page(responses)
     }
@@ -221,18 +225,20 @@ struct StorageDeviceController: RouteCollection {
                 throw Abort(.notFound, reason: "Storage device agent not found")
             }
             try await req.requireAgentAction("agent:manage", on: agent)
+            let instant = try await ClusterClock.read(on: transaction)
 
             if !update.osdEligible {
                 device.role = .unassigned
             } else if device.role != .osd {
-                let eligibility = StorageDeviceEligibility.evaluate(device, agent: agent)
+                let eligibility = StorageDeviceEligibility.evaluate(
+                    device, agent: agent, at: instant)
                 if let blocker = eligibility.blockedReason {
                     throw Abort(.conflict, reason: blocker.message)
                 }
                 device.role = .osd
             }
             try await device.save(on: transaction)
-            return try StorageDeviceResponse(device: device, agent: agent)
+            return try StorageDeviceResponse(device: device, agent: agent, at: instant)
         }
     }
 

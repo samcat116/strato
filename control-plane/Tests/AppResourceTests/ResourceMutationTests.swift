@@ -251,6 +251,32 @@ final class ResourceMutationTests {
 
     // MARK: - Convergence deadline
 
+    @Test("acceptance waits do not consume the convergence budget")
+    func acceptanceWaitDoesNotConsumeBudget() async throws {
+        try await withVM { app, vm in
+            let fake = FakeAgentDispatch(online: true)
+            let before = try await ClusterClock.read(on: app.db)
+            let budget = OperationResourceKind.virtualMachine.completionBudgetSeconds(
+                for: .reboot)
+
+            _ = try await self.mutation(app, fake).accept(
+                .reboot, on: vm, actor: .user(UUID()),
+                dispatch: .directResolution { _ in }, on: app.db, app: app
+            ) { _ in
+                // Stand in for an idempotency, advisory, or row-lock wait in
+                // the accepting transaction.
+                try await Task.sleep(for: .milliseconds(150))
+                vm.setDesiredStatus(.running)
+            }
+
+            let reloaded = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            let deadline = try #require(reloaded.convergenceDeadline)
+            #expect(deadline.timeIntervalSince(before.date) >= budget + 0.1)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
+
     @Test("a short-budget mutation never shortens a long one's deadline")
     func deadlineTakesTheMaximum() async throws {
         // The review finding this design answers: with the "operation already

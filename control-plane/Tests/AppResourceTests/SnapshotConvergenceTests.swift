@@ -638,6 +638,27 @@ final class SnapshotConvergenceTests {
         }
     }
 
+    @Test("large replica skew fences snapshot retention deletion")
+    func retentionSweepFencesDeletionUnderLargeClockOffset() async throws {
+        try await withSnapshotApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "retention-skew")
+            let vm = try await placedVM(builder, project: project, agentId: agentId)
+            let expired = try await makeCheckpoint(
+                on: app, user: user, project: project, vm: vm, agentId: agentId,
+                name: "expired-but-fenced", expiresAt: Date().addingTimeInterval(-60))
+            let databaseNow = try await ClusterClock.read(on: app.db)
+            let skewed = ClusterInstant.testing(
+                databaseNow.date,
+                localClockOffsetSeconds:
+                    ClusterClock.destructiveSweepOffsetLimitSeconds + 1)
+
+            await SnapshotRetentionSweep.run(app: app, at: skewed)
+
+            let survivor = try #require(await VMSnapshot.find(expired.id, on: app.db))
+            #expect(survivor.desiredStatus == .present)
+        }
+    }
+
     /// `SnapshotRetention.expiry` turns a relative TTL into an absolute
     /// deadline — relative would drift with every restart, and an artifact whose
     /// expiry keeps moving is one that never expires.

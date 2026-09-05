@@ -80,6 +80,7 @@ actor WorkloadPlacementService {
                         poolMembers.isEmpty || poolMembers.contains(agent.id)
                     }
                 case .ceph:
+                    let instant = try await ClusterClock.read(on: tx)
                     let schedulableIDs = schedulableAgents.compactMap { UUID(uuidString: $0.id) }
                     let clientRows =
                         schedulableIDs.isEmpty
@@ -90,7 +91,7 @@ actor WorkloadPlacementService {
                     let reachableIDs = Set(
                         clientRows.compactMap { agent -> String? in
                             StoragePool.agentCanReach(
-                                agent: agent, pool: bootPool, replicaAgentIds: [])
+                                agent: agent, pool: bootPool, replicaAgentIds: [], at: instant)
                                 ? agent.id?.uuidString : nil
                         })
                     storageEligibleAgents = schedulableAgents.filter { reachableIDs.contains($0.id) }
@@ -362,9 +363,10 @@ actor WorkloadPlacementService {
         forAgentId agentId: String, workloadId: String, consequence: String, on db: Database
     ) async throws {
         guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: db),
-            agent.supportsInterVMNetworking
+            let agent = try await Agent.find(agentUUID, on: db)
         else { return }
+        let instant = try await ClusterClock.read(on: db)
+        guard agent.supportsInterVMNetworking(at: instant) else { return }
         let authority = try await SiteNetworkAuthority.resolve(
             forAgent: agent,
             offlineGrace: app.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
@@ -413,7 +415,10 @@ actor WorkloadPlacementService {
                 .filter(\.$status == .online)
                 .all()
             async let groupedCounts = runningVMCountsFromDatabase()
-            let (agents, runningVMCounts) = try await (onlineAgents, groupedCounts)
+            async let clusterInstant = ClusterClock.read(on: app.db)
+            let (agents, runningVMCounts, instant) = try await (
+                onlineAgents, groupedCounts, clusterInstant
+            )
 
             // Fail open on nil (store unavailable): the rows said online, and
             // refusing all placement would couple VM creation to Valkey harder
@@ -440,13 +445,13 @@ actor WorkloadPlacementService {
                     availableDisk: agent.availableDisk,
                     status: agent.status,
                     runningVMCount: runningVMCounts[agentId] ?? 0,
-                    supportedHypervisors: agent.supportedHypervisors,
+                    supportedHypervisors: agent.supportedHypervisors(at: instant),
                     architecture: agent.cpuArchitecture,
-                    supportsInterVMNetworking: agent.supportsInterVMNetworking,
+                    supportsInterVMNetworking: agent.supportsInterVMNetworking(at: instant),
                     supportsMetadataService: agent.metadataServiceCapable,
                     siteID: agent.$site.id,
                     supportsSandboxWorkloads: agent.sandboxCapable,
-                    supportsSandboxNetworking: agent.effectiveSandboxNetworkingCapable,
+                    supportsSandboxNetworking: agent.effectiveSandboxNetworkingCapable(at: instant),
                     supportsVTPM: agent.tpmCapable,
                     supportsVsock: agent.supportsVsock
                 )

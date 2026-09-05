@@ -7,6 +7,10 @@ optional telemetry components.
 The canonical installation, configuration, upgrade, security, and
 troubleshooting guide is [Kubernetes deployment](../../docs/deployment/kubernetes.md).
 
+Nodes eligible to run control-plane pods need working time synchronization.
+The process warns when its wall clock differs from PostgreSQL by more than one
+second and fences destructive maintenance beyond 30 seconds.
+
 ## Quick start
 
 ```bash

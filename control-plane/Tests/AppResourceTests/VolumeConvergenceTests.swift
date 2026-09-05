@@ -424,7 +424,8 @@ final class VolumeConvergenceTests {
                         ObservedVolumeState(
                             volumeId: volumeID, present: true,
                             attachment: .file(path: "/p", format: .qcow2),
-                            attachedVMId: vm.id, observedGeneration: 2)
+                            attachedVMId: vm.id, observedGeneration: 2,
+                            ioLimits: VolumeIOLimits())
                     ]))
 
             let settled = try await #require(try await Volume.find(volumeID, on: app.db))

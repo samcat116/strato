@@ -197,15 +197,16 @@ struct VolumeController: RouteCollection {
         let requestsIOLimits = request.iopsTotal != nil || request.bpsTotal != nil
         if requestsIOLimits {
             let agents = await req.application.agentService.getAgentList()
+            let instant = try await ClusterClock.read(on: req.db)
             let capable: Agent?
             switch pool.mode {
             case .local:
                 capable = VolumeService.selectVolumeAgent(
                     from: agents, memberAgentIds: pool.memberAgentIds,
-                    requiresIOLimits: true)
+                    requiresIOLimits: true, at: instant)
             case .ceph:
                 capable = VolumeService.selectCephReconciler(
-                    from: agents, pool: pool, requiresIOLimits: true)
+                    from: agents, pool: pool, requiresIOLimits: true, at: instant)
             case .replicated:
                 capable = nil
             }
@@ -243,12 +244,6 @@ struct VolumeController: RouteCollection {
         // immutable copy rather than the mutable `sourceImage` var.
         let poolID = try pool.requireID()
 
-        // How long the create has to converge before the stuck-convergence
-        // sweep marks the volume degraded, stamped with the insert so a
-        // control-plane crash between here and placement still leaves a
-        // resource the sweep can judge.
-        volume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         volume.setDesiredStatus(.present)
         volume.generation = 1
 
@@ -263,6 +258,13 @@ struct VolumeController: RouteCollection {
                     req.idempotencyContext, actor: .user(userID), on: db)
                 try await QuotaEnforcementService.reserveVolume(
                     for: project, environment: environment, size: sizeBytes, on: db)
+                // Stamp from PostgreSQL in the accepting transaction so the
+                // insert and its convergence budget share one clock. Sample
+                // after the admission locks so their wait cannot spend it.
+                let acceptedAt = try await ClusterClock.read(on: db)
+                volume.extendConvergenceDeadline(
+                    by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
+                    from: acceptedAt)
                 try await volume.save(on: db)
                 let volumeID = try volume.requireID()
                 try await RoleBindingService.grant(
@@ -306,6 +308,7 @@ struct VolumeController: RouteCollection {
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable db in
                 let agents = await app.agentService.getAgentList()
+                let instant = try await ClusterClock.read(on: db)
                 guard let currentPool = try await StoragePool.find(poolID, on: db) else {
                     throw ResourceMutation.WorkError("The selected storage pool no longer exists")
                 }
@@ -314,7 +317,7 @@ struct VolumeController: RouteCollection {
                     guard
                         let agentId = VolumeService.selectCephReconciler(
                             from: agents, pool: currentPool,
-                            requiresIOLimits: requestsIOLimits)?.id?.uuidString
+                            requiresIOLimits: requestsIOLimits, at: instant)?.id?.uuidString
                     else {
                         throw ResourceMutation.WorkError(
                             "No configured Ceph client is online in storage pool '\(currentPool.name)'.")
@@ -331,7 +334,7 @@ struct VolumeController: RouteCollection {
                     guard
                         let agentId = VolumeService.selectVolumeAgent(
                             from: agents, memberAgentIds: currentPool.memberAgentIds,
-                            requiresIOLimits: requestsIOLimits)?.id?.uuidString
+                            requiresIOLimits: requestsIOLimits, at: instant)?.id?.uuidString
                     else {
                         throw ResourceMutation.WorkError(
                             "No agent is available to host this volume: it needs an online, "
@@ -667,6 +670,7 @@ struct VolumeController: RouteCollection {
             // after that refresh: placement may have moved while this request
             // was waiting for the volume/attachment locks.
             let replicaAgentIds = try await VolumeService.agentIDs(holding: volume, on: tx)
+            let instant = try await ClusterClock.read(on: tx)
             guard let currentPool = try await volume.$pool.get(on: tx) else {
                 throw Abort(.internalServerError, reason: "Volume references a missing storage pool")
             }
@@ -679,7 +683,7 @@ struct VolumeController: RouteCollection {
                 guard
                     StoragePool.agentCanReach(
                         agent: vmAgent, pool: currentPool,
-                        replicaAgentIds: replicaAgentIds)
+                        replicaAgentIds: replicaAgentIds, at: instant)
                 else {
                     throw Abort(
                         .badRequest,
@@ -687,7 +691,7 @@ struct VolumeController: RouteCollection {
                             "Volume is not reachable from the VM's agent. Volume is on '\(replicaAgentIds.joined(separator: ", "))', VM is on '\(vmHypervisorID)'"
                     )
                 }
-                if volume.ioLimits != nil, !vmAgent.supportsVolumeIOLimits {
+                if volume.ioLimits != nil, !vmAgent.supportsVolumeIOLimits(at: instant) {
                     throw Abort(
                         .conflict,
                         reason:
@@ -773,11 +777,12 @@ struct VolumeController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .detach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
             // Every attachment column at once, through the one function that
             // owns the transition, so the row can never come to rest describing
             // half an attachment (STR-129).
-            VolumeAttachmentService.clearAttachment(volume)
+            VolumeAttachmentService.clearAttachment(
+                volume, at: try await ClusterClock.read(on: db))
         }
 
         req.logger.info(
@@ -938,8 +943,9 @@ struct VolumeController: RouteCollection {
         let requestsIOLimits = request.iopsTotal != nil || request.bpsTotal != nil
         if requestsIOLimits {
             try await Self.requireQEMUAttachment(for: volume, on: req.db)
+            let instant = try await ClusterClock.read(on: req.db)
             guard let agent = await req.application.agentService.getAgentInfo(agentID),
-                agent.supportsVolumeIOLimits
+                agent.supportsVolumeIOLimits(at: instant)
             else {
                 throw Abort(
                     .conflict,
@@ -965,9 +971,16 @@ struct VolumeController: RouteCollection {
                         holding: volume, on: db
                     ).first,
                     let currentAgentUUID = UUID(uuidString: currentAgentID),
-                    let currentAgent = try await Agent.find(currentAgentUUID, on: db),
-                    currentAgent.supportsVolumeIOLimits
+                    let currentAgent = try await Agent.find(currentAgentUUID, on: db)
                 else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "The volume's current agent does not support per-volume I/O limits."
+                    )
+                }
+                let instant = try await ClusterClock.read(on: db)
+                guard currentAgent.supportsVolumeIOLimits(at: instant) else {
                     throw Abort(
                         .conflict,
                         reason:
@@ -1075,13 +1088,9 @@ struct VolumeController: RouteCollection {
             environment: volume.environment,
             size: volume.size,
             agentId: agentId,
-            expiresAt: try SnapshotRetention.expiry(
-                requested: request.ttlSeconds,
-                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(.snapshotDefaultTTLSeconds)),
+            expiresAt: nil,
             createdByID: userID
         )
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create))
 
         let project = try await volume.project(on: req.db)
 
@@ -1095,6 +1104,15 @@ struct VolumeController: RouteCollection {
                 req.idempotencyContext, actor: .user(userID), on: db)
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: volume.environment, size: volume.size, on: db)
+            let acceptedAt = try await ClusterClock.read(on: db)
+            snapshot.expiresAt = try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
+                    .snapshotDefaultTTLSeconds),
+                from: acceptedAt)
+            snapshot.extendConvergenceDeadline(
+                by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
             try await snapshot.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
@@ -1174,8 +1192,6 @@ struct VolumeController: RouteCollection {
             poolID: sourceVolume.$pool.id,
             sourceVolumeID: sourceVolume.id
         )
-        newVolume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         newVolume.setDesiredStatus(.present)
         newVolume.generation = 1
         if sourceIsCeph {
@@ -1193,6 +1209,10 @@ struct VolumeController: RouteCollection {
             try await QuotaEnforcementService.reserveVolume(
                 for: sourceProject, environment: sourceVolume.environment,
                 size: sourceVolume.size, on: db)
+            let acceptedAt = try await ClusterClock.read(on: db)
+            newVolume.extendConvergenceDeadline(
+                by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
             try await newVolume.save(on: db)
             let newVolumeID = try newVolume.requireID()
             try await RoleBindingService.grant(

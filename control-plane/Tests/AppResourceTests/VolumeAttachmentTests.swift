@@ -674,8 +674,11 @@ struct VolumeAttachmentTests {
             volume.attachedAgentId = "agent-a"
             try await volume.save(on: app.db)
             let generationBefore = volume.generation
+            let repairInstant = ClusterInstant.testing(
+                Date(timeIntervalSince1970: 2_000_000_000))
 
-            await app.agentMaintenance.sweepStrandedVolumeAttachments()
+            await app.agentMaintenance.sweepStrandedVolumeAttachments(
+                currentInstant: { _ in repairInstant })
 
             let swept = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.deviceName == nil)
@@ -683,6 +686,10 @@ struct VolumeAttachmentTests {
             #expect(swept.readonly == false)
             #expect(swept.attachedAgentId == nil)
             #expect(swept.generation > generationBefore)
+            let deadline = try #require(swept.convergenceDeadline)
+            let expectedDeadline = repairInstant.date.addingTimeInterval(
+                OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
+            #expect(abs(deadline.timeIntervalSince(expectedDeadline)) < 0.001)
             // `status` is the agent's observation, so the sweep does not invent
             // one — it repairs the attachment and lets the next report speak.
             #expect(swept.status == .attached)

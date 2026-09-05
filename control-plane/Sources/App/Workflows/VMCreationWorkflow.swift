@@ -389,14 +389,6 @@ enum VMCreationWorkflow {
                         on: db
                     )
 
-                    // How long the create has to converge before the
-                    // stuck-convergence sweep marks the VM degraded (STR-147).
-                    // Stamped with the insert, so a control-plane crash between
-                    // here and placement still leaves a resource the sweep can
-                    // judge.
-                    vm.extendConvergenceDeadline(
-                        by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create))
-
                     // Save VM to database first to generate ID
                     try await vm.save(on: db)
 
@@ -518,8 +510,6 @@ enum VMCreationWorkflow {
                     bootVolume.bootOrder = 0
                     bootVolume.readonly = false
                     bootVolume.generation = 1
-                    bootVolume.extendConvergenceDeadline(
-                        by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
                     try await bootVolume.save(on: db)
                     let bootVolumeID = try bootVolume.requireID()
 
@@ -604,6 +594,20 @@ enum VMCreationWorkflow {
                             ).save(on: db)
                         }
                     }
+
+                    // IPAM takes advisory locks and is the last wait-prone
+                    // admission step. Start the VM and boot-volume convergence
+                    // budgets afterwards so lock contention cannot consume the
+                    // agent's time to realize either resource after commit.
+                    let acceptedAt = try await ClusterClock.read(on: db)
+                    vm.extendConvergenceDeadline(
+                        by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .create),
+                        from: acceptedAt)
+                    bootVolume.extendConvergenceDeadline(
+                        by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
+                        from: acceptedAt)
+                    try await vm.update(on: db)
+                    try await bootVolume.update(on: db)
 
                     // The create's attribution record, and the client's handle
                     // on the asynchronous agent work that follows (ADR 0001

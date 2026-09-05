@@ -54,6 +54,29 @@ per-connection socket bookkeeping (the socket map and per-agent report
 ordering); it holds no cross-request in-memory state. Any replica can serve any
 HTTP request.
 
+## Cluster time
+
+PostgreSQL is also the source of truth for durable time. Each 30-second
+maintenance pass reads `clock_timestamp()` once and threads that `ClusterInstant` through
+heartbeat staleness, convergence, retention, finalizer, command, and rollout
+decisions. Accepting transactions use the same database clock when they stamp
+deadlines, sampling it after admission and row locks so lock waits do not spend
+the resulting convergence budget. A replica-local `Date()` is not a valid clock
+for durable state.
+
+The maintenance read also measures PostgreSQL-minus-replica wall-clock offset.
+`control_plane_clock_offset_seconds` exports the signed value per process; the
+control plane warns beyond 1 second and declines sandbox expiry, snapshot
+retention, and orphaned-resource reaping beyond 30 seconds. The predicates
+already use database time, so the 30-second fence is a fail-closed backstop,
+not the primary correctness mechanism.
+
+Hosts and Kubernetes nodes that run control-plane replicas must therefore have
+working time synchronization. Some request-path credential checks (API keys,
+SCIM tokens, OAuth device codes, role bindings, and WebAuthn challenges) avoid
+a database clock round trip and compare against the local clock. Keep every
+replica within the 1-second warning tolerance and alert on the offset gauge.
+
 ## Desired state: pull plus a broadcast doorbell
 
 Desired state is **fetched by the agent**, not pushed to it (ADR 0001 stage 10,

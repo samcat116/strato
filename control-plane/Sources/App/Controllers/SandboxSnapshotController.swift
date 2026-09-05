@@ -80,9 +80,7 @@ extension SandboxController {
             environment: sandbox.environment,
             agentId: agentId,
             captureMode: stopAfterSnapshot ? .stop : .resume,
-            expiresAt: try SnapshotRetention.expiry(
-                requested: request.ttlSeconds,
-                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(.snapshotDefaultTTLSeconds)),
+            expiresAt: nil,
             createdByID: userID)
         // Admission estimate: the memory file dominates and is bounded by
         // guest RAM. Replaced by the agent's actual sizes once its observed
@@ -95,9 +93,6 @@ extension SandboxController {
         snapshot.sourceCPUModel =
             (await req.application.agentService.getAgentInfo(agentId))?
             .hostInfo?.cpuModel
-        snapshot.extendConvergenceDeadline(
-            by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create))
-
         let environment = sandbox.environment
         let memory = sandbox.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
@@ -107,18 +102,6 @@ extension SandboxController {
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSnapshotStorage(
                 for: project, environment: environment, size: memory, on: db)
-            try await snapshot.save(on: db)
-            // The creator's binding on the snapshot, in the create
-            // transaction (the volume-snapshot path, issue #477).
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: userID,
-                role: .admin,
-                nodeType: .sandboxSnapshot,
-                nodeID: snapshot.requireID(),
-                createdBy: userID,
-                on: db
-            )
             if stopAfterSnapshot {
                 // Checkpoint-and-stop has two halves and they live in two
                 // places on purpose. The *capture* leaves the microVM paused,
@@ -142,6 +125,29 @@ extension SandboxController {
                 }
                 try await sandbox.save(on: db)
             }
+            // The optional sandbox row lock above can wait behind another
+            // mutation. Start both artifact clocks only after it completes.
+            let acceptedAt = try await ClusterClock.read(on: db)
+            snapshot.expiresAt = try SnapshotRetention.expiry(
+                requested: request.ttlSeconds,
+                defaultTTLSeconds: req.controlPlaneConfiguration.optionalInt(
+                    .snapshotDefaultTTLSeconds),
+                from: acceptedAt)
+            snapshot.extendConvergenceDeadline(
+                by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create),
+                from: acceptedAt)
+            try await snapshot.save(on: db)
+            // The creator's binding on the snapshot, in the create
+            // transaction (the volume-snapshot path, issue #477).
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: userID,
+                role: .admin,
+                nodeType: .sandboxSnapshot,
+                nodeID: snapshot.requireID(),
+                createdBy: userID,
+                on: db
+            )
             return try await SnapshotArtifactMutation.recordCapture(
                 snapshot, actor: .user(userID), idempotencyContext: req.idempotencyContext, on: db)
         }
@@ -268,11 +274,12 @@ extension SandboxController {
         guard let targetAgent = await req.application.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Sandbox's agent '\(agentId)' is unknown")
         }
+        let instant = try await ClusterClock.read(on: req.db)
         // The issue #415 rule the capture path also follows: the capability
         // proves a backend that can load a checkpoint is usable on that host.
         // A host without one fails later still, as a `degraded` condition an
         // hour after admission — refused here instead.
-        guard targetAgent.supportsSnapshotArtifact(.sandboxSnapshot) else {
+        guard targetAgent.supportsSnapshotArtifact(.sandboxSnapshot, at: instant) else {
             throw Abort(
                 .conflict,
                 reason:

@@ -52,17 +52,38 @@ final class AgentServiceLifecycleTests {
                 agentName: agent.name,
                 observation: dependency,
                 receivedAt: checkedAt,
+                at: .testing(checkedAt),
                 factory: metrics)
             let availability = try metrics.expectGauge(
                 "strato_agent_dependency_available",
                 [("agent", agent.name), ("dependency", NodeDependencyID.libvirt.rawValue)])
             #expect(availability.lastValue == 1)
 
-            await app.agentMaintenance.checkStaleAgents(dependencyMetricsFactory: metrics)
+            await app.agentMaintenance.checkStaleAgents(
+                at: .testing(Date()), dependencyMetricsFactory: metrics)
 
             let persisted = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(persisted.status == .offline)
             #expect(availability.lastValue == 0)
+        }
+    }
+
+    @Test("heartbeat monitor rejects a legacy future heartbeat")
+    func heartbeatMonitorRejectsFutureHeartbeat() async throws {
+        try await withTestApp { app in
+            let instant = ClusterInstant.testing(Date(timeIntervalSince1970: 1_000))
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try await builder.createOrganization(name: "Future Heartbeat Org")
+            let agent = try await builder.createAgent(
+                named: "future-heartbeat-agent",
+                status: .online,
+                lastHeartbeat: instant.date.addingTimeInterval(120),
+                organizationScope: .organization(try organization.requireID()))
+
+            await app.agentMaintenance.checkStaleAgents(at: instant)
+
+            let persisted = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(persisted.status == .offline)
         }
     }
 
