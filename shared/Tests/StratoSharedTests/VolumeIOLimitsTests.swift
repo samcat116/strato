@@ -9,8 +9,7 @@ import StratoShared
 /// desired side normalizes to nil, the observed side must not. Get them the
 /// wrong way round and nothing fails loudly — a planner re-plans a throttle
 /// forever, or an agent's silence reads as a deliberate clear — so this suite
-/// is what pins the rule, especially while no agent implements the feature and
-/// there is no integration path that would notice.
+/// pins the distinction across mixed-version fleets.
 @Suite("Volume I/O limits wire format")
 struct VolumeIOLimitsTests {
 
@@ -114,6 +113,19 @@ struct VolumeIOLimitsTests {
             ioLimits: VolumeIOLimits(iopsTotal: 500))
         #expect(try encodedKeys(observed).contains("ioLimits"))
         #expect(try roundTrip(observed).ioLimits?.iopsTotal == 500)
+    }
+
+    @Test func observedStateCarriesMeasuredRateOnTheWire() throws {
+        let observed = ObservedVolumeState(
+            volumeId: UUID(),
+            present: true,
+            observedGeneration: 1,
+            ioLimits: VolumeIOLimits(iopsTotal: 500),
+            ioObservedRate: VolumeIOObservedRate(iops: 487.5, bytesPerSecond: 1_024_000))
+
+        let decoded = try roundTrip(observed)
+        #expect(decoded.ioObservedRate?.iops == 487.5)
+        #expect(decoded.ioObservedRate?.bytesPerSecond == 1_024_000)
     }
 
     /// An uncapped desired entry omits the key entirely, which is what the

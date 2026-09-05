@@ -415,6 +415,10 @@ actor Agent {
     /// `bootOrder` integers are informational; attachment reconciliation uses
     /// this sequence instead of sorting them again (STR-308).
     var desiredVMVolumeSpecs: [String: [VolumeSpec]] = [:]
+    /// Previous live libvirt counter sample per volume. Kept only long enough
+    /// to turn monotonic counters into the rate sent with observed state; it is
+    /// not convergence state and deliberately does not survive a restart.
+    var volumeIOCounterSamples: [String: (sample: VolumeIOCounterSample, sampledAt: ContinuousClock.Instant)] = [:]
 
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real

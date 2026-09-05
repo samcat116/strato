@@ -31,6 +31,8 @@ extension Agent {
             try await volumeReconcileAttach(item)
         case .detach:
             try await volumeReconcileDetach(item)
+        case .throttle:
+            try await volumeReconcileThrottle(item)
         case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
             .reconfigureNetworks:
             // A volume has no run state, nowhere to be exported to, and no
@@ -49,7 +51,8 @@ extension Agent {
             try await snapshotReconcileDelete(item)
         case .export:
             try await snapshotReconcileExport(item)
-        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .reboot, .restore,
+        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .throttle,
+            .reboot, .restore,
             .reconfigureNetworks:
             // An artifact is frozen bytes: it has no run state, no size that
             // can change, nothing to plug in, and no edges of its own — a
@@ -680,7 +683,8 @@ extension Agent {
             deviceName: attachment.deviceName,
             attachment: disk,
             readonly: attachment.readonly,
-            bootOrder: attachment.bootOrder)
+            bootOrder: attachment.bootOrder,
+            ioLimits: desired.ioLimits)
         let orderedBootVolumeIds = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
 
         // A VM with no hypervisor-side record yet (not created on this host,
@@ -698,13 +702,60 @@ extension Agent {
         try await service.attachDisk(
             vmId: vmId, volumeId: item.id, attachment: disk,
             deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly,
-            orderedBootVolumeIds: orderedBootVolumeIds)
+            orderedBootVolumeIds: orderedBootVolumeIds, ioLimits: desired.ioLimits)
     }
 
     func volumeReconcileDetach(_ item: ReconcileWorkItem) async throws {
         guard let attachment = recordedVolumeAttachments()[item.id] else { return }
         try await detachVolumeFromVM(
             volumeId: item.id, vmId: attachment.vmId, deviceName: attachment.deviceName)
+    }
+
+    /// Applies an attached volume's limits through QEMU/libvirt and records
+    /// the same values in the VM manifest so later redefinition, restart, and
+    /// adoption cannot resurrect an older throttle.
+    func volumeReconcileThrottle(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredVolume, let desiredAttachment = desired.attachment else {
+            throw ConvergenceError.unsupported(
+                "volume I/O limits require an attached desired volume")
+        }
+        let vmId = desiredAttachment.vmId.uuidString
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else {
+            throw ConvergenceError.sourceNotReady(
+                "VM \(vmId) is not present on this agent yet")
+        }
+        guard entry.hypervisorType == .qemu else {
+            throw ConvergenceError.unsupported(
+                "per-volume I/O limits are supported only for QEMU VMs; \(vmId) uses \(entry.hypervisorType.rawValue)")
+        }
+
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        guard let disk = try await backend.inspectVolume(volumeId: item.id) else {
+            throw ConvergenceError.sourceNotReady(
+                "volume \(item.id) is not present on this agent")
+        }
+
+        // Manifest first. If the agent exits before the libvirt call, the
+        // domain read-back still disagrees and the next sync retries. The
+        // inverse order could leave a stale manifest that a later redefine
+        // uses to undo the successfully applied live change.
+        let spec = VolumeSpec(
+            volumeId: desired.volumeId,
+            deviceName: desiredAttachment.deviceName,
+            attachment: disk,
+            readonly: desiredAttachment.readonly,
+            bootOrder: desiredAttachment.bootOrder,
+            ioLimits: desired.ioLimits)
+        _ = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
+
+        guard let service = getHypervisorServiceForVM(vmId: vmId),
+            await service.hasLiveSession(vmId: vmId)
+        else {
+            throw ConvergenceError.sourceNotReady(
+                "VM \(vmId) has no libvirt domain to apply volume \(item.id)'s I/O limits to")
+        }
+        try await service.setDiskIOLimits(
+            vmId: vmId, volumeId: item.id, limits: desired.ioLimits)
     }
 
     func detachVolumeFromVM(volumeId: String, vmId: String, deviceName: String) async throws {

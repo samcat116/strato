@@ -478,7 +478,9 @@ package struct TestDataBuilder {
             availableDisk: 1 << 40),
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = [
-            HypervisorSupport(type: .qemu, available: true, accelerated: true)
+            HypervisorSupport(
+                type: .qemu, available: true, accelerated: true,
+                supportsVolumeIOLimits: true)
         ],
         networkCapability: NetworkCapability? = .overlay,
         protocolVersion: Int = WireProtocol.currentVersion,

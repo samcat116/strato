@@ -209,7 +209,8 @@ enum VolumeService {
                 let agents = try await Agent.query(on: tx).all()
                 guard
                     let replacement = selectCephReconciler(
-                        from: agents, pool: committedPool)?.id?.uuidString
+                        from: agents, pool: committedPool,
+                        requiresIOLimits: committed.ioLimits != nil)?.id?.uuidString
                 else {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: previous, recordedAgentID: previous)
@@ -340,10 +341,12 @@ enum VolumeService {
     static func selectVolumeAgent(
         from agents: [Agent],
         memberAgentIds: [String] = [],
-        sizeBytes: Int64 = 0
+        sizeBytes: Int64 = 0,
+        requiresIOLimits: Bool = false
     ) -> Agent? {
         agents.first {
             $0.status == .online && $0.supportedHypervisors.contains(.qemu)
+                && (!requiresIOLimits || $0.supportsVolumeIOLimits)
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
                 && $0.availableDisk >= sizeBytes
         }
@@ -358,9 +361,13 @@ enum VolumeService {
         volumeId: UUID,
         agents: [Agent],
         memberAgentIds: [String],
+        requiresIOLimits: Bool = false,
         coordination: CoordinationService
     ) async throws -> Agent {
-        let eligible = eligibleLocalVolumeAgents(from: agents, memberAgentIds: memberAgentIds)
+        let eligible = eligibleLocalVolumeAgents(
+            from: agents,
+            memberAgentIds: memberAgentIds,
+            requiresIOLimits: requiresIOLimits)
         let ids = eligible.compactMap { $0.id?.uuidString }
         let reservationId = volumeReservationID(volumeId)
 
@@ -409,10 +416,11 @@ enum VolumeService {
     }
 
     private static func eligibleLocalVolumeAgents(
-        from agents: [Agent], memberAgentIds: [String]
+        from agents: [Agent], memberAgentIds: [String], requiresIOLimits: Bool
     ) -> [Agent] {
         agents.filter {
             $0.status == .online && $0.supportedHypervisors.contains(.qemu)
+                && (!requiresIOLimits || $0.supportsVolumeIOLimits)
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
         }
     }
@@ -420,11 +428,16 @@ enum VolumeService {
     /// Pick one lifecycle executor for a shared RBD volume. Site membership
     /// plus a fresh functional Ceph-client observation is the complete client
     /// configuration gate; the selected id is not data placement.
-    static func selectCephReconciler(from agents: [Agent], pool: StoragePool) -> Agent? {
+    static func selectCephReconciler(
+        from agents: [Agent], pool: StoragePool, requiresIOLimits: Bool = false
+    ) -> Agent? {
         guard pool.mode == .ceph else { return nil }
         return
             agents
-            .filter { StoragePool.agentCanReach(agent: $0, pool: pool, replicaAgentIds: []) }
+            .filter {
+                StoragePool.agentCanReach(agent: $0, pool: pool, replicaAgentIds: [])
+                    && (!requiresIOLimits || $0.supportsVolumeIOLimits)
+            }
             .sorted { ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "") }
             .first
     }
