@@ -1,13 +1,13 @@
 {
-  "originHash" : "d93dca95eb576dbdc51cdcb5c42aea49c0b69a5e82fab2f69b5d6f3f4a4ba47f",
+  "originHash" : "249b8504de4f0e024e4b9301796b0f3360022100d9b02a61d67e3d1d887feb6d",
   "pins" : [
     {
       "identity" : "async-http-client",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/async-http-client.git",
       "state" : {
-        "revision" : "9544287b9416c0bc71e58b9f3aead8dd14b16103",
-        "version" : "1.36.0"
+        "revision" : "f95c908967e98c68c5ce3fd61a7974e7e869e303",
+        "version" : "1.36.1"
       }
     },
     {
