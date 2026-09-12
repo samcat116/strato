@@ -1,24 +1,25 @@
 ---
-description: Fetch and address unresolved review comments on this branch's PR
+description: Address unresolved feedback on the current branch's pull request.
 ---
 
-Find and address all unresolved review feedback on the current branch's pull request.
+Find the open PR for this branch and address its unresolved review feedback in
+this worktree. If there is no open PR, report that and stop.
 
-1. Find the open PR for the current branch: `gh pr view --json number,title,url`. If there is none, say so and stop.
-2. Fetch unresolved review threads via GraphQL:
-   ```
-   gh api graphql -f query='query { repository(owner: "samcat116", name: "strato") { pullRequest(number: <N>) { reviewThreads(first: 50) { nodes { id isResolved isOutdated path line comments(first: 20) { nodes { databaseId author { login } body } } } } } } }'
-   ```
-   Also fetch PR-level reviews (`gh pr view --json reviews`) for feedback not attached to a thread.
-3. Ignore anything from `chatgpt-codex-connector[bot]` that only reports Codex usage limits — that is noise, take no action on it.
-4. For each actionable unresolved comment:
-   - Fix the code in this worktree.
-   - Commit with a message referencing what the comment asked for.
-5. Push once all fixes are committed.
-6. Reply on each addressed thread with the fixing commit SHA:
-   `gh api repos/samcat116/strato/pulls/<N>/comments/<comment-databaseId>/replies -f body="..."`
-7. Resolve each addressed thread:
-   `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread-id>"}) { thread { isResolved } } }'`
-8. Summarize: which comments were addressed (with commits), which were skipped and why.
+Fetch review threads through `gh api graphql`, including thread IDs, resolution
+state, paths, lines, comment database IDs, authors, and bodies. Follow pagination
+for threads and their comments. Include PR-level reviews and discussion comments
+so feedback outside inline threads is accounted for. Ignore usage-limit-only
+comments from `chatgpt-codex-connector[bot]`.
 
-If a comment is wrong or you disagree, reply explaining why instead of silently skipping it, and do not resolve that thread.
+Apply the relevant sections of [code review](../../docs/development/code-review.md).
+Evaluate feedback against the current code, fix actionable findings, and complete
+validation for the affected behavior. Group related fixes into coherent commits;
+commit messages should identify the feedback they address.
+
+Follow the user's publication scope. When pushing and replying are authorized,
+push the fixes and reply to addressed threads with their fixing commit SHAs, then
+resolve those threads. Explain disagreements and leave those threads unresolved.
+Otherwise, leave the fixes and proposed replies ready for review locally.
+
+Finish with the findings addressed, validation results, commit SHAs, and any
+unresolved feedback or publication steps. The command does not merge the PR.

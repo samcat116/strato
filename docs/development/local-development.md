@@ -3,9 +3,9 @@
 Strato is developed as independent Swift packages plus a Next.js frontend.
 Four packages see active development — `control-plane/`, `agent/`, `shared/`,
 and `cli/` — alongside the generated API client (`clients/swift/`) and the
-vendored `SwiftFirecracker/` package. Building and testing needs no
-infrastructure at all; running the full stack goes through the same Docker
-Compose deployment operators use.
+vendored `SwiftFirecracker/` package. Most package tests need no running
+services; control-plane tests require PostgreSQL. Running the full stack uses the same Docker Compose deployment
+operators use.
 
 ## Prerequisites
 
@@ -74,9 +74,28 @@ While iterating, run a single suite:
 swift test --package-path control-plane --filter <SuiteName>
 ```
 
-Run the full suite before opening a pull request. Tests use
-[swift-testing](https://github.com/swiftlang/swift-testing) (`@Test` /
-`#expect`), not XCTest.
+### Validation scope
+
+Choose checks for the behavior and consumers affected by the change. Focused
+suites are sufficient for a localized fix when they cover the affected paths;
+run complete affected package suites for broad changes, shared contracts,
+dependencies, or test-harness changes. For documentation-only edits, check
+links and the relevant documentation build rather than running Swift suites.
+After checks pass, repeat or broaden them only for new changes, failures, or
+unresolved risks. An explicit request for full validation still means full
+validation.
+
+Swift PR CI compiles production targets; it does not compile or run Swift
+tests. The manual `.github/workflows/main-tests.yaml` runs the full Swift
+suite. Frontend and other checks have their own workflow coverage; see
+`.github/workflows/README.md`. Report the actual package,
+platform, and test scope; a build or a macOS run cannot prove Linux VM behavior.
+
+Tests use [swift-testing](https://github.com/swiftlang/swift-testing)
+(`@Test` / `#expect`), not XCTest. Keep control-plane tests in the template
+clone harness and point `DATABASE_*` at a disposable test server.
+Treat `ServeCommand did not shutdown before deinit` as the known Vapor teardown
+race only after a clean rerun.
 
 ::: tip Cold builds are slow
 A fresh checkout starts from an empty `.build` and can take 10+ minutes to
@@ -99,20 +118,9 @@ IAM_SYMCC_SOLVER_PATH=~/.local/bin/cvc5 swift test --package-path control-plane
 The script downloads the pinned, checksum-verified cvc5 1.3.1 build for your
 platform; `cvc5` anywhere on `PATH` works too. Without it those suites skip
 themselves silently, so if you don't install it nothing covers them — CI won't
-catch it for you either (see below). The shipped control-plane image carries the
+catch it for you automatically (see [validation scope](#validation-scope)). The shipped control-plane image carries the
 solver, because without one a grant is written with no explanation of the
 ceilings that narrow it.
-
-::: warning CI does not run tests
-PR validation is a compile check only: it builds each package without
-`--build-tests`, so the test targets are not even type-checked, and no workflow
-runs `swift test` on a push to `main`. Your local run is the only run — do a
-full `swift test` for every package you touched before opening a PR.
-
-The one exception is on demand: `gh workflow run main-tests.yaml --ref <branch>`
-dispatches the full suite (all packages, plus the control plane against a
-throwaway Postgres with cvc5) on the CI runners.
-:::
 
 ## Frontend
 
