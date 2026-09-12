@@ -23,6 +23,12 @@ from `SPIRE_AGENT_SELECTORS`; if your deployment overrides it, adjust to match.)
 
 - Docker with the Compose plugin, and `deploy/compose/.env` (run `./setup.sh` once).
 - KVM (`/dev/kvm`), plus OVS and OVN running, for `network_mode = "ovn"`.
+- A readable x86_64 Ubuntu cloud image in QCOW2 format and a matching hypervisor
+  host; the setup script currently seeds images as `x86_64`. Use an image with
+  serial console output and the virtio-balloon
+  driver for the console and guest-boot checks below. Set `GUEST_IMAGE` to its
+  absolute path before setup; without it, the script skips image seeding and
+  prints an unusable `<image>` placeholder in the VM creation payload.
 - A Swift toolchain new enough for the agent's dependencies. `swift-toml` tracks
   a `swift-tools-version:6.3` manifest, so if your default `swift` is older:
 
@@ -76,6 +82,7 @@ it in the background.
 
 ```bash
 cd deploy/compose
+export GUEST_IMAGE=/absolute/path/to/ubuntu-cloud-image.qcow2
 ./e2e-up.sh                         # build and set up, preserving volumes
 ```
 
