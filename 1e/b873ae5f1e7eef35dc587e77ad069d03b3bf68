@@ -1,0 +1,21 @@
+control-plane/Tests/AppPlatformTests/RebaseLegacyClusterClockDeadlinesTests.swift
+  s_d5e22336a13eea::t_b3da1531a12cc8 71-134
+control-plane/Sources/App/Migrations/RebaseLegacyClusterClockDeadlines.swift
+  s_d5e22336a13eea::t_b3da1531a12cc8 11-13,19,27,42,49-85,105-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1eb873ae5f1e7eef35dc587e77ad069d03b3bf68",
+  "prompts": {},
+  "sessions": {
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
