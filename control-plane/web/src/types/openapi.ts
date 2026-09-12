@@ -8643,8 +8643,16 @@ export interface components {
              * @description Bytes.
              */
             totalDisk: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Bytes available for new provisioned commitments.
+             */
             availableDisk: number;
+            /**
+             * Format: int64
+             * @description Bytes physically free on the local volume filesystem.
+             */
+            physicalFreeDisk: number;
         };
         /**
          * @description Whether the latest sampling pass measured the signal. Unavailable is distinct from an available signal whose value is zero.

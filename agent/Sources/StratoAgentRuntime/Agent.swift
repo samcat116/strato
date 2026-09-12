@@ -196,6 +196,10 @@ actor Agent {
     // once per agent lifetime is cheaper than persisting a second source of
     // truth that could drift from the disk.
     var volumeSizes: [String: Int64] = [:]
+    /// Host-local provisioned bytes, distinct from the physical bytes written
+    /// into sparse images. This is populated from each local backend image's
+    /// virtual size and raised as soon as a create or grow succeeds.
+    var volumeCommittedSizes: [String: Int64] = [:]
 
     // Snapshot artifacts this host holds (STR-150), across all three families.
     //

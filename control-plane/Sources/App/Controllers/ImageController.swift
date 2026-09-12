@@ -445,6 +445,9 @@ struct ImageController: RouteCollection {
         tempImage.defaultDisk = defaultDisk
         tempImage.defaultCmdline = defaultCmdline
 
+        let virtualSize = ImageValidationService.virtualSize(
+            format: format, storedSize: size, headerBytes: upload.headerBytes)
+
         do {
             try await tempImage.save(on: req.db)
 
@@ -457,6 +460,7 @@ struct ImageController: RouteCollection {
                 architecture: architecture,
                 filename: filename,
                 size: size,
+                virtualSize: virtualSize,
                 checksum: checksum,
                 storagePath: relativePath
             )
@@ -570,6 +574,10 @@ struct ImageController: RouteCollection {
         case .kernel, .initramfs:
             format = nil
         }
+        let virtualSize = format.flatMap {
+            ImageValidationService.virtualSize(
+                format: $0, storedSize: size, headerBytes: upload.headerBytes)
+        }
 
         // Replace any existing artifact of this kind (unique on image_id, kind),
         // removing its stored object first — unless the upload just overwrote it
@@ -588,6 +596,7 @@ struct ImageController: RouteCollection {
             architecture: image.architecture,
             filename: filename,
             size: size,
+            virtualSize: virtualSize,
             checksum: checksum,
             storagePath: relativePath
         )

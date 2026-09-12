@@ -438,6 +438,7 @@ actor WorkloadPlacementService {
                     availableMemory: agent.availableMemory,
                     totalDisk: agent.totalDisk,
                     availableDisk: agent.availableDisk,
+                    physicalFreeDisk: agent.physicalFreeDisk,
                     status: agent.status,
                     runningVMCount: runningVMCounts[agentId] ?? 0,
                     supportedHypervisors: agent.supportedHypervisors,

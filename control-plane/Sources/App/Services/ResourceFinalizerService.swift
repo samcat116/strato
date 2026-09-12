@@ -404,9 +404,6 @@ extension Volume: FinalizableResource {
                 .bootVolumeAbsent, from: parent, on: db, app: app)
         }
         return true
-        // No placement reservation to give back — volumes draw on none. Their
-        // `volume_replicas` and `volume_snapshots` rows cascade with the row
-        // above.
     }
 }
 

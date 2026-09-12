@@ -77,6 +77,14 @@ public protocol StorageBackend: Actor {
     /// Deletes a volume and everything under its directory (idempotent).
     func deleteVolume(volumeId: String) async throws
 
+    /// Durably prevents a materialized volume rejected by admission from being
+    /// returned by `listVolumes()`, then attempts to remove its bytes.
+    ///
+    /// If physical deletion cannot finish, the backend must retain enough
+    /// durable state to keep the artifact out of inventory after a restart and
+    /// retry cleanup before it can report an authoritative inventory again.
+    func rejectVolume(volumeId: String) async throws
+
     /// Grows a volume to `newSizeBytes` (must be detached).
     ///
     /// The attachment is the backend-owned identity. Network backends do not

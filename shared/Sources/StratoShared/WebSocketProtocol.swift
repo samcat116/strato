@@ -255,12 +255,25 @@ public struct AgentRegisterResponseMessage: WebSocketMessage {
 }
 
 public struct AgentResources: Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case totalCPU
+        case availableCPU
+        case totalMemory
+        case availableMemory
+        case totalDisk
+        case availableDisk
+        case physicalFreeDisk
+    }
+
     public let totalCPU: Int
     public let availableCPU: Int
     public let totalMemory: Int64
     public let availableMemory: Int64
     public let totalDisk: Int64
+    /// Provisioned local-disk bytes still available for new commitments.
     public let availableDisk: Int64
+    /// Bytes physically free on the filesystem backing local volumes.
+    public let physicalFreeDisk: Int64
 
     public init(
         totalCPU: Int,
@@ -268,7 +281,8 @@ public struct AgentResources: Codable, Sendable {
         totalMemory: Int64,
         availableMemory: Int64,
         totalDisk: Int64,
-        availableDisk: Int64
+        availableDisk: Int64,
+        physicalFreeDisk: Int64? = nil
     ) {
         self.totalCPU = totalCPU
         self.availableCPU = availableCPU
@@ -276,6 +290,20 @@ public struct AgentResources: Codable, Sendable {
         self.availableMemory = availableMemory
         self.totalDisk = totalDisk
         self.availableDisk = availableDisk
+        self.physicalFreeDisk = physicalFreeDisk ?? availableDisk
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.totalCPU = try container.decode(Int.self, forKey: .totalCPU)
+        self.availableCPU = try container.decode(Int.self, forKey: .availableCPU)
+        self.totalMemory = try container.decode(Int64.self, forKey: .totalMemory)
+        self.availableMemory = try container.decode(Int64.self, forKey: .availableMemory)
+        self.totalDisk = try container.decode(Int64.self, forKey: .totalDisk)
+        self.availableDisk = try container.decode(Int64.self, forKey: .availableDisk)
+        self.physicalFreeDisk =
+            try container.decodeIfPresent(Int64.self, forKey: .physicalFreeDisk)
+            ?? self.availableDisk
     }
 }
 

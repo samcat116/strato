@@ -22,8 +22,9 @@ struct ImageValidationService {
         (Array("KDMV".utf8), .vmdk),
     ]
 
-    /// Number of leading bytes `detectFormat` needs to recognise every signature.
-    static let headerProbeLength = 8
+    /// Number of leading bytes retained while streaming an image. This covers
+    /// every format signature plus qcow2's virtual-size field at offset 24.
+    static let headerProbeLength = 64
 
     /// Formats that *always* carry their signature at offset 0, so a header
     /// probe finding nothing positively disproves a claim of that format.
@@ -72,6 +73,70 @@ struct ImageValidationService {
             return format
         }
         return .raw
+    }
+
+    /// Returns the guest-visible capacity encoded by a disk image without
+    /// materializing the streamed object on the control-plane filesystem.
+    ///
+    /// Raw and flat formats occupy their virtual length. Sparse qcow2 and VMDK
+    /// headers encode it directly; VHD's dynamic footer is repeated at offset
+    /// zero, while a headerless VHD is the fixed form with one 512-byte footer.
+    /// VHDX keeps this value in a variable metadata region beyond the bounded
+    /// stream prefix, so it deliberately remains unknown and cannot be used for
+    /// capacity-sensitive volume creation.
+    static func virtualSize(
+        format: ImageFormat, storedSize: Int64, headerBytes: [UInt8]
+    ) -> Int64? {
+        guard storedSize >= 0 else { return nil }
+        switch format {
+        case .raw:
+            return storedSize
+        case .qcow2:
+            guard headerBytes.starts(with: qcow2Magic) else { return nil }
+            return int64(from: headerBytes, offset: 24, endianness: .big)
+        case .vmdk:
+            if headerBytes.starts(with: Array("KDMV".utf8)),
+                let sectors = uint64(from: headerBytes, offset: 12, endianness: .little),
+                sectors <= UInt64(Int64.max / 512)
+            {
+                return Int64(sectors) * 512
+            }
+            return nil
+        case .vhd:
+            if headerBytes.starts(with: Array("conectix".utf8)) {
+                return int64(from: headerBytes, offset: 48, endianness: .big)
+            }
+            return storedSize >= 512 ? storedSize - 512 : nil
+        case .vhdx:
+            return nil
+        }
+    }
+
+    private enum IntegerEndianness {
+        case big
+        case little
+    }
+
+    private static func int64(
+        from bytes: [UInt8], offset: Int, endianness: IntegerEndianness
+    ) -> Int64? {
+        guard let value = uint64(from: bytes, offset: offset, endianness: endianness),
+            value <= UInt64(Int64.max)
+        else { return nil }
+        return Int64(value)
+    }
+
+    private static func uint64(
+        from bytes: [UInt8], offset: Int, endianness: IntegerEndianness
+    ) -> UInt64? {
+        guard offset >= 0, bytes.count >= offset + MemoryLayout<UInt64>.size else { return nil }
+        let field = bytes[offset..<(offset + MemoryLayout<UInt64>.size)]
+        switch endianness {
+        case .big:
+            return field.reduce(0) { ($0 << 8) | UInt64($1) }
+        case .little:
+            return field.reversed().reduce(0) { ($0 << 8) | UInt64($1) }
+        }
     }
 
     /// Computes SHA256 checksum from a ByteBuffer

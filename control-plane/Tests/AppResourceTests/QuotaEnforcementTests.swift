@@ -3,6 +3,7 @@ import Vapor
 import Fluent
 import SQLKit
 import VaporTesting
+import StratoShared
 import AppTestSupport
 @testable import App
 
@@ -524,6 +525,74 @@ final class QuotaEnforcementTests {
             #expect(refreshed.vmCount == 0)
             let vmCount = try await VM.query(on: app.db).count()
             #expect(vmCount == 0)
+        }
+    }
+
+    @Test("A VM boot disk inherits the image virtual size for quota and placement")
+    func vmBootDiskUsesImageVirtualSize() async throws {
+        try await withApp { app, _, _, project, image, token in
+            let builder = TestDataBuilder(db: app.db)
+            let artifact = try #require(image.diskArtifact)
+            artifact.virtualSize = Self.gb(40)
+            try await artifact.save(on: app.db)
+
+            let quota = try await builder.createResourceQuota(
+                name: "sparse-image", maxStorageGB: 100, project: project)
+            let smallAgentID = try await builder.registerAgent(
+                on: app,
+                named: "small-sparse-image-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: Self.gb(64),
+                    availableMemory: Self.gb(64),
+                    totalDisk: Self.gb(30),
+                    availableDisk: Self.gb(30)),
+                metadataServiceCapable: true)
+            let largeAgentID = try await builder.registerAgent(
+                on: app,
+                named: "large-sparse-image-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: Self.gb(64),
+                    availableMemory: Self.gb(64),
+                    totalDisk: Self.gb(50),
+                    availableDisk: Self.gb(50)),
+                metadataServiceCapable: true)
+
+            var vmID: UUID?
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "sparse-image-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 2, memory: Self.gb(2), disk: Self.gb(10),
+                        networkName: "default"))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                vmID = try res.content.decode(AcceptedMutation<VMDetailResponse>.self).resource.id
+            }
+
+            let createdID = try #require(vmID)
+            var placed: VM?
+            for _ in 0..<100 {
+                placed = try await VM.find(createdID, on: app.db)
+                if placed?.hypervisorId != nil || placed?.failedGeneration != nil { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+
+            let vm = try #require(placed)
+            #expect(vm.disk == Self.gb(40))
+            #expect(vm.hypervisorId == largeAgentID)
+            #expect(vm.hypervisorId != smallAgentID)
+            let bootVolume = try #require(
+                try await Volume.query(on: app.db)
+                    .filter(\.$vm.$id == createdID)
+                    .first())
+            #expect(bootVolume.size == Self.gb(40))
+            let refreshedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(refreshedQuota.reservedStorage == Self.gb(40))
         }
     }
 

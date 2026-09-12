@@ -19,10 +19,16 @@ import AppTestSupport
 @Suite("Image Fetch Redirect Tests", .serialized)
 struct ImageFetchRedirectTests {
 
-    /// Minimal qcow2: the 4-byte magic plus enough filler to look like a header.
+    /// Minimal qcow2 header with a 10 GiB guest-visible virtual size.
     static func qcow2Bytes() -> [UInt8] {
         var bytes: [UInt8] = [0x51, 0x46, 0x49, 0xFB]
-        bytes.append(contentsOf: [UInt8](repeating: 0x00, count: 508))
+        bytes.append(contentsOf: [UInt8](repeating: 0x00, count: 20))
+        let virtualSize: UInt64 = 10 * 1024 * 1024 * 1024
+        bytes.append(
+            contentsOf: (0..<MemoryLayout<UInt64>.size).reversed().map {
+                UInt8(truncatingIfNeeded: virtualSize >> UInt64($0 * 8))
+            })
+        bytes.append(contentsOf: [UInt8](repeating: 0x00, count: 480))
         return bytes
     }
 
@@ -180,6 +186,7 @@ struct ImageFetchRedirectTests {
             #expect(artifact.errorMessage == nil)
             #expect(artifact.format == .qcow2)
             #expect(artifact.size == Int64(Self.qcow2Bytes().count))
+            #expect(artifact.virtualSize == Int64(10 * 1024 * 1024 * 1024))
         }
     }
 

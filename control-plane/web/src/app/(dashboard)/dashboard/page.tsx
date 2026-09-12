@@ -74,6 +74,8 @@ export default function OverviewPage() {
         availableMemory: acc.availableMemory + a.resources.availableMemory,
         totalDisk: acc.totalDisk + a.resources.totalDisk,
         availableDisk: acc.availableDisk + a.resources.availableDisk,
+        physicalFreeDisk:
+          acc.physicalFreeDisk + a.resources.physicalFreeDisk,
       }),
       {
         totalCPU: 0,
@@ -82,6 +84,7 @@ export default function OverviewPage() {
         availableMemory: 0,
         totalDisk: 0,
         availableDisk: 0,
+        physicalFreeDisk: 0,
       }
     );
 
@@ -113,7 +116,7 @@ export default function OverviewPage() {
       offlineAgents,
       cpuPct: reservedPercent(capacity.totalCPU, capacity.availableCPU),
       memPct: reservedPercent(capacity.totalMemory, capacity.availableMemory),
-      diskPct: reservedPercent(capacity.totalDisk, capacity.availableDisk),
+      diskPct: reservedPercent(capacity.totalDisk, capacity.physicalFreeDisk),
     };
   }, [vms, agents]);
 
@@ -227,10 +230,10 @@ export default function OverviewPage() {
                 tone={agentsSub.tone}
               />
               <KpiCard
-                label="Storage reserved"
+                label="Storage used"
                 value={String(stats.diskPct)}
                 unit="%"
-                sub={`${formatCapacity(Math.max(0, stats.capacity.totalDisk - stats.capacity.availableDisk))} of ${formatCapacity(stats.capacity.totalDisk)}`}
+                sub={`${formatCapacity(Math.max(0, stats.capacity.totalDisk - stats.capacity.physicalFreeDisk))} of ${formatCapacity(stats.capacity.totalDisk)}`}
               />
             </>
           )}

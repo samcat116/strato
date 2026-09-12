@@ -76,6 +76,27 @@ struct SnapshotRecordStoreTests {
         }
     }
 
+    @Test("A local volume snapshot keeps its worst-case disk commitment across restart")
+    func localDiskCommitmentRoundTrips() throws {
+        try withStore { store, _ in
+            let id = UUID()
+            let saved = SnapshotRecord(
+                snapshotId: id,
+                kind: .volumeSnapshot,
+                parentId: UUID(),
+                volumeStorage: .local,
+                reservedDiskBytes: 80 << 30,
+                facts: ObservedSnapshotFacts(sizeBytes: 4096))
+            #expect(store.save([id: saved]))
+
+            guard case .loaded(let loaded) = store.load() else {
+                Issue.record("expected .loaded")
+                return
+            }
+            #expect(loaded[id]?.reservedDiskBytes == 80 << 30)
+        }
+    }
+
     @Test("Replacing a legacy snapshot inventory tightens its permissions")
     func replacementTightensPermissions() throws {
         try withStore { store, path in

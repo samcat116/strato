@@ -1,4 +1,5 @@
 import Fluent
+import NIOConcurrencyHelpers
 import Vapor
 import StratoShared
 
@@ -177,6 +178,32 @@ struct VolumeController: RouteCollection {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")
         }
 
+        // Source-backed volumes inherit the image's native virtual size before
+        // any requested growth is applied. Stored object bytes are not a bound
+        // for sparse images, so placement and quota both use the virtual size
+        // measured from the artifact at ingestion. Legacy or unsupported image
+        // formats without that measurement fail closed instead of pinning a
+        // volume to a host that can never admit it.
+        let sourceSizeBound: Int64
+        if let sourceImage, let artifact = sourceImage.usableDiskArtifact {
+            guard let virtualSize = artifact.virtualSize else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Source image disk size is unknown. Re-upload the disk artifact so Strato can measure its virtual size."
+                )
+            }
+            sourceSizeBound = max(sourceImage.defaultDisk ?? 0, virtualSize)
+        } else {
+            sourceSizeBound = 0
+        }
+        let admittedSizeBytes = max(sizeBytes, sourceSizeBound)
+        guard admittedSizeBytes <= WorkloadSizeLimits.maxDiskBytes else {
+            throw Abort(
+                .badRequest,
+                reason: "Source image exceeds the maximum supported volume size")
+        }
+
         try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
 
         // Omission preserves the historical default-local behavior exactly.
@@ -219,12 +246,14 @@ struct VolumeController: RouteCollection {
         }
 
         // Create volume record
+        let volumeId = UUID()
         let volume = Volume(
+            id: volumeId,
             name: request.name,
             description: request.description ?? "",
             projectID: projectId,
             environment: environment,
-            size: sizeBytes,
+            size: admittedSizeBytes,
             format: format,
             volumeType: volumeType,
             status: .creating,
@@ -242,6 +271,8 @@ struct VolumeController: RouteCollection {
         // Bind to a `let` so the `@Sendable` dispatch closure captures an
         // immutable copy rather than the mutable `sourceImage` var.
         let poolID = try pool.requireID()
+        let localPlacementAgents =
+            pool.mode == .local ? await app.agentService.getAgentList() : []
 
         // How long the create has to converge before the stuck-convergence
         // sweep marks the volume degraded, stamped with the insert so a
@@ -257,14 +288,49 @@ struct VolumeController: RouteCollection {
         // together. Create cannot use `ResourceMutation.accept`, because that
         // service operates on a row that already exists.
         let accepted: ResourceMutation.Accepted
+        let reservationAgentID = NIOLockedValueBox<String?>(nil)
         do {
             accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
                 try await IdempotencyService.reserve(
                     req.idempotencyContext, actor: .user(userID), on: db)
+
+                // Claim idempotency before touching the coordination store. A
+                // concurrent retry then waits for this transaction and replays
+                // its result instead of racing its placement reservation.
+                let preselectedLocalAgentID: String?
+                if pool.mode == .local {
+                    do {
+                        let selected = try await VolumeService.selectAndReserveVolumeAgent(
+                            sizeBytes: admittedSizeBytes,
+                            volumeId: volumeId,
+                            agents: localPlacementAgents,
+                            memberAgentIds: pool.memberAgentIds,
+                            requiresIOLimits: requestsIOLimits,
+                            coordination: app.coordination)
+                        preselectedLocalAgentID = selected.id?.uuidString
+                        reservationAgentID.withLockedValue { $0 = preselectedLocalAgentID }
+                    } catch let error as VolumeService.InsufficientHostDisk
+                        where error.candidates.isEmpty
+                    {
+                        preselectedLocalAgentID = nil
+                    } catch let error as VolumeService.InsufficientHostDisk {
+                        throw Abort(.conflict, reason: error.localizedDescription)
+                    }
+                } else {
+                    preselectedLocalAgentID = nil
+                }
+
                 try await QuotaEnforcementService.reserveVolume(
-                    for: project, environment: environment, size: sizeBytes, on: db)
+                    for: project, environment: environment, size: admittedSizeBytes, on: db)
                 try await volume.save(on: db)
                 let volumeID = try volume.requireID()
+                if let preselectedLocalAgentID {
+                    try await VolumeReplica(
+                        volumeID: volumeID,
+                        agentId: preselectedLocalAgentID,
+                        state: .provisioning
+                    ).create(on: db)
+                }
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: userID,
@@ -288,19 +354,30 @@ struct VolumeController: RouteCollection {
                     on: db)
                 return accepted
             }
-        } catch let error as any DatabaseError where error.isConstraintFailure {
-            throw Abort(
-                .conflict,
-                reason: "A volume named '\(volume.name)' already exists in this project")
+        } catch {
+            if let reservedAgentID = reservationAgentID.withLockedValue({ $0 }) {
+                await app.coordination.releaseReservation(
+                    agentId: reservedAgentID,
+                    vmId: VolumeService.volumeReservationID(volumeId))
+            }
+            if let databaseError = error as? any DatabaseError,
+                databaseError.isConstraintFailure
+            {
+                throw Abort(
+                    .conflict,
+                    reason: "A volume named '\(volume.name)' already exists in this project")
+            }
+            throw error
         }
+        let preselectedLocalAgentID = reservationAgentID.withLockedValue { $0 }
 
-        let volumeId = try volume.requireID()
-
-        // Placement is a `.placement` dispatch rather than something resolved
-        // in-band, and it has to *commit* before the sync can carry the volume:
-        // `DesiredStateAssembler` finds volumes through active replica rows, so
-        // an unplaced one is in nobody's desired state. On throw, `dispatch`
-        // degrades the volume with the reason.
+        // Local placement normally committed its replica in the acceptance
+        // transaction above, closing the capacity race before the 202. Ceph
+        // and the no-agent local fallback still place asynchronously. In every
+        // case a replica has to commit before sync: `DesiredStateAssembler`
+        // finds volumes through active replica rows, so an unplaced one is in
+        // nobody's desired state. On throw, `dispatch` degrades the volume with
+        // the reason.
         req.resourceMutation.dispatch(
             .create, resourceType: Volume.self, resourceID: volumeId,
             targetGeneration: accepted.targetGeneration, agentIDs: [],
@@ -328,18 +405,41 @@ struct VolumeController: RouteCollection {
                         await app.agentService.syncDesiredState(agentId: agentId)
                     }
                 case .local:
-                    guard
-                        let agentId = VolumeService.selectVolumeAgent(
-                            from: agents, memberAgentIds: currentPool.memberAgentIds,
-                            requiresIOLimits: requestsIOLimits)?.id?.uuidString
-                    else {
+                    if let preselectedLocalAgentID {
+                        await app.agentService.syncDesiredState(agentId: preselectedLocalAgentID)
+                        return
+                    }
+                    let selected: Agent
+                    do {
+                        selected = try await VolumeService.selectAndReserveVolumeAgent(
+                            sizeBytes: admittedSizeBytes,
+                            volumeId: volumeId,
+                            agents: agents,
+                            memberAgentIds: currentPool.memberAgentIds,
+                            requiresIOLimits: requestsIOLimits,
+                            coordination: app.coordination)
+                    } catch let error as VolumeService.InsufficientHostDisk
+                        where error.candidates.isEmpty
+                    {
                         throw ResourceMutation.WorkError(
                             "No agent is available to host this volume: it needs an online, "
                                 + "QEMU-capable agent in the volume's local pool.")
+                    } catch {
+                        throw ResourceMutation.WorkError(error.localizedDescription)
                     }
-                    try await VolumeReplica(
-                        volumeID: volumeId, agentId: agentId, state: .provisioning
-                    ).create(on: db)
+                    guard let agentId = selected.id?.uuidString else {
+                        throw ResourceMutation.WorkError("Selected volume agent has no ID")
+                    }
+                    do {
+                        try await VolumeReplica(
+                            volumeID: volumeId, agentId: agentId, state: .provisioning
+                        ).create(on: db)
+                    } catch {
+                        await app.coordination.releaseReservation(
+                            agentId: agentId,
+                            vmId: VolumeService.volumeReservationID(volumeId))
+                        throw error
+                    }
                     await app.agentService.syncDesiredState(agentId: agentId)
                 case .replicated:
                     throw ResourceMutation.WorkError("Replicated storage pools are not executable")
@@ -1159,7 +1259,9 @@ struct VolumeController: RouteCollection {
         // The clone is materialized on the source's agent — a clone reads the
         // source's file, so the two must be co-located — and therefore lives in
         // the source's pool and is placed at create time rather than scheduled.
+        let newVolumeID = UUID()
         let newVolume = Volume(
+            id: newVolumeID,
             name: request.name,
             description: request.description ?? "Clone of \(sourceVolume.name)",
             projectID: sourceVolume.$project.id,
@@ -1183,61 +1285,89 @@ struct VolumeController: RouteCollection {
         }
 
         let userID = try user.requireID()
+        let sourceProject = try await sourceVolume.project(on: req.db)
+        let localPlacementAgents =
+            sourceIsCeph ? [] : await req.application.agentService.getAgentList()
         // Same create-only transaction as the ordinary volume path: reserve
         // the clone's full storage footprint first, then make generation 1,
         // attribution, and creator access visible together.
-        let sourceProject = try await sourceVolume.project(on: req.db)
-        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
-            try await IdempotencyService.reserve(
-                req.idempotencyContext, actor: .user(userID), on: db)
-            try await QuotaEnforcementService.reserveVolume(
-                for: sourceProject, environment: sourceVolume.environment,
-                size: sourceVolume.size, on: db)
-            try await newVolume.save(on: db)
-            let newVolumeID = try newVolume.requireID()
-            try await RoleBindingService.grant(
-                principalType: .user,
-                principalID: userID,
-                role: .admin,
-                nodeType: .volume,
-                nodeID: newVolumeID,
-                createdBy: userID,
-                on: db
-            )
-            let event = try await ResourceEvent.record(
-                .create, resourceKind: .volume, resourceID: newVolumeID,
-                actor: .user(userID), on: db)
-            let accepted = ResourceMutation.Accepted(
-                mutationID: try event.requireID(), targetGeneration: newVolume.generation)
-            try await IdempotencyService.complete(
-                req.idempotencyContext,
-                actor: .user(userID),
-                resourceKind: .volume,
-                resourceID: newVolumeID,
-                accepted: accepted,
-                on: db)
-            return accepted
+        let accepted: ResourceMutation.Accepted
+        let reservationAgentID = NIOLockedValueBox<String?>(nil)
+        do {
+            accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+                try await IdempotencyService.reserve(
+                    req.idempotencyContext, actor: .user(userID), on: db)
+
+                let reservedLocalAgentID: String?
+                if sourceIsCeph {
+                    reservedLocalAgentID = nil
+                } else {
+                    do {
+                        _ = try await VolumeService.selectAndReserveVolumeAgent(
+                            sizeBytes: sourceVolume.size,
+                            volumeId: newVolumeID,
+                            agents: localPlacementAgents,
+                            memberAgentIds: [sourceAgentId],
+                            coordination: req.application.coordination)
+                        reservedLocalAgentID = sourceAgentId
+                        reservationAgentID.withLockedValue { $0 = sourceAgentId }
+                    } catch let error as VolumeService.InsufficientHostDisk {
+                        throw Abort(.conflict, reason: error.localizedDescription)
+                    }
+                }
+
+                try await QuotaEnforcementService.reserveVolume(
+                    for: sourceProject, environment: sourceVolume.environment,
+                    size: sourceVolume.size, on: db)
+                try await newVolume.save(on: db)
+                if let reservedLocalAgentID {
+                    try await VolumeReplica(
+                        volumeID: newVolumeID,
+                        agentId: reservedLocalAgentID,
+                        state: .provisioning
+                    ).create(on: db)
+                }
+                try await RoleBindingService.grant(
+                    principalType: .user,
+                    principalID: userID,
+                    role: .admin,
+                    nodeType: .volume,
+                    nodeID: newVolumeID,
+                    createdBy: userID,
+                    on: db
+                )
+                let event = try await ResourceEvent.record(
+                    .create, resourceKind: .volume, resourceID: newVolumeID,
+                    actor: .user(userID), on: db)
+                let accepted = ResourceMutation.Accepted(
+                    mutationID: try event.requireID(), targetGeneration: newVolume.generation)
+                try await IdempotencyService.complete(
+                    req.idempotencyContext,
+                    actor: .user(userID),
+                    resourceKind: .volume,
+                    resourceID: newVolumeID,
+                    accepted: accepted,
+                    on: db)
+                return accepted
+            }
+        } catch {
+            if let reservedAgentID = reservationAgentID.withLockedValue({ $0 }) {
+                await req.application.coordination.releaseReservation(
+                    agentId: reservedAgentID,
+                    vmId: VolumeService.volumeReservationID(newVolumeID))
+            }
+            throw error
         }
 
         // The clone is a create *strategy* on the new volume's desired entry,
         // not an operation on the source (ADR 0001 stage 5). The source is
         // therefore never marked busy and never has to be restored afterwards —
         // it is simply read, by an agent that already holds it.
-        let newVolumeID = try newVolume.requireID()
         let app = req.application
         req.resourceMutation.dispatch(
             .create, resourceType: Volume.self, resourceID: newVolumeID,
             targetGeneration: accepted.targetGeneration, agentIDs: sourceAgentIds,
             strategy: .placement { @Sendable db in
-                if !sourceIsCeph {
-                    try await db.transaction { tx in
-                        for agentId in sourceAgentIds {
-                            try await VolumeReplica(
-                                volumeID: newVolumeID, agentId: agentId, state: .provisioning
-                            ).create(on: tx)
-                        }
-                    }
-                }
                 for agentId in sourceAgentIds {
                     await app.agentService.syncDesiredState(agentId: agentId)
                 }

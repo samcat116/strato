@@ -11,10 +11,10 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 60 adds the
-    /// QEMU volume-I/O-limit capability and observed I/O rate used by
-    /// enforcement telemetry (STR-270). Version 59 adds explicitly available
-    /// host and per-workload resource telemetry. Version 58 removes
+    /// The only wire/schema version this build accepts. Version 61 combines
+    /// physical free disk reporting with the QEMU volume-I/O-limit capability
+    /// and observed I/O rate. Version 59 adds explicitly available host and
+    /// per-workload resource telemetry. Version 58 removes
     /// obsolete fallbacks and makes the current coordinated schema explicit.
     /// Version 57 adds the failure classification that distinguishes blocked
     /// reconciliation from terminal failure. Version 56 adds recorded guest-exec replay and
@@ -32,7 +32,7 @@ public enum WireProtocol {
     /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
     /// contract (STR-237), and v46's authoritative native-OVN load-balancer
     /// state and observations (STR-28).
-    public static let currentVersion = 60
+    public static let currentVersion = 61
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

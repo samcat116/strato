@@ -1,30 +1,42 @@
 import Foundation
 import StratoShared
 
-/// CPU and memory committed on a host. Arithmetic is deliberately saturating:
+/// CPU, memory, and local disk committed on a host. Arithmetic is deliberately saturating:
 /// malformed or extreme inventory must make the host look full, never wrap it
 /// back into available capacity.
 public struct HostReservation: Sendable, Equatable, Hashable {
     public var cpus: Int
     public var memoryBytes: Int64
+    public var diskBytes: Int64
 
-    public init(cpus: Int = 0, memoryBytes: Int64 = 0) {
+    public init(cpus: Int = 0, memoryBytes: Int64 = 0, diskBytes: Int64 = 0) {
         self.cpus = max(0, cpus)
         self.memoryBytes = max(0, memoryBytes)
+        self.diskBytes = max(0, diskBytes)
     }
 
     public static func positiveDelta(from current: HostReservation, to desired: HostReservation) -> HostReservation {
         HostReservation(
             cpus: desired.cpus > current.cpus ? desired.cpus - current.cpus : 0,
-            memoryBytes: desired.memoryBytes > current.memoryBytes ? desired.memoryBytes - current.memoryBytes : 0)
+            memoryBytes: desired.memoryBytes > current.memoryBytes ? desired.memoryBytes - current.memoryBytes : 0,
+            diskBytes: desired.diskBytes > current.diskBytes ? desired.diskBytes - current.diskBytes : 0)
     }
 
     public func addingSaturating(_ other: HostReservation) -> HostReservation {
         let (cpu, cpuOverflow) = cpus.addingReportingOverflow(other.cpus)
         let (memory, memoryOverflow) = memoryBytes.addingReportingOverflow(other.memoryBytes)
+        let (disk, diskOverflow) = diskBytes.addingReportingOverflow(other.diskBytes)
         return HostReservation(
             cpus: cpuOverflow ? Int.max : cpu,
-            memoryBytes: memoryOverflow ? Int64.max : memory)
+            memoryBytes: memoryOverflow ? Int64.max : memory,
+            diskBytes: diskOverflow ? Int64.max : disk)
+    }
+
+    public func subtractingSaturating(_ other: HostReservation) -> HostReservation {
+        HostReservation(
+            cpus: other.cpus >= cpus ? 0 : cpus - other.cpus,
+            memoryBytes: other.memoryBytes >= memoryBytes ? 0 : memoryBytes - other.memoryBytes,
+            diskBytes: other.diskBytes >= diskBytes ? 0 : diskBytes - other.diskBytes)
     }
 }
 
@@ -64,7 +76,8 @@ public struct HypervisorReservationInventory: Sendable, Equatable {
                 let observed = reconciled[id] ?? HostReservation()
                 reconciled[id] = HostReservation(
                     cpus: max(observed.cpus, durable.cpus),
-                    memoryBytes: max(observed.memoryBytes, durable.memoryBytes))
+                    memoryBytes: max(observed.memoryBytes, durable.memoryBytes),
+                    diskBytes: max(observed.diskBytes, durable.diskBytes))
             }
             return reconciled.values.reduce(HostReservation()) { total, workload in
                 total.addingSaturating(workload)
@@ -82,18 +95,27 @@ public struct HostCapacitySnapshot: Sendable, Equatable {
     public let total: HostReservation
     public let reserved: HostReservation
     public let inventoryKnown: Bool
+    public let diskInventoryKnown: Bool
 
-    public init(total: HostReservation, reserved: HostReservation, inventoryKnown: Bool = true) {
+    public init(
+        total: HostReservation,
+        reserved: HostReservation,
+        inventoryKnown: Bool = true,
+        diskInventoryKnown: Bool? = nil
+    ) {
         self.total = total
         self.reserved = reserved
         self.inventoryKnown = inventoryKnown
+        self.diskInventoryKnown = diskInventoryKnown ?? inventoryKnown
     }
 
     public var available: HostReservation {
-        guard inventoryKnown else { return HostReservation() }
         return HostReservation(
-            cpus: reserved.cpus >= total.cpus ? 0 : total.cpus - reserved.cpus,
-            memoryBytes: reserved.memoryBytes >= total.memoryBytes ? 0 : total.memoryBytes - reserved.memoryBytes)
+            cpus: !inventoryKnown || reserved.cpus >= total.cpus ? 0 : total.cpus - reserved.cpus,
+            memoryBytes: !inventoryKnown || reserved.memoryBytes >= total.memoryBytes
+                ? 0 : total.memoryBytes - reserved.memoryBytes,
+            diskBytes: !diskInventoryKnown || reserved.diskBytes >= total.diskBytes
+                ? 0 : total.diskBytes - reserved.diskBytes)
     }
 }
 
@@ -107,7 +129,7 @@ public struct HostCapacityClaim: Sendable, Hashable {
 /// A capacity refusal is reported and re-driven at the same generation: a
 /// neighbouring workload can release the missing capacity independently.
 public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equatable {
-    public enum Resource: Sendable, Equatable { case inventory, cpu, memory }
+    public enum Resource: Sendable, Equatable { case inventory, cpu, memory, disk }
 
     public let agentName: String
     public let resource: Resource
@@ -140,6 +162,9 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
             case .memory:
                 return
                     "agent `\(agentName)` has \(Self.byteString(available.memoryBytes)) total memory; this workload requires \(Self.byteString(required.memoryBytes))"
+            case .disk:
+                return
+                    "agent `\(agentName)` has \(Self.byteString(available.diskBytes)) total local disk; this operation requires \(Self.byteString(required.diskBytes))"
             }
         }
         switch resource {
@@ -151,6 +176,9 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
         case .memory:
             return
                 "agent `\(agentName)` has \(Self.byteString(available.memoryBytes)) available; this operation requires \(Self.byteString(required.memoryBytes)) additional memory"
+        case .disk:
+            return
+                "agent `\(agentName)` has \(Self.byteString(available.diskBytes)) local disk available; this operation requires \(Self.byteString(required.diskBytes)) additional disk"
         }
     }
 
@@ -182,7 +210,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
         snapshot: HostCapacitySnapshot,
         agentName: String
     ) throws -> HostCapacityClaim? {
-        guard requested.cpus > 0 || requested.memoryBytes > 0 else { return nil }
+        guard requested.cpus > 0 || requested.memoryBytes > 0 || requested.diskBytes > 0 else { return nil }
         guard snapshot.inventoryKnown else {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .inventory, available: HostReservation(), required: requested)
@@ -203,10 +231,20 @@ public struct HostCapacityAdmissionLedger: Sendable {
                 agentName: agentName, resource: .memory, available: snapshot.total,
                 required: desiredWorkloadReservation, failureClassification: .permanent)
         }
+        if requested.diskBytes > 0, !snapshot.diskInventoryKnown {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .inventory, available: HostReservation(), required: requested)
+        }
+        if desiredWorkloadReservation.diskBytes > snapshot.total.diskBytes {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .disk, available: snapshot.total,
+                required: desiredWorkloadReservation, failureClassification: .permanent)
+        }
 
         let committedAndProvisional = snapshot.reserved.addingSaturating(provisionalReservation)
         let effective = HostCapacitySnapshot(
-            total: snapshot.total, reserved: committedAndProvisional, inventoryKnown: true
+            total: snapshot.total, reserved: committedAndProvisional, inventoryKnown: true,
+            diskInventoryKnown: true
         ).available
         guard requested.cpus <= effective.cpus else {
             throw HostCapacityAdmissionError(
@@ -215,6 +253,10 @@ public struct HostCapacityAdmissionLedger: Sendable {
         guard requested.memoryBytes <= effective.memoryBytes else {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: effective, required: requested)
+        }
+        guard requested.diskBytes <= effective.diskBytes else {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .disk, available: effective, required: requested)
         }
 
         let claim = HostCapacityClaim(id: UUID(), reservation: requested)
@@ -245,6 +287,16 @@ public struct HostCapacityAdmissionLedger: Sendable {
                 agentName: agentName, resource: .memory, available: snapshot.total,
                 required: currentWorkloadReservation, failureClassification: .permanent)
         }
+        if currentWorkloadReservation.diskBytes > 0, !snapshot.diskInventoryKnown {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .inventory, available: HostReservation(),
+                required: currentWorkloadReservation)
+        }
+        if currentWorkloadReservation.diskBytes > snapshot.total.diskBytes {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .disk, available: snapshot.total,
+                required: currentWorkloadReservation, failureClassification: .permanent)
+        }
         let used = snapshot.reserved.addingSaturating(provisionalReservation)
         if used.cpus > snapshot.total.cpus {
             throw HostCapacityAdmissionError(
@@ -255,6 +307,11 @@ public struct HostCapacityAdmissionLedger: Sendable {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: HostReservation(),
                 required: HostReservation(memoryBytes: used.memoryBytes - snapshot.total.memoryBytes))
+        }
+        if used.diskBytes > snapshot.total.diskBytes {
+            throw HostCapacityAdmissionError(
+                agentName: agentName, resource: .disk, available: HostReservation(),
+                required: HostReservation(diskBytes: used.diskBytes - snapshot.total.diskBytes))
         }
     }
 

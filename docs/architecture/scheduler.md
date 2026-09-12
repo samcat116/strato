@@ -225,7 +225,8 @@ differently than requested:
 
 ### Placement Reservations
 
-VM creation uses `selectAndReserveAgent`, which wraps the selection above in a
+VM creation uses `selectAndReserveAgent`, and local-volume creation uses
+`selectAndReserveVolumeAgent`. Both wrap selection in a
 reservation step backed by the Valkey coordination layer
 (`CoordinationService`, issue #258). This closes the read-decide-write race
 where two concurrent creates both observe the same free capacity on an agent
@@ -244,8 +245,8 @@ and both place against it (oversubscription):
    either lands elsewhere or fails with a clean `insufficientResources` error.
 
 Reservations are released when the create fails to dispatch or when the owning
-agent first reports the VM — via a status update or the heartbeat running-VM
-list, at which point the agent's resource reports account for it; a ~120s TTL
+agent first reports the VM or volume, at which point the agent's committed
+resource report accounts for it; a ~120s TTL
 is the backstop for crashes in between. If Valkey is unavailable,
 reservation calls fail open — placement proceeds unreserved (the
 pre-reservation behavior) rather than coupling VM creation to Valkey uptime.
