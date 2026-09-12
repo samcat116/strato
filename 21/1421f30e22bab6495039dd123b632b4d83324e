@@ -1,0 +1,20 @@
+docs/development/e2e-testing.md
+  s_df2978a7c14aee::t_daad146b2e0477 29-31,85
+  s_df2978a7c14aee::t_ae05d4372383ee 26-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "211421f30e22bab6495039dd123b632b4d83324e",
+  "prompts": {},
+  "sessions": {
+    "s_df2978a7c14aee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a091dd-b61f-7981-ad74-32fc35a885a1",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
