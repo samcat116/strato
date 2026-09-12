@@ -23,6 +23,7 @@ final class QuotaEnforcementTests {
         let cpu: Int?
         let memory: Int64?
         let disk: Int64?
+        var hypervisorType: HypervisorType? = nil
         /// VM create names its network explicitly (issue #765). Requests that
         /// need to reach later validation must provide one.
         var networkName: String? = nil
@@ -591,6 +592,114 @@ final class QuotaEnforcementTests {
                     .filter(\.$vm.$id == createdID)
                     .first())
             #expect(bootVolume.size == Self.gb(40))
+            let refreshedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(refreshedQuota.reservedStorage == Self.gb(40))
+        }
+    }
+
+    @Test("A Firecracker boot disk inherits the rootfs virtual size")
+    func firecrackerBootDiskUsesRootfsVirtualSize() async throws {
+        try await withApp { app, user, _, project, _, token in
+            let builder = TestDataBuilder(db: app.db)
+            let image = Image(
+                name: "sparse-firecracker-image",
+                description: "kernel and sparse rootfs",
+                projectID: try project.requireID(),
+                architecture: .arm64,
+                status: .ready,
+                uploadedByID: try user.requireID())
+            try await image.save(on: app.db)
+            let imageID = try image.requireID()
+            let checksum = String(repeating: "c", count: 64)
+            try await ImageArtifact(
+                imageID: imageID,
+                kind: .kernel,
+                format: nil,
+                architecture: .arm64,
+                filename: "vmlinux",
+                size: Self.gb(1),
+                checksum: checksum,
+                storagePath: "images/\(imageID)/kernel/vmlinux"
+            ).save(on: app.db)
+            try await ImageArtifact(
+                imageID: imageID,
+                kind: .rootfs,
+                format: .qcow2,
+                architecture: .arm64,
+                filename: "rootfs.qcow2",
+                size: Self.gb(1),
+                virtualSize: Self.gb(40),
+                checksum: checksum,
+                storagePath: "images/\(imageID)/rootfs/rootfs.qcow2"
+            ).save(on: app.db)
+
+            let quota = try await builder.createResourceQuota(
+                name: "sparse-rootfs", maxStorageGB: 100, project: project)
+            let firecracker = [
+                HypervisorSupport(type: .firecracker, available: true, accelerated: true)
+            ]
+            let smallAgentID = try await builder.registerAgent(
+                on: app,
+                named: "small-firecracker-rootfs-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: Self.gb(64),
+                    availableMemory: Self.gb(64),
+                    totalDisk: Self.gb(30),
+                    availableDisk: Self.gb(30)),
+                architecture: .arm64,
+                hypervisors: firecracker)
+            let largeAgentID = try await builder.registerAgent(
+                on: app,
+                named: "large-firecracker-rootfs-host",
+                resources: AgentResources(
+                    totalCPU: 16,
+                    availableCPU: 16,
+                    totalMemory: Self.gb(64),
+                    availableMemory: Self.gb(64),
+                    totalDisk: Self.gb(50),
+                    availableDisk: Self.gb(50)),
+                architecture: .arm64,
+                hypervisors: firecracker)
+
+            var vmID: UUID?
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "sparse-rootfs-vm",
+                        imageId: imageID,
+                        projectId: project.id,
+                        environment: "development",
+                        cpu: 2,
+                        memory: Self.gb(2),
+                        disk: Self.gb(10),
+                        hypervisorType: .firecracker,
+                        networkName: "default"))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                vmID = try res.content.decode(AcceptedMutation<VMDetailResponse>.self).resource.id
+            }
+
+            let createdID = try #require(vmID)
+            var placed: VM?
+            for _ in 0..<100 {
+                placed = try await VM.find(createdID, on: app.db)
+                if placed?.hypervisorId != nil || placed?.failedGeneration != nil { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+
+            let vm = try #require(placed)
+            #expect(vm.disk == Self.gb(40))
+            #expect(vm.hypervisorId == largeAgentID)
+            #expect(vm.hypervisorId != smallAgentID)
+            let bootVolume = try #require(
+                try await Volume.query(on: app.db)
+                    .filter(\.$vm.$id == createdID)
+                    .first())
+            #expect(bootVolume.size == Self.gb(40))
+            #expect(bootVolume.format == .raw)
             let refreshedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.db))
             #expect(refreshedQuota.reservedStorage == Self.gb(40))
         }

@@ -202,7 +202,7 @@ enum VMCreationWorkflow {
             throw Abort(.badRequest, reason: "'disk' must be positive")
         }
         let diskValue: Int64
-        if chosenHypervisor == .qemu, let artifact = image.usableDiskArtifact {
+        if let artifact = image.usableBootArtifact(for: chosenHypervisor) {
             guard let virtualSize = artifact.virtualSize else {
                 throw Abort(
                     .badRequest,
