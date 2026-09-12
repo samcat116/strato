@@ -425,6 +425,9 @@ extension DNSZoneReconciler {
         var failures: [ReconcileStepFailure] = []
 
         for write in writes(desired: plans, observed: observed) {
+            let affectedNetworkIDs =
+                (networkIDsByZone[write.plan.zoneId] ?? [])
+                .union(write.detach.compactMap { networkIDsBySwitchName[$0] })
             // Logged per write rather than per pass: every sync assembles every
             // zone, so a zone holding one TXT record would otherwise warn
             // forever on the authority agent. Tied to the write, it fires when
@@ -447,7 +450,7 @@ extension DNSZoneReconciler {
             if let failure = await observeAttempt(
                 logger,
                 "converge DNS zone \(write.plan.zoneName)",
-                affectedNetworkIds: networkIDsByZone[write.plan.zoneId] ?? [],
+                affectedNetworkIds: affectedNetworkIDs,
                 { try await actuator.ensureDNSZone(write) })
             {
                 failures.append(failure)

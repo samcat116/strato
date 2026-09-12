@@ -339,6 +339,28 @@ struct DNSZoneRealizationTests {
         #expect(failures[0].affectedNetworkIds == [networkID])
     }
 
+    @Test("A failed zone update identifies networks being detached")
+    func reconcileAttributesDetachFailure() async throws {
+        let actuator = RecordingDNSActuator(
+            observed: [
+                ObservedDNSZone(
+                    uuid: "row-1", zoneId: zoneID, recordsHash: "hash-1",
+                    zoneName: "acme.internal", records: [:],
+                    switchNames: [switchName, otherSwitchName])
+            ],
+            failingZones: [zoneID])
+        let failures = try await DNSZoneReconciler.reconcile(
+            zones: [zone(networkIds: [networkID], records: [])],
+            networkIDsBySwitchName: [
+                switchName: networkID,
+                otherSwitchName: otherNetworkID,
+            ],
+            actuator: actuator,
+            logger: Logger(label: "test"))
+        #expect(failures.count == 1)
+        #expect(failures[0].affectedNetworkIds == [networkID, otherNetworkID])
+    }
+
     @Test("A failed stale-row teardown identifies its former network")
     func reconcileAttributesTeardownFailure() async throws {
         let actuator = RecordingDNSActuator(
