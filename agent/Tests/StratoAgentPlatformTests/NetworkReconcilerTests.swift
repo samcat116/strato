@@ -39,6 +39,25 @@ struct NetworkReconcilerTests {
             floatingIPs: floatingIPs)
     }
 
+    @Test("A failed newer generation still closes the replay window for older payloads")
+    func acceptedAndObservedGenerationsAreIndependent() {
+        let networkID = UUID()
+        var ledger = NetworkGenerationLedger()
+
+        let acceptedFour = ledger.accept(networkID: networkID, generation: 4)
+        #expect(acceptedFour)
+        ledger.recordObserved(networkID: networkID, generation: 4)
+        let acceptedFive = ledger.accept(networkID: networkID, generation: 5)
+        #expect(acceptedFive)
+        // Generation 5 fails before it can become observed.
+        #expect(ledger.observedGeneration(for: networkID) == 4)
+        let replayedFour = ledger.accept(networkID: networkID, generation: 4)
+        #expect(!replayedFour)
+        let retriedFive = ledger.accept(networkID: networkID, generation: 5)
+        #expect(retriedFive)
+        #expect(ledger.acceptedGeneration(for: networkID) == 5)
+    }
+
     // MARK: - Plan
 
     @Test("Networks sharing a project share one router with a port each")
@@ -453,6 +472,44 @@ struct NetworkReconcilerTests {
         #expect(!calls.contains(where: { $0.hasPrefix("ensureSNAT") }))
     }
 
+    @Test("An uplink failure affects only networks that contribute NAT")
+    func reconcileScopesUplinkFailureToEgressNetworks() async throws {
+        let egress = network(
+            name: "egress", subnet: "192.168.1.0/24", gateway: "192.168.1.1",
+            routerKey: "p", externalAccess: true)
+        let isolated = network(
+            name: "isolated", subnet: "10.0.5.0/24", gateway: "10.0.5.1",
+            routerKey: "p", externalAccess: false)
+        let actuator = RecordingNetworkActuator(
+            observed: ObservedNetworkTopology(), uplinkAvailable: false)
+
+        let failures = try await NetworkReconciler.reconcile(
+            networks: [egress, isolated], actuator: actuator, logger: Logger(label: "test"))
+
+        let failure = try #require(
+            failures.first { $0.message.contains("No detectable host uplink") })
+        #expect(failure.affectedNetworkIds == [egress.networkId])
+        #expect(failure.affectedNetworkIds?.contains(isolated.networkId) == false)
+    }
+
+    @Test("A per-network reconcile failure identifies only its network")
+    func reconcileAttributesPerNetworkFailure() async throws {
+        let failed = network(
+            name: "failed", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
+        let healthy = network(
+            name: "healthy", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: "p")
+        let failedSwitch = OVNNaming.switchName(networkId: failed.networkId)
+        let actuator = RecordingNetworkActuator(
+            observed: ObservedNetworkTopology(), failingSwitchNames: [failedSwitch])
+
+        let failures = try await NetworkReconciler.reconcile(
+            networks: [failed, healthy], actuator: actuator, logger: Logger(label: "test"))
+
+        let failure = try #require(failures.first { $0.message.contains(failedSwitch) })
+        #expect(failure.affectedNetworkIds == [failed.networkId])
+        #expect(failure.affectedNetworkIds?.contains(healthy.networkId) == false)
+    }
+
     // MARK: - Metadata localport (STR-49)
 
     @Test("An enabled network plans a dual-stack metadata localport on its switch")
@@ -774,6 +831,29 @@ struct NetworkReconcilerTests {
         #expect(uplinkIndex != nil && dnatIndex != nil && uplinkIndex! < dnatIndex!)
     }
 
+    @Test("Retired NAT teardown failures retain router ownership")
+    func reconcileAttributesRetiredNATFailures() async throws {
+        let network = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
+        let observed = ObservedNetworkTopology(
+            routerNames: ["lr-p"],
+            snatRules: [SNATRuleKey(router: "lr-p", logicalIP: "10.0.5.0/24")],
+            dnatRules: [DNATRuleKey(router: "lr-p", externalIP: "203.0.113.31")])
+        let actuator = RecordingNetworkActuator(
+            observed: observed,
+            failingSNATRemovals: ["10.0.5.0/24"],
+            failingDNATRemovals: ["203.0.113.31"])
+
+        let failures = try await NetworkReconciler.reconcile(
+            networks: [network], actuator: actuator, logger: Logger(label: "test"))
+
+        let natFailures = failures.filter {
+            $0.message.contains("203.0.113.31") || $0.message.contains("10.0.5.0/24")
+        }
+        #expect(natFailures.count == 2)
+        #expect(natFailures.allSatisfy { $0.affectedNetworkIds == [network.networkId] })
+    }
+
     @Test("reconcile skips DNAT (like SNAT) when no uplink is available")
     func reconcileSkipsDNATWithoutUplink() async throws {
         let web = network(
@@ -859,14 +939,29 @@ private actor RecordingNetworkActuator: NetworkActuator {
     private(set) var calls: [String] = []
     private let observed: ObservedNetworkTopology
     private let uplinkAvailable: Bool
+    private let failingSwitchNames: Set<String>
+    private let failingSNATRemovals: Set<String>
+    private let failingDNATRemovals: Set<String>
 
-    init(observed: ObservedNetworkTopology, uplinkAvailable: Bool = true) {
+    init(
+        observed: ObservedNetworkTopology,
+        uplinkAvailable: Bool = true,
+        failingSwitchNames: Set<String> = [],
+        failingSNATRemovals: Set<String> = [],
+        failingDNATRemovals: Set<String> = []
+    ) {
         self.observed = observed
         self.uplinkAvailable = uplinkAvailable
+        self.failingSwitchNames = failingSwitchNames
+        self.failingSNATRemovals = failingSNATRemovals
+        self.failingDNATRemovals = failingDNATRemovals
     }
 
     func observeTopology() async throws -> ObservedNetworkTopology { observed }
-    func ensureSwitch(_ desired: DesiredSwitch) async throws { calls.append("ensureSwitch(\(desired.name))") }
+    func ensureSwitch(_ desired: DesiredSwitch) async throws {
+        calls.append("ensureSwitch(\(desired.name))")
+        if failingSwitchNames.contains(desired.name) { throw RecordingNetworkActuatorError.expectedFailure }
+    }
     func ensureServiceLocalPort(_ port: DesiredServiceLocalPort) async throws {
         calls.append("ensureServiceLocalPort(\(port.name)@\(port.switchName))")
     }
@@ -884,12 +979,18 @@ private actor RecordingNetworkActuator: NetworkActuator {
     }
     func removeSNAT(router routerName: String, logicalIP: String) async throws {
         calls.append("removeSNAT(\(routerName),\(logicalIP))")
+        if failingSNATRemovals.contains(logicalIP) {
+            throw RecordingNetworkActuatorError.expectedFailure
+        }
     }
     func ensureDNAT(router routerName: String, rule: DesiredDNATRule) async throws {
         calls.append("ensureDNAT(\(routerName),\(rule.externalIP)->\(rule.logicalIP))")
     }
     func removeDNAT(router routerName: String, externalIP: String) async throws {
         calls.append("removeDNAT(\(routerName),\(externalIP))")
+        if failingDNATRemovals.contains(externalIP) {
+            throw RecordingNetworkActuatorError.expectedFailure
+        }
     }
     func ensureDynamicRouting(for router: DesiredRouter, uplinkReady: Bool) async throws {
         calls.append("ensureDynamicRouting(\(router.name),\(uplinkReady ? "ready" : "noUplink"))")
@@ -903,4 +1004,8 @@ private actor RecordingNetworkActuator: NetworkActuator {
         calls.append("ensureDNSZone(\(write.plan.zoneName))")
     }
     func removeDNSZone(uuid: String) async throws { calls.append("removeDNSZone(\(uuid))") }
+}
+
+private enum RecordingNetworkActuatorError: Error {
+    case expectedFailure
 }

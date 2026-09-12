@@ -1645,6 +1645,104 @@ public struct ObservedManifestStatus: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Observed Network Fabric State
+
+/// Whether one desired network-fabric object was realized by the reporting
+/// agent. Reports are statements about the agent's own OVSDB writes, not packet
+/// probes: `.active` means the requested writes and the verification read
+/// completed, while `.error` preserves a failed attempt for the control plane.
+public enum ObservedNetworkFabricStatus: String, Codable, Sendable, Equatable {
+    case active
+    case error
+}
+
+/// What the site's OVN topology authority observed after reconciling one
+/// logical network. Optional at the report level because a non-authority has no
+/// opinion about shared topology; an empty list is an authoritative opinion
+/// about an empty desired set.
+public struct ObservedNetworkState: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let observedGeneration: Int64
+    public let status: ObservedNetworkFabricStatus
+    public let lastError: String?
+    public let failedGeneration: Int64?
+    public let failureClassification: ObservedFailureClassification?
+
+    public init(
+        id: UUID,
+        observedGeneration: Int64,
+        status: ObservedNetworkFabricStatus,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil
+    ) {
+        self.id = id
+        self.observedGeneration = observedGeneration
+        self.status = status
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
+    }
+}
+
+/// What the site's OVN topology authority observed after reconciling one
+/// security group's port group and ACLs. A group can be realized by more than
+/// one site; each report remains scoped to its reporting authority and the
+/// control plane is responsible for combining those opinions.
+public struct ObservedSecurityGroupState: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let observedGeneration: Int64
+    public let status: ObservedNetworkFabricStatus
+    public let lastError: String?
+    public let failedGeneration: Int64?
+    public let failureClassification: ObservedFailureClassification?
+
+    public init(
+        id: UUID,
+        observedGeneration: Int64,
+        status: ObservedNetworkFabricStatus,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil
+    ) {
+        self.id = id
+        self.observedGeneration = observedGeneration
+        self.status = status
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
+    }
+}
+
+/// The result of converging one VM or sandbox port's security-group
+/// membership. `securityGroupIds` is the desired set this result belongs to;
+/// the control plane compares it with the current attachment rows before
+/// applying the result so a delayed report cannot bless a newer membership.
+public struct ObservedPortMembershipState: Codable, Sendable, Equatable {
+    public let interfaceId: UUID
+    public let portName: String
+    public let securityGroupIds: [UUID]
+    public let status: ObservedNetworkFabricStatus
+    public let lastError: String?
+    public let failureClassification: ObservedFailureClassification?
+
+    public init(
+        interfaceId: UUID,
+        portName: String,
+        securityGroupIds: [UUID],
+        status: ObservedNetworkFabricStatus,
+        lastError: String? = nil,
+        failureClassification: ObservedFailureClassification? = nil
+    ) {
+        self.interfaceId = interfaceId
+        self.portName = portName
+        self.securityGroupIds = securityGroupIds
+        self.status = status
+        self.lastError = lastError
+        self.failureClassification = failureClassification
+    }
+}
+
 // MARK: - Observed Load Balancer State
 
 public enum ObservedLoadBalancerStatus: String, Codable, Sendable {
@@ -1768,6 +1866,16 @@ public struct ObservedStateReport: WebSocketMessage {
     /// Native LB programming and backend health observed by the site's
     /// topology author. Nil means no opinion, not an empty authoritative set.
     public let loadBalancers: [ObservedLoadBalancerState]?
+    /// Logical-switch/router/SNAT/DHCP realization observed by the site's
+    /// topology authority. Nil means this agent has no topology opinion.
+    public let networks: [ObservedNetworkState]?
+    /// Port-group and ACL realization observed by the site's topology
+    /// authority. Nil means this agent has no authority-side opinion.
+    public let securityGroups: [ObservedSecurityGroupState]?
+    /// Per-workload port-group membership observed by this agent. Nil means the
+    /// agent did not attempt or cannot identify membership; an empty list is an
+    /// authoritative statement that this sync contained no managed local port.
+    public let portMemberships: [ObservedPortMembershipState]?
     /// Whole physical disks observed by this agent. A non-nil value is the
     /// complete current inventory, including an authoritative empty list.
     /// Nil means enumeration failed or is unsupported and must not be read as
@@ -1789,6 +1897,9 @@ public struct ObservedStateReport: WebSocketMessage {
         volumes: [ObservedVolumeState]? = nil,
         snapshots: [ObservedSnapshotState]? = nil,
         loadBalancers: [ObservedLoadBalancerState]? = nil,
+        networks: [ObservedNetworkState]? = nil,
+        securityGroups: [ObservedSecurityGroupState]? = nil,
+        portMemberships: [ObservedPortMembershipState]? = nil,
         storageDevices: [ObservedStorageDevice]? = nil
     ) {
         self.requestId = requestId
@@ -1805,6 +1916,9 @@ public struct ObservedStateReport: WebSocketMessage {
         self.volumes = volumes
         self.snapshots = snapshots
         self.loadBalancers = loadBalancers
+        self.networks = networks
+        self.securityGroups = securityGroups
+        self.portMemberships = portMemberships
         self.storageDevices = storageDevices
     }
 

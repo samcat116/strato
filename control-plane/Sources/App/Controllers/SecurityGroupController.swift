@@ -279,6 +279,7 @@ struct SecurityGroupController: RouteCollection {
             try await rule.save(on: db)
             try await Self.bumpGeneration(of: groupId, on: db)
         }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         await req.application.agentService.syncDesiredStateToFleet()
         return try SecurityGroupRuleResponse(from: rule)
@@ -305,6 +306,7 @@ struct SecurityGroupController: RouteCollection {
             try await rule.delete(on: db)
             try await Self.bumpGeneration(of: groupId, on: db)
         }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
@@ -364,6 +366,7 @@ struct SecurityGroupController: RouteCollection {
                         reason: "Interface already has \(SecurityGroup.maxGroupsPerNIC) security groups attached")
                 }
                 try await target.attach(groupID: groupId, on: db)
+                try await target.invalidateMembershipObservation(on: db)
                 return true
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -374,6 +377,7 @@ struct SecurityGroupController: RouteCollection {
             return .noContent
         }
         guard changed else { return .noContent }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         // Only on a real change, and for both workloads: since STR-102 a
         // sandbox attach changes the group closure the topology authority
@@ -420,9 +424,11 @@ struct SecurityGroupController: RouteCollection {
                 )
             }
             try await target.detach(groupID: groupId, on: db)
+            try await target.invalidateMembershipObservation(on: db)
             return true
         }
         guard changed else { return .noContent }
+        await Self.refreshConvergenceScope(projectID: group.$project.id, req: req)
 
         // Both workloads, for the same reason as the attach path: a detach can
         // drop the last NIC referencing a group, which retires its port group.
@@ -439,6 +445,23 @@ struct SecurityGroupController: RouteCollection {
     }
 
     // MARK: - Helpers
+
+    /// Scope bookkeeping is derived state. A failed refresh must not turn a
+    /// committed rule or membership mutation into an apparent request failure;
+    /// the immediately requested and periodic desired-state assemblies retry it.
+    private static func refreshConvergenceScope(projectID: UUID, req: Request) async {
+        do {
+            try await SecurityGroupSiteConvergence.reconcileScopes(
+                projectIDs: [projectID], on: req.db)
+        } catch {
+            req.logger.error(
+                "Could not refresh per-site security-group convergence scope",
+                metadata: [
+                    "projectId": .string(projectID.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
 
     /// A resolved attach/detach target: the NIC and the workload that owns it.
     /// The two workloads keep separate join tables, so membership reads and
@@ -495,6 +518,31 @@ struct SecurityGroupController: RouteCollection {
                     .filter(\.$interface.$id == interfaceID)
                     .filter(\.$securityGroup.$id == groupID)
                     .delete()
+            }
+        }
+
+        /// A membership verdict describes the exact join-table set that the
+        /// reporting agent compared. Changing that set invalidates the verdict
+        /// in the same transaction so the API cannot claim the replacement set
+        /// is already active.
+        func invalidateMembershipObservation(on db: Database) async throws {
+            switch workload {
+            case .vm:
+                guard let nic = try await VMNetworkInterface.find(interfaceID, on: db) else {
+                    throw Abort(.notFound, reason: "VM network interface not found")
+                }
+                nic.securityGroupStatus = nil
+                nic.securityGroupLastError = nil
+                nic.securityGroupLastErrorAt = nil
+                try await nic.save(on: db)
+            case .sandbox:
+                guard let nic = try await SandboxNetworkInterface.find(interfaceID, on: db) else {
+                    throw Abort(.notFound, reason: "Sandbox network interface not found")
+                }
+                nic.securityGroupStatus = nil
+                nic.securityGroupLastError = nil
+                nic.securityGroupLastErrorAt = nil
+                try await nic.save(on: db)
             }
         }
     }

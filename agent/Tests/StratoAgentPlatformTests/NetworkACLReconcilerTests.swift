@@ -494,11 +494,37 @@ struct NetworkACLReconcilerTests {
         let second = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0201")!
         let actuator = RecordingNetworkACLActuator(
             observed: [observed(rules: [ObservedNetworkACLRule(uuid: "old", action: "drop")])])
-        try await NetworkACLReconciler.reconcile(
+        let failures = try await NetworkACLReconciler.reconcile(
             networks: [network(policies: [policy(rules: []), policy(id: second, rules: [])])],
             actuator: actuator,
             logger: Logger(label: "test"))
         #expect(await actuator.events == [.observe])
+        #expect(failures.count == 1)
+        #expect(failures[0].classification == .permanent)
+        #expect(failures[0].affectedNetworkIds == [networkID])
+    }
+
+    @Test("Per-policy actuator failures identify the affected network")
+    func reconcileReturnsPerNetworkFailures() async throws {
+        let createFailure = ActuatorEvent.create(
+            kind: NetworkACLRowIdentity.defaultDropKind, action: "drop", priority: 0)
+        let convergeActuator = RecordingNetworkACLActuator(failOn: createFailure)
+        let convergeFailures = try await NetworkACLReconciler.reconcile(
+            networks: [network(policies: [policy(rules: [])])],
+            actuator: convergeActuator,
+            logger: Logger(label: "test"))
+        #expect(convergeFailures.count == 1)
+        #expect(convergeFailures[0].affectedNetworkIds == [networkID])
+
+        let teardownActuator = RecordingNetworkACLActuator(
+            observed: [observed(rules: [ObservedNetworkACLRule(uuid: "old", action: "pass")])],
+            failOn: .remove(uuid: "old"))
+        let teardownFailures = try await NetworkACLReconciler.reconcile(
+            networks: [network(policies: [])],
+            actuator: teardownActuator,
+            logger: Logger(label: "test"))
+        #expect(teardownFailures.count == 1)
+        #expect(teardownFailures[0].affectedNetworkIds == [networkID])
     }
 
     @Test("Explicit empty policy tears down, while all-nil desired state performs no observation")

@@ -117,6 +117,10 @@ actor Agent {
     // the control plane's desired-state syncs. Work items run on per-VM serial
     // lanes, so two items can never interleave operations on one VM.
     var reconciler: Reconciler?
+    /// Latest result of the network-fabric pass. It is replaced atomically for
+    /// each desired-state message and included in every later observed report,
+    /// so a persistent failure remains visible between syncs.
+    var observedNetworkFabric = NetworkReconcileOutcome.noOpinion
     // What this host's link-local metadata service serves its guests (STR-52),
     // written by the reconciler from each sync's `DesiredVMState.metadata`.
     // Owned here rather than by the reconciler because the guest-facing

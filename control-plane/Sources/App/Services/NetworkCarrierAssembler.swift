@@ -298,8 +298,20 @@ extension DesiredStateAssembler {
     /// port group with no members matches nothing, so realizing it early costs
     /// an OVN row and changes no traffic.
     func desiredSecurityGroups(
-        forVMs vms: [VM], sandboxes: [Sandbox], on db: any Database
+        forVMs vms: [VM], sandboxes: [Sandbox], siteID: UUID, on db: any Database
     ) async throws -> [DesiredSecurityGroup] {
+        var projectIDs = Set(vms.map { $0.$project.id } + sandboxes.map { $0.$project.id })
+        // A project with no remaining workload in this site is absent from the
+        // current covered arrays. Its persisted scope rows are the durable
+        // breadcrumb that lets this authority remove those rows instead of
+        // leaving an old pending/degraded site in the group aggregate forever.
+        let priorScope = try await SecurityGroupSiteObservation.query(on: db)
+            .filter(\.$site.$id == siteID)
+            .with(\.$securityGroup)
+            .all()
+        projectIDs.formUnion(priorScope.map { $0.securityGroup.$project.id })
+        try await SecurityGroupSiteConvergence.reconcileScopes(projectIDs: projectIDs, on: db)
+
         let vmInterfaceIDs = vms.flatMap { $0.networkInterfaces.compactMap(\.id) }
         let sandboxInterfaceIDs = sandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) }
         // Both seeds, not just the VM one: an agent (or a whole site) hosting

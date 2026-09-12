@@ -12,6 +12,7 @@ import SwiftOVN
 
 extension NetworkServiceLinux: LoadBalancerActuator {
     static var loadBalancerIDKey: String { "strato-load-balancer-id" }
+    static var loadBalancerNetworkIDKey: String { "strato-network-id" }
     static var loadBalancerGenerationKey: String { "strato-generation" }
     static var loadBalancerDisplayNameKey: String { "strato-display-name" }
     static var loadBalancerListenerIDKey: String { "strato-listener-id" }
@@ -34,6 +35,9 @@ extension NetworkServiceLinux: LoadBalancerActuator {
                 ManagedLoadBalancerObservation(
                     rowUUID: rowUUID,
                     ownerID: ownerID,
+                    networkID: row.external_ids?[Self.loadBalancerNetworkIDKey].flatMap {
+                        UUID(uuidString: $0)
+                    },
                     switchNames: Set(
                         switches.filter { ($0.loadBalancer ?? []).contains(rowUUID) }.map(\.name)),
                     routerNames: Set(
@@ -44,6 +48,7 @@ extension NetworkServiceLinux: LoadBalancerActuator {
 
     func ensureLoadBalancer(
         _ desired: DesiredLoadBalancer,
+        networkID: UUID,
         routerName: String,
         switchNames: Set<String>,
         existing: ManagedLoadBalancerObservation?
@@ -52,7 +57,7 @@ extension NetworkServiceLinux: LoadBalancerActuator {
             throw NetworkError.notConnected("OVN manager not connected")
         }
 
-        let externalIDs = Self.loadBalancerExternalIDs(desired)
+        let externalIDs = Self.loadBalancerExternalIDs(desired, networkID: networkID)
         let initialRow = Self.makeLoadBalancerRow(
             desired, healthChecks: [], externalIDs: externalIDs)
         let rowUUID: String
@@ -211,11 +216,13 @@ extension NetworkServiceLinux: LoadBalancerActuator {
     }
 
     static func loadBalancerExternalIDs(
-        _ desired: DesiredLoadBalancer
+        _ desired: DesiredLoadBalancer,
+        networkID: UUID
     ) -> [String: String] {
         [
             managedKey: managedValue,
             loadBalancerIDKey: desired.id.uuidString,
+            loadBalancerNetworkIDKey: networkID.uuidString,
             loadBalancerGenerationKey: String(desired.generation),
             loadBalancerDisplayNameKey: desired.name,
         ]

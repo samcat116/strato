@@ -37,6 +37,15 @@ final class SandboxNetworkInterface: Model, @unchecked Sendable {
     @Children(for: \.$interface)
     var securityGroupMemberships: [SandboxInterfaceSecurityGroup]
 
+    @OptionalField(key: "security_group_status")
+    var securityGroupStatus: String?
+
+    @OptionalField(key: "security_group_last_error")
+    var securityGroupLastError: String?
+
+    @OptionalField(key: "security_group_last_error_at")
+    var securityGroupLastErrorAt: Date?
+
     @OptionalField(key: "mtu")
     var mtu: Int?
 
@@ -67,6 +76,9 @@ final class SandboxNetworkInterface: Model, @unchecked Sendable {
         self.macAddress = macAddress
         self.mtu = mtu
         self.deviceName = deviceName
+        self.securityGroupStatus = nil
+        self.securityGroupLastError = nil
+        self.securityGroupLastErrorAt = nil
     }
 }
 

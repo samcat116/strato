@@ -28,19 +28,43 @@ extension NetworkServiceLinux {
             ipv6_ra_configs: raConfigs,
             external_ids: ["strato-managed": "true"])
         if let existing = try await ovnManager.getLogicalRouterPort(named: name) {
-            // Re-address in place when the network's gateway/subnet (either
-            // family) or RA config changed: the port name is stable (derived
-            // from the network), so without this an edit would leave a stale
-            // CIDR/MAC/RA and break L3.
-            let drifted =
-                Set(existing.networks) != Set(cidrs)
-                || existing.mac != mac
-                || (existing.ipv6_ra_configs ?? [:]) != raConfigs
-            if drifted, let uuid = existing.uuid {
-                try await ovnManager.updateLogicalRouterPort(uuid: uuid, desiredPort)
+            guard let existingUUID = existing.uuid else {
+                throw NetworkError.ovnError("Logical router port \(name) has no UUID")
+            }
+            let routerPortUUIDsByRouter = Dictionary(
+                uniqueKeysWithValues: try await ovnManager.getLogicalRouters().map {
+                    ($0.name, Set($0.ports ?? []))
+                })
+            if Self.routerPortNeedsReparent(
+                portUUID: existingUUID,
+                desiredRouter: router,
+                routerPortUUIDsByRouter: routerPortUUIDsByRouter)
+            {
+                // The port name is stable across an external-access change,
+                // but its parent router is not. Delete-detach followed by the
+                // atomic create-attach repairs both stale and multiple parent
+                // references; a failed create is reported and retried rather
+                // than acknowledging the new network generation.
+                try await ovnManager.deleteLogicalRouterPort(uuid: existingUUID)
+                _ = try await ovnManager.createLogicalRouterPort(desiredPort, onRouter: router)
                 logger.info(
-                    "Updated logical router port addressing",
-                    metadata: ["port": .string(name), "cidrs": .string(cidrs.joined(separator: " "))])
+                    "Reparented logical router port",
+                    metadata: ["port": .string(name), "router": .string(router)])
+            } else {
+                // Re-address in place when the network's gateway/subnet (either
+                // family) or RA config changed: the port name is stable (derived
+                // from the network), so without this an edit would leave a stale
+                // CIDR/MAC/RA and break L3.
+                let drifted =
+                    Set(existing.networks) != Set(cidrs)
+                    || existing.mac != mac
+                    || (existing.ipv6_ra_configs ?? [:]) != raConfigs
+                if drifted {
+                    try await ovnManager.updateLogicalRouterPort(uuid: existingUUID, desiredPort)
+                    logger.info(
+                        "Updated logical router port addressing",
+                        metadata: ["port": .string(name), "cidrs": .string(cidrs.joined(separator: " "))])
+                }
             }
         } else {
             _ = try await ovnManager.createLogicalRouterPort(desiredPort, onRouter: router)

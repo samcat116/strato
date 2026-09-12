@@ -327,7 +327,7 @@ struct DNSZoneRealizationTests {
     func reconcileToleratesOneFailingZone() async throws {
         let failing = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
         let actuator = RecordingDNSActuator(observed: [], failingZones: [failing])
-        try await DNSZoneReconciler.reconcile(
+        let failures = try await DNSZoneReconciler.reconcile(
             zones: [
                 zone(id: failing, name: "broken.internal", records: []),
                 zone(name: "acme.internal", records: []),
@@ -335,6 +335,26 @@ struct DNSZoneRealizationTests {
             actuator: actuator,
             logger: Logger(label: "test"))
         #expect(await actuator.calls.contains("ensureDNSZone(acme.internal)"))
+        #expect(failures.count == 1)
+        #expect(failures[0].affectedNetworkIds == [networkID])
+    }
+
+    @Test("A failed stale-row teardown identifies its former network")
+    func reconcileAttributesTeardownFailure() async throws {
+        let actuator = RecordingDNSActuator(
+            observed: [
+                ObservedDNSZone(
+                    uuid: "row-stale", zoneId: UUID(), recordsHash: "old",
+                    zoneName: "old.internal", records: [:], switchNames: [switchName])
+            ],
+            failingRows: ["row-stale"])
+        let failures = try await DNSZoneReconciler.reconcile(
+            zones: [],
+            networkIDsBySwitchName: [switchName: networkID],
+            actuator: actuator,
+            logger: Logger(label: "test"))
+        #expect(failures.count == 1)
+        #expect(failures[0].affectedNetworkIds == [networkID])
     }
 }
 
@@ -344,10 +364,16 @@ private actor RecordingDNSActuator: NetworkActuator {
     private(set) var calls: [String] = []
     private let observed: [ObservedDNSZone]
     private let failingZones: Set<UUID>
+    private let failingRows: Set<String>
 
-    init(observed: [ObservedDNSZone], failingZones: Set<UUID> = []) {
+    init(
+        observed: [ObservedDNSZone],
+        failingZones: Set<UUID> = [],
+        failingRows: Set<String> = []
+    ) {
         self.observed = observed
         self.failingZones = failingZones
+        self.failingRows = failingRows
     }
 
     struct Failure: Error {}
@@ -357,7 +383,10 @@ private actor RecordingDNSActuator: NetworkActuator {
         guard !failingZones.contains(write.plan.zoneId) else { throw Failure() }
         calls.append("ensureDNSZone(\(write.plan.zoneName))")
     }
-    func removeDNSZone(uuid: String) async throws { calls.append("removeDNSZone(\(uuid))") }
+    func removeDNSZone(uuid: String) async throws {
+        guard !failingRows.contains(uuid) else { throw Failure() }
+        calls.append("removeDNSZone(\(uuid))")
+    }
 
     func observeTopology() async throws -> ObservedNetworkTopology { ObservedNetworkTopology() }
     func ensureSwitch(_ desired: DesiredSwitch) async throws {}

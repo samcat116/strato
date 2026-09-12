@@ -171,6 +171,9 @@ final class SecurityGroupControllerTests {
                 projectID: project.id!, on: app.db)
             #expect(group.isDefault)
             #expect(group.name == SecurityGroup.defaultGroupName)
+            #expect(group.generation == 1)
+            #expect(group.observedGeneration == 0)
+            #expect(group.convergenceDeadline == nil)
 
             let rules = try await SecurityGroupRule.query(on: app.db)
                 .filter(\.$securityGroup.$id == group.id!)
@@ -223,7 +226,7 @@ final class SecurityGroupControllerTests {
                 #expect(res.status == .noContent)
             }
             let reloaded = try await SecurityGroup.find(group.id, on: app.db)
-            #expect(reloaded?.generation == 1)
+            #expect(reloaded?.generation == 2)
         }
     }
 
@@ -237,6 +240,9 @@ final class SecurityGroupControllerTests {
             #expect(!group.isDefault)
             #expect(group.rules.isEmpty)
             #expect(group.attachmentCount == 0)
+            #expect(group.conditions.targetGeneration == 1)
+            #expect(group.conditions.observedGeneration == 0)
+            #expect(group.conditions.converged == false)
 
             // Reserved name.
             try await app.test(.POST, "/api/security-groups") { req in
@@ -360,7 +366,7 @@ final class SecurityGroupControllerTests {
                 }
             }
             let reloaded = try await SecurityGroup.find(group.id, on: app.db)
-            #expect(reloaded?.generation == Int64(goodRules.count))
+            #expect(reloaded?.generation == Int64(goodRules.count + 1))
         }
     }
 
@@ -444,6 +450,11 @@ final class SecurityGroupControllerTests {
 
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
 
+            nic.securityGroupStatus = ObservedNetworkFabricStatus.active.rawValue
+            nic.securityGroupLastError = "stale verdict"
+            nic.securityGroupLastErrorAt = Date()
+            try await nic.save(on: app.db)
+
             // Attach, then an idempotent repeat.
             for _ in 0..<2 {
                 try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
@@ -457,6 +468,10 @@ final class SecurityGroupControllerTests {
                 .filter(\.$interface.$id == nic.id!)
                 .count()
             #expect(memberships == 2)
+            let afterAttach = try #require(try await VMNetworkInterface.find(nic.id, on: app.db))
+            #expect(afterAttach.securityGroupStatus == nil)
+            #expect(afterAttach.securityGroupLastError == nil)
+            #expect(afterAttach.securityGroupLastErrorAt == nil)
 
             // Cross-project attach → 400, the one status every cross-project
             // refusal answers with (issue #777); was 409.
@@ -473,12 +488,16 @@ final class SecurityGroupControllerTests {
             }
 
             // Detach down to one group; detaching the last is refused.
+            afterAttach.securityGroupStatus = ObservedNetworkFabricStatus.active.rawValue
+            try await afterAttach.save(on: app.db)
             try await app.test(.POST, "/api/security-groups/\(web.id)/detach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!, interfaceId: nic.id!))
             } afterResponse: { res in
                 #expect(res.status == .noContent)
             }
+            let afterDetach = try #require(try await VMNetworkInterface.find(nic.id, on: app.db))
+            #expect(afterDetach.securityGroupStatus == nil)
             try await app.test(.POST, "/api/security-groups/\(defaultGroup.id!)/detach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(AttachSecurityGroupRequest(vmId: vm.id!, interfaceId: nic.id!))
@@ -819,15 +838,53 @@ final class SecurityGroupControllerTests {
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
 
+            let beforeAssembly = try await SecurityGroup.query(on: app.db)
+                .filter(\.$id ~~ [web.id, db_.id])
+                .all()
+            #expect(beforeAssembly.allSatisfy { $0.convergenceDeadline == nil })
+
             let message = try await app.desiredStateAssembler.assemble(agentId: vm.hypervisorId!)
             let groups = try #require(message.securityGroups)
             #expect(Set(groups.map(\.id)) == [web.id, db_.id])
             let webDesired = groups.first { $0.id == web.id }
-            #expect(webDesired?.generation == 1)
+            #expect(webDesired?.generation == 2)
             #expect(webDesired?.rules.count == 1)
             #expect(webDesired?.rules.first?.remoteGroupId == db_.id)
+            let afterAssembly = try await SecurityGroup.query(on: app.db)
+                .filter(\.$id ~~ [web.id, db_.id])
+                .all()
+            let siteObservations = try await SecurityGroupSiteObservation.query(on: app.db)
+                .filter(\.$securityGroup.$id ~~ [web.id, db_.id])
+                .all()
+            #expect(siteObservations.count == 2, "Created \(siteObservations.count) site observations")
+            let afterAssemblyByID = Dictionary(
+                uniqueKeysWithValues: afterAssembly.compactMap { group in
+                    group.id.map { ($0, group) }
+                })
+            #expect(afterAssemblyByID[web.id]?.convergenceDeadline != nil)
+            #expect(afterAssemblyByID[db_.id]?.convergenceDeadline != nil)
             let nicSpec = try #require(message.vms.first?.spec.networks.first)
             #expect(nicSpec.securityGroupIds == [web.id])
+
+            // Once this site's last workload for the project disappears, the
+            // persisted scope itself must pull the project into one final
+            // reconciliation pass so both the direct and referenced rows retire.
+            try await VMInterfaceSecurityGroup.query(on: app.db)
+                .filter(\.$interface.$id == nic.id!)
+                .delete()
+            let authorityID = try #require(UUID(uuidString: vm.hypervisorId!))
+            let authority = try #require(try await Agent.find(authorityID, on: app.db))
+            let emptyGroups = try await app.desiredStateAssembler.desiredSecurityGroups(
+                forVMs: [], sandboxes: [], siteID: authority.$site.id, on: app.db)
+            #expect(emptyGroups.isEmpty)
+            #expect(
+                try await SecurityGroupSiteObservation.query(on: app.db)
+                    .filter(\.$securityGroup.$id ~~ [web.id, db_.id])
+                    .count() == 0)
+            let retiredGroups = try await SecurityGroup.query(on: app.db)
+                .filter(\.$id ~~ [web.id, db_.id])
+                .all()
+            #expect(retiredGroups.allSatisfy { $0.convergenceDeadline == nil })
         }
     }
 
@@ -943,6 +1000,11 @@ final class SecurityGroupControllerTests {
             let first = try await self.createGroup(app: app, project: project, token: token, name: "sbx-a")
             let second = try await self.createGroup(app: app, project: project, token: token, name: "sbx-b")
 
+            nic.securityGroupStatus = ObservedNetworkFabricStatus.active.rawValue
+            nic.securityGroupLastError = "stale verdict"
+            nic.securityGroupLastErrorAt = Date()
+            try await nic.save(on: app.db)
+
             // An unplaced sandbox attaches regardless of any host gate: the
             // project's default group is attached before scheduling, so the
             // gate can only ask about a host that already exists (STR-103).
@@ -971,6 +1033,12 @@ final class SecurityGroupControllerTests {
                 #expect(res.status == .conflict)
             }
 
+            let afterFirstAttach = try #require(
+                try await SandboxNetworkInterface.find(nic.id, on: app.db))
+            #expect(afterFirstAttach.securityGroupStatus == nil)
+            #expect(afterFirstAttach.securityGroupLastError == nil)
+            #expect(afterFirstAttach.securityGroupLastErrorAt == nil)
+
             try await app.test(.POST, "/api/security-groups/\(second.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -995,6 +1063,8 @@ final class SecurityGroupControllerTests {
             }
 
             // With a second group present the first detaches.
+            afterFirstAttach.securityGroupStatus = ObservedNetworkFabricStatus.active.rawValue
+            try await afterFirstAttach.save(on: app.db)
             try await app.test(.POST, "/api/security-groups/\(first.id)/detach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -1006,6 +1076,9 @@ final class SecurityGroupControllerTests {
                 .filter(\.$interface.$id == nic.id!)
                 .all()
             #expect(remaining.map { $0.$securityGroup.id } == [second.id])
+            let afterDetach = try #require(
+                try await SandboxNetworkInterface.find(nic.id, on: app.db))
+            #expect(afterDetach.securityGroupStatus == nil)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
