@@ -76,14 +76,15 @@ it in the background.
 
 ```bash
 cd deploy/compose
-./e2e-up.sh --fresh                 # DESTRUCTIVE: wipes volumes, rebuilds, sets up
+./e2e-up.sh                         # build and set up, preserving volumes
 ```
 
-It stops partway and prints the command you must run as root, then waits for the
-agent to register:
+It prints the command to run as root, then waits for agent registration. Use
+available root access, or hand the command to the operator if a password is
+required:
 
 ```bash
-sudo RUN_DIR=<printed by e2e-up.sh> bash deploy/compose/e2e-agent.sh reset
+sudo RUN_DIR=<printed by e2e-up.sh> bash deploy/compose/e2e-agent.sh start
 ```
 
 `sudo` does not forward the environment, so `RUN_DIR` has to be passed on the
@@ -96,11 +97,17 @@ assigned), a network, a guest image, and a 16/16 smoke test.
 Useful variants:
 
 ```bash
+./e2e-up.sh --fresh                 # DESTRUCTIVE: wipe volumes and rebuild
 ./e2e-up.sh --no-build              # reuse existing images
 ./e2e-up.sh --api-key sk_...        # DB already has users; supply your own key
 ./e2e-up.sh --stage stack           # stop once the stack is healthy
 ./e2e-up.sh --down                  # stop the stack, keep volumes
 ```
+
+`--fresh` needs authorization to discard the deployment data, including users
+and passkeys. After that reset, the script prints an agent `reset` command
+instead of `start` to clear state tied to the old SPIRE CA. Rebuilding source
+alone does not require deleting volumes.
 
 Stages run in order — `stack → key → enroll → agent → fixtures → smoke` — and
 the whole script is idempotent, so re-running it reuses whatever already exists.
@@ -135,6 +142,18 @@ lifts without requiring a new generation.
 
 Prefer that over `status` alone. VMs are still created in `Created` rather than
 running, so start them explicitly with `POST /api/vms/{id}/start`.
+
+### Full lifecycle acceptance
+
+For a full VM E2E check, create and start a VM, confirm guest boot evidence
+and serial console access as described below, then stop and start it again,
+waiting for each target generation. Delete it and poll the operations façade
+for the verdict. Verify that the VM's QEMU process, OVN logical switch port,
+TAP, and directory under `/var/lib/strato/vms` are gone on the relevant host.
+Record the tested backend and any checks it cannot support.
+
+Use the agent log at `$RUN_DIR/strato-agent.log` and `resource_events` for
+mutation evidence. The setup smoke test alone does not establish this lifecycle.
 
 ### Live vCPU shrink contract
 

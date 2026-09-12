@@ -23,9 +23,8 @@ Label the tier explicitly on every comment. An unlabeled nit next to an
 unlabeled blocker makes the author guess which one matters, and they will guess
 wrong.
 
-Read the diff **twice**: once for what it does, once for what it *doesn't* —
-the missing rollback, the unhandled `nil`, the second call site that wasn't
-updated. Most real bugs are in the second pass.
+Review both the changed behavior and omissions such as a missing rollback,
+an unhandled `nil`, or a consumer that still relies on the old contract.
 
 ---
 
@@ -228,10 +227,8 @@ review as a security review. `/security-review` covers this in depth.
   from the name alone.
 - **Assertions are specific.** `#expect(result != nil)` passes for the wrong
   value; assert the value.
-- **Run the full suite before opening or updating a PR** —
-  `swift test --package-path control-plane` (needs Postgres; see
-  `docs/development/local-development.md`). `--filter <SuiteName>` is for
-  iterating, not for the final check.
+- **Validation scope** follows [local development](./local-development.md#validation-scope).
+  Check that the reported evidence covers the affected behavior and consumers.
 
 ## 9. Impact on the existing codebase
 
@@ -478,11 +475,8 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
    hours here; resolve conflicts locally before opening the PR and again
    before declaring it done.
 2. `swift format --in-place --recursive <changed dirs>`.
-3. Full test suite for every package you touched, plus
-   `bun run lint && bun run build` if the frontend changed. **This step is not
-   optional and CI will not do it for you** — PR validation is a compile check
-   that doesn't even build the test targets, and nothing runs `swift test` on
-   `main`. A green PR says "it compiles", nothing more.
+3. Complete the applicable [validation](./local-development.md#validation-scope)
+   and state its coverage. Swift PR compile checks do not provide test evidence.
 4. Spec changed? Regenerate `openapi.ts` and commit it.
 5. Architecture changed? Update `docs/architecture/`, `CONTEXT.md`, or an ADR
    in the same PR.
