@@ -163,6 +163,48 @@ struct VMCommandExecutionTests {
         }
     }
 
+    @Test("a skewed sweep preserves provisional output until the durable deadline")
+    func skewedSweepPreservesProvisionalCapture() async throws {
+        try await withTestApp { app in
+            let service = VMCommandExecutionService(
+                app: app,
+                sendEnvelope: { _, _ in },
+                beforeClassifyStart: { throw ClassificationUnavailable() },
+                retryDelay: .seconds(30))
+            app.vmCommandExecutionService = service
+            let databaseNow = Date()
+            let execution = execution(deadline: databaseNow.addingTimeInterval(600))
+            try await execution.create(command: ["/usr/bin/printf", "retained"], on: app.db)
+            let id = try execution.requireID()
+
+            #expect(
+                await service.handleStarted(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey))
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("before ".utf8)))
+
+            // Simulate a database clock beyond the replica-stamped provisional
+            // deadline but still before the durable command deadline.
+            await service.sweepStuck(
+                at: .testing(databaseNow.addingTimeInterval(400)))
+
+            let pending = try #require(try await VMCommandExecution.find(id, on: app.db))
+            #expect(pending.status == .pending)
+            #expect(
+                await service.handleOutput(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey,
+                    stream: "stdout", data: Data("after".utf8)))
+            #expect(
+                await service.handleExit(
+                    sessionId: id.uuidString, fromAgentKey: execution.agentKey, exitCode: 0))
+
+            let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
+            #expect(String(decoding: payload.stdout ?? Data(), as: UTF8.self) == "before after")
+        }
+    }
+
     @Test("a completed command survives a transient persistence failure and timeout sweep")
     func retriesCompletedResultPersistence() async throws {
         try await withTestApp { app in

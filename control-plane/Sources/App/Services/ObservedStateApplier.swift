@@ -39,6 +39,7 @@ struct ObservedStateApplier {
         reportedFailedGeneration: Int64?,
         previousFailureGeneration: Int64?,
         defaultMutation: VMOperationKind,
+        at instant: ClusterInstant,
         prepareFailure: (R) -> Void = { _ in },
         on db: any Database
     ) async throws -> ConvergenceSettlement {
@@ -75,6 +76,7 @@ struct ObservedStateApplier {
             context: .observedReport(
                 previousFailureGeneration: previousFailureGeneration,
                 hadActiveDeadline: resource.convergenceDeadline != nil),
+            at: instant,
             on: db)
         if outcome == .alreadyRecorded, changed {
             try await resource.save(on: db)
@@ -208,7 +210,10 @@ struct ObservedStateApplier {
     /// Apply one report, returning what the caller should do about the
     /// workloads the agent holds that no sync accounted for.
     @discardableResult
-    func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
+    func apply(
+        _ report: ObservedStateReport,
+        at instant: ClusterInstant
+    ) async throws -> UnrecognizedOutcome {
         let db = app.db
 
         // Network observations are independent of the workload manifest. A
@@ -343,7 +348,8 @@ struct ObservedStateApplier {
                     ) {
                         volume, tx in
                         return try await applyObservedVolumeState(
-                            volume: volume, observed: observed, agentId: report.agentId, on: tx)
+                            volume: volume, observed: observed, agentId: report.agentId,
+                            at: instant, on: tx)
                     }
                     unrecognizedOutcome.desiredStateChanged =
                         unrecognizedOutcome.desiredStateChanged || desiredStateChanged == true
@@ -386,12 +392,12 @@ struct ObservedStateApplier {
                     try await applyObservedVMState(
                         vm: vm, observed: observed, interfaces: interfaces,
                         bootVolumes: report.volumes == nil ? nil : bootVolumesByVMID[vmID] ?? [],
-                        on: tx)
+                        at: instant, on: tx)
                 }
             } else {
                 try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
                     try await handleReportedAbsence(
-                        vm: vm, agentId: report.agentId, on: tx)
+                        vm: vm, agentId: report.agentId, at: instant, on: tx)
                 }
             }
         }
@@ -402,13 +408,13 @@ struct ObservedStateApplier {
                 try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
                     sandbox, tx in
                     try await applyObservedSandboxState(
-                        sandbox: sandbox, observed: observed, on: tx)
+                        sandbox: sandbox, observed: observed, at: instant, on: tx)
                 }
             } else {
                 try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
                     sandbox, tx in
                     try await handleReportedSandboxAbsence(
-                        sandbox: sandbox, agentId: report.agentId, on: tx)
+                        sandbox: sandbox, agentId: report.agentId, at: instant, on: tx)
                 }
             }
         }
@@ -424,11 +430,14 @@ struct ObservedStateApplier {
                 uniquingKeysWith: { first, _ in first }
             )
             try await applyObservedSnapshots(
-                VolumeSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                VolumeSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
             try await applyObservedSnapshots(
-                VMSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                VMSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
             try await applyObservedSnapshots(
-                SandboxSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                SandboxSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
         }
 
         return unrecognizedOutcome

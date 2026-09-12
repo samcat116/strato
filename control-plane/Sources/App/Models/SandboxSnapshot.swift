@@ -278,17 +278,19 @@ extension SandboxSnapshot: SnapshotArtifactResource {
         ($project.id, environment)
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [SandboxSnapshot] {
-        try await SandboxSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    static func overdueForConvergence(
+        at instant: ClusterInstant, on db: any Database
+    ) async throws -> [SandboxSnapshot] {
+        try await SandboxSnapshot.query(on: db).filter(\.$convergenceDeadline <= instant.date).all()
     }
 
     static func placed(onAgent agentId: String, on db: any Database) async throws -> [SandboxSnapshot] {
         try await SandboxSnapshot.query(on: db).filter(\.$agentId == agentId).all()
     }
 
-    static func expired(at now: Date, on db: any Database) async throws -> [SandboxSnapshot] {
+    static func expired(at instant: ClusterInstant, on db: any Database) async throws -> [SandboxSnapshot] {
         try await SandboxSnapshot.query(on: db)
-            .filter(\.$expiresAt <= now)
+            .filter(\.$expiresAt <= instant.date)
             .filter(\.$desiredStatus != DesiredSnapshotStatus.absent)
             .all()
     }

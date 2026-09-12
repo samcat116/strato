@@ -725,7 +725,10 @@ struct AgentController: RouteCollection {
 
         let targetVersion = AgentVersionTarget.version(
             configuration: req.controlPlaneConfiguration)
-        return try visible.map { try AgentResponse(from: $0, targetVersion: targetVersion) }
+        let instant = try await ClusterClock.read(on: req.db)
+        return try visible.map {
+            try AgentResponse(from: $0, targetVersion: targetVersion, at: instant)
+        }
     }
 
     func getAgent(req: Request) async throws -> AgentResponse {
@@ -753,7 +756,8 @@ struct AgentController: RouteCollection {
         return try AgentResponse(
             from: agent,
             targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration),
-            heldWorkloads: held)
+            heldWorkloads: held,
+            at: try await ClusterClock.read(on: req.db))
     }
 
     // MARK: - Workload adoption (STR-98)
@@ -1188,8 +1192,9 @@ struct AgentController: RouteCollection {
         }
         let force = request.force == true
 
-        agent.status = agent.statusBasedOnHeartbeat
-        guard agent.isOnline else {
+        let instant = try await ClusterClock.read(on: req.db)
+        agent.status = agent.statusBasedOnHeartbeat(at: instant)
+        guard agent.isOnline(at: instant) else {
             throw Abort(.conflict, reason: "Agent is offline; it must be connected to receive an update")
         }
 
@@ -1314,15 +1319,27 @@ struct AgentController: RouteCollection {
         // deliberate — re-issuing the update is how an operator retries past a
         // recorded failure, and it restarts the health budget with a freshly
         // supplied artifact.
-        agent.assignUpdate(version: targetVersion, source: .manual, artifact: artifactOverride)
-        try await agent.save(on: req.db)
+        let assignmentInstant = try await ClusterClock.read(on: req.db)
+        guard let assignmentAgent = try await Agent.find(agentId, on: req.db) else {
+            throw Abort(.notFound, reason: "Agent was removed before the update could be assigned")
+        }
+        assignmentAgent.status = assignmentAgent.statusBasedOnHeartbeat(at: assignmentInstant)
+        guard assignmentAgent.isOnline(at: assignmentInstant) else {
+            throw Abort(.conflict, reason: "Agent went offline before the update could be assigned")
+        }
+        assignmentAgent.assignUpdate(
+            version: targetVersion,
+            source: .manual,
+            artifact: artifactOverride,
+            at: assignmentInstant)
+        try await assignmentAgent.save(on: req.db)
 
         req.logger.notice(
             "Agent update assigned",
             metadata: [
                 "strato.agent.id": .string(agentId.uuidString),
-                "strato.agent.name": .string(agent.name),
-                "currentVersion": .string(agent.version),
+                "strato.agent.name": .string(assignmentAgent.name),
+                "currentVersion": .string(assignmentAgent.version),
                 "targetVersion": .string(targetVersion),
                 // Redacted: explicit overrides may be presigned URLs whose
                 // query string is a credential.
@@ -1367,12 +1384,14 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
         try await req.requireAgentAction("agent:manage", on: agent)
+        let instant = try await ClusterClock.read(on: req.db)
 
         guard let assigned = agent.updateDesiredVersion else {
             return try AgentResponse(
                 from: agent,
                 targetVersion: AgentVersionTarget.version(
-                    configuration: req.controlPlaneConfiguration))
+                    configuration: req.controlPlaneConfiguration),
+                at: instant)
         }
 
         agent.clearUpdateAssignment()
@@ -1391,7 +1410,8 @@ struct AgentController: RouteCollection {
 
         return try AgentResponse(
             from: agent,
-            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
+            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration),
+            at: instant)
     }
 
     // MARK: - Agent Properties
@@ -1414,6 +1434,7 @@ struct AgentController: RouteCollection {
         try await req.requireAgentAction("agent:manage", on: agent)
 
         let patch = try req.content.decode(AgentPatchRequest.self)
+        let instant = try await ClusterClock.read(on: req.db)
 
         if let autoUpdate = patch.autoUpdate, autoUpdate != agent.autoUpdate {
             agent.autoUpdate = autoUpdate
@@ -1427,7 +1448,7 @@ struct AgentController: RouteCollection {
                 // which is a retry that never had a chance.
                 agent.updateFailureReason = nil
                 if agent.updateDesiredVersion != nil {
-                    agent.updateAttemptedAt = Date()
+                    agent.updateAttemptedAt = instant.date
                 }
             } else if agent.updateAssignmentSource != .manual {
                 // Withdrawing clears the rollout's assignment: the next sync
@@ -1452,7 +1473,8 @@ struct AgentController: RouteCollection {
 
         return try AgentResponse(
             from: agent,
-            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration))
+            targetVersion: AgentVersionTarget.version(configuration: req.controlPlaneConfiguration),
+            at: instant)
     }
 
 }

@@ -306,7 +306,8 @@ final class VolumeObservedSizeTests {
                                 path: "/var/lib/strato/volumes/root/volume.qcow2", format: .qcow2),
                             sizeBytes: materializedSize,
                             attachedVMId: try vm.requireID(),
-                            observedGeneration: 2)
+                            observedGeneration: 2,
+                            ioLimits: VolumeIOLimits())
                     ]))
 
             let settled = try #require(try await VM.find(try vm.requireID(), on: app.db))

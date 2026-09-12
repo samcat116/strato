@@ -167,7 +167,12 @@ extension StoragePool {
     ///
     /// `pool` is optional so callers can pass an unloaded/legacy state; no pool
     /// behaves like `local`.
-    static func agentCanReach(agent: Agent, pool: StoragePool?, replicaAgentIds: [String]) -> Bool {
+    static func agentCanReach(
+        agent: Agent,
+        pool: StoragePool?,
+        replicaAgentIds: [String],
+        at instant: ClusterInstant
+    ) -> Bool {
         switch pool?.mode {
         case .replicated:
             return false
@@ -179,7 +184,7 @@ extension StoragePool {
             else { return false }
             return agent.status == .online
                 && agent.$site.id == pool.$site.id
-                && agent.dependencyAllows(.cephVolumes)
+                && agent.dependencyAllows(.cephVolumes, at: instant)
         case .local, nil:
             guard let agentID = agent.id?.uuidString else { return false }
             return replicaAgentIds.isEmpty || replicaAgentIds.contains(agentID)

@@ -14,6 +14,7 @@ extension ObservedStateApplier {
         volume: Volume,
         observed: ObservedVolumeState,
         agentId: String,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws -> Bool {
         let volumeID = try volume.requireID()
@@ -186,8 +187,10 @@ extension ObservedStateApplier {
                 else {
                     throw ConvergenceWriteError.unsupportedDatabase
                 }
+                let acceptedAt = try await ClusterClock.read(on: db)
                 volume.extendConvergenceDeadline(
-                    by: OperationResourceKind.volume.completionBudgetSeconds(for: .resize))
+                    by: OperationResourceKind.volume.completionBudgetSeconds(for: .resize),
+                    from: acceptedAt)
                 changed = true
                 normalizedDesiredSize = true
             }
@@ -287,6 +290,7 @@ extension ObservedStateApplier {
             reportedFailedGeneration: observed.failedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .create,
+            at: instant,
             on: db)
         return normalizedDesiredSize
     }
@@ -319,6 +323,7 @@ extension ObservedStateApplier {
         _ type: A.Type,
         reported: [UUID: ObservedSnapshotState],
         agentId: String,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws {
         for artifact in try await A.placed(onAgent: agentId, on: db) {
@@ -333,7 +338,7 @@ extension ObservedStateApplier {
                     artifact, reportedBy: agentId, on: db
                 ) { artifact, tx in
                     try await applyObservedSnapshotState(
-                        artifact: artifact, observed: observed, on: tx)
+                        artifact: artifact, observed: observed, at: instant, on: tx)
                 }
                 if shouldEnforceStorageQuota == true {
                     // Start quota enforcement only after the row-locking
@@ -355,6 +360,7 @@ extension ObservedStateApplier {
     func applyObservedSnapshotState<A: SnapshotArtifactResource>(
         artifact: A,
         observed: ObservedSnapshotState,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws -> Bool {
         try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
@@ -427,6 +433,7 @@ extension ObservedStateApplier {
             reportedFailedGeneration: observed.failedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .create,
+            at: instant,
             on: db)
         if case .unchanged = settlement {
             return false

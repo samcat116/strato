@@ -81,7 +81,7 @@ protocol SnapshotArtifactResource: FinalizableResource {
     static func placed(onAgent agentId: String, on db: any Database) async throws -> [Self]
 
     /// Rows whose retention deadline has passed, for the sweep.
-    static func expired(at now: Date, on db: any Database) async throws -> [Self]
+    static func expired(at instant: ClusterInstant, on db: any Database) async throws -> [Self]
 
     /// Rows whose deletion has been accepted, for the orphaned-terminating
     /// backstop. A protocol requirement for `overdueForConvergence`'s reason:
@@ -132,7 +132,9 @@ extension SnapshotArtifactResource {
     /// VM's does — reverting it would resurrect something the user deleted (and
     /// the retention sweep would only ask again).
     @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
+    func resolveForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String, at instant: ClusterInstant
+    ) -> Bool {
         false
     }
 }
@@ -171,7 +173,7 @@ enum SnapshotRetention {
     static func expiry(
         requested: Int?,
         defaultTTLSeconds: Int? = nil,
-        from now: Date = Date()
+        from now: ClusterInstant
     ) throws -> Date? {
         let seconds: Int?
         if let requested {
@@ -188,6 +190,6 @@ enum SnapshotRetention {
             seconds = defaultTTLSeconds
         }
         guard let seconds else { return nil }
-        return now.addingTimeInterval(TimeInterval(seconds))
+        return now.date.addingTimeInterval(TimeInterval(seconds))
     }
 }

@@ -25,28 +25,36 @@ import Vapor
 /// the next tick recomputes the deadline from the row.
 enum SnapshotRetentionSweep {
 
-    static func run(app: Application) async {
+    static func run(app: Application, at instant: ClusterInstant) async {
+        guard instant.permitsDestructiveSweeps else {
+            app.logger.error(
+                "Skipping snapshot retention because this replica's clock is too far from PostgreSQL",
+                metadata: [
+                    "offsetSeconds": .stringConvertible(instant.localClockOffsetSeconds),
+                    "limitSeconds": .stringConvertible(
+                        ClusterClock.destructiveSweepOffsetLimitSeconds),
+                ])
+            return
+        }
         guard await app.coordination.acquireSweepLock("snapshot_retention") else {
             app.logger.debug("Skipping snapshot retention sweep; lock held by another control-plane instance")
             return
         }
 
         let db = app.db
-        let now = Date()
-
         do {
-            try await expire(VolumeSnapshot.self, at: now, on: db, app: app)
-            try await expire(VMSnapshot.self, at: now, on: db, app: app)
-            try await expire(SandboxSnapshot.self, at: now, on: db, app: app)
+            try await expire(VolumeSnapshot.self, at: instant, on: db, app: app)
+            try await expire(VMSnapshot.self, at: instant, on: db, app: app)
+            try await expire(SandboxSnapshot.self, at: instant, on: db, app: app)
         } catch {
             app.logger.error("Snapshot retention sweep failed: \(error)")
         }
     }
 
     private static func expire<A: SnapshotArtifactResource>(
-        _ type: A.Type, at now: Date, on db: any Database, app: Application
+        _ type: A.Type, at instant: ClusterInstant, on db: any Database, app: Application
     ) async throws {
-        for artifact in try await A.expired(at: now, on: db) {
+        for artifact in try await A.expired(at: instant, on: db) {
             guard let artifactID = artifact.id else { continue }
 
             // Deleting a snapshot a live fork depends on would break the fork,

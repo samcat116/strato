@@ -224,6 +224,7 @@ FROM hashed;
 | `strato_agent_send_failures_total` | counter | `kind` = `message` \| `success` \| `error` | Failed to encode/send a message to an agent over its WebSocket |
 | `strato_agent_up` | gauge | `agent` = agent name | `1` while connected, `0` once disconnected. Durable per-agent up/down signal — keeps reporting `0` after the stale sweep, so it's the basis for the "agent down" alert |
 | `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
+| `control_plane_clock_offset_seconds` | gauge | — | Signed PostgreSQL-minus-replica wall-clock offset, emitted by every replica each maintenance tick. Warn beyond an absolute value of 1 second; destructive sweeps are fenced beyond 30 seconds |
 | `strato_volume_io_configured_limit_total` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Sum of configured per-volume ceilings on the agent. Compare with the applied total; a mismatch means desired policy is not in force |
 | `strato_volume_io_applied_limit_total` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Sum of ceilings the agent read back from libvirt |
 | `strato_volume_io_observed_rate_total` | gauge | `agent`, `dimension` = `iops` \| `bytes_per_second` | Sum of live rates calculated from consecutive libvirt block-stat samples |
