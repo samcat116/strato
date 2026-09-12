@@ -695,8 +695,20 @@ extension Agent: ReconcileActuator {
             throw ConvergenceError.sourceNotReady(reason)
         }
 
+        // A surviving stopped domain may have been defined under a kernel,
+        // QEMU, filesystem, or backend that no longer supports its recorded
+        // direct-I/O policy. Probe the concrete attachments again before this
+        // boot reads the persistent XML. Running/paused adoption never reaches
+        // this path, so its live policy remains unchanged.
+        let reprobedQEMUSpec: VMSpec?
+        if desired.hypervisorType == .qemu, !item.steps.contains(.create) {
+            reprobedQEMUSpec = try await specWithRealizedVolumeAttachments(
+                current.spec, vmId: item.id, hypervisorType: .qemu)
+        } else {
+            reprobedQEMUSpec = nil
+        }
         if desired.hypervisorType == .qemu {
-            try await prepareQEMUStorageAttachments(current.spec)
+            try await prepareQEMUStorageAttachments(reprobedQEMUSpec ?? current.spec)
         }
 
         let raw = await rawHostCapacitySnapshot()
@@ -740,6 +752,23 @@ extension Agent: ReconcileActuator {
             }
         }
         do {
+            if let reprobedQEMUSpec {
+                // This rewrite is required. Persisting the new applied echo
+                // before libvirt accepts it would recreate the same false
+                // state as a failed hot attach.
+                try await service.convergeDiskBlockPolicies(
+                    vmId: item.id, volumes: reprobedQEMUSpec.volumes)
+                if let entry = managedVMs[item.id] ?? orphanedVMs[item.id] {
+                    let updated = entry.with(spec: reprobedQEMUSpec)
+                    if managedVMs[item.id] != nil {
+                        managedVMs[item.id] = updated
+                    } else {
+                        orphanedVMs[item.id] = updated
+                    }
+                    persistManifest()
+                }
+            }
+
             // A domain created by an older agent may have no persistent disk
             // boot metadata even though its desired volumes are ordered. This
             // migration must succeed before boot; otherwise libvirt can start

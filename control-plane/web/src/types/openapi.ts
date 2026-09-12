@@ -5824,6 +5824,7 @@ export interface components {
              * @description Storage pool for the managed boot volume. Omit to preserve the deployment's local default. A Ceph pool must belong to this project and constrains VM placement to fresh Ceph-client agents in its site; its bytes consume no agent-local disk reservation.
              */
             poolId?: string;
+            blockMode?: components["schemas"]["VolumeBlockMode"];
             environment?: string;
             cpu?: number;
             /**
@@ -6473,6 +6474,7 @@ export interface components {
              * @description Total (read + write) throughput ceiling in bytes per second. Omit for uncapped; zero is rejected. Enforced by capable QEMU agents through libvirt.
              */
             bpsTotal?: number;
+            blockMode?: components["schemas"]["VolumeBlockMode"];
         };
         UpdateVolumeRequest: {
             name?: string;
@@ -6486,6 +6488,8 @@ export interface components {
             /** @description Boot priority, lower first. Unique per VM: reusing one another attached volume already holds is refused with 409, since two disks at one priority make the order of both arbitrary. */
             bootOrder?: number;
             readonly?: boolean;
+            /** @description Optional attachment-time policy override. Omit to retain the volume's existing requested mode. */
+            blockMode?: components["schemas"]["VolumeBlockMode"];
         };
         ResizeVolumeRequest: {
             sizeGB: number;
@@ -6567,12 +6571,11 @@ export interface components {
             conditions: components["schemas"]["ResourceConditions"];
             /** @description The I/O ceilings requested for this volume. **Omitted entirely** when the volume is uncapped — the key is absent, not null, so test for presence rather than comparing against null. */
             ioLimits?: components["schemas"]["VolumeIOLimits"];
-            /**
-             * @description The ceilings the owning agent read back from libvirt. Compare against `ioLimits`: equal on an attached volume means the policy is in force, and attached convergence requires that equality.
-             *
-             *     **Omitted** (again absent, not null) means no applied cap was reported. A successful explicit clear is also represented as an omitted response value because the database columns are null; the observed-state protocol keeps those cases distinct while merging.
-             */
+            /** @description The ceilings the owning agent read back from libvirt. Compare against `ioLimits`: equal on an attached volume means the policy is in force, and attached convergence requires that equality. **Omitted** (again absent, not null) means no applied cap was reported. A successful explicit clear is also represented as an omitted response value because the database columns are null; the observed-state protocol keeps those cases distinct while merging. */
             appliedIOLimits?: components["schemas"]["VolumeIOLimits"];
+            blockMode: components["schemas"]["VolumeBlockMode"];
+            /** @description Exact attributes selected by the agent. Omitted until an agent supporting wire v61 reports; `active: false` explicitly means the volume is detached. `fallbackReason` explains any safe downgrade. */
+            appliedBlockPolicy?: components["schemas"]["AppliedBlockDevicePolicy"];
             /** Format: uuid */
             sourceImageId?: string;
             /** Format: uuid */
@@ -6674,6 +6677,27 @@ export interface components {
         };
         /** @enum {string} */
         VolumeFormat: "qcow2" | "raw";
+        /**
+         * @description Requested QEMU cache behavior. `conservative` emits no cache or AIO override. `direct` requests cache=none plus io_uring, subject to a live backend probe. `cachedShared` explicitly uses writeback host caching for read-mostly shared-base workloads. Neither optimized mode is the default until representative benchmarks have been reviewed.
+         * @default conservative
+         * @enum {string}
+         */
+        VolumeBlockMode: "conservative" | "direct" | "cachedShared";
+        AppliedBlockDevicePolicy: {
+            active: boolean;
+            requestedMode: components["schemas"]["VolumeBlockMode"];
+            /** @enum {string} */
+            cacheMode?: "none" | "writeback";
+            /** @enum {string} */
+            ioMode?: "io_uring";
+            /** @description Whether discard=unmap and detect_zeroes=unmap were emitted. */
+            discard: boolean;
+            /** @description Whether the realized guest device was advertised as non-rotational. */
+            nonRotational: boolean;
+            queueCount?: number;
+            /** @description Why one or more requested optimizations were omitted. */
+            fallbackReason?: string;
+        };
         /** @enum {string} */
         VolumeType: "boot" | "data";
         /** @enum {string} */

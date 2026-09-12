@@ -67,6 +67,96 @@ import StratoShared
 /// this pass prepares any simultaneous upward ceiling change first.
 public enum DomainRedefinition {
 
+    /// Rewrites the agent-owned QEMU driver attributes of managed volumes in
+    /// an inactive domain. A stopped VM is safe to update; a running VM keeps
+    /// the exact policy its live disks were created with.
+    ///
+    /// Every requested volume must occur exactly once. A partial rewrite could
+    /// otherwise make the manifest claim a newly probed policy that one disk's
+    /// persistent XML did not receive.
+    public static func applyingBlockPolicies(
+        toInactiveDomainXML xml: String, volumes: [VolumeSpec]
+    ) throws -> String? {
+        let requested = volumes.compactMap { volume in
+            volume.appliedBlockPolicy.map { (volume.volumeId, $0) }
+        }
+        guard !requested.isEmpty else { return nil }
+        guard Set(requested.map(\.0)).count == requested.count else {
+            throw DomainInventoryError.unparseable(
+                "the requested block policies contain a repeated volume identity")
+        }
+        if let inactive = requested.first(where: { !$0.1.active }) {
+            throw DomainInventoryError.unparseable(
+                "the requested block policy for volume \(inactive.0) is inactive")
+        }
+
+        let policies = Dictionary(uniqueKeysWithValues: requested)
+        var domain = try DomainXMLNode.parse(xml)
+        guard domain.name == "domain" else {
+            throw DomainInventoryError.unparseable("no <domain> element")
+        }
+        guard let devices = domain.child(named: "devices") else {
+            throw DomainInventoryError.unparseable("the domain document declares no <devices>")
+        }
+        guard devices.text == nil else {
+            throw DomainInventoryError.unparseable(
+                "<devices> carries character data, so it is not an element this can edit")
+        }
+
+        let original = domain
+        var found = Set<UUID>()
+        var duplicate: UUID?
+        var missingDriver: UUID?
+        domain.editChild(named: "devices") { devices in
+            devices.editChildren(named: "disk") { disk in
+                guard let serial = disk.child(named: "serial")?.text,
+                    serial.hasPrefix("vol-"),
+                    let volumeId = UUID(uuidString: String(serial.dropFirst(4))),
+                    let policy = policies[volumeId]
+                else { return }
+                guard found.insert(volumeId).inserted else {
+                    duplicate = volumeId
+                    return
+                }
+                guard
+                    disk.editChild(
+                        named: "driver",
+                        { driver in
+                            func setOptional(_ name: String, _ value: String?) {
+                                if let value {
+                                    driver.setAttribute(name, value)
+                                } else {
+                                    driver.removeAttribute(name)
+                                }
+                            }
+                            setOptional("cache", policy.cacheMode?.rawValue)
+                            setOptional("io", policy.ioMode?.rawValue)
+                            setOptional("discard", policy.discard ? "unmap" : nil)
+                            setOptional("detect_zeroes", policy.discard ? "unmap" : nil)
+                            setOptional("queues", policy.queueCount.map(String.init))
+                        })
+                else {
+                    missingDriver = volumeId
+                    return
+                }
+            }
+        }
+
+        if let duplicate {
+            throw DomainInventoryError.unparseable(
+                "the domain contains volume identity \(duplicate) more than once")
+        }
+        if let missingDriver {
+            throw DomainInventoryError.unparseable(
+                "the domain disk for volume \(missingDriver) declares no <driver>")
+        }
+        if let missing = requested.map(\.0).first(where: { !found.contains($0) }) {
+            throw DomainInventoryError.unparseable(
+                "the domain does not contain requested volume identity \(missing)")
+        }
+        return domain == original ? nil : domain.render()
+    }
+
     /// Rewrites per-disk boot metadata in the persistent domain definition.
     ///
     /// `orderedVolumeIds` is the complete sequence of volumes whose API

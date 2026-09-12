@@ -108,6 +108,11 @@ struct VMCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Guest bootstrap source: iso or imds (x86 QEMU default: imds).")
         var metadataSource: String?
 
+        @Option(
+            name: .long,
+            help: "QEMU block mode for the boot volume: conservative, direct, or cached-shared.")
+        var blockMode: String?
+
         @Flag(name: .long, help: "Return immediately instead of waiting for the operation.")
         var noWait = false
 
@@ -115,6 +120,7 @@ struct VMCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
                 let client = env.makeClient()
+                let requestedBlockMode = try parseVolumeBlockMode(blockMode)
 
                 var sshPublicKey: String?
                 if let sshKeyFile {
@@ -141,6 +147,7 @@ struct VMCommand: AsyncParsableCommand {
                         .init(
                             name: name, description: description, imageId: image,
                             projectId: try resolveProject(project, environment: env),
+                            blockMode: requestedBlockMode,
                             environment: environment, cpu: cpu, memory: memory, disk: disk,
                             networkId: network, sshPublicKey: sshPublicKey,
                             metadataSource: guestBootstrapSource))

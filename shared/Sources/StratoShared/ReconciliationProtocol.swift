@@ -414,6 +414,9 @@ public struct DesiredVolumeState: Codable, Sendable {
     /// so an all-nil pair travels as an absent field — see the type's note on
     /// why the desired and observed sides normalize in opposite directions.
     public let ioLimits: VolumeIOLimits?
+    /// Requested QEMU host-cache policy. Existing desired entries decode to
+    /// the conservative path so optimized caching never appears by upgrade.
+    public let blockMode: VolumeBlockMode
 
     public init(
         volumeId: UUID,
@@ -424,7 +427,8 @@ public struct DesiredVolumeState: Codable, Sendable {
         storage: DesiredVolumeStorage = .local,
         source: DesiredVolumeSource? = nil,
         attachment: DesiredVolumeAttachment? = nil,
-        ioLimits: VolumeIOLimits? = nil
+        ioLimits: VolumeIOLimits? = nil,
+        blockMode: VolumeBlockMode = .conservative
     ) {
         self.volumeId = volumeId
         self.desiredStatus = desiredStatus
@@ -435,11 +439,12 @@ public struct DesiredVolumeState: Codable, Sendable {
         self.source = source
         self.attachment = attachment
         self.ioLimits = ioLimits
+        self.blockMode = blockMode
     }
 
     private enum CodingKeys: String, CodingKey {
         case volumeId, desiredStatus, generation, sizeBytes, format, storage
-        case source, attachment, ioLimits
+        case source, attachment, ioLimits, blockMode
     }
 
     /// Agent manifests written before wire v53 contain no storage field. They
@@ -458,7 +463,9 @@ public struct DesiredVolumeState: Codable, Sendable {
             source: try container.decodeIfPresent(DesiredVolumeSource.self, forKey: .source),
             attachment: try container.decodeIfPresent(
                 DesiredVolumeAttachment.self, forKey: .attachment),
-            ioLimits: try container.decodeIfPresent(VolumeIOLimits.self, forKey: .ioLimits))
+            ioLimits: try container.decodeIfPresent(VolumeIOLimits.self, forKey: .ioLimits),
+            blockMode: try container.decodeIfPresent(VolumeBlockMode.self, forKey: .blockMode)
+                ?? .conservative)
     }
 }
 
@@ -1483,6 +1490,9 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// `VolumeIOLimits(iopsTotal: nil, bpsTotal: nil)`: present but empty. So
     /// unlike the desired side, this one is deliberately *not* normalized.
     public let ioLimits: VolumeIOLimits?
+    /// Block policy this agent actually applied, or an explicit inactive value
+    /// for a detached volume. Nil is reserved for agents predating wire v61.
+    public let blockPolicy: AppliedBlockDevicePolicy?
     /// Measured read + write rate between two live libvirt block-stat samples.
     /// Optional because a first sample, a stopped domain, or a failed stats
     /// read has no honest rate to report.
@@ -1500,6 +1510,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
         ioLimits: VolumeIOLimits? = nil,
+        blockPolicy: AppliedBlockDevicePolicy? = nil,
         ioObservedRate: VolumeIOObservedRate? = nil
     ) {
         self.volumeId = volumeId
@@ -1513,6 +1524,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.failedGeneration = failedGeneration
         self.failureClassification = failureClassification
         self.ioLimits = ioLimits
+        self.blockPolicy = blockPolicy
         self.ioObservedRate = ioObservedRate
     }
 }

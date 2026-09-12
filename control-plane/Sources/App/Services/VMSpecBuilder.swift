@@ -339,7 +339,8 @@ struct VMSpecBuilder {
                     // Read off the same column `DesiredVolumeState.ioLimits`
                     // is, so a VM realized from its spec boots with the caps
                     // the volume lane would apply (STR-19).
-                    ioLimits: volume.ioLimits
+                    ioLimits: volume.ioLimits,
+                    blockMode: volume.blockMode
                 ))
         }
         return specs

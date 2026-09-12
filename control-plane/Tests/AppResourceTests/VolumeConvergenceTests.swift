@@ -65,6 +65,7 @@ final class VolumeConvergenceTests {
         desired: DesiredVolumeStatus = .present,
         generation: Int64 = 1,
         observedGeneration: Int64 = 1,
+        blockMode: VolumeBlockMode = .conservative,
         storagePath: String? = "/var/lib/strato/volumes/v/volume.qcow2"
     ) async throws -> Volume {
         let volume = Volume(
@@ -73,7 +74,8 @@ final class VolumeConvergenceTests {
             projectID: project.id!, environment: "development",
             size: size,
             status: status,
-            createdByID: user.id!
+            createdByID: user.id!,
+            blockMode: blockMode
         )
         volume.desiredStatus = desired
         volume.generation = generation
@@ -123,6 +125,20 @@ final class VolumeConvergenceTests {
             // Neither the pool nor the path travels: placement is expressed by
             // whose sync the entry is on, and the agent owns path layout.
             #expect(entry.source == nil)
+        }
+    }
+
+    @Test("Requested block mode rides the volume desired-state entry")
+    func blockModeIsAssembledForItsAgent() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let agentId = try await registerAgent(app: app, named: "block-mode-agent")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                blockMode: .direct)
+
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let entry = try #require(message.volumes.first { $0.volumeId == volume.id })
+            #expect(entry.blockMode == .direct)
         }
     }
 
@@ -259,6 +275,125 @@ final class VolumeConvergenceTests {
                     == .file(path: "/agent/chosen/path.qcow2", format: .qcow2))
             #expect(replica?.state == .healthy)
             #expect(replica?.generation == 1)
+        }
+    }
+
+    @Test("An agent's applied block policy is persisted without treating silence as removal")
+    func appliedBlockPolicyIsRecorded() async throws {
+        try await withVolumeApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "block-policy-agent")
+            let vm = try await builder.createVM(name: "block-policy-target", project: project)
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                generation: 2, observedGeneration: 1, blockMode: .direct)
+            volume.$vm.id = vm.id
+            volume.deviceName = "disk1"
+            try await volume.save(on: app.db)
+            let policy = AppliedBlockDevicePolicy(
+                active: true, requestedMode: .direct,
+                cacheMode: BlockDeviceCacheMode.none, ioMode: .ioUring,
+                discard: true, nonRotational: true, queueCount: 8)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try volume.requireID(), present: true,
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2",
+                                format: .qcow2),
+                            attachedVMId: vm.id, observedGeneration: 2,
+                            blockPolicy: policy)
+                    ]))
+            var stored = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(stored.appliedBlockPolicy == policy)
+
+            // Nil is a legacy agent's silence, not an explicit fallback.
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try volume.requireID(), present: true,
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2",
+                                format: .qcow2),
+                            attachedVMId: vm.id, observedGeneration: 2,
+                            blockPolicy: nil)
+                    ]))
+            stored = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(stored.appliedBlockPolicy == policy)
+        }
+    }
+
+    @Test("A storage-only replica cannot overwrite the attachment host's block policy")
+    func appliedBlockPolicyIsScopedToAttachmentHost() async throws {
+        try await withVolumeApp { app, builder, user, project in
+            let vmAgentID = try await registerAgent(app: app, named: "block-policy-vm-host")
+            let storageOnlyAgentID = try await registerAgent(
+                app: app, named: "block-policy-storage-only")
+            let vm = try await builder.createVM(name: "block-policy-vm", project: project)
+            vm.hypervisorId = vmAgentID
+            try await vm.save(on: app.db)
+
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: vmAgentID,
+                blockMode: .direct)
+            try await placeVolume(volume, on: storageOnlyAgentID, using: app.db)
+            volume.$vm.id = vm.id
+            volume.deviceName = "disk1"
+            try await volume.save(on: app.db)
+            let volumeID = try volume.requireID()
+            let active = AppliedBlockDevicePolicy(
+                active: true, requestedMode: .direct,
+                cacheMode: BlockDeviceCacheMode.none, ioMode: .ioUring,
+                discard: true, queueCount: 4)
+            let inactive = AppliedBlockDevicePolicy.inactive(requestedMode: .direct)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: vmAgentID,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/vm-host/volume.qcow2", format: .qcow2),
+                            attachedVMId: vm.id, observedGeneration: 1,
+                            blockPolicy: active)
+                    ]))
+            var stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.attachedAgentId == vmAgentID)
+            #expect(stored.appliedBlockPolicy == active)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: storageOnlyAgentID,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true,
+                            attachment: .file(
+                                path: "/storage-only/volume.qcow2", format: .qcow2),
+                            observedGeneration: 1, blockPolicy: inactive)
+                    ]))
+            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.attachedAgentId == vmAgentID)
+            #expect(stored.appliedBlockPolicy == active)
+
+            // The attachment owner remains authoritative for its own detach.
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: vmAgentID,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true,
+                            attachment: .file(path: "/vm-host/volume.qcow2", format: .qcow2),
+                            observedGeneration: 1, blockPolicy: inactive)
+                    ]))
+            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.attachedAgentId == nil)
+            #expect(stored.appliedBlockPolicy == inactive)
         }
     }
 
@@ -424,7 +559,8 @@ final class VolumeConvergenceTests {
                         ObservedVolumeState(
                             volumeId: volumeID, present: true,
                             attachment: .file(path: "/p", format: .qcow2),
-                            attachedVMId: vm.id, observedGeneration: 2)
+                            attachedVMId: vm.id, observedGeneration: 2,
+                            ioLimits: VolumeIOLimits())
                     ]))
 
             let settled = try await #require(try await Volume.find(volumeID, on: app.db))

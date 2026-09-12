@@ -221,6 +221,51 @@ struct DomainRedefinitionTests {
         #expect(try DomainXMLNode.parse(tree.render()) == tree)
     }
 
+    @Test("a stopped domain replaces stale direct-I/O attributes with the reprobed fallback")
+    func blockPolicyIsReprobedBeforeBoot() throws {
+        let volumeId = UUID()
+        let document = """
+            <domain type='kvm'>
+              <name>stopped-vm</name>
+              <devices>
+                <disk type='file' device='disk'>
+                  <driver name='qemu' type='qcow2' cache='none' io='io_uring' discard='unmap' detect_zeroes='unmap' queues='8' custom='keep'/>
+                  <source file='/volumes/data.qcow2'/>
+                  <target dev='vdb' bus='virtio'/>
+                  <iotune><total_iops_sec>500</total_iops_sec></iotune>
+                  <serial>vol-\(volumeId.uuidString)</serial>
+                </disk>
+              </devices>
+            </domain>
+            """
+        let fallback = AppliedBlockDevicePolicy(
+            active: true, requestedMode: .direct, queueCount: 2,
+            fallbackReason: "direct I/O is no longer supported")
+        let volume = VolumeSpec(
+            volumeId: volumeId, deviceName: .disk(0),
+            attachment: .file(path: "/volumes/data.qcow2", format: .qcow2),
+            ioLimits: VolumeIOLimits(iopsTotal: 500), blockMode: .direct,
+            appliedBlockPolicy: fallback)
+
+        let candidate = try DomainRedefinition.applyingBlockPolicies(
+            toInactiveDomainXML: document, volumes: [volume])
+        let rewritten = try #require(candidate)
+        let domain = try DomainXMLNode.parse(rewritten)
+        let disk = try #require(domain.child(named: "devices")?.child(named: "disk"))
+        let driver = try #require(disk.child(named: "driver"))
+
+        #expect(driver.attribute("cache") == nil)
+        #expect(driver.attribute("io") == nil)
+        #expect(driver.attribute("discard") == nil)
+        #expect(driver.attribute("detect_zeroes") == nil)
+        #expect(driver.attribute("queues") == "2")
+        #expect(driver.attribute("custom") == "keep")
+        #expect(disk.child(named: "iotune")?.child(named: "total_iops_sec")?.text == "500")
+        #expect(
+            try DomainRedefinition.applyingBlockPolicies(
+                toInactiveDomainXML: rewritten, volumes: [volume]) == nil)
+    }
+
     /// Mixed content is the one shape `render` cannot express, so reading it is
     /// refused rather than silently flattened — a redefine that dropped it would
     /// be redefining a VM's hardware.

@@ -764,6 +764,32 @@ actor LibvirtService: HypervisorService {
         }
     }
 
+    func convergeDiskBlockPolicies(vmId: String, volumes: [VolumeSpec]) async throws {
+        try await perform("converge-disk-block-policies", vmId: vmId) {
+            let dom = try await domain(vmId)
+            // Adoption of a running or paused domain must preserve the live
+            // disk policy until the guest is stopped.
+            guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
+                return
+            }
+            guard
+                let persistentXML = try DomainRedefinition.applyingBlockPolicies(
+                    toInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
+                    volumes: volumes)
+            else { return }
+
+            _ = try await call(
+                "libvirt-define-disk-block-policies", vmId: vmId,
+                seconds: StageBudget.hypervisorSpawnSeconds
+            ) { client, deadline in
+                try await client.domainDefineXML(xml: persistentXML, deadline: deadline)
+            }
+            logger.info(
+                "Updated persistent libvirt disk block policies for the next start",
+                metadata: ["strato.vm.id": .string(vmId)])
+        }
+    }
+
     /// Migrates the persistent bootstrap state of IMDS VMs created by an older
     /// agent. The seed is rebuilt from current desired state so its local
     /// network document no longer tries to rename an already-active interface,
@@ -1436,7 +1462,8 @@ actor LibvirtService: HypervisorService {
     /// definition rewrite failed.
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
+        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?,
+        orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws {
         try await perform("attach-disk", vmId: vmId) {
             let dom = try await domain(vmId)
@@ -1452,7 +1479,7 @@ actor LibvirtService: HypervisorService {
                 let target = DomainDiskInventory.nextTargetDevice(after: disks)
                 let xml = DomainDeviceXML.hotplugDisk(
                     attachment: attachment, target: target, readonly: readonly, volumeId: volumeId,
-                    ioLimits: ioLimits)
+                    blockPolicy: blockPolicy, ioLimits: ioLimits)
                 let flags = try await deviceFlags(dom, vmId: vmId)
 
                 logger.info(
@@ -2419,6 +2446,7 @@ actor LibvirtService: HypervisorService {
                     // Written into the document as `<serial>`, so a detach can
                     // resolve this disk by managed identity after a restart.
                     volumeId: volume.volumeId.uuidString,
+                    blockPolicy: volume.appliedBlockPolicy,
                     ioLimits: volume.ioLimits))
         }
 

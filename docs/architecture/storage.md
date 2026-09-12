@@ -141,6 +141,73 @@ control plane stores it as JSON on `VolumeReplica`, and `VolumeSpec` echoes it
 back to the VM's agent. The control plane never derives or repurposes a path,
 and driver code no longer infers a file format from a filename.
 
+### QEMU block-device policy
+
+Each volume has a requested `blockMode`, and each QEMU agent reports the exact
+`AppliedBlockDevicePolicy` it selected for the concrete attachment. The two are
+kept separate because a request is not proof that the host can realize it:
+
+| Requested mode | Libvirt driver attributes | Intended use |
+| --- | --- | --- |
+| `conservative` | No `cache` or `io` override | Historical cache and AIO behavior; the default until benchmarks justify changing it |
+| `direct` | `cache='none' io='io_uring'`, only after a live probe succeeds | Avoid duplicating the guest cache in the host page cache |
+| `cachedShared` | `cache='writeback'` | Read-mostly images whose backing pages are genuinely shared between guests |
+
+Discard and multiqueue are independent of the cache mode. A QEMU disk gets
+`discard='unmap' detect_zeroes='unmap'` only when its storage backend confirms
+safe deallocation. Its virtio-blk queue count is the assigned vCPU count
+clamped to `1...256`; the project's libvirt 11.5 floor covers those XML
+attributes. Firecracker receives none of this QEMU policy.
+
+QEMU itself supports a virtio-blk `rotation_rate=1` device property, but
+libvirt currently rejects the domain `rotation_rate` attribute on a `virtio`
+disk. The `qemu:override` escape hatch applies only to initial device creation,
+not hot-plug, so it cannot satisfy the cold/hot consistency requirement.
+Strato therefore omits this unsupported XML, reports `nonRotational: false`,
+and includes the libvirt limitation in `fallbackReason`. This must remain
+fail-closed until libvirt has one supported representation that works for both
+paths.
+
+The filesystem backend probes the attachment immediately before cold boot or
+hot attach. It punches a hole in a temporary sibling file to prove that the
+backing filesystem can deallocate ranges, then opens the actual, still-
+unattached image read-only with `qemu-img bench -i io_uring -t none`. That one
+open checks the installed QEMU, kernel io_uring support, image format, file,
+and filesystem together. Failure does not fail the VM: the agent omits the
+unsupported attributes, logs the reason, and reports it in
+`appliedBlockPolicy.fallbackReason`.
+
+Native RBD advertises discard because unmap is a librbd operation. It does not
+claim the probed POSIX `cache=none`/io_uring path: QEMU's RBD driver has its own
+asynchronous I/O implementation, so a `direct` request currently falls back
+with that reason. RBD volumes are raw-only. For local storage, raw sparse files
+can release host extents directly, while qcow2 must first release guest data
+clusters through its metadata; both still depend on the host filesystem's
+hole-punch behavior. Discard support means the request reached a safe
+deallocation path, not that a particular storage system promises immediate
+physical-byte accounting.
+
+These modes do not relax write-ordering. Strato never emits `cache='unsafe'`;
+guests and applications must still issue flushes or `fsync` at their normal
+durability boundaries. `cachedShared` is not a promise that pages are shared:
+the current filesystem image-materialization path makes independent copies,
+so it benefits cross-VM density only after a backing-file or reflink layout
+actually gives the guests common host pages. Writable golden images should use
+an overlay and retain the base read-only.
+
+The applied policy is persisted in the VM manifest and used by the same disk
+renderer for cold boot and hot attach. Re-adoption preserves it across an agent
+restart. A pre-v61 manifest is recorded explicitly as the historical
+conservative XML instead of claiming that a surviving domain acquired new
+attributes during adoption. The control plane stores non-null reports but
+does not erase one when an older agent is silent; current agents report an
+explicit inactive policy after detach.
+
+The benchmark and live-validation gate is documented in
+[QEMU block policy validation](../operations/qemu-block-policy-benchmark.md).
+Neither optimized cache mode should become the default without results from
+that matrix.
+
 ### One image-materialization path
 
 `materializeDisk(at:from:format:)` is the single image → disk path, used by:

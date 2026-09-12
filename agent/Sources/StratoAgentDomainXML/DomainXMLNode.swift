@@ -127,6 +127,10 @@ struct DomainXMLNode: Equatable {
         }
     }
 
+    mutating func removeAttribute(_ name: String) {
+        attributes.removeAll { $0.name == name }
+    }
+
     /// Replaces this element's character data. Refuses a container for the
     /// reason `text` gives: `render` has no mixed-content form, so the text
     /// would be dropped.

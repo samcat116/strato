@@ -28,6 +28,7 @@ public actor FileSystemStorageBackend: StorageBackend {
     private let logger: Logger
     private let volumeStoragePath: String
     private let qemuImgPath: String
+    private let fallocatePath: String
     private let imageSource: (any ImageSource)?
     private let runSubprocess: SubprocessRunner
     private let enumerateVolumeStore: @Sendable (String) throws -> [String]
@@ -60,6 +61,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         logger: Logger,
         volumeStoragePath: String? = nil,
         qemuImgPath: String? = nil,
+        fallocatePath: String = "/usr/bin/fallocate",
         imageSource: (any ImageSource)? = nil,
         enumerateVolumeStore: @escaping @Sendable (String) throws -> [String] = {
             try FileManager.default.contentsOfDirectory(atPath: $0)
@@ -73,6 +75,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         self.logger = logger
         self.volumeStoragePath = volumeStoragePath ?? Self.defaultStoragePath
         self.qemuImgPath = qemuImgPath ?? Self.defaultQemuImgPath
+        self.fallocatePath = fallocatePath
         self.imageSource = imageSource
         self.runSubprocess = runSubprocess
         self.enumerateVolumeStore = enumerateVolumeStore
@@ -762,6 +765,78 @@ public actor FileSystemStorageBackend: StorageBackend {
             try? FileManager.default.removeItem(atPath: stagingPath)
             throw error
         }
+    }
+
+    // MARK: - QEMU block capabilities
+
+    /// Probes the actual filesystem and QEMU I/O stack used by `attachment`.
+    /// Both probes fail closed and are read-only with respect to volume data:
+    /// hole punching happens on a temporary sibling file, while qemu-img opens
+    /// the unattached volume read-only with the exact cache/aio pair we would
+    /// put in libvirt XML.
+    public func qemuBlockCapabilities(
+        for attachment: DiskAttachment
+    ) async -> StorageBlockDeviceCapabilities {
+        guard case .file(let path, let format) = attachment else {
+            return .unsupported
+        }
+
+        let discard = await probeHolePunching(beside: path)
+        let direct = await probeDirectIO(path: path, format: format)
+        return StorageBlockDeviceCapabilities(
+            discardSupported: discard == nil,
+            discardUnavailableReason: discard,
+            directIOSupported: direct == nil,
+            directIOUnavailableReason: direct)
+    }
+
+    private func probeHolePunching(beside volumePath: String) async -> String? {
+        #if os(Linux)
+        let directory = (volumePath as NSString).deletingLastPathComponent
+        let path = (directory as NSString).appendingPathComponent(
+            ".strato-discard-probe-\(UUID().uuidString.lowercased())")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        do {
+            try Data(repeating: 0x5a, count: 4096).write(
+                to: URL(fileURLWithPath: path), options: .withoutOverwriting)
+            let result = try await runSubprocess(
+                URL(fileURLWithPath: fallocatePath),
+                ["--keep-size", "--punch-hole", "--offset", "0", "--length", "4096", path])
+            guard result.terminationStatus == 0 else {
+                return "the backing filesystem rejected a hole-punch probe (exit \(result.terminationStatus))"
+            }
+            return nil
+        } catch {
+            return "the backing filesystem hole-punch probe could not run: \(error.localizedDescription)"
+        }
+        #else
+        return "safe file deallocation is probed only on Linux hypervisor hosts"
+        #endif
+    }
+
+    private func probeDirectIO(
+        path: String, format: DiskFormat
+    ) async -> String? {
+        #if os(Linux)
+        do {
+            let result = try await runSubprocess(
+                URL(fileURLWithPath: qemuImgPath),
+                [
+                    "bench", "-c", "1", "-d", "1", "-f", format.rawValue,
+                    "-i", "io_uring", "-t", "none", "-s", "512", path,
+                ])
+            guard result.terminationStatus == 0 else {
+                return
+                    "qemu-img rejected cache=none with io_uring on this file, kernel, or QEMU build "
+                    + "(exit \(result.terminationStatus))"
+            }
+            return nil
+        } catch {
+            return "the qemu-img cache=none/io_uring probe could not run: \(error.localizedDescription)"
+        }
+        #else
+        return "io_uring direct I/O is available only on Linux hypervisor hosts"
+        #endif
     }
 
     // MARK: - qemu-img Helpers

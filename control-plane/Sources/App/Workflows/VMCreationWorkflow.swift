@@ -30,6 +30,9 @@ enum VMCreationWorkflow {
             /// Storage pool for the managed boot volume. Omission preserves
             /// the seeded default-local behavior.
             let poolId: UUID?
+            /// QEMU host-cache policy for the managed boot volume. Omission
+            /// keeps the historical conservative path.
+            let blockMode: VolumeBlockMode?
             // Hot-add ceilings (issue #568). Fixed for the life of a running
             // hypervisor process, so they are chosen here and only raised by
             // a stop/start. Default to the boot sizing, i.e. no headroom.
@@ -512,7 +515,8 @@ enum VMCreationWorkflow {
                         status: .creating,
                         createdByID: userID,
                         poolID: bootPoolID,
-                        sourceImageID: imageId)
+                        sourceImageID: imageId,
+                        blockMode: createRequest.blockMode ?? .conservative)
                     bootVolume.$vm.id = vmID
                     bootVolume.deviceName = VolumeDeviceName.disk(0).rawValue
                     bootVolume.bootOrder = 0

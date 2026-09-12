@@ -213,6 +213,23 @@ extension ObservedStateApplier {
             }
         }
 
+        // Nil is a pre-v61 agent saying nothing, not an instruction to erase a
+        // previously observed policy. A storage-only replica also reports an
+        // explicit inactive policy, so accept policy only from the agent that
+        // claims the attachment or from the persisted attachment owner clearing
+        // its own state. This is the same ownership rule used for
+        // `attachedAgentId` below, kept ahead of the convergence early-return
+        // because applied policy remains a useful fact while peers catch up.
+        let reporterOwnsAttachment =
+            observed.attachedVMId != nil || volume.attachedAgentId == agentId
+        if let applied = observed.blockPolicy,
+            reporterOwnsAttachment,
+            volume.appliedBlockPolicy != applied
+        {
+            volume.appliedBlockPolicy = applied
+            changed = true
+        }
+
         // A generation acknowledgement is incomplete when an attached volume
         // (including a requested clear) or a stored non-empty policy lacks the
         // applied-value echo. Keep the last known columns for operator

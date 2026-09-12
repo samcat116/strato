@@ -151,6 +151,11 @@ public protocol HypervisorService: Actor, Sendable {
     /// the reconciliation still appears successful.
     func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws
 
+    /// Rewrites a stopped persistent domain with the freshly probed block
+    /// policy that its next boot will use. Backends without persistent domain
+    /// XML use the default no-op.
+    func convergeDiskBlockPolicies(vmId: String, volumes: [VolumeSpec]) async throws
+
     /// Converges guest-bootstrap state that a persistent backend created with
     /// an older agent before a stopped VM boots. Backends that rebuild their
     /// process from the current spec have no stored bootstrap state and use the
@@ -232,7 +237,8 @@ public protocol HypervisorService: Actor, Sendable {
     ///   hot-plug disks
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String,
-        readonly: Bool, orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
+        readonly: Bool, blockPolicy: AppliedBlockDevicePolicy?,
+        orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws
 
     /// Replaces both absolute I/O ceilings for an already attached disk and
@@ -476,6 +482,8 @@ public extension HypervisorService {
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
 
     func convergeDiskBootOrder(vmId: String, volumes: [VolumeSpec]) async throws {}
+
+    func convergeDiskBlockPolicies(vmId: String, volumes: [VolumeSpec]) async throws {}
 
     func convergeGuestBootstrap(
         vmId: String, spec: VMSpec,
