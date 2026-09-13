@@ -46,6 +46,8 @@ jobs:
       release_workflow: ${{ steps.filter.outputs.release_workflow }}
       ci_scripts: ${{ steps.filter.outputs.ci_scripts }}
       docker_web: ${{ steps.filter.outputs.docker_web }}
+      docker_web_package: ${{ steps.filter.outputs.docker_web_package }}
+      docker_web_lock: ${{ steps.filter.outputs.docker_web_lock }}
       docker_source_context: ${{ steps.filter.outputs.docker_source_context }}
     steps:
       - uses: dorny/paths-filter@v3
@@ -127,8 +129,12 @@ jobs:
               - '.github/scripts/**'
             docker_web:
               - 'control-plane/web/Dockerfile'
-              # Dependency updates can break the container's build runtime.
+            # Dependency updates can break the container's build runtime.
+            # Keep separate filters because `every` requires all patterns to
+            # match one file; the Docker job combines these outputs with OR.
+            docker_web_package:
               - 'control-plane/web/package.json'
+            docker_web_lock:
               - 'control-plane/web/bun.lock*'
             # The root ignore file is the safety boundary for every source
             # Docker build. Its behavioral test lives under compose_scripts,
@@ -648,7 +654,7 @@ jobs:
   docker-web:
     name: Docker Build Check (Frontend)
     needs: changes
-    if: needs.changes.outputs.docker_web == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.docker_web == 'true' || needs.changes.outputs.docker_web_package == 'true' || needs.changes.outputs.docker_web_lock == 'true' || needs.changes.outputs.workflow == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
