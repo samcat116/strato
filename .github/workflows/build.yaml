@@ -127,6 +127,9 @@ jobs:
               - '.github/scripts/**'
             docker_web:
               - 'control-plane/web/Dockerfile'
+              # Dependency updates can break the container's build runtime.
+              - 'control-plane/web/package.json'
+              - 'control-plane/web/bun.lock*'
             # The root ignore file is the safety boundary for every source
             # Docker build. Its behavioral test lives under compose_scripts,
             # so changing either the rule or the test runs the shell job.
