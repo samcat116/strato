@@ -1,13 +1,12 @@
 # ================================
 # Build stage
 # ================================
-# Use the glibc (Debian) bun image, NOT the -alpine (musl) variant. Bun's
-# musl/JavaScriptCore builds segfault during `next build` on arm64 (the x64
-# musl image builds fine, arm64 crashes) — see the arm64 frontend digest
-# failures on main. The glibc image is the path CI's setup-bun jobs already
-# build this frontend with successfully on both arches. This is only the build
-# stage; the runtime image below stays on node:22-alpine.
-FROM oven/bun:1.3.14 AS builder
+# Keep Bun for dependency installation, but run Next.js with Node.js, as in
+# production. Without Node.js, Bun 1.3.14 runs `next build` itself and crashes
+# after compilation on both Linux arm64 and x64 with Next.js 16.3.3.
+FROM oven/bun:1.3.14 AS bun
+FROM node:22-bookworm-slim AS builder
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
