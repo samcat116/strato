@@ -1,0 +1,58 @@
+agent/Tests/StratoAgentStorageTests/VMManifestStoreTests.swift
+  s_39ccab062a953d::t_d23713f3557fc1 162-163,185
+agent/Sources/StratoAgentDomainXML/DomainDiskInventory.swift
+  s_39ccab062a953d::t_19c504e0019007 2,54-59,65-72,78-85,87-88
+  s_39ccab062a953d::t_2e08861c07fdf9 60-64
+  s_39ccab062a953d::t_63815182c3f56f 73-77,86
+  s_39ccab062a953d::t_cdb16b0aa0b6fb 89
+control-plane/Sources/App/Services/Sweeps/StrandedVolumeAttachmentSweep.swift
+  s_39ccab062a953d::t_2e08861c07fdf9 25-26,42
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  s_39ccab062a953d::t_19c504e0019007 1575-1585
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_39ccab062a953d::t_867d6bedcdcb46 156,161-167
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_39ccab062a953d::t_867d6bedcdcb46 786
+agent/Tests/StratoAgentRuntimeTests/BlockPolicyLifecycleTests.swift
+  s_39ccab062a953d::t_78a9ad9d1918cc 180-182
+  s_39ccab062a953d::t_2e08861c07fdf9 127-129
+  s_39ccab062a953d::t_aeec6dc6c194ce 88-96,125-126,130-131,193-199
+  s_39ccab062a953d::t_746c452869bb62 132,200-201
+docs/architecture/storage.md
+  s_39ccab062a953d::t_2e08861c07fdf9 200-202,204-206
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_39ccab062a953d::t_b1a61c7d303dc3 278,309
+agent/Sources/StratoAgentRuntime/HypervisorProtocol.swift
+  s_39ccab062a953d::t_19c504e0019007 244-247,432-435
+  s_39ccab062a953d::t_45a0a104623df0 436-437
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_39ccab062a953d::t_2e08861c07fdf9 387-390
+  s_39ccab062a953d::t_d23713f3557fc1 384,386,391
+  s_39ccab062a953d::t_867d6bedcdcb46 385
+agent/Sources/StratoAgentRuntime/Agent+Reconciliation.swift
+  s_39ccab062a953d::t_19c504e0019007 387-389
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_39ccab062a953d::t_19c504e0019007 596-599,778-797,804
+  s_39ccab062a953d::t_2e08861c07fdf9 798-803
+  s_39ccab062a953d::t_ddf94455ef246f 805-806
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_39ccab062a953d::t_aeec6dc6c194ce 28-54
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_39ccab062a953d::t_d23713f3557fc1 187-188,192-193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "19195d8fc08d3b5ecdd8e0032a92ea297021b88c",
+  "prompts": {},
+  "sessions": {
+    "s_39ccab062a953d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09d89-308f-78b1-81e2-f469ba9f1dfa",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
