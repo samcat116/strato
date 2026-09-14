@@ -33,6 +33,10 @@ public struct SnapshotRecord: Codable, Sendable, Equatable {
     /// written before wire v54 remain readable; legacy entries fall back to a
     /// current parent volume only when no authoritative snapshot value exists.
     public let volumeStorage: DesiredVolumeStorage?
+    /// Worst-case host-local bytes this artifact may add. Volume snapshot
+    /// overlays can grow to the parent's full virtual size after capture, so
+    /// their commitment must survive agent restarts even while still sparse.
+    public let reservedDiskBytes: Int64?
     public var facts: ObservedSnapshotFacts
     /// Whether this host has finished streaming the artifact to the export
     /// slots a sync asked for. Durable, so an agent restart mid-rollout does
@@ -44,6 +48,7 @@ public struct SnapshotRecord: Codable, Sendable, Equatable {
         kind: SnapshotArtifactKind,
         parentId: UUID,
         volumeStorage: DesiredVolumeStorage? = nil,
+        reservedDiskBytes: Int64? = nil,
         facts: ObservedSnapshotFacts,
         exported: Bool = false
     ) {
@@ -51,6 +56,7 @@ public struct SnapshotRecord: Codable, Sendable, Equatable {
         self.kind = kind
         self.parentId = parentId
         self.volumeStorage = volumeStorage
+        self.reservedDiskBytes = reservedDiskBytes
         self.facts = facts
         self.exported = exported
     }

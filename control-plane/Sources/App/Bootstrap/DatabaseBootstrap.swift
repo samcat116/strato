@@ -207,6 +207,14 @@ extension Application {
         // contention snapshots, sampled outside the heartbeat path.
         migrations.add(AddResourceContentionTelemetry())
 
+        // STR-278: preserve both committed disk availability and the physical
+        // filesystem headroom sparse volumes can consume later.
+        migrations.add(AddAgentPhysicalFreeDisk())
+
+        // STR-278: placement and quota admission need the guest-visible size
+        // encoded by sparse image artifacts, not their stored object bytes.
+        migrations.add(AddImageArtifactVirtualSize())
+
         // STR-292: timestamps written by pre-cluster-clock replicas can be in
         // PostgreSQL's future. Fail them closed until a current report arrives.
         migrations.add(NormalizeLegacyAgentClockTimestamps())

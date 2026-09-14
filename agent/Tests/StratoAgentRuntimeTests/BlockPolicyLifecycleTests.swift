@@ -25,6 +25,7 @@ private actor BlockPolicyTestStorage: CephStorageBackend {
         artifactKind: ArtifactKind
     ) async throws -> DiskAttachment { attachment }
     func deleteVolume(volumeId: String) async throws {}
+    func rejectVolume(volumeId: String) async throws {}
     func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {}
     func createSnapshot(
         volumeId: String, snapshotId: String, attachment: DiskAttachment

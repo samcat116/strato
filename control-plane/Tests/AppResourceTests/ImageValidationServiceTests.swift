@@ -103,6 +103,32 @@ final class ImageValidationServiceTests {
         #expect(format == .raw)
     }
 
+    @Test("Read the guest-visible size from a sparse QCOW2 header")
+    func testQCOW2VirtualSize() {
+        let expectedSize: Int64 = 40 * 1024 * 1024 * 1024
+        var buffer = Self.createQCOW2Buffer(virtualSize: expectedSize)
+        let header = buffer.readBytes(length: buffer.readableBytes) ?? []
+
+        #expect(
+            ImageValidationService.virtualSize(
+                format: .qcow2, storedSize: Int64(header.count), headerBytes: header)
+                == expectedSize)
+    }
+
+    @Test("Raw virtual size is its stored length")
+    func testRawVirtualSize() {
+        #expect(
+            ImageValidationService.virtualSize(
+                format: .raw, storedSize: 4096, headerBytes: []) == 4096)
+    }
+
+    @Test("A truncated QCOW2 header has no trustworthy virtual size")
+    func testTruncatedQCOW2VirtualSize() {
+        #expect(
+            ImageValidationService.virtualSize(
+                format: .qcow2, storedSize: 4, headerBytes: ImageValidationService.qcow2Magic) == nil)
+    }
+
     /// Builds a buffer whose header is `signature` followed by filler, so only
     /// the magic bytes decide the detected format.
     static func createBuffer(signature: String) -> ByteBuffer {
