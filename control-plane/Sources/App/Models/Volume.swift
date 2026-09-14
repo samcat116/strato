@@ -207,6 +207,17 @@ final class Volume: Model, @unchecked Sendable {
     @OptionalField(key: "applied_bps_total")
     var appliedBPSTotal: Int64?
 
+    /// Requested QEMU host-cache behavior. Conservative remains the database
+    /// default until the benchmark gate in STR-269 is satisfied.
+    @Enum(key: "block_mode")
+    var blockMode: VolumeBlockMode
+
+    /// Exact policy last reported by the realizing agent. JSON keeps the
+    /// applied shape extensible without turning every QEMU attribute into an
+    /// unrelated nullable column.
+    @OptionalField(key: "applied_block_policy")
+    var appliedBlockPolicy: AppliedBlockDevicePolicy?
+
     // Source tracking (for clones/volumes created from images)
     @OptionalParent(key: "source_image_id")
     var sourceImage: Image?
@@ -243,7 +254,8 @@ final class Volume: Model, @unchecked Sendable {
         diskAttachment: DiskAttachment? = nil,
         reconcilerAgentId: String? = nil,
         sourceImageID: UUID? = nil,
-        sourceVolumeID: UUID? = nil
+        sourceVolumeID: UUID? = nil,
+        blockMode: VolumeBlockMode = .conservative
     ) {
         self.id = id
         self.name = name
@@ -263,6 +275,7 @@ final class Volume: Model, @unchecked Sendable {
         self.$pool.id = poolID
         self.diskAttachment = diskAttachment
         self.reconcilerAgentId = reconcilerAgentId
+        self.blockMode = blockMode
         if let sourceImageID = sourceImageID {
             self.$sourceImage.id = sourceImageID
         }
@@ -450,11 +463,13 @@ struct CreateVolumeRequest: Content, ValidatedRequestBody {
     /// Absolute I/O ceilings (STR-19). Omit for uncapped.
     let iopsTotal: Int64?
     let bpsTotal: Int64?
+    let blockMode: VolumeBlockMode?
 
     init(
         name: String, description: String?, projectId: UUID?, environment: String?,
         sizeGB: Int, format: String?, volumeType: String?, sourceImageId: UUID?,
-        iopsTotal: Int64?, bpsTotal: Int64?, poolId: UUID? = nil
+        iopsTotal: Int64?, bpsTotal: Int64?, poolId: UUID? = nil,
+        blockMode: VolumeBlockMode? = nil
     ) {
         self.name = name
         self.description = description
@@ -467,6 +482,7 @@ struct CreateVolumeRequest: Content, ValidatedRequestBody {
         self.sourceImageId = sourceImageId
         self.iopsTotal = iopsTotal
         self.bpsTotal = bpsTotal
+        self.blockMode = blockMode
     }
 
     mutating func validate() throws {
@@ -490,6 +506,20 @@ struct AttachVolumeRequest: Content {
     let deviceName: String?  // e.g., "disk1", auto-generated if not provided
     let bootOrder: Int?  // Boot priority (lower = higher priority)
     let readonly: Bool?  // Mount as read-only
+    /// Optional attachment-time override of the volume's requested QEMU cache
+    /// policy. Omission preserves the volume's existing preference.
+    let blockMode: VolumeBlockMode?
+
+    init(
+        vmId: UUID, deviceName: String?, bootOrder: Int?, readonly: Bool?,
+        blockMode: VolumeBlockMode? = nil
+    ) {
+        self.vmId = vmId
+        self.deviceName = deviceName
+        self.bootOrder = bootOrder
+        self.readonly = readonly
+        self.blockMode = blockMode
+    }
 }
 
 struct ResizeVolumeRequest: Content {
@@ -570,6 +600,9 @@ struct VolumeResponse: Content {
     /// it reported no caps. When `ioLimits` is non-null, convergence requires
     /// this echo to match it exactly.
     let appliedIOLimits: VolumeIOLimits?
+    /// Requested cache policy and the exact policy the agent reports applying.
+    let blockMode: VolumeBlockMode
+    let appliedBlockPolicy: AppliedBlockDevicePolicy?
     let sourceImageId: UUID?
     let sourceVolumeId: UUID?
     let createdById: UUID?
@@ -600,6 +633,8 @@ struct VolumeResponse: Content {
         self.conditions = volume.conditions
         self.ioLimits = volume.ioLimits
         self.appliedIOLimits = volume.appliedIOLimits
+        self.blockMode = volume.blockMode
+        self.appliedBlockPolicy = volume.appliedBlockPolicy
         self.sourceImageId = volume.$sourceImage.id
         self.sourceVolumeId = volume.$sourceVolume.id
         self.createdById = volume.$createdBy.id

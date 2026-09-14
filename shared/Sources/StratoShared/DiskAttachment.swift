@@ -19,6 +19,71 @@ public enum DiskFormat: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// The host-cache policy requested for a QEMU volume attachment.
+///
+/// Neither optimized mode is the default until representative benchmarks have
+/// compared them. `conservative` preserves the historical libvirt/QEMU
+/// defaults; `direct` asks the agent to use direct I/O only when its live
+/// capability probe succeeds; and `cachedShared` explicitly retains the host
+/// page cache for read-mostly images whose backing pages can be shared.
+public enum VolumeBlockMode: String, Codable, Sendable, CaseIterable {
+    case conservative
+    case direct
+    case cachedShared
+}
+
+/// A QEMU cache value that an agent has actually selected.
+public enum BlockDeviceCacheMode: String, Codable, Sendable {
+    case none
+    case writeback
+}
+
+/// A QEMU asynchronous-I/O engine that an agent has actually selected.
+public enum BlockDeviceIOMode: String, Codable, Sendable {
+    case ioUring = "io_uring"
+}
+
+/// The complete block-device policy an agent selected for one attachment.
+///
+/// This is applied state, not a capability claim. Optional driver values mean
+/// the corresponding libvirt XML attribute was deliberately omitted. An
+/// inactive value is the explicit current-agent report for a detached volume;
+/// absence of the whole structure means an older agent did not report policy.
+public struct AppliedBlockDevicePolicy: Codable, Equatable, Sendable {
+    public let active: Bool
+    public let requestedMode: VolumeBlockMode
+    public let cacheMode: BlockDeviceCacheMode?
+    public let ioMode: BlockDeviceIOMode?
+    public let discard: Bool
+    public let nonRotational: Bool
+    public let queueCount: Int?
+    public let fallbackReason: String?
+
+    public init(
+        active: Bool,
+        requestedMode: VolumeBlockMode,
+        cacheMode: BlockDeviceCacheMode? = nil,
+        ioMode: BlockDeviceIOMode? = nil,
+        discard: Bool = false,
+        nonRotational: Bool = false,
+        queueCount: Int? = nil,
+        fallbackReason: String? = nil
+    ) {
+        self.active = active
+        self.requestedMode = requestedMode
+        self.cacheMode = cacheMode
+        self.ioMode = ioMode
+        self.discard = discard
+        self.nonRotational = nonRotational
+        self.queueCount = queueCount
+        self.fallbackReason = fallbackReason
+    }
+
+    public static func inactive(requestedMode: VolumeBlockMode) -> Self {
+        Self(active: false, requestedMode: requestedMode)
+    }
+}
+
 /// A storage-backend-owned disk reference that a hypervisor can realize.
 ///
 /// The cases are intentionally exhaustive rather than a path plus optional

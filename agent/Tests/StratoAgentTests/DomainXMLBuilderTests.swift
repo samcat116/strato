@@ -450,6 +450,35 @@ struct DomainXMLBuilderTests {
         #expect(xml.contains("<memballoon model='virtio' freePageReporting='on'/>"))
     }
 
+    @Test("cold boot and hot attach render the same selected block attributes")
+    func blockPolicyIsSharedByColdAndHotPaths() throws {
+        let policy = AppliedBlockDevicePolicy(
+            active: true, requestedMode: .direct,
+            cacheMode: BlockDeviceCacheMode.none, ioMode: .ioUring,
+            discard: true, nonRotational: false, queueCount: 4)
+        let attachment = DiskAttachment.file(
+            path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2)
+        let cold = try DomainXMLBuilder.build(
+            Self.input(
+                spec: Self.spec(cpus: 4),
+                disks: [
+                    ResolvedDisk(
+                        attachment: attachment, volumeId: Self.dataVolumeId,
+                        blockPolicy: policy)
+                ],
+                cloudInitISOPath: nil))
+        let hot = DomainDeviceXML.hotplugDisk(
+            attachment: attachment, target: "vdb", readonly: false,
+            volumeId: Self.dataVolumeId, blockPolicy: policy)
+
+        let driver =
+            "<driver name='qemu' type='qcow2' cache='none' io='io_uring' discard='unmap' detect_zeroes='unmap' queues='4'/>"
+        #expect(cold.contains(driver))
+        #expect(hot.contains(driver))
+        #expect(!cold.contains("rotation_rate="))
+        #expect(!hot.contains("rotation_rate="))
+    }
+
     /// The graphics console's device reasoning (issue #566), which used to be
     /// asserted against a QEMU command line before the process driver was
     /// deleted (STR-136). The goldens record the whole document; these are the

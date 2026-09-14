@@ -9,8 +9,8 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "68575f5dc8fb318887deb3e6a471bd1a"
-    private static let expectedCurrentCatalogMD5 = "eb22125b74ac7aad94c6bcf283e99ad9"
+    private static let expectedCatalogMD5 = "4164eef002a4bb3f9e26e0738d27bc06"
+    private static let expectedCurrentCatalogMD5 = "2f9c72e8428ae67e592fc28c65c55a97"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -31,8 +31,8 @@ struct CurrentSchemaBaselineTests {
 
             let counts = try await catalogCounts(on: app.db)
             #expect(counts.tables == 70)
-            #expect(counts.columns == 914)
-            #expect(counts.constraints == 320)
+            #expect(counts.columns == 916)
+            #expect(counts.constraints == 321)
             #expect(counts.indexes == 216)
             #expect(counts.enums == 3)
             #expect(counts.triggers == 3)
@@ -64,8 +64,8 @@ struct CurrentSchemaBaselineTests {
             #expect(baselineMD5 == Self.expectedCatalogMD5)
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
             #expect(upgradedCounts.tables == 79)
-            #expect(upgradedCounts.columns == 1037)
-            #expect(upgradedCounts.constraints == 374)
+            #expect(upgradedCounts.columns == 1039)
+            #expect(upgradedCounts.constraints == 375)
             #expect(upgradedCounts.indexes == 243)
             #expect(upgradedCounts.enums == baselineCounts.enums)
             #expect(upgradedCounts.triggers == baselineCounts.triggers)

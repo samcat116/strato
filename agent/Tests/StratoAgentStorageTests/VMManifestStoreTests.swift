@@ -133,6 +133,62 @@ struct VMManifestStoreTests {
         #expect(adopted.firecrackerMMDSInterfaces == ["eth0"])
     }
 
+    @Test("QEMU adoption preserves the block policy realized before restart")
+    func qemuAdoptionPreservesRealizedBlockPolicy() throws {
+        let volumeId = UUID()
+        let policy = AppliedBlockDevicePolicy(
+            active: true, requestedMode: .direct,
+            cacheMode: BlockDeviceCacheMode.none, ioMode: .ioUring,
+            discard: true, nonRotational: true, queueCount: 4)
+        let realized = makeSpec().withVolumes([
+            VolumeSpec(
+                volumeId: volumeId, deviceName: .disk(0),
+                attachment: .file(path: "/volumes/root.qcow2", format: .qcow2),
+                bootOrder: 0, blockMode: .direct, appliedBlockPolicy: policy)
+        ])
+        let desired = makeSpec(cpus: 4).withVolumes([
+            VolumeSpec(
+                volumeId: volumeId, deviceName: .disk(0), bootOrder: 0,
+                blockMode: .direct)
+        ])
+        let entry = VMManifestEntry(hypervisorType: .qemu, spec: realized)
+
+        let adopted = entry.recordingAdoption(of: desired)
+
+        #expect(adopted.spec.cpus == 4)
+        #expect(try #require(adopted.spec.volumes.first).appliedBlockPolicy == policy)
+    }
+
+    @Test("QEMU adoption leaves missing policy unknown, including interrupted hot attach")
+    func qemuAdoptionPreservesUnknownPolicy() throws {
+        let legacyVolumeId = UUID()
+        let newVolumeId = UUID()
+        let realized = makeSpec().withVolumes([
+            VolumeSpec(
+                volumeId: legacyVolumeId, deviceName: .disk(0),
+                attachment: .file(path: "/volumes/root.qcow2", format: .qcow2),
+                bootOrder: 0)
+        ])
+        let desired = makeSpec().withVolumes([
+            VolumeSpec(
+                volumeId: legacyVolumeId, deviceName: .disk(0), bootOrder: 0,
+                blockMode: .direct),
+            VolumeSpec(
+                volumeId: newVolumeId, deviceName: .disk(1),
+                blockMode: .direct),
+        ])
+
+        let adopted = VMManifestEntry(hypervisorType: .qemu, spec: realized)
+            .recordingAdoption(of: desired)
+
+        let legacy = try #require(adopted.spec.volumes.first { $0.volumeId == legacyVolumeId })
+        #expect(legacy.appliedBlockPolicy == nil)
+
+        let notYetAttached = try #require(
+            adopted.spec.volumes.first { $0.volumeId == newVolumeId })
+        #expect(notYetAttached.appliedBlockPolicy == nil)
+    }
+
     @Test("Disk reservations survive the manifest round-trip")
     func diskReservationRoundTrip() throws {
         let dir = try makeTempDir()

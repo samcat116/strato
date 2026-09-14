@@ -678,14 +678,29 @@ extension Agent {
         // attachment whose hot-plug the next sync re-drives (idempotently);
         // the other order would leave a plugged device nothing remembers, and
         // the guest would lose it at its next power cycle.
+        let blockPolicy =
+            entry.hypervisorType == .qemu
+            ? await selectedQEMUBlockPolicy(
+                for: disk, requestedMode: desired.blockMode,
+                vCPUCount: entry.spec.cpus, backend: backend,
+                volumeId: item.id)
+            : nil
         let spec = VolumeSpec(
             volumeId: desired.volumeId,
             deviceName: attachment.deviceName,
             attachment: disk,
             readonly: attachment.readonly,
             bootOrder: attachment.bootOrder,
-            ioLimits: desired.ioLimits)
-        let orderedBootVolumeIds = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
+            ioLimits: desired.ioLimits,
+            blockMode: desired.blockMode,
+            appliedBlockPolicy: blockPolicy)
+        // Persist the attachment before calling libvirt so a crash cannot
+        // strand an installed disk, but leave the selected policy pending.
+        // Reporting it as active before attachDisk succeeds would claim XML
+        // that the domain may have rejected.
+        let pendingSpec = spec.withAppliedBlockPolicy(nil)
+        let orderedBootVolumeIds = await recordVolumeAttachment(
+            pendingSpec, onVM: vmId, entry: entry)
 
         // A VM with no hypervisor-side record yet (not created on this host,
         // or an orphan not yet re-adopted) needs no device call at all: the
@@ -702,7 +717,14 @@ extension Agent {
         try await service.attachDisk(
             vmId: vmId, volumeId: item.id, attachment: disk,
             deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly,
-            orderedBootVolumeIds: orderedBootVolumeIds, ioLimits: desired.ioLimits)
+            blockPolicy: blockPolicy, orderedBootVolumeIds: orderedBootVolumeIds,
+            ioLimits: desired.ioLimits)
+
+        // Read the installed attributes, since an idempotent retry may have
+        // selected a different fallback than the disk already in libvirt.
+        if entry.hypervisorType == .qemu {
+            await recoverBlockPolicy(vmId: vmId, volumeId: desired.volumeId)
+        }
     }
 
     func volumeReconcileDetach(_ item: ReconcileWorkItem) async throws {
@@ -745,7 +767,11 @@ extension Agent {
             attachment: disk,
             readonly: desiredAttachment.readonly,
             bootOrder: desiredAttachment.bootOrder,
-            ioLimits: desired.ioLimits)
+            ioLimits: desired.ioLimits,
+            blockMode: desired.blockMode,
+            appliedBlockPolicy: entry.spec.volumes.first {
+                $0.volumeId == desired.volumeId
+            }?.appliedBlockPolicy)
         _ = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
 
         guard let service = getHypervisorServiceForVM(vmId: vmId),
@@ -828,6 +854,13 @@ extension Agent {
             if hypervisorType == .qemu {
                 try await backend.prepareAttachmentForQEMU(disk)
             }
+            let blockPolicy =
+                hypervisorType == .qemu
+                ? await selectedQEMUBlockPolicy(
+                    for: disk, requestedMode: volume.blockMode,
+                    vCPUCount: spec.cpus, backend: backend,
+                    volumeId: volumeId)
+                : nil
             volumes.append(
                 VolumeSpec(
                     volumeId: volume.volumeId,
@@ -835,9 +868,67 @@ extension Agent {
                     attachment: disk,
                     readonly: volume.readonly,
                     bootOrder: volume.bootOrder,
-                    ioLimits: volume.ioLimits))
+                    ioLimits: volume.ioLimits,
+                    blockMode: volume.blockMode,
+                    appliedBlockPolicy: blockPolicy))
         }
         return spec.withVolumes(volumes)
+    }
+
+    /// Selects only attributes the concrete backend probe confirmed. Probe
+    /// failure is an observable fallback, never a reason to fail VM creation
+    /// or attachment.
+    func selectedQEMUBlockPolicy(
+        for attachment: DiskAttachment,
+        requestedMode: VolumeBlockMode,
+        vCPUCount: Int,
+        backend: any StorageBackend,
+        volumeId: String
+    ) async -> AppliedBlockDevicePolicy {
+        let capabilities = await backend.qemuBlockCapabilities(for: attachment)
+        let policy = QEMUBlockDevicePolicy.select(
+            requestedMode: requestedMode,
+            vCPUCount: vCPUCount,
+            capabilities: capabilities)
+        if let reason = policy.fallbackReason {
+            logger.warning(
+                "QEMU block policy fell back to its supported subset",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "requestedMode": .string(requestedMode.rawValue),
+                    "reason": .string(reason),
+                ])
+        }
+        return policy
+    }
+
+    /// Retry unknown policy on every observation. A failed read leaves it
+    /// unknown; it never substitutes desired settings for installed settings.
+    func recoverBlockPolicy(vmId: String, volumeId: UUID) async {
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId],
+            entry.hypervisorType == .qemu,
+            let volume = entry.spec.volumes.first(where: { $0.volumeId == volumeId }),
+            volume.appliedBlockPolicy == nil,
+            let service = getHypervisorServiceForVM(vmId: vmId)
+        else { return }
+        do {
+            let policy = try await service.diskBlockPolicy(
+                vmId: vmId, volumeId: volumeId.uuidString, requestedMode: volume.blockMode)
+            guard let current = managedVMs[vmId] ?? orphanedVMs[vmId],
+                let currentVolume = current.spec.volumes.first(where: { $0.volumeId == volumeId }),
+                currentVolume.appliedBlockPolicy == nil,
+                currentVolume.blockMode == volume.blockMode
+            else { return }
+            _ = await recordVolumeAttachment(
+                currentVolume.withAppliedBlockPolicy(policy), onVM: vmId, entry: current)
+        } catch {
+            logger.debug(
+                "Block policy read-back pending",
+                metadata: [
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     func prepareQEMUStorageAttachments(_ spec: VMSpec) async throws {

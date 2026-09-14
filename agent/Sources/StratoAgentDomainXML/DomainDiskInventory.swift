@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 #if canImport(FoundationXML)
 import FoundationXML
@@ -49,6 +50,42 @@ public struct DomainDisk: Sendable, Equatable {
 /// tested away from a running daemon: this lives in the core library for the
 /// same reason `DomainXMLBuilder` does.
 public enum DomainDiskInventory {
+
+    /// Recovers the installed policy after an interrupted attachment. Missing
+    /// or unsupported attributes must not become an invented conservative echo.
+    public static func blockPolicy(
+        inDomainXML xml: String, volumeId: String, requestedMode: VolumeBlockMode
+    ) throws -> AppliedBlockDevicePolicy {
+        let domain = try DomainXMLNode.parse(xml)
+        let disks =
+            domain.child(named: "devices")?.children.filter {
+                $0.name == "disk"
+                    && $0.child(named: "serial")?.text == QEMUDiskIdentity.deviceID(volumeId: volumeId)
+            } ?? []
+        guard domain.name == "domain", disks.count == 1,
+            let driver = disks.first?.child(named: "driver")
+        else { throw DomainInventoryError.unparseable("no unique driver for volume \(volumeId)") }
+        let cache = driver.attribute("cache")
+        let io = driver.attribute("io")
+        let queues = driver.attribute("queues")
+        let cacheMode = cache.flatMap(BlockDeviceCacheMode.init(rawValue:))
+        let ioMode = io.flatMap(BlockDeviceIOMode.init(rawValue:))
+        let queueCount = queues.flatMap(Int.init)
+        guard cache == nil || cacheMode != nil,
+            io == nil || ioMode != nil,
+            queues == nil || (queueCount ?? 0) > 0
+        else { throw DomainInventoryError.unparseable("unsupported block policy for volume \(volumeId)") }
+        var reasons = ["non-rotational model disabled: libvirt cannot express rotation_rate for virtio-blk"]
+        if requestedMode == .direct && (cacheMode != BlockDeviceCacheMode.none || ioMode != .ioUring) {
+            reasons.append("the installed disk does not use cache-none/io_uring")
+        }
+        return AppliedBlockDevicePolicy(
+            active: true, requestedMode: requestedMode,
+            cacheMode: cacheMode, ioMode: ioMode,
+            discard: driver.attribute("discard") == "unmap",
+            queueCount: queueCount,
+            fallbackReason: reasons.joined(separator: "; "))
+    }
 
     /// Every `<devices><disk>` in a domain document, in document order.
     ///

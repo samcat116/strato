@@ -195,6 +195,10 @@ extension Application {
         // redundant. Fresh baselines omit it; preserved databases drop it here.
         migrations.add(DropAgentWireProtocolVersion())
 
+        // STR-269: opt-in cache policy plus the agent's exact applied/fallback
+        // report. Existing volumes remain conservative.
+        migrations.add(AddVolumeBlockPolicy())
+
         // STR-294: close the desired/observed loop for network topology,
         // security-group ACLs, and per-port membership.
         migrations.add(AddNetworkFabricObservations())

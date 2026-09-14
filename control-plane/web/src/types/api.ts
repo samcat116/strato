@@ -254,6 +254,7 @@ export type UpdateImageRequest = OpenAPISchemas["UpdateImageRequest"];
 export type VolumeStatus = OpenAPISchemas["VolumeStatus"];
 export type VolumeFormat = OpenAPISchemas["VolumeFormat"];
 export type VolumeType = OpenAPISchemas["VolumeType"];
+export type VolumeBlockMode = OpenAPISchemas["VolumeBlockMode"];
 export type VolumeIOLimits = OpenAPISchemas["VolumeIOLimits"];
 export type Volume = OpenAPISchemas["Volume"];
 
