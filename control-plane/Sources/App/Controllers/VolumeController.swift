@@ -783,7 +783,7 @@ struct VolumeController: RouteCollection {
             // Every attachment column at once, through the one function that
             // owns the transition, so the row can never come to rest describing
             // half an attachment (STR-129).
-            VolumeAttachmentService.clearAttachment(volume)
+            VolumeAttachmentService.clearAttachment(volume, preservingObservedOwner: true)
         }
 
         req.logger.info(

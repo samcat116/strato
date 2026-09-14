@@ -593,11 +593,10 @@ extension Agent {
             blockPolicy: blockPolicy, orderedBootVolumeIds: orderedBootVolumeIds,
             ioLimits: desired.ioLimits)
 
-        // A retry after a crash in this narrow window is safe: attachDisk is
-        // idempotent and will confirm the existing volume before this applied
-        // echo becomes durable.
-        if let attachedEntry = managedVMs[vmId] ?? orphanedVMs[vmId] {
-            _ = await recordVolumeAttachment(spec, onVM: vmId, entry: attachedEntry)
+        // Read the installed attributes, since an idempotent retry may have
+        // selected a different fallback than the disk already in libvirt.
+        if entry.hypervisorType == .qemu {
+            await recoverBlockPolicy(vmId: vmId, volumeId: desired.volumeId)
         }
     }
 
@@ -774,6 +773,35 @@ extension Agent {
                 ])
         }
         return policy
+    }
+
+    /// Retry unknown policy on every observation. A failed read leaves it
+    /// unknown; it never substitutes desired settings for installed settings.
+    func recoverBlockPolicy(vmId: String, volumeId: UUID) async {
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId],
+            entry.hypervisorType == .qemu,
+            let volume = entry.spec.volumes.first(where: { $0.volumeId == volumeId }),
+            volume.appliedBlockPolicy == nil,
+            let service = getHypervisorServiceForVM(vmId: vmId)
+        else { return }
+        do {
+            let policy = try await service.diskBlockPolicy(
+                vmId: vmId, volumeId: volumeId.uuidString, requestedMode: volume.blockMode)
+            guard let current = managedVMs[vmId] ?? orphanedVMs[vmId],
+                let currentVolume = current.spec.volumes.first(where: { $0.volumeId == volumeId }),
+                currentVolume.appliedBlockPolicy == nil,
+                currentVolume.blockMode == volume.blockMode
+            else { return }
+            _ = await recordVolumeAttachment(
+                currentVolume.withAppliedBlockPolicy(policy), onVM: vmId, entry: current)
+        } catch {
+            logger.debug(
+                "Block policy read-back pending",
+                metadata: [
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     func prepareQEMUStorageAttachments(_ spec: VMSpec) async throws {

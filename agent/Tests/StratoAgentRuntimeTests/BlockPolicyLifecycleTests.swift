@@ -85,6 +85,15 @@ private actor BlockPolicyAttachHypervisor: HypervisorService {
         }
     }
 
+    func diskBlockPolicy(vmId: String, volumeId: String, requestedMode: VolumeBlockMode)
+        async throws -> AppliedBlockDevicePolicy
+    {
+        guard !rejectAttach, let policy = policies.last ?? nil else {
+            throw HypervisorServiceError.diskError("disk not installed")
+        }
+        return policy
+    }
+
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {}
 }
 
@@ -111,6 +120,14 @@ extension Agent {
     {
         managedVMs[vmId]?.spec.volumes.first { $0.volumeId == volumeId }?
             .appliedBlockPolicy
+    }
+
+    fileprivate func forgetBlockPolicyForCrashTest(vmId: String) {
+        guard let entry = managedVMs[vmId] else { return }
+        let pending = entry.with(
+            spec: entry.spec.withVolumes(
+                entry.spec.volumes.map { $0.withAppliedBlockPolicy(nil) }))
+        managedVMs[vmId] = pending.recordingAdoption(of: pending.spec)
     }
 
     fileprivate func shutDownBlockPolicyTestResources() async throws {
@@ -160,6 +177,9 @@ struct BlockPolicyLifecycleTests {
         #expect(await agent.recordedBlockPolicy(vmId: vmId, volumeId: volumeId) == nil)
         #expect(await hypervisor.receivedPolicies().compactMap { $0 }.last?.active == true)
 
+        await agent.recoverBlockPolicy(vmId: vmId, volumeId: volumeId)
+        #expect(await agent.recordedBlockPolicy(vmId: vmId, volumeId: volumeId) == nil)
+
         await hypervisor.allowAttach()
         try await agent.volumeReconcileAttach(item)
 
@@ -168,6 +188,15 @@ struct BlockPolicyLifecycleTests {
         #expect(applied.active)
         #expect(applied.cacheMode == BlockDeviceCacheMode.none)
         #expect(applied.ioMode == .ioUring)
+        #expect(await hypervisor.receivedPolicies().count == 2)
+
+        // Simulate a manifest saved before attachment, followed by process
+        // loss after libvirt installed the disk. Adoption must not invent a
+        // conservative policy, and observation must recover without reattach.
+        await agent.forgetBlockPolicyForCrashTest(vmId: vmId)
+        #expect(await agent.recordedBlockPolicy(vmId: vmId, volumeId: volumeId) == nil)
+        await agent.recoverBlockPolicy(vmId: vmId, volumeId: volumeId)
+        #expect(await agent.recordedBlockPolicy(vmId: vmId, volumeId: volumeId) == applied)
         #expect(await hypervisor.receivedPolicies().count == 2)
 
         try await agent.shutDownBlockPolicyTestResources()

@@ -241,6 +241,10 @@ public protocol HypervisorService: Actor, Sendable {
         orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) async throws
 
+    /// Reads the installed driver policy, including after an interrupted attach.
+    func diskBlockPolicy(vmId: String, volumeId: String, requestedMode: VolumeBlockMode)
+        async throws -> AppliedBlockDevicePolicy
+
     /// Replaces both absolute I/O ceilings for an already attached disk and
     /// persists them for the next boot. Nil clears both dimensions.
     func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws
@@ -423,6 +427,12 @@ public extension HypervisorService {
     func setDiskIOLimits(vmId: String, volumeId: String, limits: VolumeIOLimits?) async throws {
         throw HypervisorServiceError.notSupported(
             "\(hypervisorType.displayName) does not support per-volume I/O limits")
+    }
+
+    func diskBlockPolicy(vmId: String, volumeId: String, requestedMode: VolumeBlockMode)
+        async throws -> AppliedBlockDevicePolicy
+    {
+        throw HypervisorServiceError.notSupported("block policy read-back is not supported")
     }
 
     func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits {

@@ -384,6 +384,9 @@ extension Agent: ReconcileActuator {
                 entry.hypervisorType == .qemu,
                 let service = getHypervisorServiceForVM(vmId: attachment.vmId)
             {
+                if let volumeUUID = UUID(uuidString: volumeId) {
+                    await recoverBlockPolicy(vmId: attachment.vmId, volumeId: volumeUUID)
+                }
                 // Read-back is the source of the applied echo. A failure stays
                 // nil so the planner re-drives `.throttle`; copying desired
                 // state here would recreate the false-convergence bug this

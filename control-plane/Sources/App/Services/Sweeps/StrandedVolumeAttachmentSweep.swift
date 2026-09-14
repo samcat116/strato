@@ -22,14 +22,13 @@ extension AgentMaintenanceLoop {
         let db = app.db
 
         do {
-            // This mirrors the schema constraint column for column: the fields
-            // describe one state, so they must agree.
+            // Only desired attachment fields identify stranded state. The
+            // observed owner legitimately survives while a detach is pending.
             let strandedVolumes = try await Volume.query(on: db)
                 .filter(\.$vm.$id == nil)
                 .group(.or) { unresolved in
                     unresolved.filter(\.$deviceName != nil)
                     unresolved.filter(\.$bootOrder != nil)
-                    unresolved.filter(\.$attachedAgentId != nil)
                     unresolved.filter(\.$readonly == true)
                 }
                 .all()
@@ -40,7 +39,7 @@ extension AgentMaintenanceLoop {
                     guard try await volume.lockAndRefresh(on: tx) else { return false }
                     guard volume.$vm.id == nil,
                         volume.deviceName != nil || volume.bootOrder != nil
-                            || volume.attachedAgentId != nil || volume.readonly
+                            || volume.readonly
                     else { return false }
                     let expectedGeneration = volume.generation
                     VolumeAttachmentService.clearAttachment(volume)

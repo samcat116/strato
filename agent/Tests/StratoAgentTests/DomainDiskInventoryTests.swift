@@ -25,6 +25,33 @@ import FoundationXML
 @Suite("libvirt domain disk inventory")
 struct DomainDiskInventoryTests {
 
+    @Test("Installed block policy is recovered independently of a fresh probe")
+    func recoversInstalledBlockPolicy() throws {
+        let xml = """
+            <domain><devices><disk device='disk'>
+            <driver name='qemu' type='qcow2' cache='none' io='io_uring'
+              discard='unmap' detect_zeroes='unmap' queues='4'/>
+            <serial>vol-\(Self.dataVolumeId)</serial>
+            </disk></devices></domain>
+            """
+        let policy = try DomainDiskInventory.blockPolicy(
+            inDomainXML: xml, volumeId: Self.dataVolumeId, requestedMode: .direct)
+        #expect(policy.active)
+        #expect(policy.cacheMode == BlockDeviceCacheMode.none)
+        #expect(policy.ioMode == .ioUring)
+        #expect(policy.discard)
+        #expect(policy.queueCount == 4)
+        #expect(throws: DomainInventoryError.self) {
+            try DomainDiskInventory.blockPolicy(
+                inDomainXML: xml, volumeId: UUID().uuidString, requestedMode: .direct)
+        }
+        #expect(throws: DomainInventoryError.self) {
+            try DomainDiskInventory.blockPolicy(
+                inDomainXML: xml.replacingOccurrences(of: "cache='none'", with: "cache='unsafe'"),
+                volumeId: Self.dataVolumeId, requestedMode: .direct)
+        }
+    }
+
     static let dataVolumeId = "6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00"
 
     static let runningDomain = """

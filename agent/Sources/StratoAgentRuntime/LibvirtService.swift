@@ -1572,6 +1572,17 @@ actor LibvirtService: HypervisorService {
         }
     }
 
+    func diskBlockPolicy(vmId: String, volumeId: String, requestedMode: VolumeBlockMode)
+        async throws -> AppliedBlockDevicePolicy
+    {
+        try await perform("read-disk-block-policy", vmId: vmId) {
+            let dom = try await domain(vmId)
+            return try DomainDiskInventory.blockPolicy(
+                inDomainXML: try await domainXML(dom, vmId: vmId),
+                volumeId: volumeId, requestedMode: requestedMode)
+        }
+    }
+
     func diskIOLimits(vmId: String, volumeId: String) async throws -> VolumeIOLimits {
         try await perform("read-disk-io-limits", vmId: vmId) {
             let dom = try await domain(vmId)

@@ -159,8 +159,8 @@ struct VMManifestStoreTests {
         #expect(try #require(adopted.spec.volumes.first).appliedBlockPolicy == policy)
     }
 
-    @Test("Legacy QEMU adoption reports historical policy without claiming a new disk")
-    func legacyQEMUAdoptionRecordsConservativePolicy() throws {
+    @Test("QEMU adoption leaves missing policy unknown, including interrupted hot attach")
+    func qemuAdoptionPreservesUnknownPolicy() throws {
         let legacyVolumeId = UUID()
         let newVolumeId = UUID()
         let realized = makeSpec().withVolumes([
@@ -182,14 +182,7 @@ struct VMManifestStoreTests {
             .recordingAdoption(of: desired)
 
         let legacy = try #require(adopted.spec.volumes.first { $0.volumeId == legacyVolumeId })
-        let applied = try #require(legacy.appliedBlockPolicy)
-        #expect(applied.active)
-        #expect(applied.requestedMode == .conservative)
-        #expect(applied.cacheMode == nil)
-        #expect(applied.ioMode == nil)
-        #expect(!applied.discard)
-        #expect(applied.queueCount == nil)
-        #expect(applied.fallbackReason?.contains("predates") == true)
+        #expect(legacy.appliedBlockPolicy == nil)
 
         let notYetAttached = try #require(
             adopted.spec.volumes.first { $0.volumeId == newVolumeId })

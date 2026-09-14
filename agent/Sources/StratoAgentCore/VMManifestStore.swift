@@ -184,24 +184,13 @@ public struct VMManifestEntry: Codable, Sendable {
     /// have changed while the agent was down, but reconnecting to that process
     /// does not apply the new list. Keep the realized networks until the
     /// reconciler replaces the VMM; every other part of the desired spec can be
-    /// recorded immediately. A legacy QEMU volume with no applied-policy field
-    /// is known to use the historical XML (no cache, discard, rotation, or
-    /// queue override), so its one-time upgrade records that conservative fact
-    /// explicitly. A desired volume absent from the old manifest is left
-    /// unknown until its hot-plug actually succeeds.
+    /// recorded immediately. A missing QEMU policy can also describe an
+    /// interrupted hot attach, so leave it unknown until domain read-back.
     public func recordingAdoption(of desiredSpec: VMSpec) -> VMManifestEntry {
         if hypervisorType == .qemu {
             let policies = Dictionary(
-                spec.volumes.map { volume in
-                    let policy =
-                        volume.appliedBlockPolicy
-                        ?? AppliedBlockDevicePolicy(
-                            active: volume.attachment != nil,
-                            requestedMode: volume.blockMode,
-                            fallbackReason:
-                                "the surviving domain predates QEMU block-policy reporting; "
-                                + "historical conservative attributes remain active until it is recreated")
-                    return (volume.volumeId, policy)
+                spec.volumes.compactMap { volume in
+                    volume.appliedBlockPolicy.map { (volume.volumeId, $0) }
                 },
                 uniquingKeysWith: { first, _ in first })
             let adoptedVolumes = desiredSpec.volumes.map { volume in

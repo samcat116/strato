@@ -381,6 +381,14 @@ final class VolumeConvergenceTests {
             #expect(stored.attachedAgentId == vmAgentID)
             #expect(stored.appliedBlockPolicy == active)
 
+            // Exercise the same desired-state transition as the detach endpoint.
+            VolumeAttachmentService.clearAttachment(stored, preservingObservedOwner: true)
+            try await stored.save(on: app.db)
+            await app.agentMaintenance.sweepStrandedVolumeAttachments()
+            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.attachedAgentId == vmAgentID)
+            #expect(stored.appliedBlockPolicy == active)
+
             // The attachment owner remains authoritative for its own detach.
             _ = try await app.observedStateApplier.apply(
                 report(

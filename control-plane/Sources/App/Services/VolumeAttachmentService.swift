@@ -153,12 +153,18 @@ enum VolumeAttachmentService {
     ///
     /// `status` is left alone. It is what the agent last observed, and the
     /// detach it will observe is what moves it.
-    static func clearAttachment(_ volume: Volume) {
+    static func clearAttachment(_ volume: Volume, preservingObservedOwner: Bool = false) {
         volume.$vm.id = nil
         volume.deviceName = nil
         volume.bootOrder = nil
         volume.readonly = false
-        volume.attachedAgentId = nil
+        // A requested hot detach needs the observed owner until its report
+        // clears the active policy. Reaping and stranded-record cleanup have
+        // no live VM whose acknowledgement they can require.
+        if !preservingObservedOwner {
+            volume.attachedAgentId = nil
+            volume.appliedBlockPolicy = .inactive(requestedMode: volume.blockMode)
+        }
         volume.extendConvergenceDeadline(
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
     }
