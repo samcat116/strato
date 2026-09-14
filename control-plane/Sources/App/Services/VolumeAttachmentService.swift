@@ -153,7 +153,11 @@ enum VolumeAttachmentService {
     ///
     /// `status` is left alone. It is what the agent last observed, and the
     /// detach it will observe is what moves it.
-    static func clearAttachment(_ volume: Volume, preservingObservedOwner: Bool = false) {
+    static func clearAttachment(
+        _ volume: Volume,
+        at instant: ClusterInstant,
+        preservingObservedOwner: Bool = false
+    ) {
         volume.$vm.id = nil
         volume.deviceName = nil
         volume.bootOrder = nil
@@ -166,7 +170,8 @@ enum VolumeAttachmentService {
             volume.appliedBlockPolicy = .inactive(requestedMode: volume.blockMode)
         }
         volume.extendConvergenceDeadline(
-            by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
+            by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach),
+            from: instant)
     }
 
     /// Releases every data volume attached to `vmID`, and returns their ids.
@@ -184,6 +189,7 @@ enum VolumeAttachmentService {
             .filter(\.$volumeType == .data)
             .all()
 
+        var releasable: [Volume] = []
         for volume in attached.sorted(by: {
             ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
         }) {
@@ -191,8 +197,16 @@ enum VolumeAttachmentService {
             // It may have moved while this VM's reap was reaching it. Only
             // release the attachment the query selected, never a newer one.
             guard volume.$vm.id == vmID else { continue }
+            releasable.append(volume)
+        }
+
+        // Acquire every row lock before starting the detach budgets. The
+        // sorted lock order remains unchanged, but contention cannot shorten
+        // any volume's post-commit convergence window.
+        let instant = try await ClusterClock.read(on: db)
+        for volume in releasable {
             let expectedGeneration = volume.generation
-            clearAttachment(volume)
+            clearAttachment(volume, at: instant)
             guard
                 case .applied = try await volume.advanceDesiredStateGeneration(
                     expectedGeneration: expectedGeneration, on: db)

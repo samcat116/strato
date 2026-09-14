@@ -994,7 +994,7 @@ private extension LogicalNetwork {
         metadataEnabled: Bool = true,
         resolverEnabled: Bool = true,
         resolverIndex: Int? = nil,
-        generation: Int = 1
+        generation: Int64 = 1
     ) {
         self.init(
             id: id,

@@ -19,6 +19,11 @@ Every control-plane pod applies pending database migrations before it starts
 serving. PostgreSQL advisory locking serializes concurrent replicas; a migration
 failure leaves the new pod unready and is reported in its logs.
 
+Every node that can run a control-plane pod must have working NTP or equivalent
+time synchronization. Strato measures replica time against PostgreSQL, warns
+beyond 1 second, and refuses destructive maintenance beyond 30 seconds; alert
+on `control_plane_clock_offset_seconds`.
+
 ## Generated credentials
 
 On first install the chart creates the `<release>-strato-credentials` secret

@@ -58,12 +58,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// never received a sync owns its local NB (the legacy model).
     var topologyAuthority = true
 
-    /// Highest network `generation` this agent has applied, per network id. A
-    /// full-list sync whose entry for a network is older than what's recorded is
-    /// stale (actor-reentrancy reordering of two fetched payloads)
-    /// and is skipped, so it can't roll the network's L3 realization backward —
-    /// the same guard the VM reconciler applies per VM.
-    var networkGenerations: [UUID: Int64] = [:]
+    /// Replay protection advances as soon as a desired generation is accepted;
+    /// observed convergence advances only after every attributed write succeeds.
+    /// Keeping both cursors prevents a failed newer pass from admitting an older
+    /// reordered payload while still reporting the last known-good generation.
+    var networkGenerationLedger = NetworkGenerationLedger()
+    /// Highest security-group generation this authority has verified. This is
+    /// kept separately from the desired input so a later failed retry can
+    /// report the last known-good generation without falsely advancing it.
+    var securityGroupGenerations: [UUID: Int64] = [:]
     var lastObservedLoadBalancers: [ObservedLoadBalancerState]?
 
     #if os(Linux)
@@ -133,6 +136,21 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// Whether an OVN object's external-ids mark it as created by this reconciler.
     static func isManaged(_ externalIDs: [String: String]?) -> Bool {
         externalIDs?[managedKey] == managedValue
+    }
+
+    /// A router port has one intended parent. Treat a missing, stale, or
+    /// multiply-attached relationship as drift so reconciliation repairs it
+    /// before reporting the network generation as observed.
+    static func routerPortNeedsReparent(
+        portUUID: String,
+        desiredRouter: String,
+        routerPortUUIDsByRouter: [String: Set<String>]
+    ) -> Bool {
+        let parents = Set(
+            routerPortUUIDsByRouter.compactMap { routerName, portUUIDs in
+                portUUIDs.contains(portUUID) ? routerName : nil
+            })
+        return parents != [desiredRouter]
     }
 
     /// OVN logical switch port name for one NIC of any workload. Sandbox NICs

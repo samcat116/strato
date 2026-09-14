@@ -182,7 +182,7 @@ extension TimestampedConvergenceObservable {
         phase: String?,
         lastError: String?,
         failedGeneration: Int64?,
-        at now: Date = Date()
+        at now: ClusterInstant
     ) -> Bool {
         let errorPairChanged = self.lastError != lastError || self.failedGeneration != failedGeneration
         var changed = recordConvergence(
@@ -192,7 +192,7 @@ extension TimestampedConvergenceObservable {
         if lastError == nil || failedGeneration == nil {
             nextErrorAt = nil
         } else if errorPairChanged || lastErrorAt == nil {
-            nextErrorAt = now
+            nextErrorAt = now.date
         } else {
             nextErrorAt = lastErrorAt
         }
@@ -304,7 +304,9 @@ where IDValue == UUID {
     /// whether desired state changed and therefore needs a new generation;
     /// observed-status realignment does not count. Does not persist.
     @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool
+    func resolveForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String, at instant: ClusterInstant
+    ) -> Bool
 
     /// Rows whose convergence deadline has passed — the stuck-convergence
     /// sweep's whole query. A protocol requirement rather than a generic
@@ -312,7 +314,9 @@ where IDValue == UUID {
     /// (`\.$convergenceDeadline`), which a protocol cannot name. Rows with no
     /// deadline are excluded by SQL's `NULL` comparison, which is the wanted
     /// behaviour: nothing is outstanding on them.
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Self]
+    static func overdueForConvergence(
+        at instant: ClusterInstant, on db: any Database
+    ) async throws -> [Self]
 
     /// Copies the columns the *reconciliation* loop owns — everything the
     /// observed-state applier, the scheduler's placement, the finalizer
@@ -333,6 +337,16 @@ where IDValue == UUID {
     /// itself within seconds, so it is left out rather than growing this list
     /// with fields whose staleness has no lasting consequence.
     func adoptReconciliationState(from committed: Self)
+}
+
+/// Shared convergence shape for network-fabric rows. Unlike workload
+/// `ConvergingResource`s these rows have no finalizers or single workload
+/// placement, but they expose the same client-facing conditions.
+protocol NetworkFabricConvergingResource: Model, ConvergenceDerived, Sendable
+where IDValue == UUID {
+    var observedGeneration: Int64 { get set }
+    var lastErrorAt: Date? { get set }
+    var convergenceDeadline: Date? { get set }
 }
 
 extension ConvergingResource {
@@ -413,8 +427,8 @@ extension ConvergingResource {
     /// a perfectly healthy resource to degraded. Extending only forward means
     /// the outstanding work is always judged against the most generous budget
     /// anything asked for.
-    func extendConvergenceDeadline(by budget: TimeInterval, from now: Date = Date()) {
-        let candidate = now.addingTimeInterval(budget)
+    func extendConvergenceDeadline(by budget: TimeInterval, from now: ClusterInstant) {
+        let candidate = now.date.addingTimeInterval(budget)
         if let existing = convergenceDeadline, existing > candidate { return }
         convergenceDeadline = candidate
     }
@@ -427,8 +441,10 @@ extension VM: ConvergingResource {
         hypervisorId.map { [$0] } ?? []
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VM] {
-        try await VM.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    static func overdueForConvergence(
+        at instant: ClusterInstant, on db: any Database
+    ) async throws -> [VM] {
+        try await VM.query(on: db).filter(\.$convergenceDeadline <= instant.date).all()
     }
 
     func adoptReconciliationState(from committed: VM) {
@@ -459,8 +475,10 @@ extension Sandbox: ConvergingResource {
         hypervisorId.map { [$0] } ?? []
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Sandbox] {
-        try await Sandbox.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    static func overdueForConvergence(
+        at instant: ClusterInstant, on db: any Database
+    ) async throws -> [Sandbox] {
+        try await Sandbox.query(on: db).filter(\.$convergenceDeadline <= instant.date).all()
     }
 
     func adoptReconciliationState(from committed: Sandbox) {
@@ -497,8 +515,10 @@ extension Volume: ConvergingResource {
         set { errorMessage = newValue }
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Volume] {
-        try await Volume.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    static func overdueForConvergence(
+        at instant: ClusterInstant, on db: any Database
+    ) async throws -> [Volume] {
+        try await Volume.query(on: db).filter(\.$convergenceDeadline <= instant.date).all()
     }
 
     func adoptReconciliationState(from committed: Volume) {
@@ -546,7 +566,9 @@ extension Volume: ConvergingResource {
     /// `.absent`, for the same reason a VM's does — reverting it would
     /// resurrect a volume the user deleted.
     @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
+    func resolveForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String, at instant: ClusterInstant
+    ) -> Bool {
         guard desiredStatus != .absent else { return false }
         guard mutation == .attach, $vm.id != nil else { return false }
         $vm.id = nil

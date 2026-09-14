@@ -6092,6 +6092,15 @@ export interface components {
             attachmentState: "attaching" | "attached" | "detaching" | "attach_failed" | "detach_failed";
             /** @description The current generation's convergence error for this interface, when failed. */
             attachmentError?: string;
+            /**
+             * @description The reporting host's observed result for this port's security-group membership. Absent until a current membership has been attempted.
+             * @enum {string}
+             */
+            securityGroupStatus?: "active" | "error";
+            /** @description Why the reporting host could not realize the current membership. */
+            securityGroupLastError?: string;
+            /** Format: date-time */
+            securityGroupLastErrorAt?: string;
             /** @description The security groups filtering this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
             securityGroupIds?: string[];
         };
@@ -6233,6 +6242,15 @@ export interface components {
             deviceName: string;
             /** @description The security groups attached to this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
             securityGroupIds?: string[];
+            /**
+             * @description The reporting host's observed result for this port's security-group membership. Absent until a current membership has been attempted.
+             * @enum {string}
+             */
+            securityGroupStatus?: "active" | "error";
+            /** @description Why the reporting host could not realize the current membership. */
+            securityGroupLastError?: string;
+            /** Format: date-time */
+            securityGroupLastErrorAt?: string;
         };
         /** @enum {string} */
         SandboxStatus: "Stopped" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
@@ -6574,7 +6592,7 @@ export interface components {
             /** @description The ceilings the owning agent read back from libvirt. Compare against `ioLimits`: equal on an attached volume means the policy is in force, and attached convergence requires that equality. **Omitted** (again absent, not null) means no applied cap was reported. A successful explicit clear is also represented as an omitted response value because the database columns are null; the observed-state protocol keeps those cases distinct while merging. */
             appliedIOLimits?: components["schemas"]["VolumeIOLimits"];
             blockMode: components["schemas"]["VolumeBlockMode"];
-            /** @description Exact attributes selected by the agent. Omitted until an agent supporting wire v61 reports; `active: false` explicitly means the volume is detached. `fallbackReason` explains any safe downgrade. */
+            /** @description Exact attributes selected by the agent. Omitted until an agent supporting wire v62 reports; `active: false` explicitly means the volume is detached. `fallbackReason` explains any safe downgrade. */
             appliedBlockPolicy?: components["schemas"]["AppliedBlockDevicePolicy"];
             /** Format: uuid */
             sourceImageId?: string;
@@ -6787,6 +6805,7 @@ export interface components {
             primaryDnsZoneId?: string;
             /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will — the network's resolver is off, its site cannot run one, or it has no address yet. Absent for a network with no attached zone, which has nothing to fail to deliver. */
             zoneResolutionWarning?: string;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -7056,6 +7075,7 @@ export interface components {
             rules: components["schemas"]["SecurityGroupRule"][];
             /** @description How many VM NICs currently attach this group. */
             attachmentCount: number;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */

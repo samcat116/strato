@@ -382,7 +382,10 @@ final class VolumeConvergenceTests {
             #expect(stored.appliedBlockPolicy == active)
 
             // Exercise the same desired-state transition as the detach endpoint.
-            VolumeAttachmentService.clearAttachment(stored, preservingObservedOwner: true)
+            VolumeAttachmentService.clearAttachment(
+                stored,
+                at: try await ClusterClock.read(on: app.db),
+                preservingObservedOwner: true)
             try await stored.save(on: app.db)
             await app.agentMaintenance.sweepStrandedVolumeAttachments()
             stored = try #require(try await Volume.find(volumeID, on: app.db))
@@ -568,6 +571,7 @@ final class VolumeConvergenceTests {
                             volumeId: volumeID, present: true,
                             attachment: .file(path: "/p", format: .qcow2),
                             attachedVMId: vm.id, observedGeneration: 2,
+                            // An attached disk confirms uncapped I/O explicitly; nil is silence.
                             ioLimits: VolumeIOLimits())
                     ]))
 

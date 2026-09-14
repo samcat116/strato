@@ -266,17 +266,17 @@ extension Sandbox {
 
     /// Whether the lifetime budget has run out. Always false for a sandbox
     /// with no TTL.
-    func isExpired(at date: Date = Date()) -> Bool {
+    func isExpired(at instant: ClusterInstant) -> Bool {
         guard let expiresAt else { return false }
-        return expiresAt <= date
+        return expiresAt <= instant.date
     }
 
     /// Updates the observed status, starts a fresh divergence episode, and
     /// stamps the change time for reconciliation sweeps. Does not persist —
     /// call `save(on:)` afterwards.
-    func setStatus(_ newStatus: SandboxStatus, at date: Date = Date()) {
+    func setStatus(_ newStatus: SandboxStatus, at instant: ClusterInstant) {
         status = newStatus
-        statusChangedAt = date
+        statusChangedAt = instant.date
         divergenceDetectedAt = nil
     }
 
@@ -342,9 +342,11 @@ extension Sandbox {
     /// counterpart to `Telemetry.vmEnteredError` yet, and the parameter is here
     /// so both workload kinds present one signature to `ConvergingResource`.
     @discardableResult
-    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
+    func resolveForStuckOperation(
+        mutation: VMOperationKind, telemetryReason: String, at instant: ClusterInstant
+    ) -> Bool {
         if status.isTransitional || (mutation == .create && observedGeneration == 0) {
-            setStatus(.error)
+            setStatus(.error, at: instant)
         }
         return revertDesiredToObserved()
     }
@@ -395,6 +397,9 @@ struct SandboxNetworkInterfaceResponse: Content {
     /// empty array here reads as "this NIC is in no group", a security claim a
     /// forgotten `.with(...)` must not be able to make.
     let securityGroupIds: [UUID]?
+    let securityGroupStatus: String?
+    let securityGroupLastError: String?
+    let securityGroupLastErrorAt: Date?
 
     init(from nic: SandboxNetworkInterface) {
         self.id = nic.id
@@ -410,6 +415,9 @@ struct SandboxNetworkInterfaceResponse: Content {
         self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
             memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
         }
+        self.securityGroupStatus = nic.securityGroupStatus
+        self.securityGroupLastError = nic.securityGroupLastError
+        self.securityGroupLastErrorAt = nic.securityGroupLastErrorAt
     }
 }
 

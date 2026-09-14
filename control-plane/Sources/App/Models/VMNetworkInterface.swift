@@ -65,6 +65,15 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
     @OptionalField(key: "detach_generation")
     var detachGeneration: Int64?
 
+    @OptionalField(key: "security_group_status")
+    var securityGroupStatus: String?
+
+    @OptionalField(key: "security_group_last_error")
+    var securityGroupLastError: String?
+
+    @OptionalField(key: "security_group_last_error_at")
+    var securityGroupLastErrorAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -91,6 +100,9 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         self.orderIndex = orderIndex
         self.attachGeneration = nil
         self.detachGeneration = nil
+        self.securityGroupStatus = nil
+        self.securityGroupLastError = nil
+        self.securityGroupLastErrorAt = nil
     }
 
 }

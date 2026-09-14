@@ -76,13 +76,15 @@ protocol NetworkServiceProtocol: Sendable {
     /// pre-v36 control plane, or an agent with nothing to do for any zone):
     /// leave every managed row and rendered file alone.
     ///
-    /// Default no-op so platforms without a real SDN (macOS user-mode) ignore it.
+    /// Returns the observations produced by this pass. Nil fields mean this
+    /// adapter has no opinion; callers retain the latest result for the next
+    /// `ObservedStateReport`.
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
         metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
         dnsZones: [DesiredDNSZone]?
-    ) async
+    ) async -> NetworkReconcileOutcome
 
     /// Latest native LB programming view. Nil means this service is not the
     /// site's topology author (or has not received a v43 opinion).
@@ -92,15 +94,19 @@ protocol NetworkServiceProtocol: Sendable {
 extension NetworkServiceProtocol {
     func inspectDependencyHealth() async -> NetworkDependencyHealth { .healthy }
 
-    /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.
-    func reconcileNetworks(
-        _ networks: [DesiredNetworkState], authoritative: Bool,
-        securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
-        metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
-        dnsZones: [DesiredDNSZone]?
-    ) async {}
-
     func observedLoadBalancers() async -> [ObservedLoadBalancerState]? { nil }
+}
+
+/// Network-fabric observations from one level-triggered pass. This is the
+/// network module's interface to the agent: actuator errors and OVN details stay
+/// behind it, while the caller gets only wire-ready resource outcomes.
+struct NetworkReconcileOutcome: Sendable {
+    let networks: [ObservedNetworkState]?
+    let securityGroups: [ObservedSecurityGroupState]?
+    let portMemberships: [ObservedPortMembershipState]?
+
+    static let noOpinion = NetworkReconcileOutcome(
+        networks: nil, securityGroups: nil, portMemberships: nil)
 }
 
 typealias NetworkDependencyHealth = NodeDependencyFunctionalHealth

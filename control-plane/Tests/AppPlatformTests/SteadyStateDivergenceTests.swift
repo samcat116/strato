@@ -31,7 +31,7 @@ struct SteadyStateDivergenceTests {
             ) async throws -> VM {
                 let vm = try await builder.createVM(name: name, project: project)
                 vm.desiredStatus = desired
-                vm.setStatus(status, at: changedAt)
+                vm.setStatus(status, at: .testing(changedAt))
                 vm.generation = generation
                 vm.observedGeneration = observedGeneration
                 vm.convergenceDeadline = deadline
@@ -53,12 +53,13 @@ struct SteadyStateDivergenceTests {
             let divergedSandbox = try await builder.createSandbox(
                 name: "diverged-sandbox", project: project)
             divergedSandbox.desiredStatus = .running
-            divergedSandbox.setStatus(.stopped, at: cutoff)
+            divergedSandbox.setStatus(.stopped, at: .testing(cutoff))
             divergedSandbox.generation = 7
             divergedSandbox.observedGeneration = 7
             try await divergedSandbox.save(on: app.db)
 
-            let first = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
+            let instant = ClusterInstant.testing(now)
+            let first = await app.agentMaintenance.sweepSteadyStateDivergence(at: instant)
             #expect(first == .init(vms: 1, sandboxes: 1, newlyDetected: 2))
             #expect(try #require(await VM.find(divergedVM.id, on: app.db)).divergenceDetectedAt == now)
             #expect(
@@ -67,25 +68,25 @@ struct SteadyStateDivergenceTests {
 
             // The standing gauge counts remain, while the per-episode claims
             // prevent a second replica/pass from producing duplicate warnings.
-            let second = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
+            let second = await app.agentMaintenance.sweepSteadyStateDivergence(at: instant)
             #expect(second == .init(vms: 1, sandboxes: 1, newlyDetected: 0))
 
             // A recovered status starts a fresh episode and clears the claim.
-            divergedVM.setStatus(.running, at: now)
+            divergedVM.setStatus(.running, at: instant)
             try await divergedVM.save(on: app.db)
-            divergedSandbox.setStatus(.running, at: now)
+            divergedSandbox.setStatus(.running, at: instant)
             try await divergedSandbox.save(on: app.db)
             #expect(try #require(await VM.find(divergedVM.id, on: app.db)).divergenceDetectedAt == nil)
             #expect(
                 try #require(await Sandbox.find(divergedSandbox.id, on: app.db))
                     .divergenceDetectedAt == nil)
-            let recovered = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
+            let recovered = await app.agentMaintenance.sweepSteadyStateDivergence(at: instant)
             #expect(recovered == .init(vms: 0, sandboxes: 0, newlyDetected: 0))
 
             // The exact 15-minute boundary is inclusive.
             recentVM.statusChangedAt = cutoff
             try await recentVM.save(on: app.db)
-            let boundary = await app.agentMaintenance.sweepSteadyStateDivergence(now: now)
+            let boundary = await app.agentMaintenance.sweepSteadyStateDivergence(at: instant)
             #expect(boundary == .init(vms: 1, sandboxes: 0, newlyDetected: 1))
         }
     }

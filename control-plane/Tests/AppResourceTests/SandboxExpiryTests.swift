@@ -353,6 +353,25 @@ final class SandboxExpiryTests {
 
     // MARK: - Coordination
 
+    @Test("large replica skew fences sandbox deletion")
+    func sweepFencesDeletionUnderLargeClockOffset() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox in
+            let sandboxID = try sandbox.requireID()
+            sandbox.ttlSeconds = 60
+            try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
+            let databaseNow = try await ClusterClock.read(on: app.db)
+            let skewed = ClusterInstant.testing(
+                databaseNow.date,
+                localClockOffsetSeconds:
+                    ClusterClock.destructiveSweepOffsetLimitSeconds + 1)
+
+            await app.agentMaintenance.sweepExpiredSandboxes(at: skewed)
+
+            #expect(try await Sandbox.find(sandboxID, on: app.db) != nil)
+            #expect(try await deletionRequested(for: sandboxID, on: app.db) == false)
+        }
+    }
+
     @Test("The expiry sweep is a cluster singleton")
     func sweepRespectsSingletonLock() async throws {
         try await withSandboxTestApp { app, _, _, sandbox in
