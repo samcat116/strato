@@ -210,6 +210,50 @@ struct LoadBalancerReconcilerTests {
         #expect(await actuator.removedCount() == 1)
     }
 
+    @Test("A failed stale-row teardown is attributed to its owning network")
+    func attributesStaleTeardownFailure() async throws {
+        let actuator = FakeLoadBalancerActuator(
+            backendHealth: [], failingRemovalRows: ["stale-row"])
+        await actuator.seed(
+            ManagedLoadBalancerObservation(
+                rowUUID: "stale-row",
+                ownerID: loadBalancerID,
+                networkID: vipNetworkID,
+                switchNames: [OVNNaming.switchName(networkId: vipNetworkID)]))
+
+        let outcome = await LoadBalancerReconciler.reconcileWithOutcome(
+            networks: [network(loadBalancers: [])],
+            actuator: actuator,
+            logger: Logger(label: "LoadBalancerReconcilerTests"))
+
+        #expect(outcome.observations?.isEmpty == true)
+        #expect(outcome.networkFailures.count == 1)
+        #expect(outcome.networkFailures[0].affectedNetworkIds == [vipNetworkID])
+        #expect(await actuator.rowCount() == 1)
+    }
+
+    @Test("A stale network payload protects all load balancers owned by that network")
+    func protectsLoadBalancersForStaleNetwork() async throws {
+        let actuator = FakeLoadBalancerActuator(backendHealth: [])
+        await actuator.seed(
+            ManagedLoadBalancerObservation(
+                rowUUID: "newer-row",
+                ownerID: loadBalancerID,
+                networkID: vipNetworkID,
+                switchNames: [OVNNaming.switchName(networkId: vipNetworkID)]))
+
+        let outcome = await LoadBalancerReconciler.reconcileWithOutcome(
+            networks: [],
+            actuator: actuator,
+            logger: Logger(label: "LoadBalancerReconcilerTests"),
+            protectedNetworkIDs: [vipNetworkID])
+
+        #expect(outcome.observations?.isEmpty == true)
+        #expect(outcome.networkFailures.isEmpty)
+        #expect(await actuator.rowCount() == 1)
+        #expect(await actuator.removedCount() == 0)
+    }
+
 }
 
 private actor FakeLoadBalancerActuator: LoadBalancerActuator {
@@ -217,9 +261,14 @@ private actor FakeLoadBalancerActuator: LoadBalancerActuator {
     private var creations = 0
     private var removals = 0
     private let backendHealth: [ObservedLoadBalancerBackend]
+    private let failingRemovalRows: Set<String>
 
-    init(backendHealth: [ObservedLoadBalancerBackend]) {
+    init(
+        backendHealth: [ObservedLoadBalancerBackend],
+        failingRemovalRows: Set<String> = []
+    ) {
         self.backendHealth = backendHealth
+        self.failingRemovalRows = failingRemovalRows
     }
 
     func seed(_ observation: ManagedLoadBalancerObservation) {
@@ -232,6 +281,7 @@ private actor FakeLoadBalancerActuator: LoadBalancerActuator {
 
     func ensureLoadBalancer(
         _ desired: DesiredLoadBalancer,
+        networkID: UUID,
         routerName: String,
         switchNames: Set<String>,
         existing: ManagedLoadBalancerObservation?
@@ -246,6 +296,7 @@ private actor FakeLoadBalancerActuator: LoadBalancerActuator {
         rows[rowUUID] = ManagedLoadBalancerObservation(
             rowUUID: rowUUID,
             ownerID: desired.id,
+            networkID: networkID,
             switchNames: switchNames,
             routerNames: [routerName])
         return rowUUID
@@ -257,7 +308,12 @@ private actor FakeLoadBalancerActuator: LoadBalancerActuator {
         backendHealth
     }
 
-    func removeLoadBalancer(_ observed: ManagedLoadBalancerObservation) {
+    struct RemovalFailure: Error {}
+
+    func removeLoadBalancer(_ observed: ManagedLoadBalancerObservation) throws {
+        guard !failingRemovalRows.contains(observed.rowUUID) else {
+            throw RemovalFailure()
+        }
         rows[observed.rowUUID] = nil
         removals += 1
     }

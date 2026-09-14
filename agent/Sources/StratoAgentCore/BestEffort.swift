@@ -1,3 +1,4 @@
+import Foundation
 import Logging
 
 /// Runs an independent reconciliation side effect without aborting the rest
@@ -20,5 +21,49 @@ public func attempt(
                 "error": .string(error.localizedDescription),
             ])
         return false
+    }
+}
+
+/// One failed best-effort network step retained for the observed-state report.
+public struct ReconcileStepFailure: Sendable, Equatable {
+    public let message: String
+    public let classification: FailureClassification
+    /// Nil means the failed step was global and affects every network in the
+    /// pass. An empty set means the failure belonged only to retired objects.
+    public let affectedNetworkIds: Set<UUID>?
+
+    public init(
+        message: String,
+        classification: FailureClassification,
+        affectedNetworkIds: Set<UUID>? = nil
+    ) {
+        self.message = message
+        self.classification = classification
+        self.affectedNetworkIds = affectedNetworkIds
+    }
+}
+
+/// Runs a best-effort step while returning the failure instead of reducing it
+/// to a log line. Used by reconcilers whose caller publishes observed state.
+public func observeAttempt(
+    _ logger: Logger,
+    _ step: String,
+    affectedNetworkIds: Set<UUID>? = nil,
+    _ body: () async throws -> Void
+) async -> ReconcileStepFailure? {
+    do {
+        try await body()
+        return nil
+    } catch {
+        logger.error(
+            "Network reconcile step failed",
+            metadata: [
+                "step": .string(step),
+                "error": .string(error.localizedDescription),
+            ])
+        return ReconcileStepFailure(
+            message: "\(step): \(error.localizedDescription)",
+            classification: (error as? any ClassifiableError)?.failureClassification ?? .transient,
+            affectedNetworkIds: affectedNetworkIds)
     }
 }

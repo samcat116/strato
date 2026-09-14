@@ -21,6 +21,17 @@ struct RebaseLegacyClusterClockDeadlinesTests {
                 name: "Legacy Clock Project",
                 description: "Legacy deadline repair",
                 organization: organization)
+            let siteID = try await builder.placementSite(for: project).requireID()
+            let network = LogicalNetwork(
+                name: "legacy-clock-network",
+                subnet: "192.0.2.0/24",
+                gateway: "192.0.2.1",
+                projectID: try project.requireID(),
+                siteID: siteID)
+            try await network.save(on: app.db)
+            let securityGroup = SecurityGroup(
+                projectID: try project.requireID(), name: "legacy-clock-group")
+            try await securityGroup.save(on: app.db)
             let vm = try await builder.createVM(name: "legacy-clock-vm", project: project)
             let snapshot = VMSnapshot(
                 name: "legacy-clock-snapshot",
@@ -52,19 +63,40 @@ struct RebaseLegacyClusterClockDeadlinesTests {
                 WHERE id = \(bind: try snapshot.requireID())
                 """
             ).run()
+            try await sql.raw(
+                """
+                UPDATE logical_networks
+                SET convergence_deadline = \(bind: legacyDeadline)
+                WHERE id = \(bind: try network.requireID())
+                """
+            ).run()
+            try await sql.raw(
+                """
+                UPDATE security_groups
+                SET convergence_deadline = \(bind: legacyDeadline)
+                WHERE id = \(bind: try securityGroup.requireID())
+                """
+            ).run()
 
             try await RebaseLegacyClusterClockDeadlines().prepare(on: app.db)
 
             let sampledAfterRepair = try await ClusterClock.read(on: app.db)
             let repairedVM = try #require(try await VM.find(vm.id, on: app.db))
             let repairedSnapshot = try #require(try await VMSnapshot.find(snapshot.id, on: app.db))
+            let repairedNetwork = try #require(try await LogicalNetwork.find(network.id, on: app.db))
+            let repairedSecurityGroup = try #require(
+                try await SecurityGroup.find(securityGroup.id, on: app.db))
             let vmDeadline = try #require(repairedVM.convergenceDeadline)
             let snapshotDeadline = try #require(repairedSnapshot.convergenceDeadline)
             let snapshotExpiry = try #require(repairedSnapshot.expiresAt)
+            let networkDeadline = try #require(repairedNetwork.convergenceDeadline)
+            let securityGroupDeadline = try #require(repairedSecurityGroup.convergenceDeadline)
 
             #expect(vmDeadline.timeIntervalSince(sampledAfterRepair.date) > 1_790)
             #expect(snapshotDeadline.timeIntervalSince(sampledAfterRepair.date) > 1_790)
             #expect(snapshotExpiry.timeIntervalSince(sampledAfterRepair.date) > 3_590)
+            #expect(networkDeadline.timeIntervalSince(sampledAfterRepair.date) > 170)
+            #expect(securityGroupDeadline.timeIntervalSince(sampledAfterRepair.date) > 170)
         }
     }
 

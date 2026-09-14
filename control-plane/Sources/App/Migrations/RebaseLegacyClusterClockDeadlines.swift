@@ -95,6 +95,8 @@ struct RebaseLegacyClusterClockDeadlines: AsyncMigration {
         (VolumeSnapshot.schema, 300),
         (VMSnapshot.schema, 1_800),
         (SandboxSnapshot.schema, 3_600),
+        (LogicalNetwork.schema, 180),
+        (SecurityGroup.schema, 180),
     ]
 
     private static let snapshotTables = [

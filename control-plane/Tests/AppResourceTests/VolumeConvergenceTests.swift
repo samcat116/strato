@@ -425,6 +425,7 @@ final class VolumeConvergenceTests {
                             volumeId: volumeID, present: true,
                             attachment: .file(path: "/p", format: .qcow2),
                             attachedVMId: vm.id, observedGeneration: 2,
+                            // An attached disk confirms uncapped I/O explicitly; nil is silence.
                             ioLimits: VolumeIOLimits())
                     ]))
 
