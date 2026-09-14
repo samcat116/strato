@@ -91,10 +91,10 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
         metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
         dnsZones: [DesiredDNSZone]?
-    ) async {
+    ) async -> NetworkReconcileOutcome {
         guard authoritative else {
             lastObservedLoadBalancers = nil
-            return
+            return .noOpinion
         }
         let reason = "Native OVN load balancers are not supported with user-mode networking"
         let desired = networks.flatMap(\.loadBalancers)
@@ -111,6 +111,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
                     ObservedLoadBalancerBackend(id: $0.id, healthStatus: .error)
                 })
         }
+        return .noOpinion
     }
 
     func observedLoadBalancers() async -> [ObservedLoadBalancerState]? {

@@ -218,8 +218,8 @@ struct SiteResponse: Content {
     /// `controller` is the designated agent's row, loaded by the caller (the
     /// list endpoint batches them). Required rather than optional-with-default
     /// so no producer can accidentally report a sick controller as healthy.
-    init(from site: Site, controller: Agent?) throws {
-        let health = SiteNetworkAuthority.controllerHealth(controller: controller)
+    init(from site: Site, controller: Agent?, at instant: ClusterInstant) throws {
+        let health = SiteNetworkAuthority.controllerHealth(controller: controller, at: instant)
         self.networkControllerStatus = health.status
         self.networkControllerIssue = health.issue
         self.id = try site.requireID()

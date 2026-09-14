@@ -580,6 +580,12 @@ CREATE TABLE public.logical_networks (
     lease_time bigint,
     external_access boolean DEFAULT true NOT NULL,
     generation bigint DEFAULT 1 NOT NULL,
+    observed_generation bigint DEFAULT 0 NOT NULL,
+    convergence_phase text,
+    last_error text,
+    failed_generation bigint,
+    last_error_at timestamp with time zone,
+    convergence_deadline timestamp with time zone,
     site_id uuid NOT NULL,
     subnet6 text,
     gateway6 text,
@@ -866,7 +872,10 @@ CREATE TABLE public.sandbox_network_interfaces (
     device_name text NOT NULL,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
-    logical_network_id uuid NOT NULL
+    logical_network_id uuid NOT NULL,
+    security_group_status text,
+    security_group_last_error text,
+    security_group_last_error_at timestamp with time zone
 );
 
 
@@ -1023,11 +1032,34 @@ CREATE TABLE public.security_groups (
     description text,
     is_default boolean NOT NULL,
     generation bigint NOT NULL,
+    observed_generation bigint DEFAULT 0 NOT NULL,
+    convergence_phase text,
+    last_error text,
+    failed_generation bigint,
+    last_error_at timestamp with time zone,
+    convergence_deadline timestamp with time zone,
     created_by_id uuid,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     CONSTRAINT ck_security_groups_description_length CHECK ((char_length(description) <= 4096)),
     CONSTRAINT ck_security_groups_name_length CHECK ((char_length(name) <= 128))
+);
+
+
+--
+-- Name: security_group_site_observations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.security_group_site_observations (
+    id uuid NOT NULL,
+    security_group_id uuid NOT NULL,
+    site_id uuid NOT NULL,
+    observed_generation bigint DEFAULT 0 NOT NULL,
+    status text,
+    last_error text,
+    failed_generation bigint,
+    failure_classification text,
+    last_error_at timestamp with time zone
 );
 
 
@@ -1314,7 +1346,10 @@ CREATE TABLE public.vm_network_interfaces (
     updated_at timestamp with time zone,
     logical_network_id uuid NOT NULL,
     attach_generation bigint,
-    detach_generation bigint
+    detach_generation bigint,
+    security_group_status text,
+    security_group_last_error text,
+    security_group_last_error_at timestamp with time zone
 );
 
 
@@ -1955,6 +1990,14 @@ ALTER TABLE ONLY public.security_group_rules
 
 
 --
+-- Name: security_group_site_observations security_group_site_observations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT security_group_site_observations_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: security_groups security_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2312,6 +2355,14 @@ ALTER TABLE ONLY public.scim_tokens
 
 ALTER TABLE ONLY public.security_groups
     ADD CONSTRAINT "uq:security_groups.project_id+security_groups.name" UNIQUE (project_id, name);
+
+
+--
+-- Name: security_group_site_observations uq_security_group_site_observations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT uq_security_group_site_observations UNIQUE (security_group_id, site_id);
 
 
 --
@@ -3052,6 +3103,13 @@ CREATE INDEX ix_security_group_rules_remote_group ON public.security_group_rules
 
 
 --
+-- Name: ix_security_group_site_observations_site; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_security_group_site_observations_site ON public.security_group_site_observations USING btree (site_id);
+
+
+--
 -- Name: ix_vm_interface_security_groups_group; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3618,6 +3676,22 @@ ALTER TABLE ONLY public.security_group_rules
 
 ALTER TABLE ONLY public.security_group_rules
     ADD CONSTRAINT security_group_rules_security_group_id_fkey FOREIGN KEY (security_group_id) REFERENCES public.security_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: security_group_site_observations security_group_site_observations_security_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT security_group_site_observations_security_group_id_fkey FOREIGN KEY (security_group_id) REFERENCES public.security_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: security_group_site_observations security_group_site_observations_site_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.security_group_site_observations
+    ADD CONSTRAINT security_group_site_observations_site_id_fkey FOREIGN KEY (site_id) REFERENCES public.sites(id) ON DELETE CASCADE;
 
 
 --

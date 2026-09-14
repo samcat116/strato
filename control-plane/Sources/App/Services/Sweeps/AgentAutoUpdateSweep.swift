@@ -46,7 +46,12 @@ extension AgentMaintenanceLoop {
     /// Only when nothing is failed or waiting does the sweep assign the next
     /// eligible *enrolled* agent (deterministic name order), after proving the
     /// release actually publishes an artifact for that agent's platform.
-    func sweepAgentAutoUpdates() async {
+    func sweepAgentAutoUpdates(
+        at instant: ClusterInstant,
+        currentInstant: @Sendable (any Database) async throws -> ClusterInstant = {
+            try await ClusterClock.read(on: $0)
+        }
+    ) async {
         guard !isShutDown, !app.didShutdown else { return }
         guard await app.coordination.acquireSweepLock("agent_auto_update") else {
             app.logger.debug("Skipping auto-update sweep; lock held by another control-plane instance")
@@ -54,7 +59,7 @@ extension AgentMaintenanceLoop {
         }
 
         let db = app.db
-        let now = Date()
+        let now = instant.date
         // Nil on a dev build with no configured target: no *rollout* can run,
         // but assignments an operator made by hand (which supply their own
         // artifact, precisely for builds a release does not serve) still need
@@ -186,11 +191,12 @@ extension AgentMaintenanceLoop {
             // Eligibility mirrors the update endpoint's checks, minus the
             // hosted-workload guard — that precondition is evaluated live on
             // the agent, which is the only side that actually knows.
+            let eligibilityInstant = try await currentInstant(db)
             let next = candidates.first { agent in
                 agent.autoUpdate
                     && agent.updateDesiredVersion == nil
                     && AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target)
-                    && agent.isOnline
+                    && agent.isOnline(at: eligibilityInstant)
                     && agent.hostOperatingSystem != nil
                     && agent.cpuArchitecture != nil
             }
@@ -216,7 +222,13 @@ extension AgentMaintenanceLoop {
                 return
             }
 
-            next.assignUpdate(version: target, source: .rollout, at: now)
+            // Artifact resolution and every earlier sweep may take time. Use a
+            // current database instant for the assignment itself so none of
+            // that work consumes the agent's health budget. Recheck liveness
+            // against the same instant before committing the assignment.
+            let assignmentInstant = try await currentInstant(db)
+            guard next.isOnline(at: assignmentInstant) else { return }
+            next.assignUpdate(version: target, source: .rollout, at: assignmentInstant)
             try await next.save(on: db)
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(

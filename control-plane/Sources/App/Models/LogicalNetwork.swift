@@ -88,9 +88,9 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     /// one of its NICs (STR-49).
     ///
     /// An opt-*out*, defaulting true: the metadata service replaces the
-    /// boot-time seed ISO rather than supplementing it. Editing it deliberately
-    /// does **not** bump `generation` — the metadata port converges
-    /// level-triggered on every network reconcile, exactly like the DHCP rows.
+    /// boot-time seed ISO rather than supplementing it. Editing it bumps the
+    /// network generation; the per-host metadata port also converges
+    /// level-triggered on every network reconcile.
     @Field(key: "metadata_enabled")
     var metadataEnabled: Bool
 
@@ -114,8 +114,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     /// so a site that cannot run CoreDNS is unaffected by the default until it
     /// can.
     ///
-    /// Editing it deliberately does **not** bump `generation` — the port and the
-    /// DHCP row converge level-triggered on every network reconcile.
+    /// Editing it bumps the network generation; the per-host resolver port and
+    /// DHCP row also converge level-triggered on every network reconcile.
     @Field(key: "resolver_enabled")
     var resolverEnabled: Bool
 
@@ -133,12 +133,30 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     var resolverIndex: Int?
 
     /// Monotonic counter bumped whenever a change alters how agents realize the
-    /// network's L3 (subnet, gateway, or external access), or creates, changes,
-    /// or deletes its switch-level network ACL. Sent to agents as the
+    /// network fabric, including L3, DHCP, DNS, metadata, resolver, and
+    /// switch-level network ACL state. Sent to agents as the
     /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
-    /// the network's realization backward or resurrect removed ACL rules.
+    /// the network's realization backward or resurrect removed state.
     @Field(key: "generation")
-    var generation: Int
+    var generation: Int64
+
+    @Field(key: "observed_generation")
+    var observedGeneration: Int64
+
+    @OptionalField(key: "convergence_phase")
+    var convergencePhase: String?
+
+    @OptionalField(key: "last_error")
+    var lastError: String?
+
+    @OptionalField(key: "failed_generation")
+    var failedGeneration: Int64?
+
+    @OptionalField(key: "last_error_at")
+    var lastErrorAt: Date?
+
+    @OptionalField(key: "convergence_deadline")
+    var convergenceDeadline: Date?
 
     /// Project that owns this network. Required since issue #765: a network is
     /// a tenant-scoped resource, and the project is what its name, its IP pool
@@ -190,7 +208,7 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         metadataEnabled: Bool = true,
         resolverEnabled: Bool = true,
         resolverIndex: Int? = nil,
-        generation: Int = 1,
+        generation: Int64 = 1,
         siteID: UUID
     ) {
         self.id = id
@@ -211,6 +229,12 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.resolverEnabled = resolverEnabled
         self.resolverIndex = resolverIndex
         self.generation = generation
+        self.observedGeneration = 0
+        self.convergencePhase = nil
+        self.lastError = nil
+        self.failedGeneration = nil
+        self.lastErrorAt = nil
+        self.convergenceDeadline = nil
     }
 
     /// The addresses to put on the wire for this network's resolver, or nil when
@@ -455,6 +479,7 @@ struct NetworkResponse: Content {
     /// handlers building this can silently omit the one field that reports a
     /// misconfiguration.
     let zoneResolutionWarning: String?
+    let conditions: ResourceConditions
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -483,7 +508,12 @@ struct NetworkResponse: Content {
         self.siteId = network.$site.id
         self.primaryDnsZoneId = network.$primaryDNSZone.id
         self.zoneResolutionWarning = zoneResolutionWarning
+        self.conditions = network.conditions
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt
     }
+}
+
+extension LogicalNetwork: NetworkFabricConvergingResource {
+    var desiredSatisfied: Bool { true }
 }

@@ -11,10 +11,11 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 61 combines
-    /// physical free disk reporting with the QEMU volume-I/O-limit capability
-    /// and observed I/O rate. Version 59 adds explicitly available host and
-    /// per-workload resource telemetry. Version 58 removes
+    /// The only wire/schema version this build accepts. Version 61 adds
+    /// physical free disk reporting and observed network-fabric outcomes
+    /// (STR-294) alongside version 60's QEMU volume-I/O-limit capability and
+    /// observed enforcement rate (STR-270). Version 59 adds explicitly
+    /// available host and per-workload resource telemetry. Version 58 removes
     /// obsolete fallbacks and makes the current coordinated schema explicit.
     /// Version 57 adds the failure classification that distinguishes blocked
     /// reconciliation from terminal failure. Version 56 adds recorded guest-exec replay and

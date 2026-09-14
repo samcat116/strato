@@ -439,7 +439,8 @@ struct DesiredStateAssembler {
         let securityGroups: [DesiredSecurityGroup]?
         if scope.authoritative {
             securityGroups = try await desiredSecurityGroups(
-                forVMs: scope.coveredVMs, sandboxes: scope.coveredSandboxes, on: db)
+                forVMs: scope.coveredVMs, sandboxes: scope.coveredSandboxes,
+                siteID: try site.requireID(), on: db)
         } else {
             securityGroups = nil
         }

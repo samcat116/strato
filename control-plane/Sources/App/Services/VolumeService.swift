@@ -183,13 +183,14 @@ enum VolumeService {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: nil, recordedAgentID: nil)
                 }
+                let instant = try await ClusterClock.read(on: tx)
 
                 let previous = committed.reconcilerAgentId
                 if let previous,
                     let reconcilerID = UUID(uuidString: previous),
                     let reconciler = try await Agent.find(reconcilerID, on: tx),
                     StoragePool.agentCanReach(
-                        agent: reconciler, pool: committedPool, replicaAgentIds: [])
+                        agent: reconciler, pool: committedPool, replicaAgentIds: [], at: instant)
                 {
                     return AgentHoldingResolution(
                         agentID: previous, previousAgentID: previous, recordedAgentID: previous)
@@ -210,7 +211,7 @@ enum VolumeService {
                 guard
                     let replacement = selectCephReconciler(
                         from: agents, pool: committedPool,
-                        requiresIOLimits: committed.ioLimits != nil)?.id?.uuidString
+                        requiresIOLimits: committed.ioLimits != nil, at: instant)?.id?.uuidString
                 else {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: previous, recordedAgentID: previous)
@@ -342,11 +343,11 @@ enum VolumeService {
         from agents: [Agent],
         memberAgentIds: [String] = [],
         sizeBytes: Int64 = 0,
-        requiresIOLimits: Bool = false
+        requiresIOLimits: Bool = false, at instant: ClusterInstant
     ) -> Agent? {
         agents.first {
-            $0.status == .online && $0.supportedHypervisors.contains(.qemu)
-                && (!requiresIOLimits || $0.supportsVolumeIOLimits)
+            $0.status == .online && $0.supportedHypervisors(at: instant).contains(.qemu)
+                && (!requiresIOLimits || $0.supportsVolumeIOLimits(at: instant))
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
                 && $0.availableDisk >= sizeBytes
         }
@@ -362,12 +363,14 @@ enum VolumeService {
         agents: [Agent],
         memberAgentIds: [String],
         requiresIOLimits: Bool = false,
+        at instant: ClusterInstant,
         coordination: CoordinationService
     ) async throws -> Agent {
         let eligible = eligibleLocalVolumeAgents(
             from: agents,
             memberAgentIds: memberAgentIds,
-            requiresIOLimits: requiresIOLimits)
+            requiresIOLimits: requiresIOLimits,
+            at: instant)
         let ids = eligible.compactMap { $0.id?.uuidString }
         let reservationId = volumeReservationID(volumeId)
 
@@ -416,11 +419,12 @@ enum VolumeService {
     }
 
     private static func eligibleLocalVolumeAgents(
-        from agents: [Agent], memberAgentIds: [String], requiresIOLimits: Bool
+        from agents: [Agent], memberAgentIds: [String], requiresIOLimits: Bool,
+        at instant: ClusterInstant
     ) -> [Agent] {
         agents.filter {
-            $0.status == .online && $0.supportedHypervisors.contains(.qemu)
-                && (!requiresIOLimits || $0.supportsVolumeIOLimits)
+            $0.status == .online && $0.supportedHypervisors(at: instant).contains(.qemu)
+                && (!requiresIOLimits || $0.supportsVolumeIOLimits(at: instant))
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
         }
     }
@@ -429,14 +433,16 @@ enum VolumeService {
     /// plus a fresh functional Ceph-client observation is the complete client
     /// configuration gate; the selected id is not data placement.
     static func selectCephReconciler(
-        from agents: [Agent], pool: StoragePool, requiresIOLimits: Bool = false
+        from agents: [Agent], pool: StoragePool, requiresIOLimits: Bool = false,
+        at instant: ClusterInstant
     ) -> Agent? {
         guard pool.mode == .ceph else { return nil }
         return
             agents
             .filter {
-                StoragePool.agentCanReach(agent: $0, pool: pool, replicaAgentIds: [])
-                    && (!requiresIOLimits || $0.supportsVolumeIOLimits)
+                StoragePool.agentCanReach(
+                    agent: $0, pool: pool, replicaAgentIds: [], at: instant)
+                    && (!requiresIOLimits || $0.supportsVolumeIOLimits(at: instant))
             }
             .sorted { ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "") }
             .first

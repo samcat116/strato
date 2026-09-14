@@ -39,6 +39,7 @@ const network: Network = {
   resolverEnabled: true,
   externalAccess: false,
   siteId: "site-1",
+  conditions: { converged: true, targetGeneration: 1, observedGeneration: 1 },
 };
 
 describe("network ACL permissions", () => {

@@ -75,6 +75,16 @@ extension AgentService {
             return
         }
 
+        let instant: ClusterInstant
+        do {
+            instant = try await ClusterClock.read(on: app.db)
+        } catch {
+            app.logger.warning(
+                "Failed to read PostgreSQL time for observed-state report: \(error)",
+                metadata: ["strato.agent.id": .string(report.agentId)])
+            return
+        }
+
         // Reports carry the same resource snapshot as heartbeats; keep the
         // scheduler's view fresh from whichever arrives without re-saving an
         // identical row a second time.
@@ -82,7 +92,8 @@ extension AgentService {
             report.resources,
             dependencyObservations: nil,
             hostResourceTelemetry: report.hostResourceTelemetry,
-            to: agent)
+            to: agent,
+            at: instant)
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason
         applyReportedUpdateStatus(report.agentUpdateStatus, to: agent)
@@ -90,12 +101,12 @@ extension AgentService {
             || agent.updateFailureReason != previousFailureReason
         {
             agentChanged = true
-            agent.lastHeartbeat = Date()
+            agent.lastHeartbeat = instant.date
         }
-        if applyReportedTeardownRefusal(report.teardownRefusal, to: agent) {
+        if applyReportedTeardownRefusal(report.teardownRefusal, to: agent, at: instant) {
             agentChanged = true
         }
-        if applyReportedManifestStatus(report.manifestStatus, to: agent) {
+        if applyReportedManifestStatus(report.manifestStatus, to: agent, at: instant) {
             agentChanged = true
         }
         if agentChanged {
@@ -120,7 +131,7 @@ extension AgentService {
                 try await StorageDeviceInventoryReconciler(application: app).apply(
                     storageDevices,
                     for: agent,
-                    receivedAt: Date())
+                    receivedAt: instant.date)
             } catch {
                 app.logger.error(
                     "Failed to apply storage-device inventory: \(error)",
@@ -129,7 +140,7 @@ extension AgentService {
         }
 
         do {
-            let outcome = try await app.observedStateApplier.apply(report)
+            let outcome = try await app.observedStateApplier.apply(report, at: instant)
             // Level-triggered, and recorded here because this is where the
             // agent's name is: the withheld-teardown counter only fires at the
             // transition, so on its own it can't answer whether a host is
@@ -195,7 +206,7 @@ extension AgentService {
     /// Returns whether the row actually changed, so a heartbeat carrying a
     /// refusal it has already recorded costs no write.
     func applyReportedTeardownRefusal(
-        _ refusal: ObservedTeardownRefusal?, to agent: Agent
+        _ refusal: ObservedTeardownRefusal?, to agent: Agent, at instant: ClusterInstant
     ) -> Bool {
         guard let refusal else {
             reportedTeardownRefusalSyncIds.removeValue(forKey: agent.name)
@@ -223,7 +234,7 @@ extension AgentService {
             ])
         Telemetry.agentTeardownRefused()
         agent.teardownRefusalReason = refusal.reason
-        agent.teardownRefusedAt = Date()
+        agent.teardownRefusedAt = instant.date
         return true
     }
 
@@ -241,7 +252,7 @@ extension AgentService {
     /// recorded on every report, changed or not: it answers "is this still
     /// happening", which a transition-only signal cannot.
     func applyReportedManifestStatus(
-        _ status: ObservedManifestStatus?, to agent: Agent
+        _ status: ObservedManifestStatus?, to agent: Agent, at instant: ClusterInstant
     ) -> Bool {
         Telemetry.agentManifestUnreadable(
             agentName: agent.name, unreadable: status.map { !$0.inventoryComplete } ?? false)
@@ -278,7 +289,7 @@ extension AgentService {
                 "reason": .string(status.reason),
             ])
         agent.manifestStatusReason = status.reason
-        agent.manifestStatusAt = Date()
+        agent.manifestStatusAt = instant.date
         agent.manifestInventoryComplete = status.inventoryComplete
         return true
     }
