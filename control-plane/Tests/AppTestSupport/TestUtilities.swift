@@ -1047,6 +1047,7 @@ package struct TestDataBuilder {
         project: Project,
         filename: String = "test.qcow2",
         size: Int64 = 10 * 1024 * 1024,
+        virtualSize: Int64? = nil,
         format: ImageFormat = .qcow2,
         status: ImageStatus = .ready,
         uploadedBy: User,
@@ -1073,6 +1074,7 @@ package struct TestDataBuilder {
                 architecture: image.architecture,
                 filename: filename,
                 size: size,
+                virtualSize: virtualSize ?? size,
                 checksum: checksum ?? "",
                 storagePath: storagePath
                     ?? ImageObjectKey.artifact(

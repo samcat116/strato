@@ -15553,6 +15553,7 @@ components:
         - availableMemory
         - totalDisk
         - availableDisk
+        - physicalFreeDisk
       properties:
         totalCPU:
           type: integer
@@ -15573,6 +15574,11 @@ components:
         availableDisk:
           type: integer
           format: int64
+          description: Bytes available for new provisioned commitments.
+        physicalFreeDisk:
+          type: integer
+          format: int64
+          description: Bytes physically free on the local volume filesystem.
 
     ResourceTelemetryAvailability:
       type: string

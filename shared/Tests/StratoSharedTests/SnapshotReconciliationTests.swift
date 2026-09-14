@@ -104,7 +104,7 @@ struct SnapshotReconciliationTests {
         let unavailable = """
             {"requestId":"r","timestamp":0,"agentId":"a","vms":[],"sandboxes":[],
              "resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,
-             "totalDisk":1,"availableDisk":1},"unrecognized":[]}
+             "totalDisk":1,"availableDisk":1,"physicalFreeDisk":1},"unrecognized":[]}
             """
         let decoded = try decodeJSON(ObservedStateReport.self, from: unavailable)
         #expect(decoded.snapshots == nil)
