@@ -462,9 +462,9 @@ extension VM {
     /// Updates the VM status, starts a fresh divergence episode, and stamps the
     /// change time for reconciliation sweeps. Does not persist — call
     /// `save(on:)` afterwards.
-    func setStatus(_ newStatus: VMStatus, at date: Date = Date()) {
+    func setStatus(_ newStatus: VMStatus, at instant: ClusterInstant) {
         status = newStatus
-        statusChangedAt = date
+        statusChangedAt = instant.date
         divergenceDetectedAt = nil
     }
 
@@ -552,10 +552,10 @@ extension VM {
     /// this ever read off it.
     @discardableResult
     func resolveForStuckOperation(
-        mutation: VMOperationKind, telemetryReason: String
+        mutation: VMOperationKind, telemetryReason: String, at instant: ClusterInstant
     ) -> Bool {
         if status.isTransitional || (mutation == .create && status == .created) {
-            setStatus(.error)
+            setStatus(.error, at: instant)
             Telemetry.vmEnteredError(reason: telemetryReason)
         }
         return revertDesiredToObserved()

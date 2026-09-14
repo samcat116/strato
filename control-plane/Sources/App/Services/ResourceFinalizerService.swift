@@ -112,14 +112,32 @@ enum ResourceFinalizerService {
             throw FinalizerError.unsupportedDatabase
         }
 
-        let row = try await sql.raw(
-            """
-            UPDATE \(ident: R.schema)
-            SET finalizers = array_remove(finalizers, \(bind: token.rawValue))
-            WHERE id = \(bind: id)
-            RETURNING finalizers
-            """
-        ).first(decoding: RemainingFinalizers.self)
+        let row: RemainingFinalizers?
+        switch R.operationResourceKind {
+        case .virtualMachine, .sandbox, .volume:
+            // These three families are aged by `updated_at` if this commit
+            // clears the last token but the process dies before `reap`.
+            row = try await sql.raw(
+                """
+                UPDATE \(ident: R.schema)
+                SET finalizers = array_remove(finalizers, \(bind: token.rawValue)),
+                    updated_at = now()
+                WHERE id = \(bind: id)
+                RETURNING finalizers
+                """
+            ).first(decoding: RemainingFinalizers.self)
+        case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
+            // Snapshot orphan detection needs no age cutoff and these schemas
+            // do not all carry an `updated_at` column.
+            row = try await sql.raw(
+                """
+                UPDATE \(ident: R.schema)
+                SET finalizers = array_remove(finalizers, \(bind: token.rawValue))
+                WHERE id = \(bind: id)
+                RETURNING finalizers
+                """
+            ).first(decoding: RemainingFinalizers.self)
+        }
 
         guard let row else { return .alreadyGone }
 
@@ -137,6 +155,26 @@ enum ResourceFinalizerService {
         try Task.checkCancellation()
 
         return try await R.reap(resource, on: db, app: app) ? .reaped : .alreadyGone
+    }
+
+    /// Anchors the orphan-reap age when a delete first becomes durable. Only
+    /// the resource families swept with an `updated_at` cutoff participate;
+    /// snapshots are reaped immediately once their finalizer list is empty.
+    static func stampOrphanReapAge<R: FinalizableResource>(
+        for resource: R, on db: any Database
+    ) async throws {
+        guard
+            R.operationResourceKind == .virtualMachine
+                || R.operationResourceKind == .sandbox
+                || R.operationResourceKind == .volume
+        else { return }
+        guard let sql = db as? any SQLDatabase else {
+            throw FinalizerError.unsupportedDatabase
+        }
+        let id = try resource.requireID()
+        try await sql.raw(
+            "UPDATE \(ident: R.schema) SET updated_at = now() WHERE id = \(bind: id)"
+        ).run()
     }
 
     /// Resolve both halves of an offline VM delete in one transaction. Physical

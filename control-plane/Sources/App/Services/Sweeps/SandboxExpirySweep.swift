@@ -53,17 +53,27 @@ extension AgentMaintenanceLoop {
     /// correctness, because the next tick recomputes both clocks from scratch.
     ///
     /// Internal rather than private so tests can drive a pass directly.
-    func sweepExpiredSandboxes() async {
+    func sweepExpiredSandboxes(at instant: ClusterInstant) async {
         // Never touch app.db once shutdown has begun — after core teardown
         // that is a process-killing fatal error, not a throw.
         guard !isShutDown, !app.didShutdown else { return }
+        guard instant.permitsDestructiveSweeps else {
+            app.logger.error(
+                "Skipping sandbox expiry because this replica's clock is too far from PostgreSQL",
+                metadata: [
+                    "offsetSeconds": .stringConvertible(instant.localClockOffsetSeconds),
+                    "limitSeconds": .stringConvertible(
+                        ClusterClock.destructiveSweepOffsetLimitSeconds),
+                ])
+            return
+        }
         guard await app.coordination.acquireSweepLock("sandbox_expiry") else {
             app.logger.debug("Skipping sandbox expiry sweep; lock held by another control-plane instance")
             return
         }
 
         let db = app.db
-        let now = Date()
+        let now = instant.date
 
         do {
             var expiring: [(sandbox: Sandbox, reason: SandboxExpiryReason)] = []
@@ -74,7 +84,7 @@ extension AgentMaintenanceLoop {
                 .filter(\.$desiredStatus != .absent)
                 .filter(\.$ttlSeconds != nil)
                 .all()
-            for sandbox in budgeted where sandbox.isExpired(at: now) {
+            for sandbox in budgeted where sandbox.isExpired(at: instant) {
                 expiring.append((sandbox, .ttl(seconds: sandbox.ttlSeconds ?? 0)))
             }
 

@@ -12,6 +12,11 @@ source, see [Local Development](/development/local-development).
 
 ## Install
 
+The host running the control-plane container must have working NTP or another
+time-synchronization service. Strato measures each replica against PostgreSQL,
+warns beyond 1 second, and refuses destructive maintenance beyond 30 seconds;
+alert on `control_plane_clock_offset_seconds`.
+
 Tagged releases provide a version-pinned `strato-<version>-compose.tar.gz`
 archive containing this entire directory. It replaces the retired standalone
 `docker-compose.release.yml` and `nginx.conf` release assets, which did not

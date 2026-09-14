@@ -200,17 +200,19 @@ extension VMSnapshot: SnapshotArtifactResource {
         ($project.id, environment)
     }
 
-    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VMSnapshot] {
-        try await VMSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    static func overdueForConvergence(
+        at instant: ClusterInstant, on db: any Database
+    ) async throws -> [VMSnapshot] {
+        try await VMSnapshot.query(on: db).filter(\.$convergenceDeadline <= instant.date).all()
     }
 
     static func placed(onAgent agentId: String, on db: any Database) async throws -> [VMSnapshot] {
         try await VMSnapshot.query(on: db).filter(\.$agentId == agentId).all()
     }
 
-    static func expired(at now: Date, on db: any Database) async throws -> [VMSnapshot] {
+    static func expired(at instant: ClusterInstant, on db: any Database) async throws -> [VMSnapshot] {
         try await VMSnapshot.query(on: db)
-            .filter(\.$expiresAt <= now)
+            .filter(\.$expiresAt <= instant.date)
             .filter(\.$desiredStatus != DesiredSnapshotStatus.absent)
             .all()
     }

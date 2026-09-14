@@ -90,11 +90,10 @@ struct AddNetworkFabricObservations: AsyncMigration {
         // therefore have no silence deadline. Security-group deadlines start
         // only when desired-state assembly includes them for an authority;
         // otherwise unused groups would time out despite legitimate silence.
-        let convergenceDeadline = Date().addingTimeInterval(180)
         try await sql.raw(
             """
             UPDATE logical_networks
-            SET convergence_deadline = \(bind: convergenceDeadline)
+            SET convergence_deadline = clock_timestamp() + interval '180 seconds'
             WHERE observed_generation < generation
               AND convergence_deadline IS NULL
             """
@@ -102,7 +101,7 @@ struct AddNetworkFabricObservations: AsyncMigration {
         try await sql.raw(
             """
             UPDATE security_groups groups
-            SET convergence_deadline = \(bind: convergenceDeadline)
+            SET convergence_deadline = clock_timestamp() + interval '180 seconds'
             WHERE groups.observed_generation < groups.generation
               AND groups.convergence_deadline IS NULL
               AND EXISTS (

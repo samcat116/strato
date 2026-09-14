@@ -71,7 +71,7 @@ extension AgentService {
         var siteID = siteID
         let dependencyObservations = normalizedDependencyObservations(
             message.dependencyObservations, agentName: agentName)
-        let dependencyObservationsReceivedAt = Date()
+        let registrationInstant = try await ClusterClock.read(on: db)
         // Set when this registration creates the agent row, so the enrollment it
         // drew its scope from can be marked used after a successful save.
         var newAgentEnrollment: AgentEnrollment?
@@ -103,7 +103,7 @@ extension AgentService {
             agent.apply(
                 registration: message,
                 dependencyObservations: dependencyObservations,
-                receivedAt: dependencyObservationsReceivedAt)
+                receivedAt: registrationInstant.date)
         } else {
             // A brand-new agent takes its scope and site placement from the
             // enrollment an operator created for this name: agents authenticate
@@ -149,7 +149,7 @@ extension AgentService {
                 name: agentName,
                 siteID: siteID,
                 dependencyObservations: dependencyObservations,
-                receivedAt: dependencyObservationsReceivedAt,
+                at: registrationInstant,
                 trustDomain: trustDomain)
             newAgentEnrollment = enrollment
         }
@@ -252,9 +252,9 @@ extension AgentService {
         // an eligible peer claims it on its own next registration.
         let persistedSiteID = agent.$site.id
         await SiteNetworkAuthority.revalidateDesignation(
-            agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
+            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
         await SiteNetworkAuthority.designateIfUnset(
-            agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
+            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
 
         // Record that the node completed its first registration. Bootstrap
         // redemption already erased the token hash atomically before minting
@@ -295,7 +295,8 @@ extension AgentService {
             Telemetry.recordDependency(
                 agentName: agent.name,
                 observation: observation,
-                receivedAt: dependencyObservationsReceivedAt)
+                receivedAt: registrationInstant.date,
+                at: registrationInstant)
         }
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: true, reason: "registered", on: db, logger: app.logger)
@@ -541,6 +542,7 @@ extension AgentService {
     /// agent's resource tracking or VM reconciliation.
     func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
         let db = app.db
+        let instant = try await ClusterClock.read(on: db)
         guard let agentUUID = UUID(uuidString: message.agentId),
             let agent = try await Agent.find(agentUUID, on: db)
         else {
@@ -569,7 +571,8 @@ extension AgentService {
             message.resources,
             dependencyObservations: message.dependencyObservations,
             hostResourceTelemetry: message.hostResourceTelemetry,
-            to: agent)
+            to: agent,
+            at: instant)
         {
             try await agent.save(on: db)
         }
@@ -588,10 +591,11 @@ extension AgentService {
         _ resources: AgentResources,
         dependencyObservations: [NodeDependencyObservation]?,
         hostResourceTelemetry: HostResourceTelemetry? = nil,
-        to agent: Agent
+        to agent: Agent,
+        at instant: ClusterInstant
     ) -> Bool {
         var changed = agent.updateAvailableResources(resources)
-        let now = Date()
+        let now = instant.date
         if let dependencyObservations {
             let storedObservations = normalizedDependencyObservations(
                 agent.dependencyObservations, agentName: agent.name)
@@ -607,7 +611,8 @@ extension AgentService {
                 Telemetry.recordDependency(
                     agentName: agent.name,
                     observation: observation,
-                    receivedAt: now)
+                    receivedAt: now,
+                    at: instant)
                 if previous[observation.id]?.functionalState != observation.functionalState
                     || previous[observation.id]?.reason?.code != observation.reason?.code
                 {

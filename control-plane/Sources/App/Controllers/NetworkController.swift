@@ -207,8 +207,6 @@ struct NetworkController: RouteCollection {
             resolverEnabled: request.resolverEnabled ?? true,
             siteID: siteId
         )
-        network.convergenceDeadline = Date().addingTimeInterval(180)
-
         do {
             // The creator's explicit, revocable binding on the network, in the
             // same transaction as the row (issue #477).
@@ -224,6 +222,8 @@ struct NetworkController: RouteCollection {
                 if network.resolverEnabled {
                     _ = try await ResolverAddressAllocator.ensureIndex(for: network, on: db)
                 }
+                let acceptedAt = try await ClusterClock.read(on: db)
+                network.convergenceDeadline = acceptedAt.date.addingTimeInterval(180)
                 try await network.save(on: db)
                 try await RoleBindingService.grant(
                     principalType: .user,

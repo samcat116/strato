@@ -39,6 +39,7 @@ struct ObservedStateApplier {
         reportedFailedGeneration: Int64?,
         previousFailureGeneration: Int64?,
         defaultMutation: VMOperationKind,
+        at instant: ClusterInstant,
         prepareFailure: (R) -> Void = { _ in },
         on db: any Database
     ) async throws -> ConvergenceSettlement {
@@ -75,6 +76,7 @@ struct ObservedStateApplier {
             context: .observedReport(
                 previousFailureGeneration: previousFailureGeneration,
                 hadActiveDeadline: resource.convergenceDeadline != nil),
+            at: instant,
             on: db)
         if outcome == .alreadyRecorded, changed {
             try await resource.save(on: db)
@@ -208,7 +210,10 @@ struct ObservedStateApplier {
     /// Apply one report, returning what the caller should do about the
     /// workloads the agent holds that no sync accounted for.
     @discardableResult
-    func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
+    func apply(
+        _ report: ObservedStateReport,
+        at instant: ClusterInstant
+    ) async throws -> UnrecognizedOutcome {
         let db = app.db
 
         // Network observations are independent of the workload manifest. A
@@ -218,15 +223,16 @@ struct ObservedStateApplier {
             try await applyObservedLoadBalancers(loadBalancers, on: db)
         }
         if let networks = report.networks {
-            try await applyObservedNetworks(networks, reportedBy: report.agentId, on: db)
+            try await applyObservedNetworks(
+                networks, reportedBy: report.agentId, at: instant, on: db)
         }
         if let securityGroups = report.securityGroups {
             try await applyObservedSecurityGroups(
-                securityGroups, reportedBy: report.agentId, on: db)
+                securityGroups, reportedBy: report.agentId, at: instant, on: db)
         }
         if let portMemberships = report.portMemberships {
             try await applyObservedPortMemberships(
-                portMemberships, reportedBy: report.agentId, on: db)
+                portMemberships, reportedBy: report.agentId, at: instant, on: db)
         }
 
         // A report from an agent that cannot read its own workload manifest
@@ -354,7 +360,8 @@ struct ObservedStateApplier {
                     ) {
                         volume, tx in
                         return try await applyObservedVolumeState(
-                            volume: volume, observed: observed, agentId: report.agentId, on: tx)
+                            volume: volume, observed: observed, agentId: report.agentId,
+                            at: instant, on: tx)
                     }
                     unrecognizedOutcome.desiredStateChanged =
                         unrecognizedOutcome.desiredStateChanged || desiredStateChanged == true
@@ -397,12 +404,12 @@ struct ObservedStateApplier {
                     try await applyObservedVMState(
                         vm: vm, observed: observed, interfaces: interfaces,
                         bootVolumes: report.volumes == nil ? nil : bootVolumesByVMID[vmID] ?? [],
-                        on: tx)
+                        at: instant, on: tx)
                 }
             } else {
                 try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
                     try await handleReportedAbsence(
-                        vm: vm, agentId: report.agentId, on: tx)
+                        vm: vm, agentId: report.agentId, at: instant, on: tx)
                 }
             }
         }
@@ -413,13 +420,13 @@ struct ObservedStateApplier {
                 try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
                     sandbox, tx in
                     try await applyObservedSandboxState(
-                        sandbox: sandbox, observed: observed, on: tx)
+                        sandbox: sandbox, observed: observed, at: instant, on: tx)
                 }
             } else {
                 try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
                     sandbox, tx in
                     try await handleReportedSandboxAbsence(
-                        sandbox: sandbox, agentId: report.agentId, on: tx)
+                        sandbox: sandbox, agentId: report.agentId, at: instant, on: tx)
                 }
             }
         }
@@ -435,11 +442,14 @@ struct ObservedStateApplier {
                 uniquingKeysWith: { first, _ in first }
             )
             try await applyObservedSnapshots(
-                VolumeSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                VolumeSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
             try await applyObservedSnapshots(
-                VMSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                VMSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
             try await applyObservedSnapshots(
-                SandboxSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                SandboxSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
         }
 
         return unrecognizedOutcome
@@ -495,6 +505,7 @@ struct ObservedStateApplier {
     func applyObservedNetworks(
         _ observations: [ObservedNetworkState],
         reportedBy agentId: String,
+        at instant: ClusterInstant,
         on db: any Database
     ) async throws {
         guard let reporterID = UUID(uuidString: agentId) else { return }
@@ -526,6 +537,7 @@ struct ObservedStateApplier {
                     lastError: observed.lastError,
                     failedGeneration: observed.failedGeneration,
                     failureClassification: observed.failureClassification,
+                    at: instant,
                     to: network)
                 try await network.save(on: tx)
             }
@@ -535,6 +547,7 @@ struct ObservedStateApplier {
     func applyObservedSecurityGroups(
         _ observations: [ObservedSecurityGroupState],
         reportedBy agentId: String,
+        at instant: ClusterInstant,
         on db: any Database
     ) async throws {
         guard let reporterID = UUID(uuidString: agentId) else { return }
@@ -549,7 +562,8 @@ struct ObservedStateApplier {
         else { return }
 
         for observed in observations {
-            try await SecurityGroupSiteConvergence.apply(observed, siteID: siteID, on: db)
+            try await SecurityGroupSiteConvergence.apply(
+                observed, siteID: siteID, at: instant, on: db)
         }
     }
 
@@ -559,6 +573,7 @@ struct ObservedStateApplier {
         lastError: String?,
         failedGeneration: Int64?,
         failureClassification: ObservedFailureClassification?,
+        at instant: ClusterInstant,
         to resource: R
     ) {
         resource.observedGeneration = max(resource.observedGeneration, observedGeneration)
@@ -586,7 +601,7 @@ struct ObservedStateApplier {
                 resource.convergenceDeadline = nil
             }
         } else if previousError != error || previousFailed != failed {
-            resource.lastErrorAt = Date()
+            resource.lastErrorAt = instant.date
         }
         if error != nil,
             failureClassification != .blocked,
@@ -605,6 +620,7 @@ struct ObservedStateApplier {
     func applyObservedPortMemberships(
         _ observations: [ObservedPortMembershipState],
         reportedBy agentId: String,
+        at instant: ClusterInstant,
         on db: any Database
     ) async throws {
         for observed in observations {
@@ -627,7 +643,7 @@ struct ObservedStateApplier {
                         .map { $0.$securityGroup.id }
                         .sorted { $0.uuidString < $1.uuidString }
                     guard current == observed.securityGroupIds else { return }
-                    recordMembership(observed, on: nic)
+                    recordMembership(observed, at: instant, on: nic)
                     try await nic.save(on: tx)
                     return
                 }
@@ -645,7 +661,7 @@ struct ObservedStateApplier {
                         .map { $0.$securityGroup.id }
                         .sorted { $0.uuidString < $1.uuidString }
                     guard current == observed.securityGroupIds else { return }
-                    recordMembership(observed, on: nic)
+                    recordMembership(observed, at: instant, on: nic)
                     try await nic.save(on: tx)
                 }
             }
@@ -654,20 +670,22 @@ struct ObservedStateApplier {
 
     private func recordMembership(
         _ observed: ObservedPortMembershipState,
+        at instant: ClusterInstant,
         on nic: VMNetworkInterface
     ) {
         nic.securityGroupStatus = observed.status.rawValue
         nic.securityGroupLastError = observed.lastError
-        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : Date()
+        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : instant.date
     }
 
     private func recordMembership(
         _ observed: ObservedPortMembershipState,
+        at instant: ClusterInstant,
         on nic: SandboxNetworkInterface
     ) {
         nic.securityGroupStatus = observed.status.rawValue
         nic.securityGroupLastError = observed.lastError
-        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : Date()
+        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : instant.date
     }
 
     // MARK: - Unrecognized workloads (STR-98)

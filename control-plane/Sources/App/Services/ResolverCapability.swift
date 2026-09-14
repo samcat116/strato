@@ -28,10 +28,11 @@ enum ResolverCapability {
     static func incapableAgentNames(inSite siteID: UUID, on db: any Database) async throws
         -> [String]
     {
-        try await Agent.query(on: db)
+        let instant = try await ClusterClock.read(on: db)
+        return try await Agent.query(on: db)
             .filter(\.$site.$id == siteID)
             .all()
-            .filter { !$0.effectiveResolverCapable }
+            .filter { !$0.effectiveResolverCapable(at: instant) }
             .map(\.name)
             .sorted()
     }
@@ -41,10 +42,11 @@ enum ResolverCapability {
     /// One query, so listing N networks costs one round trip rather than N. The
     /// common case materializes zero rows.
     static func index(on db: any Database) async throws -> Index {
-        Index(
+        let instant = try await ClusterClock.read(on: db)
+        return Index(
             incapable: try await Agent.query(on: db)
                 .all()
-                .filter { !$0.effectiveResolverCapable })
+                .filter { !$0.effectiveResolverCapable(at: instant) })
     }
 
     /// A fleet-wide snapshot of which sites are holding the resolver back.

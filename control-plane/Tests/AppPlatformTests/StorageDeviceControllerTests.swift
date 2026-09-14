@@ -94,25 +94,39 @@ struct StorageDeviceControllerTests {
         let online = agent(lastHeartbeat: now.addingTimeInterval(-1))
 
         let anonymous = device(identityKind: nil, identityValue: nil, present: false, state: .faulted)
-        #expect(StorageDeviceEligibility.evaluate(anonymous, agent: online, now: now).blockedReason == .missingIdentity)
+        #expect(
+            StorageDeviceEligibility.evaluate(anonymous, agent: online, at: .testing(now))
+                .blockedReason == .missingIdentity)
 
         let missing = device(present: false, state: .faulted)
-        #expect(StorageDeviceEligibility.evaluate(missing, agent: online, now: now).blockedReason == .notPresent)
+        #expect(
+            StorageDeviceEligibility.evaluate(missing, agent: online, at: .testing(now))
+                .blockedReason == .notPresent)
 
         let inUse = device(state: .inUse)
-        #expect(StorageDeviceEligibility.evaluate(inUse, agent: online, now: now).blockedReason == .inUse)
+        #expect(
+            StorageDeviceEligibility.evaluate(inUse, agent: online, at: .testing(now))
+                .blockedReason == .inUse)
 
         let draining = device(state: .draining)
-        #expect(StorageDeviceEligibility.evaluate(draining, agent: online, now: now).blockedReason == .draining)
+        #expect(
+            StorageDeviceEligibility.evaluate(draining, agent: online, at: .testing(now))
+                .blockedReason == .draining)
 
         let faulted = device(state: .faulted)
-        #expect(StorageDeviceEligibility.evaluate(faulted, agent: online, now: now).blockedReason == .faulted)
+        #expect(
+            StorageDeviceEligibility.evaluate(faulted, agent: online, at: .testing(now))
+                .blockedReason == .faulted)
 
         let offline = agent(lastHeartbeat: now.addingTimeInterval(-61))
-        #expect(StorageDeviceEligibility.evaluate(device(), agent: offline, now: now).blockedReason == .agentOffline)
+        #expect(
+            StorageDeviceEligibility.evaluate(device(), agent: offline, at: .testing(now))
+                .blockedReason == .agentOffline)
 
         let stale = device(lastSeenAt: now.addingTimeInterval(-61))
-        #expect(StorageDeviceEligibility.evaluate(stale, agent: online, now: now).blockedReason == .staleObservation)
+        #expect(
+            StorageDeviceEligibility.evaluate(stale, agent: online, at: .testing(now))
+                .blockedReason == .staleObservation)
     }
 
     @Test("only a fresh available identified disk on an online agent can be selected")
@@ -121,7 +135,7 @@ struct StorageDeviceControllerTests {
         let result = StorageDeviceEligibility.evaluate(
             device(lastSeenAt: now.addingTimeInterval(-60)),
             agent: agent(lastHeartbeat: now.addingTimeInterval(-1)),
-            now: now)
+            at: .testing(now))
 
         #expect(result.canMarkOsdEligible)
         #expect(result.blockedReason == nil)
@@ -136,7 +150,7 @@ struct StorageDeviceControllerTests {
         let result = StorageDeviceEligibility.evaluate(
             selected,
             agent: agent(lastHeartbeat: now.addingTimeInterval(-100)),
-            now: now)
+            at: .testing(now))
 
         #expect(result.osdEligible)
         #expect(result.canMarkOsdEligible == false)

@@ -90,14 +90,16 @@ enum SecurityGroupSiteConvergence {
             """
         ).run()
 
+        let instant = try await ClusterClock.read(on: db)
         for row in groups {
-            try await refreshAggregate(groupID: row.id, on: db)
+            try await refreshAggregate(groupID: row.id, at: instant, on: db)
         }
     }
 
     static func apply(
         _ observed: ObservedSecurityGroupState,
         siteID: UUID,
+        at instant: ClusterInstant,
         on db: any Database
     ) async throws {
         try await db.transaction { tx in
@@ -153,15 +155,19 @@ enum SecurityGroupSiteConvergence {
             if observed.status != .error {
                 siteObservation.lastErrorAt = nil
             } else if failureChanged || siteObservation.lastErrorAt == nil {
-                siteObservation.lastErrorAt = Date()
+                siteObservation.lastErrorAt = instant.date
             }
             try await siteObservation.save(on: tx)
-            try await refreshAggregate(groupID: observed.id, on: tx)
+            try await refreshAggregate(groupID: observed.id, at: instant, on: tx)
         }
     }
 
     /// The caller holds the security-group row lock.
-    private static func refreshAggregate(groupID: UUID, on db: any Database) async throws {
+    private static func refreshAggregate(
+        groupID: UUID,
+        at instant: ClusterInstant,
+        on db: any Database
+    ) async throws {
         guard let group = try await SecurityGroup.find(groupID, on: db) else { return }
         let previousObservedGeneration = group.observedGeneration
         let previousConvergencePhase = group.convergencePhase
@@ -239,7 +245,7 @@ enum SecurityGroupSiteConvergence {
                     group.failedGeneration = nil
                     group.lastErrorAt = nil
                     if group.convergenceDeadline == nil {
-                        group.convergenceDeadline = Date().addingTimeInterval(180)
+                        group.convergenceDeadline = instant.date.addingTimeInterval(180)
                     }
                 }
             }
