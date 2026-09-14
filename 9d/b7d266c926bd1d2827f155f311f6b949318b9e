@@ -1,0 +1,39 @@
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_ecf329776cbe5e::t_8367aa98892324 688-691,730,735-737,740,844-847,872-874
+docs/architecture/wire-protocol.md
+  s_ecf329776cbe5e::t_e49ec690f0fff2 126
+control-plane/web/src/components/networks/network-acl-permissions.test.tsx
+  s_ecf329776cbe5e::t_92790f0497756e 42
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_ecf329776cbe5e::t_4e33175b3d1b25 427-429
+control-plane/Tests/AppPlatformTests/NetworkFabricGenerationTests.swift
+  s_ecf329776cbe5e::t_729ef920e2a6b0 1-14,16-70
+  s_ecf329776cbe5e::t_67b3c2bce55b34 15
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_ecf329776cbe5e::t_8367aa98892324 568,573
+control-plane/Sources/App/Services/DesiredStateGenerationWriter.swift
+  s_ecf329776cbe5e::t_47c5c4dd016c6c 43-54,56-57,61,70
+control-plane/Sources/App/Services/SecurityGroupSiteConvergence.swift
+  s_ecf329776cbe5e::t_8367aa98892324 119-130,132
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_ecf329776cbe5e::t_4e33175b3d1b25 278-280,311-312
+docs/architecture/networking.md
+  s_ecf329776cbe5e::t_350cd5fbbec88b 84,104-105,112-118
+  s_ecf329776cbe5e::t_e49ec690f0fff2 70-83,85-103,106-111,119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9db7d266c926bd1d2827f155f311f6b949318b9e",
+  "prompts": {},
+  "sessions": {
+    "s_ecf329776cbe5e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09d4f-441e-75b1-b72e-337732849bb3",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
