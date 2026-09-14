@@ -39,11 +39,26 @@ enum DesiredStateGenerationWriter {
         guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
 
         let advanced: GenerationRow?
+        let convergenceDeadline = Date().addingTimeInterval(180)
+        var assignments: SQLQueryString = "generation = generation + 1"
+        if schema == LogicalNetwork.schema {
+            assignments += ", convergence_deadline = GREATEST(convergence_deadline, \(bind: convergenceDeadline))"
+        } else if schema == SecurityGroup.schema {
+            // Assembly establishes which authorities receive a group. Renew
+            // their runway on every mutation, even after convergence cleared
+            // the deadline, but do not time out unattached groups.
+            assignments += """
+                , convergence_deadline = CASE WHEN EXISTS (
+                    SELECT 1 FROM \(ident: SecurityGroupSiteObservation.schema)
+                    WHERE security_group_id = \(bind: id)
+                ) THEN GREATEST(convergence_deadline, \(bind: convergenceDeadline)) ELSE NULL END
+                """
+        }
         if let expectedGeneration {
             advanced = try await sql.raw(
                 """
                 UPDATE \(ident: schema)
-                SET generation = generation + 1
+                SET \(assignments)
                 WHERE id = \(bind: id) AND generation = \(bind: expectedGeneration)
                 RETURNING generation
                 """
@@ -52,7 +67,7 @@ enum DesiredStateGenerationWriter {
             advanced = try await sql.raw(
                 """
                 UPDATE \(ident: schema)
-                SET generation = generation + 1
+                SET \(assignments)
                 WHERE id = \(bind: id)
                 RETURNING generation
                 """

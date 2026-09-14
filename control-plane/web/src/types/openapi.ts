@@ -6091,6 +6091,15 @@ export interface components {
             attachmentState: "attaching" | "attached" | "detaching" | "attach_failed" | "detach_failed";
             /** @description The current generation's convergence error for this interface, when failed. */
             attachmentError?: string;
+            /**
+             * @description The reporting host's observed result for this port's security-group membership. Absent until a current membership has been attempted.
+             * @enum {string}
+             */
+            securityGroupStatus?: "active" | "error";
+            /** @description Why the reporting host could not realize the current membership. */
+            securityGroupLastError?: string;
+            /** Format: date-time */
+            securityGroupLastErrorAt?: string;
             /** @description The security groups filtering this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
             securityGroupIds?: string[];
         };
@@ -6232,6 +6241,15 @@ export interface components {
             deviceName: string;
             /** @description The security groups attached to this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
             securityGroupIds?: string[];
+            /**
+             * @description The reporting host's observed result for this port's security-group membership. Absent until a current membership has been attempted.
+             * @enum {string}
+             */
+            securityGroupStatus?: "active" | "error";
+            /** @description Why the reporting host could not realize the current membership. */
+            securityGroupLastError?: string;
+            /** Format: date-time */
+            securityGroupLastErrorAt?: string;
         };
         /** @enum {string} */
         SandboxStatus: "Stopped" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
@@ -6763,6 +6781,7 @@ export interface components {
             primaryDnsZoneId?: string;
             /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will — the network's resolver is off, its site cannot run one, or it has no address yet. Absent for a network with no attached zone, which has nothing to fail to deliver. */
             zoneResolutionWarning?: string;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -7032,6 +7051,7 @@ export interface components {
             rules: components["schemas"]["SecurityGroupRule"][];
             /** @description How many VM NICs currently attach this group. */
             attachmentCount: number;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */

@@ -633,6 +633,9 @@ struct NetworkInterfaceResponse: Content {
     /// address lists: an empty array here reads as "this NIC is in no group",
     /// a security claim a forgotten `.with(...)` must not be able to make.
     let securityGroupIds: [UUID]?
+    let securityGroupStatus: String?
+    let securityGroupLastError: String?
+    let securityGroupLastErrorAt: Date?
     let attachmentState: NetworkInterfaceAttachmentState
     let attachmentError: String?
 
@@ -655,6 +658,9 @@ struct NetworkInterfaceResponse: Content {
         self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
             memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
         }
+        self.securityGroupStatus = nic.securityGroupStatus
+        self.securityGroupLastError = nic.securityGroupLastError
+        self.securityGroupLastErrorAt = nic.securityGroupLastErrorAt
         if let detachGeneration = nic.detachGeneration {
             if vm.failedGeneration == detachGeneration {
                 self.attachmentState = .detachFailed

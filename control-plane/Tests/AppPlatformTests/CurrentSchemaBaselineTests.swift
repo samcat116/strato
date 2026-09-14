@@ -9,8 +9,8 @@ import Vapor
 
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
-    private static let expectedCatalogMD5 = "848631eafc007aca56e77448502c7d5e"
-    private static let expectedCurrentCatalogMD5 = "4197252edb589428f6fc17a62daac1ce"
+    private static let expectedCatalogMD5 = "68575f5dc8fb318887deb3e6a471bd1a"
+    private static let expectedCurrentCatalogMD5 = "c517ee5140368851dbb79c4933e62098"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -30,10 +30,10 @@ struct CurrentSchemaBaselineTests {
             #expect(fluentEnumRows.count == 12)
 
             let counts = try await catalogCounts(on: app.db)
-            #expect(counts.tables == 69)
-            #expect(counts.columns == 887)
-            #expect(counts.constraints == 316)
-            #expect(counts.indexes == 213)
+            #expect(counts.tables == 70)
+            #expect(counts.columns == 914)
+            #expect(counts.constraints == 320)
+            #expect(counts.indexes == 216)
             #expect(counts.enums == 3)
             #expect(counts.triggers == 3)
             #expect(counts.functions == 2)
@@ -63,10 +63,10 @@ struct CurrentSchemaBaselineTests {
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
-            #expect(upgradedCounts.tables == 78)
-            #expect(upgradedCounts.columns == 1008)
-            #expect(upgradedCounts.constraints == 370)
-            #expect(upgradedCounts.indexes == 240)
+            #expect(upgradedCounts.tables == 79)
+            #expect(upgradedCounts.columns == 1035)
+            #expect(upgradedCounts.constraints == 374)
+            #expect(upgradedCounts.indexes == 243)
             #expect(upgradedCounts.enums == baselineCounts.enums)
             #expect(upgradedCounts.triggers == baselineCounts.triggers)
             #expect(upgradedCounts.functions == baselineCounts.functions)

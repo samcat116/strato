@@ -245,6 +245,10 @@ actor AgentMaintenanceLoop {
             try await degradeOverdue(VolumeSnapshot.self, now: now, on: db)
             try await degradeOverdue(VMSnapshot.self, now: now, on: db)
             try await degradeOverdue(SandboxSnapshot.self, now: now, on: db)
+            try await degradeOverdueNetworkFabric(
+                schema: LogicalNetwork.schema, resourceKind: "network", now: now, on: db)
+            try await degradeOverdueNetworkFabric(
+                schema: SecurityGroup.schema, resourceKind: "security_group", now: now, on: db)
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
@@ -462,6 +466,45 @@ actor AgentMaintenanceLoop {
                     "mutation": .string(mutation.rawValue),
                     "targetGeneration": .stringConvertible(resource.generation),
                     "observedGeneration": .stringConvertible(resource.observedGeneration),
+                ])
+        }
+    }
+
+    private func degradeOverdueNetworkFabric(
+        schema: String,
+        resourceKind: String,
+        now: Date,
+        on db: any Database
+    ) async throws {
+        guard let sql = db as? any SQLDatabase else {
+            throw ConvergenceWriteError.unsupportedDatabase
+        }
+        struct OverdueFabricRow: Decodable {
+            let id: UUID
+            let generation: Int64
+            let observedGeneration: Int64
+        }
+        let reason = "Timed out: the network authority did not report convergence before the deadline"
+        let rows = try await sql.raw(
+            """
+            UPDATE \(ident: schema)
+            SET last_error = \(bind: reason),
+                failed_generation = generation,
+                last_error_at = \(bind: now),
+                convergence_deadline = NULL
+            WHERE convergence_deadline <= \(bind: now)
+              AND observed_generation < generation
+            RETURNING id, generation, observed_generation AS "observedGeneration"
+            """
+        ).all(decoding: OverdueFabricRow.self)
+        for row in rows {
+            app.logger.warning(
+                "Network fabric did not converge before its deadline; marked degraded",
+                metadata: [
+                    "resourceKind": .string(resourceKind),
+                    "resourceId": .string(row.id.uuidString),
+                    "targetGeneration": .stringConvertible(row.generation),
+                    "observedGeneration": .stringConvertible(row.observedGeneration),
                 ])
         }
     }

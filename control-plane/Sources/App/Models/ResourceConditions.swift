@@ -335,6 +335,16 @@ where IDValue == UUID {
     func adoptReconciliationState(from committed: Self)
 }
 
+/// Shared convergence shape for network-fabric rows. Unlike workload
+/// `ConvergingResource`s these rows have no finalizers or single workload
+/// placement, but they expose the same client-facing conditions.
+protocol NetworkFabricConvergingResource: Model, ConvergenceDerived, Sendable
+where IDValue == UUID {
+    var observedGeneration: Int64 { get set }
+    var lastErrorAt: Date? { get set }
+    var convergenceDeadline: Date? { get set }
+}
+
 extension ConvergingResource {
     func project(on db: any Database) async throws -> Project {
         guard let project = try await Project.find(projectID, on: db) else {
