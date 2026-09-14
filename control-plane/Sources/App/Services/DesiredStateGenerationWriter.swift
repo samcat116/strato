@@ -39,37 +39,27 @@ enum DesiredStateGenerationWriter {
         guard let sql = db as? any SQLDatabase else { throw Error.unsupportedDatabase }
 
         let advanced: GenerationRow?
-        // Security-group deadlines start when desired-state assembly proves a
-        // topology authority will receive the group. Unattached groups are
-        // intentionally absent from every agent's closure.
-        let tracksNetworkFabric = schema == LogicalNetwork.schema
         let convergenceDeadline = Date().addingTimeInterval(180)
-        if let expectedGeneration, tracksNetworkFabric {
+        var assignments: SQLQueryString = "generation = generation + 1"
+        if schema == LogicalNetwork.schema {
+            assignments += ", convergence_deadline = GREATEST(convergence_deadline, \(bind: convergenceDeadline))"
+        } else if schema == SecurityGroup.schema {
+            // Assembly establishes which authorities receive a group. Renew
+            // their runway on every mutation, even after convergence cleared
+            // the deadline, but do not time out unattached groups.
+            assignments += """
+                , convergence_deadline = CASE WHEN EXISTS (
+                    SELECT 1 FROM \(ident: SecurityGroupSiteObservation.schema)
+                    WHERE security_group_id = \(bind: id)
+                ) THEN GREATEST(convergence_deadline, \(bind: convergenceDeadline)) ELSE NULL END
+                """
+        }
+        if let expectedGeneration {
             advanced = try await sql.raw(
                 """
                 UPDATE \(ident: schema)
-                SET generation = generation + 1,
-                    convergence_deadline = \(bind: convergenceDeadline)
+                SET \(assignments)
                 WHERE id = \(bind: id) AND generation = \(bind: expectedGeneration)
-                RETURNING generation
-                """
-            ).first(decoding: GenerationRow.self)
-        } else if let expectedGeneration {
-            advanced = try await sql.raw(
-                """
-                UPDATE \(ident: schema)
-                SET generation = generation + 1
-                WHERE id = \(bind: id) AND generation = \(bind: expectedGeneration)
-                RETURNING generation
-                """
-            ).first(decoding: GenerationRow.self)
-        } else if tracksNetworkFabric {
-            advanced = try await sql.raw(
-                """
-                UPDATE \(ident: schema)
-                SET generation = generation + 1,
-                    convergence_deadline = \(bind: convergenceDeadline)
-                WHERE id = \(bind: id)
                 RETURNING generation
                 """
             ).first(decoding: GenerationRow.self)
@@ -77,7 +67,7 @@ enum DesiredStateGenerationWriter {
             advanced = try await sql.raw(
                 """
                 UPDATE \(ident: schema)
-                SET generation = generation + 1
+                SET \(assignments)
                 WHERE id = \(bind: id)
                 RETURNING generation
                 """

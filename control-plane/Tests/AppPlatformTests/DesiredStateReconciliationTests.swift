@@ -685,8 +685,10 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("A stale active report cannot erase a current blocked security-group failure")
-    func staleActivePreservesBlockedSecurityGroupFailure() async throws {
+    @Test(
+        "A stale report cannot erase a current blocked security-group failure",
+        arguments: [ObservedNetworkFabricStatus.active, .error])
+    func staleReportPreservesBlockedSecurityGroupFailure(status: ObservedNetworkFabricStatus) async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentID = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
@@ -725,15 +727,17 @@ final class DesiredStateReconciliationTests {
             #expect(degraded.conditions.degraded?.sinceGeneration == 2)
             #expect(abs(try #require(degraded.convergenceDeadline).timeIntervalSince(deadline)) < 0.01)
 
-            let staleActive = try self.report(
+            let staleReport = try self.report(
                 agentId: agentID,
                 vms: [],
                 securityGroups: [
                     ObservedSecurityGroupState(
-                        id: groupID, observedGeneration: 1, status: .active)
+                        id: groupID, observedGeneration: 1, status: status,
+                        lastError: status == .error ? "superseded failure" : nil,
+                        failedGeneration: status == .error ? 1 : nil)
                 ])
             await app.agentService.applyObservedStateReport(
-                staleActive, fromAgentKey: agentKey("recon-agent"))
+                staleReport, fromAgentKey: agentKey("recon-agent"))
 
             let stillDegraded = try #require(
                 try await SecurityGroup.find(groupID, on: app.db))
@@ -837,8 +841,10 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("A network timeout survives stale active reports until the current generation lands")
-    func networkFabricDeadlineSweep() async throws {
+    @Test(
+        "A network timeout survives stale reports until the current generation lands",
+        arguments: [ObservedNetworkFabricStatus.active, .error])
+    func networkFabricDeadlineSweep(status: ObservedNetworkFabricStatus) async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentID = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
@@ -863,7 +869,9 @@ final class DesiredStateReconciliationTests {
                 vms: [],
                 networks: [
                     ObservedNetworkState(
-                        id: try network.requireID(), observedGeneration: 3, status: .active)
+                        id: try network.requireID(), observedGeneration: 3, status: status,
+                        lastError: status == .error ? "superseded failure" : nil,
+                        failedGeneration: status == .error ? 3 : nil)
                 ])
             await app.agentService.applyObservedStateReport(
                 stale, fromAgentKey: agentKey("recon-agent"))

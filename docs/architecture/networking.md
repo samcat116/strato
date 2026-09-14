@@ -67,6 +67,56 @@ What genuinely remains missing (details in §Known gaps):
   Inbound resolution from outside the overlay and external publication are still
   open. See [dns](./dns.md).
 
+## Fabric convergence observations
+
+The agent reports the outcome of fabric reconciliation through
+`ObservedStateReport.networks`, `.securityGroups`, and `.portMemberships`
+(STR-294, wire v61). These observations describe whether the agent's own
+realization work succeeded; they do not verify packet delivery. A successful
+pass advances the observed generation, while an error identifies the failed
+generation and its retry classification. Logical-network and security-group
+API responses expose the resulting `conditions`.
+
+Only the site's designated topology authority reports network and
+security-group results. Other agents send nil for those fields, which means
+they have no opinion. The control plane checks the reporting authority before
+persisting results. Network outcomes include failures in the authority's
+topology, ACL, DHCP, and DNS reconciliation. DNS write failures
+are attributed to the affected networks, including a network being detached
+from a zone; DNS zones do not have a separate observed-state row.
+
+A security group can be required in several sites. The control plane keeps
+one `SecurityGroupSiteObservation` per required site, derived from VM and
+sandbox NIC attachments and transitive remote-group rule references. Its
+aggregate observed generation is the minimum across that set. All required
+sites must acknowledge the current generation before the group converges;
+one site's success cannot clear another site's failure. Removing the last
+attachment removes the obsolete site requirement. An unused group has no
+authority work and receives no convergence deadline.
+
+Port membership is reported by every workload host, independently of topology
+authority. Each result identifies the interface and desired security-group
+set, including failures to add default-deny membership. The control plane
+checks workload placement and the current attachment set under the membership
+lock before storing the NIC's status and error.
+
+Network mutations and required security-group work receive a convergence
+deadline. Mutations renew it without shortening an existing longer deadline.
+The stuck-convergence sweep degrades work that receives no current
+acknowledgement before its deadline. An explicit failure already degrades the
+resource; a blocked failure also retains its deadline while the dependency is
+retried. A delayed report for an older generation cannot erase a current
+failure, and only current-generation success clears that failure. Agents
+continue reconciling level-triggered desired state so a later successful pass
+can recover without another mutation.
+
+Per-host resolver/metadata failures, agent failure metrics, and asynchronous
+mutation receipts remain outside this observation slice. Local typed errors
+retain their failure classification, but SwiftOVN currently flattens OVSDB
+server errors into `OVNManagerError.operationFailed(String)`. Those failures
+are conservatively transient: distinguishing permanent server-side validation
+errors requires preserving the structured error upstream, not parsing prose.
+
 ## Target deployment topology
 
 The product shape is a **SaaS control plane** orchestrating **customer-run

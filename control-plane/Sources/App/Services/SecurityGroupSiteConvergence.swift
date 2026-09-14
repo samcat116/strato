@@ -116,18 +116,20 @@ enum SecurityGroupSiteConvergence {
                     .first()
             else { return }
 
+            // A blocked failure retains the site's last successful cursor.
+            // An old success or error can share that cursor without answering
+            // for the current generation, so neither may erase its failure.
+            let answersCurrentGeneration =
+                (observed.status == .active && observed.observedGeneration == group.generation)
+                || (observed.status == .error && observed.failedGeneration == group.generation)
+            if siteObservation.observedStatus == .error,
+                siteObservation.failedGeneration == group.generation,
+                !answersCurrentGeneration
+            {
+                return
+            }
             if observed.status == .active {
-                // A blocked failure can retain the site's last successful
-                // generation. Do not let a delayed success for that older
-                // generation erase the current generation's failure.
-                let wouldClearCurrentFailure =
-                    siteObservation.observedStatus == .error
-                    && siteObservation.failedGeneration == group.generation
-                    && observed.observedGeneration < group.generation
-                guard
-                    !wouldClearCurrentFailure,
-                    observed.observedGeneration >= siteObservation.observedGeneration
-                else { return }
+                guard observed.observedGeneration >= siteObservation.observedGeneration else { return }
             } else {
                 guard
                     observed.failedGeneration == group.generation
