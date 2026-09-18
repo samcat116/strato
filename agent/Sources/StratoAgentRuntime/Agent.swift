@@ -119,6 +119,10 @@ actor Agent {
     // the control plane's desired-state syncs. Work items run on per-VM serial
     // lanes, so two items can never interleave operations on one VM.
     var reconciler: Reconciler?
+    /// Latest result of the network-fabric pass. It is replaced atomically for
+    /// each desired-state message and included in every later observed report,
+    /// so a persistent failure remains visible between syncs.
+    var observedNetworkFabric = NetworkReconcileOutcome.noOpinion
     // What this host's link-local metadata service serves its guests (STR-52),
     // written by the reconciler from each sync's `DesiredVMState.metadata`.
     // Owned here rather than by the reconciler because the guest-facing
@@ -196,6 +200,10 @@ actor Agent {
     // once per agent lifetime is cheaper than persisting a second source of
     // truth that could drift from the disk.
     var volumeSizes: [String: Int64] = [:]
+    /// Host-local provisioned bytes, distinct from the physical bytes written
+    /// into sparse images. This is populated from each local backend image's
+    /// virtual size and raised as soon as a create or grow succeeds.
+    var volumeCommittedSizes: [String: Int64] = [:]
 
     // Snapshot artifacts this host holds (STR-150), across all three families.
     //
@@ -357,6 +365,10 @@ actor Agent {
     /// `bootOrder` integers are informational; attachment reconciliation uses
     /// this sequence instead of sorting them again (STR-308).
     var desiredVMVolumeSpecs: [String: [VolumeSpec]] = [:]
+    /// Previous live libvirt counter sample per volume. Kept only long enough
+    /// to turn monotonic counters into the rate sent with observed state; it is
+    /// not convergence state and deliberately does not survive a restart.
+    var volumeIOCounterSamples: [String: (sample: VolumeIOCounterSample, sampledAt: ContinuousClock.Instant)] = [:]
 
     var isSimulationMode: Bool { configuration.simulation?.enabled ?? false }
     // The observed-state report reads this cache without starting subprocesses.

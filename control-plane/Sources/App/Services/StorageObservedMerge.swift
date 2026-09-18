@@ -14,6 +14,7 @@ extension ObservedStateApplier {
         volume: Volume,
         observed: ObservedVolumeState,
         agentId: String,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws -> Bool {
         let volumeID = try volume.requireID()
@@ -186,8 +187,10 @@ extension ObservedStateApplier {
                 else {
                     throw ConvergenceWriteError.unsupportedDatabase
                 }
+                let acceptedAt = try await ClusterClock.read(on: db)
                 volume.extendConvergenceDeadline(
-                    by: OperationResourceKind.volume.completionBudgetSeconds(for: .resize))
+                    by: OperationResourceKind.volume.completionBudgetSeconds(for: .resize),
+                    from: acceptedAt)
                 changed = true
                 normalizedDesiredSize = true
             }
@@ -198,11 +201,10 @@ extension ObservedStateApplier {
         // mutation.
         //
         // Written *only* when the agent said something. Nil here means "this
-        // agent does not report applied limits" — which is every agent until
-        // the agent-side work lands — and writing that through would record an
-        // agent's silence as "the caps were removed". An agent reporting an
-        // explicitly uncapped disk sends a present-but-empty value instead, and
-        // that one does clear the columns.
+        // agent does not report applied limits" — and writing that through
+        // would record an agent's silence as "the caps were removed". An agent
+        // reporting an explicitly uncapped disk sends a present-but-empty
+        // value instead, and that one does clear the columns.
         if let applied = observed.ioLimits {
             if volume.appliedIOPSTotal != applied.iopsTotal {
                 volume.appliedIOPSTotal = applied.iopsTotal
@@ -214,8 +216,35 @@ extension ObservedStateApplier {
             }
         }
 
-        if aggregateObservedGeneration > volume.observedGeneration {
-            volume.observedGeneration = aggregateObservedGeneration
+        // Nil is a pre-v62 agent saying nothing, not an instruction to erase a
+        // previously observed policy. A storage-only replica also reports an
+        // explicit inactive policy, so accept policy only from the agent that
+        // claims the attachment or from the persisted attachment owner clearing
+        // its own state. This is the same ownership rule used for
+        // `attachedAgentId` below, kept ahead of the convergence early-return
+        // because applied policy remains a useful fact while peers catch up.
+        let reporterOwnsAttachment =
+            observed.attachedVMId != nil || volume.attachedAgentId == agentId
+        if let applied = observed.blockPolicy,
+            reporterOwnsAttachment,
+            volume.appliedBlockPolicy != applied
+        {
+            volume.appliedBlockPolicy = applied
+            changed = true
+        }
+
+        // A generation acknowledgement is incomplete when an attached volume
+        // (including a requested clear) or a stored non-empty policy lacks the
+        // applied-value echo. Keep the last known columns for operator
+        // visibility, but do not let that stale fact satisfy the current
+        // generation. A later libvirt read-back advances it normally.
+        let requiresAppliedIOLimitsEcho = observed.attachedVMId != nil || volume.ioLimits != nil
+        let verifiedObservedGeneration =
+            requiresAppliedIOLimitsEcho && observed.ioLimits == nil
+            ? min(aggregateObservedGeneration, generationBeforeTarget)
+            : aggregateObservedGeneration
+        if verifiedObservedGeneration > volume.observedGeneration {
+            volume.observedGeneration = verifiedObservedGeneration
             changed = true
         }
 
@@ -278,6 +307,7 @@ extension ObservedStateApplier {
             reportedFailedGeneration: observed.failedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .create,
+            at: instant,
             on: db)
         return normalizedDesiredSize
     }
@@ -310,6 +340,7 @@ extension ObservedStateApplier {
         _ type: A.Type,
         reported: [UUID: ObservedSnapshotState],
         agentId: String,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws {
         for artifact in try await A.placed(onAgent: agentId, on: db) {
@@ -324,7 +355,7 @@ extension ObservedStateApplier {
                     artifact, reportedBy: agentId, on: db
                 ) { artifact, tx in
                     try await applyObservedSnapshotState(
-                        artifact: artifact, observed: observed, on: tx)
+                        artifact: artifact, observed: observed, at: instant, on: tx)
                 }
                 if shouldEnforceStorageQuota == true {
                     // Start quota enforcement only after the row-locking
@@ -346,6 +377,7 @@ extension ObservedStateApplier {
     func applyObservedSnapshotState<A: SnapshotArtifactResource>(
         artifact: A,
         observed: ObservedSnapshotState,
+        at instant: ClusterInstant,
         on db: Database
     ) async throws -> Bool {
         try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
@@ -418,6 +450,7 @@ extension ObservedStateApplier {
             reportedFailedGeneration: observed.failedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .create,
+            at: instant,
             on: db)
         if case .unchanged = settlement {
             return false

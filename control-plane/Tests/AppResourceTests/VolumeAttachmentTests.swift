@@ -289,6 +289,26 @@ struct VolumeAttachmentTests {
         }
     }
 
+    // MARK: - Backend validation
+
+    @Test("A Firecracker VM rejects data-volume attachment before placement")
+    func firecrackerAttachmentIsRefused() async throws {
+        try await withAttachmentApp { app, _, admin, project, vm, token in
+            vm.hypervisorType = .firecracker
+            try await vm.save(on: app.db)
+            let volume = try await makeVolume(
+                named: "firecracker-data-volume", on: app, user: admin, project: project)
+
+            try await attach(
+                volume, to: vm, token: token, on: app, expecting: .badRequest,
+                reason: "not supported for Firecracker VMs")
+
+            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            #expect(stored.$vm.id == nil)
+            #expect(stored.generation == 0)
+        }
+    }
+
     // MARK: - Deleting a VM
 
     @Test("Deleting a VM detaches its volumes instead of stranding them")
@@ -654,8 +674,11 @@ struct VolumeAttachmentTests {
             volume.attachedAgentId = "agent-a"
             try await volume.save(on: app.db)
             let generationBefore = volume.generation
+            let repairInstant = ClusterInstant.testing(
+                Date(timeIntervalSince1970: 2_000_000_000))
 
-            await app.agentMaintenance.sweepStrandedVolumeAttachments()
+            await app.agentMaintenance.sweepStrandedVolumeAttachments(
+                currentInstant: { _ in repairInstant })
 
             let swept = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(swept.deviceName == nil)
@@ -663,6 +686,10 @@ struct VolumeAttachmentTests {
             #expect(swept.readonly == false)
             #expect(swept.attachedAgentId == nil)
             #expect(swept.generation > generationBefore)
+            let deadline = try #require(swept.convergenceDeadline)
+            let expectedDeadline = repairInstant.date.addingTimeInterval(
+                OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
+            #expect(abs(deadline.timeIntervalSince(expectedDeadline)) < 0.001)
             // `status` is the agent's observation, so the sweep does not invent
             // one — it repairs the attachment and lets the next report speak.
             #expect(swept.status == .attached)

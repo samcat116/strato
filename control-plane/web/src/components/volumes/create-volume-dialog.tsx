@@ -19,7 +19,7 @@ import { useProjectStoragePools } from "@/lib/hooks";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 
-import type { VolumeFormat, VolumeType } from "@/types/api";
+import type { VolumeBlockMode, VolumeFormat, VolumeType } from "@/types/api";
 
 interface CreateVolumeDialogProps {
   open: boolean;
@@ -42,6 +42,7 @@ export function CreateVolumeDialog({
     sizeGB: "10",
     format: "qcow2" as VolumeFormat,
     volumeType: "data" as VolumeType,
+    blockMode: "conservative" as VolumeBlockMode,
     sourceImageId: "",
     poolId: "",
     poolProjectId: "",
@@ -89,6 +90,7 @@ export function CreateVolumeDialog({
       sizeGB: "10",
       format: "qcow2",
       volumeType: "data",
+      blockMode: "conservative",
       sourceImageId: "",
       poolId: "",
       poolProjectId: "",
@@ -136,6 +138,7 @@ export function CreateVolumeDialog({
       sizeGB,
       format: formData.format,
       volumeType: formData.volumeType,
+      blockMode: formData.blockMode,
       sourceImageId: formData.sourceImageId || undefined,
       poolId: selectedPoolId || undefined,
     };
@@ -298,6 +301,32 @@ export function CreateVolumeDialog({
                   : selectedPool?.mode === "ceph"
                     ? "RBD volumes use raw format and can attach from any configured agent in the site."
                     : "Local volumes remain pinned to the agent that creates them."}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="volumeBlockMode" className="text-foreground">
+                QEMU block I/O mode
+              </Label>
+              <select
+                id="volumeBlockMode"
+                value={formData.blockMode}
+                onChange={(event) =>
+                  setFormData({
+                    ...formData,
+                    blockMode: event.target.value as VolumeBlockMode,
+                  })
+                }
+                disabled={isLoading}
+                className={selectClassName}
+              >
+                <option value="conservative">Conservative (default)</option>
+                <option value="direct">Direct I/O when supported</option>
+                <option value="cachedShared">Cached shared base</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Direct I/O is enabled only after the agent probes the actual
+                QEMU, kernel, filesystem, and volume. Unsupported combinations
+                stay conservative and report why.
               </p>
             </div>
             <div className="space-y-2">

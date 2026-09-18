@@ -76,7 +76,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         let store = app.imageObjectStore
 
         do {
-            let (size, checksum, format) = try await downloadFile(
+            let (size, checksum, format, headerBytes) = try await downloadFile(
                 from: url, to: artifact.storagePath, in: store
             ) {
                 [weak self] progress in
@@ -101,6 +101,8 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             // Kernel/initramfs are opaque; only disk-like artifacts carry a format.
             if artifact.kind == .diskImage || artifact.kind == .rootfs {
                 artifact.format = format
+                artifact.virtualSize = ImageValidationService.virtualSize(
+                    format: format, storedSize: size, headerBytes: headerBytes)
             }
             artifact.status = .ready
             artifact.downloadProgress = 100
@@ -162,7 +164,9 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     /// volume. Kept in sync with `ImageController.maxUploadBytes` (4 GiB).
     private static let maxDownloadBytes: Int64 = 4 * 1024 * 1024 * 1024
 
-    private typealias DownloadResult = (size: Int64, checksum: String, format: ImageFormat)
+    private typealias DownloadResult = (
+        size: Int64, checksum: String, format: ImageFormat, headerBytes: [UInt8]
+    )
 
     /// What one hop of the redirect chain resolved to.
     private enum HopOutcome {
@@ -261,7 +265,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         var hasher = SHA256Hasher()
         var totalBytesWritten: Int64 = 0
         var lastProgressUpdate: Int64 = 0
-        var formatDetected: ImageFormat?
+        var headerBytes: [UInt8] = []
 
         do {
             // Stream the response body into the store
@@ -273,9 +277,10 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                     continue
                 }
 
-                // Detect format from first chunk
-                if formatDetected == nil && !bytes.isEmpty {
-                    formatDetected = ImageValidationService.detectFormat(from: buffer)
+                if headerBytes.count < ImageValidationService.headerProbeLength {
+                    headerBytes.append(
+                        contentsOf: bytes.prefix(
+                            ImageValidationService.headerProbeLength - headerBytes.count))
                 }
 
                 try await writer.write(buffer)
@@ -317,9 +322,9 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         }
 
         let checksum = hasher.finalize()
-        let format = formatDetected ?? .raw
+        let format = ImageValidationService.detectFormat(fromHeader: headerBytes)
 
-        return (totalBytesWritten, checksum, format)
+        return (totalBytesWritten, checksum, format, headerBytes)
     }
 
 }

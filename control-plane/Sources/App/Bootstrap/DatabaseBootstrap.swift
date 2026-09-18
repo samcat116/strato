@@ -195,8 +195,33 @@ extension Application {
         // redundant. Fresh baselines omit it; preserved databases drop it here.
         migrations.add(DropAgentWireProtocolVersion())
 
+        // STR-269: opt-in cache policy plus the agent's exact applied/fallback
+        // report. Existing volumes remain conservative.
+        migrations.add(AddVolumeBlockPolicy())
+
+        // STR-294: close the desired/observed loop for network topology,
+        // security-group ACLs, and per-port membership.
+        migrations.add(AddNetworkFabricObservations())
+
         // STR-266: explicit host PSI/reclaim/swap and per-workload cgroup
         // contention snapshots, sampled outside the heartbeat path.
         migrations.add(AddResourceContentionTelemetry())
+
+        // STR-278: preserve both committed disk availability and the physical
+        // filesystem headroom sparse volumes can consume later.
+        migrations.add(AddAgentPhysicalFreeDisk())
+
+        // STR-278: placement and quota admission need the guest-visible size
+        // encoded by sparse image artifacts, not their stored object bytes.
+        migrations.add(AddImageArtifactVirtualSize())
+
+        // STR-292: timestamps written by pre-cluster-clock replicas can be in
+        // PostgreSQL's future. Fail them closed until a current report arrives.
+        migrations.add(NormalizeLegacyAgentClockTimestamps())
+
+        // Legacy convergence and snapshot-retention deadlines cannot reveal
+        // the replica offset that stamped them. Restart their safe runway from
+        // PostgreSQL time before database-clock sweeps judge them.
+        migrations.add(RebaseLegacyClusterClockDeadlines())
     }
 }

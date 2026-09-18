@@ -22,19 +22,19 @@ final class ImageControllerTests {
         buffer.writeBytes([0x51, 0x46, 0x49, 0xFB])
 
         // Version 3 (big-endian)
-        buffer.writeInteger(UInt32(3).bigEndian)
+        buffer.writeInteger(UInt32(3), endianness: .big)
 
         // Backing file offset
-        buffer.writeInteger(UInt64(0).bigEndian)
+        buffer.writeInteger(UInt64(0), endianness: .big)
 
         // Backing file size
-        buffer.writeInteger(UInt32(0).bigEndian)
+        buffer.writeInteger(UInt32(0), endianness: .big)
 
         // Cluster bits
-        buffer.writeInteger(UInt32(16).bigEndian)
+        buffer.writeInteger(UInt32(16), endianness: .big)
 
         // Virtual size (10GB)
-        buffer.writeInteger(UInt64(10 * 1024 * 1024 * 1024).bigEndian)
+        buffer.writeInteger(UInt64(10 * 1024 * 1024 * 1024), endianness: .big)
 
         // Fill remaining with zeros
         let remaining = max(0, size - buffer.writerIndex)
@@ -909,6 +909,7 @@ final class ImageControllerTests {
                 fileContent: fileContent
             )
 
+            var imageID: UUID?
             try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 req.headers.contentType = HTTPMediaType(
@@ -919,7 +920,15 @@ final class ImageControllerTests {
 
                 let response = try res.content.decode(ImageResponse.self)
                 #expect(response.format == .qcow2)
+                imageID = response.id
             }
+
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == imageID!)
+                    .filter(\.$kind == .diskImage)
+                    .first())
+            #expect(artifact.virtualSize == Int64(10 * 1024 * 1024 * 1024))
         }
     }
 

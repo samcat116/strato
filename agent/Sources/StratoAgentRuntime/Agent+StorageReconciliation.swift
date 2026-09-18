@@ -31,6 +31,8 @@ extension Agent {
             try await volumeReconcileAttach(item)
         case .detach:
             try await volumeReconcileDetach(item)
+        case .throttle:
+            try await volumeReconcileThrottle(item)
         case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
             .reconfigureNetworks:
             // A volume has no run state, nowhere to be exported to, and no
@@ -49,7 +51,8 @@ extension Agent {
             try await snapshotReconcileDelete(item)
         case .export:
             try await snapshotReconcileExport(item)
-        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .reboot, .restore,
+        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .throttle,
+            .reboot, .restore,
             .reconfigureNetworks:
             // An artifact is frozen bytes: it has no run state, no size that
             // can change, nothing to plug in, and no edges of its own — a
@@ -76,6 +79,7 @@ extension Agent {
         let parentId = desired.parentId.uuidString
 
         let facts: ObservedSnapshotFacts
+        let reservedDiskBytes: Int64?
         switch desired.kind {
         case .volumeSnapshot:
             // The backend's snapshot is a qcow2 overlay backed by the volume,
@@ -103,6 +107,28 @@ extension Agent {
                 throw ConvergenceError.sourceNotReady(
                     "volume \(parentId) is not present on this host yet")
             }
+            let parentDesired = desiredVolumeStates[parentId]
+            let snapshotStorage = VolumeSnapshotStorageRouting.resolve(
+                desiredStorage: desired.volumeStorage,
+                recordedStorage: nil,
+                currentParentStorage: parentDesired?.storage)
+            reservedDiskBytes =
+                snapshotStorage == .local
+                ? max(0, try await backend.volumeInfo(attachment: disk).virtualSize)
+                : nil
+            let claim: HostCapacityClaim?
+            if let reservedDiskBytes {
+                let reservation = HostReservation(diskBytes: reservedDiskBytes)
+                let raw = await rawHostCapacitySnapshot()
+                claim = try capacityAdmissionLedger.claim(
+                    reservation,
+                    desiredWorkloadReservation: reservation,
+                    snapshot: raw,
+                    agentName: initialAgentID)
+            } else {
+                claim = nil
+            }
+            defer { capacityAdmissionLedger.release(claim) }
             let path = try await backend.createSnapshot(
                 volumeId: parentId, snapshotId: snapshotId, attachment: disk)
             facts = ObservedSnapshotFacts(
@@ -111,6 +137,7 @@ extension Agent {
                 architecture: CPUArchitecture.current)
 
         case .vmCheckpoint:
+            reservedDiskBytes = nil
             guard let service = getHypervisorServiceForVM(vmId: parentId) else {
                 throw ConvergenceError.sourceNotReady(
                     "VM \(parentId) is not present on this host yet")
@@ -126,6 +153,7 @@ extension Agent {
                 qemuVersion: report.hypervisorVersion)
 
         case .sandboxSnapshot:
+            reservedDiskBytes = nil
             guard let runtime = sandboxRuntime else {
                 throw ConvergenceError.unsupported("this agent has no sandbox runtime")
             }
@@ -145,6 +173,7 @@ extension Agent {
         snapshotRecords[desired.snapshotId] = SnapshotRecord(
             snapshotId: desired.snapshotId, kind: desired.kind, parentId: desired.parentId,
             volumeStorage: desired.kind == .volumeSnapshot ? desired.volumeStorage : nil,
+            reservedDiskBytes: reservedDiskBytes,
             facts: facts)
         persistSnapshotRecords()
         logger.info(
@@ -339,6 +368,24 @@ extension Agent {
         return try await storageBackends.backend(for: storage)
     }
 
+    private func rejectMaterializedVolume(
+        volumeId: String, backend: any StorageBackend, cause: any Error
+    ) async {
+        do {
+            try await backend.rejectVolume(volumeId: volumeId)
+            volumeSizes.removeValue(forKey: volumeId)
+            volumeCommittedSizes.removeValue(forKey: volumeId)
+        } catch let rejectionError {
+            logger.error(
+                "Failed to durably reject a volume after materialization",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "cause": .string(cause.localizedDescription),
+                    "rejectionError": .string(rejectionError.localizedDescription),
+                ])
+        }
+    }
+
     func volumeReconcileCreate(_ item: ReconcileWorkItem) async throws {
         guard let desired = item.desiredVolume else {
             throw ConvergenceError.unsupported("volume create requires a desired entry")
@@ -351,6 +398,23 @@ extension Agent {
                 "managed volume \(item.id) has historical bytes that could not be adopted: \(adoptionFailure)")
         }
         let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        let claim: HostCapacityClaim?
+        if desired.storage == .local {
+            let reservation = HostReservation(diskBytes: desired.sizeBytes)
+            let raw = await rawHostCapacitySnapshot()
+            claim = try capacityAdmissionLedger.claim(
+                reservation,
+                desiredWorkloadReservation: reservation,
+                snapshot: raw,
+                agentName: initialAgentID)
+        } else {
+            claim = nil
+        }
+        var supplementalClaim: HostCapacityClaim?
+        defer {
+            capacityAdmissionLedger.release(supplementalClaim)
+            capacityAdmissionLedger.release(claim)
+        }
 
         // The create strategy is read only here, when the volume does not yet
         // exist. A present volume never re-runs it, which is what makes a
@@ -407,9 +471,56 @@ extension Agent {
                 volumeId: item.id, sizeBytes: desired.sizeBytes, format: format)
         }
 
-        // A cloned or image-backed volume inherits the source's size, which may
-        // be smaller than what was asked for; the next sync plans the grow.
-        volumeSizes[item.id] = try? await backend.volumeInfo(attachment: attachment).virtualSize
+        // A cloned or image-backed volume inherits the source's size. It may be
+        // smaller than what was asked for (the next sync plans the grow), or it
+        // may be larger. Retain at least the inherited promise before releasing
+        // the provisional create claim.
+        let materializedSize: Int64
+        do {
+            materializedSize = max(
+                0, try await backend.volumeInfo(attachment: attachment).virtualSize)
+        } catch {
+            if desired.storage == .local {
+                await rejectMaterializedVolume(
+                    volumeId: item.id, backend: backend, cause: error)
+            }
+            throw error
+        }
+        volumeSizes[item.id] = materializedSize
+        if desired.storage == .local {
+            let retainedSize = max(desired.sizeBytes, materializedSize)
+            volumeCommittedSizes[item.id] = retainedSize
+            if retainedSize > desired.sizeBytes {
+                // The raw snapshot now sees the new volume in local inventory.
+                // Exclude its retained commitment here because the create claim
+                // still represents it; otherwise upgrading that claim would
+                // charge the same volume twice during admission.
+                let raw = await rawHostCapacitySnapshot()
+                let retained = HostReservation(diskBytes: retainedSize)
+                let excludingMaterializedVolume = HostCapacitySnapshot(
+                    total: raw.total,
+                    reserved: raw.reserved.subtractingSaturating(retained),
+                    inventoryKnown: raw.inventoryKnown,
+                    diskInventoryKnown: raw.diskInventoryKnown)
+                do {
+                    supplementalClaim = try capacityAdmissionLedger.claim(
+                        .positiveDelta(
+                            from: HostReservation(diskBytes: desired.sizeBytes),
+                            to: retained),
+                        desiredWorkloadReservation: retained,
+                        snapshot: excludingMaterializedVolume,
+                        agentName: initialAgentID)
+                } catch let admissionError {
+                    // The backend could not expose the inherited virtual size
+                    // until after materialization. Do not leave that published
+                    // artifact for the next sync to mistake for a converged
+                    // volume that no longer needs admission.
+                    await rejectMaterializedVolume(
+                        volumeId: item.id, backend: backend, cause: admissionError)
+                    throw admissionError
+                }
+            }
+        }
         logger.info(
             "Volume converged into existence",
             metadata: [
@@ -502,7 +613,25 @@ extension Agent {
                             + "has no online grow path")
                 }
             }
+            let claim: HostCapacityClaim?
+            if desired.storage == .local {
+                let committed = max(current, volumeCommittedSizes[item.id] ?? 0)
+                let currentReservation = HostReservation(diskBytes: committed)
+                let desiredReservation = HostReservation(diskBytes: desired.sizeBytes)
+                let raw = await rawHostCapacitySnapshot()
+                claim = try capacityAdmissionLedger.claim(
+                    .positiveDelta(from: currentReservation, to: desiredReservation),
+                    desiredWorkloadReservation: desiredReservation,
+                    snapshot: raw,
+                    agentName: initialAgentID)
+            } else {
+                claim = nil
+            }
+            defer { capacityAdmissionLedger.release(claim) }
             try await backend.resizeVolume(attachment: disk, newSizeBytes: desired.sizeBytes)
+            if desired.storage == .local {
+                volumeCommittedSizes[item.id] = desired.sizeBytes
+            }
         }
         volumeSizes[item.id] = desired.sizeBytes
     }
@@ -519,6 +648,7 @@ extension Agent {
         }
         try await backend.deleteVolume(volumeId: item.id)
         volumeSizes.removeValue(forKey: item.id)
+        volumeCommittedSizes.removeValue(forKey: item.id)
         logger.info("Volume removed from this host", metadata: ["volumeId": .string(item.id)])
     }
 
@@ -548,13 +678,29 @@ extension Agent {
         // attachment whose hot-plug the next sync re-drives (idempotently);
         // the other order would leave a plugged device nothing remembers, and
         // the guest would lose it at its next power cycle.
+        let blockPolicy =
+            entry.hypervisorType == .qemu
+            ? await selectedQEMUBlockPolicy(
+                for: disk, requestedMode: desired.blockMode,
+                vCPUCount: entry.spec.cpus, backend: backend,
+                volumeId: item.id)
+            : nil
         let spec = VolumeSpec(
             volumeId: desired.volumeId,
             deviceName: attachment.deviceName,
             attachment: disk,
             readonly: attachment.readonly,
-            bootOrder: attachment.bootOrder)
-        let orderedBootVolumeIds = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
+            bootOrder: attachment.bootOrder,
+            ioLimits: desired.ioLimits,
+            blockMode: desired.blockMode,
+            appliedBlockPolicy: blockPolicy)
+        // Persist the attachment before calling libvirt so a crash cannot
+        // strand an installed disk, but leave the selected policy pending.
+        // Reporting it as active before attachDisk succeeds would claim XML
+        // that the domain may have rejected.
+        let pendingSpec = spec.withAppliedBlockPolicy(nil)
+        let orderedBootVolumeIds = await recordVolumeAttachment(
+            pendingSpec, onVM: vmId, entry: entry)
 
         // A VM with no hypervisor-side record yet (not created on this host,
         // or an orphan not yet re-adopted) needs no device call at all: the
@@ -571,13 +717,71 @@ extension Agent {
         try await service.attachDisk(
             vmId: vmId, volumeId: item.id, attachment: disk,
             deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly,
-            orderedBootVolumeIds: orderedBootVolumeIds)
+            blockPolicy: blockPolicy, orderedBootVolumeIds: orderedBootVolumeIds,
+            ioLimits: desired.ioLimits)
+
+        // Read the installed attributes, since an idempotent retry may have
+        // selected a different fallback than the disk already in libvirt.
+        if entry.hypervisorType == .qemu {
+            await recoverBlockPolicy(vmId: vmId, volumeId: desired.volumeId)
+        }
     }
 
     func volumeReconcileDetach(_ item: ReconcileWorkItem) async throws {
         guard let attachment = recordedVolumeAttachments()[item.id] else { return }
         try await detachVolumeFromVM(
             volumeId: item.id, vmId: attachment.vmId, deviceName: attachment.deviceName)
+    }
+
+    /// Applies an attached volume's limits through QEMU/libvirt and records
+    /// the same values in the VM manifest so later redefinition, restart, and
+    /// adoption cannot resurrect an older throttle.
+    func volumeReconcileThrottle(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredVolume, let desiredAttachment = desired.attachment else {
+            throw ConvergenceError.unsupported(
+                "volume I/O limits require an attached desired volume")
+        }
+        let vmId = desiredAttachment.vmId.uuidString
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else {
+            throw ConvergenceError.sourceNotReady(
+                "VM \(vmId) is not present on this agent yet")
+        }
+        guard entry.hypervisorType == .qemu else {
+            throw ConvergenceError.unsupported(
+                "per-volume I/O limits are supported only for QEMU VMs; \(vmId) uses \(entry.hypervisorType.rawValue)")
+        }
+
+        let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
+        guard let disk = try await backend.inspectVolume(volumeId: item.id) else {
+            throw ConvergenceError.sourceNotReady(
+                "volume \(item.id) is not present on this agent")
+        }
+
+        // Manifest first. If the agent exits before the libvirt call, the
+        // domain read-back still disagrees and the next sync retries. The
+        // inverse order could leave a stale manifest that a later redefine
+        // uses to undo the successfully applied live change.
+        let spec = VolumeSpec(
+            volumeId: desired.volumeId,
+            deviceName: desiredAttachment.deviceName,
+            attachment: disk,
+            readonly: desiredAttachment.readonly,
+            bootOrder: desiredAttachment.bootOrder,
+            ioLimits: desired.ioLimits,
+            blockMode: desired.blockMode,
+            appliedBlockPolicy: entry.spec.volumes.first {
+                $0.volumeId == desired.volumeId
+            }?.appliedBlockPolicy)
+        _ = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
+
+        guard let service = getHypervisorServiceForVM(vmId: vmId),
+            await service.hasLiveSession(vmId: vmId)
+        else {
+            throw ConvergenceError.sourceNotReady(
+                "VM \(vmId) has no libvirt domain to apply volume \(item.id)'s I/O limits to")
+        }
+        try await service.setDiskIOLimits(
+            vmId: vmId, volumeId: item.id, limits: desired.ioLimits)
     }
 
     func detachVolumeFromVM(volumeId: String, vmId: String, deviceName: String) async throws {
@@ -666,6 +870,13 @@ extension Agent {
             if configuration.hypervisorType == .qemu {
                 try await backend.prepareAttachmentForQEMU(disk)
             }
+            let blockPolicy =
+                configuration.hypervisorType == .qemu
+                ? await selectedQEMUBlockPolicy(
+                    for: disk, requestedMode: volume.blockMode,
+                    vCPUCount: spec.cpus, backend: backend,
+                    volumeId: volumeId)
+                : nil
             volumes.append(
                 VolumeSpec(
                     volumeId: volume.volumeId,
@@ -673,9 +884,67 @@ extension Agent {
                     attachment: disk,
                     readonly: volume.readonly,
                     bootOrder: volume.bootOrder,
-                    ioLimits: volume.ioLimits))
+                    ioLimits: volume.ioLimits,
+                    blockMode: volume.blockMode,
+                    appliedBlockPolicy: blockPolicy))
         }
         return spec.withVolumes(volumes)
+    }
+
+    /// Selects only attributes the concrete backend probe confirmed. Probe
+    /// failure is an observable fallback, never a reason to fail VM creation
+    /// or attachment.
+    func selectedQEMUBlockPolicy(
+        for attachment: DiskAttachment,
+        requestedMode: VolumeBlockMode,
+        vCPUCount: Int,
+        backend: any StorageBackend,
+        volumeId: String
+    ) async -> AppliedBlockDevicePolicy {
+        let capabilities = await backend.qemuBlockCapabilities(for: attachment)
+        let policy = QEMUBlockDevicePolicy.select(
+            requestedMode: requestedMode,
+            vCPUCount: vCPUCount,
+            capabilities: capabilities)
+        if let reason = policy.fallbackReason {
+            logger.warning(
+                "QEMU block policy fell back to its supported subset",
+                metadata: [
+                    "volumeId": .string(volumeId),
+                    "requestedMode": .string(requestedMode.rawValue),
+                    "reason": .string(reason),
+                ])
+        }
+        return policy
+    }
+
+    /// Retry unknown policy on every observation. A failed read leaves it
+    /// unknown; it never substitutes desired settings for installed settings.
+    func recoverBlockPolicy(vmId: String, volumeId: UUID) async {
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId],
+            entry.hypervisorType == .qemu,
+            let volume = entry.spec.volumes.first(where: { $0.volumeId == volumeId }),
+            volume.appliedBlockPolicy == nil,
+            let service = getHypervisorServiceForVM(vmId: vmId)
+        else { return }
+        do {
+            let policy = try await service.diskBlockPolicy(
+                vmId: vmId, volumeId: volumeId.uuidString, requestedMode: volume.blockMode)
+            guard let current = managedVMs[vmId] ?? orphanedVMs[vmId],
+                let currentVolume = current.spec.volumes.first(where: { $0.volumeId == volumeId }),
+                currentVolume.appliedBlockPolicy == nil,
+                currentVolume.blockMode == volume.blockMode
+            else { return }
+            _ = await recordVolumeAttachment(
+                currentVolume.withAppliedBlockPolicy(policy), onVM: vmId, entry: current)
+        } catch {
+            logger.debug(
+                "Block policy read-back pending",
+                metadata: [
+                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     func prepareQEMUStorageAttachments(_ spec: VMSpec) async throws {

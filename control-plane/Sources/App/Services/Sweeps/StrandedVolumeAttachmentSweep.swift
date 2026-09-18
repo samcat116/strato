@@ -6,7 +6,11 @@ import StratoShared
 import Vapor
 
 extension AgentMaintenanceLoop {
-    func sweepStrandedVolumeAttachments() async {
+    func sweepStrandedVolumeAttachments(
+        currentInstant: @escaping @Sendable (any Database) async throws -> ClusterInstant = {
+            try await ClusterClock.read(on: $0)
+        }
+    ) async {
         // Never touch app.db (a fatal error, not a throw, after core
         // teardown) once shutdown has begun — this was the crashing frame of
         // the recurring "Core not configured" CI crash.
@@ -22,14 +26,13 @@ extension AgentMaintenanceLoop {
         let db = app.db
 
         do {
-            // This mirrors the schema constraint column for column: the fields
-            // describe one state, so they must agree.
+            // Only desired attachment fields identify stranded state. The
+            // observed owner legitimately survives while a detach is pending.
             let strandedVolumes = try await Volume.query(on: db)
                 .filter(\.$vm.$id == nil)
                 .group(.or) { unresolved in
                     unresolved.filter(\.$deviceName != nil)
                     unresolved.filter(\.$bootOrder != nil)
-                    unresolved.filter(\.$attachedAgentId != nil)
                     unresolved.filter(\.$readonly == true)
                 }
                 .all()
@@ -40,10 +43,14 @@ extension AgentMaintenanceLoop {
                     guard try await volume.lockAndRefresh(on: tx) else { return false }
                     guard volume.$vm.id == nil,
                         volume.deviceName != nil || volume.bootOrder != nil
-                            || volume.attachedAgentId != nil || volume.readonly
+                            || volume.readonly
                     else { return false }
                     let expectedGeneration = volume.generation
-                    VolumeAttachmentService.clearAttachment(volume)
+                    // The row lock may wait behind a live mutation. Sample
+                    // after it so that wait cannot consume the repair's new
+                    // detach convergence budget.
+                    let repairInstant = try await currentInstant(tx)
+                    VolumeAttachmentService.clearAttachment(volume, at: repairInstant)
                     guard
                         case .applied = try await volume.advanceDesiredStateGeneration(
                             expectedGeneration: expectedGeneration, on: tx)

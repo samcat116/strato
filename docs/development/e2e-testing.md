@@ -23,6 +23,12 @@ from `SPIRE_AGENT_SELECTORS`; if your deployment overrides it, adjust to match.)
 
 - Docker with the Compose plugin, and `deploy/compose/.env` (run `./setup.sh` once).
 - KVM (`/dev/kvm`), plus OVS and OVN running, for `network_mode = "ovn"`.
+- A readable x86_64 Ubuntu cloud image in QCOW2 format and a matching hypervisor
+  host; the setup script currently seeds images as `x86_64`. Use an image with
+  serial console output and the virtio-balloon
+  driver for the console and guest-boot checks below. Set `GUEST_IMAGE` to its
+  absolute path before setup; without it, the script skips image seeding and
+  prints an unusable `<image>` placeholder in the VM creation payload.
 - A Swift toolchain new enough for the agent's dependencies. `swift-toml` tracks
   a `swift-tools-version:6.3` manifest, so if your default `swift` is older:
 
@@ -76,14 +82,16 @@ it in the background.
 
 ```bash
 cd deploy/compose
-./e2e-up.sh --fresh                 # DESTRUCTIVE: wipes volumes, rebuilds, sets up
+export GUEST_IMAGE=/absolute/path/to/ubuntu-cloud-image.qcow2
+./e2e-up.sh                         # build and set up, preserving volumes
 ```
 
-It stops partway and prints the command you must run as root, then waits for the
-agent to register:
+It prints the command to run as root, then waits for agent registration. Use
+available root access, or hand the command to the operator if a password is
+required:
 
 ```bash
-sudo RUN_DIR=<printed by e2e-up.sh> bash deploy/compose/e2e-agent.sh reset
+sudo RUN_DIR=<printed by e2e-up.sh> bash deploy/compose/e2e-agent.sh start
 ```
 
 `sudo` does not forward the environment, so `RUN_DIR` has to be passed on the
@@ -96,11 +104,17 @@ assigned), a network, a guest image, and a 16/16 smoke test.
 Useful variants:
 
 ```bash
+./e2e-up.sh --fresh                 # DESTRUCTIVE: wipe volumes and rebuild
 ./e2e-up.sh --no-build              # reuse existing images
 ./e2e-up.sh --api-key sk_...        # DB already has users; supply your own key
 ./e2e-up.sh --stage stack           # stop once the stack is healthy
 ./e2e-up.sh --down                  # stop the stack, keep volumes
 ```
+
+`--fresh` needs authorization to discard the deployment data, including users
+and passkeys. After that reset, the script prints an agent `reset` command
+instead of `start` to clear state tied to the old SPIRE CA. Rebuilding source
+alone does not require deleting volumes.
 
 Stages run in order — `stack → key → enroll → agent → fixtures → smoke` — and
 the whole script is idempotent, so re-running it reuses whatever already exists.
@@ -135,6 +149,18 @@ lifts without requiring a new generation.
 
 Prefer that over `status` alone. VMs are still created in `Created` rather than
 running, so start them explicitly with `POST /api/vms/{id}/start`.
+
+### Full lifecycle acceptance
+
+For a full VM E2E check, create and start a VM, confirm guest boot evidence
+and serial console access as described below, then stop and start it again,
+waiting for each target generation. Delete it and poll the operations façade
+for the verdict. Verify that the VM's QEMU process, OVN logical switch port,
+TAP, and directory under `/var/lib/strato/vms` are gone on the relevant host.
+Record the tested backend and any checks it cannot support.
+
+Use the agent log at `$RUN_DIR/strato-agent.log` and `resource_events` for
+mutation evidence. The setup smoke test alone does not establish this lifecycle.
 
 ### Live vCPU shrink contract
 
@@ -172,6 +198,39 @@ sudo deploy/compose/memory-growth-test.sh \
 
 Run it as an account that can read `qemu:///system`; the script deletes its VM
 on exit.
+
+### QEMU block policy, TRIM, and multiqueue
+
+STR-269 needs a guest with the Strato guest agent plus `fio` and `fstrim`, and
+it needs host-side allocated-byte evidence for both local files and RBD. The
+complete cold/hot/re-adoption check, TRIM commands, multiqueue proof, and
+cache-mode comparison matrix live in
+[QEMU block policy validation](../operations/qemu-block-policy-benchmark.md).
+Keep the default `conservative` until that benchmark evidence has been
+captured and reviewed.
+
+### Volume I/O-limit contract
+
+`deploy/compose/volume-io-limits-test.sh` exercises STR-270 on the libvirt
+agent host. It attaches a capped volume before boot, runs 60-second `fio`
+samples after a 10-second ramp, and requires the measured rate to stay within
+10% of each ceiling. It then raises and lowers both IOPS and bandwidth on the
+running VM, checking the API applied echo and libvirt's live and persistent
+domain definitions at every step. Finally it restarts the agent, reboots the
+VM, and hot-detaches and reattaches the volume, with another `fio` sample after
+each transition:
+
+```bash
+sudo deploy/compose/volume-io-limits-test.sh \
+  --origin "$ORIGIN" --api-key "$(cat "$KEY_FILE")" \
+  --project "$PROJECT_ID" --network "$NET_ID" --image "$IMAGE_ID" \
+  --restart-agent-command "systemctl restart strato-agent"
+```
+
+The image must contain the Strato guest agent and `fio`, and the API key must
+include `vm:runCommand`. The script is deliberately a real-host test:
+it needs KVM and permission to inspect `qemu:///system` and restart the agent.
+It deletes its VM and data volume on exit.
 
 One carve-out keeps the older machinery:
 

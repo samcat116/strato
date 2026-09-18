@@ -31,6 +31,36 @@ public struct VolumeInfoResult: Codable, Sendable {
     }
 }
 
+/// Storage-side facts needed before QEMU may opt into discard or direct I/O.
+///
+/// Reasons are operator-facing and deliberately travel separately from the
+/// booleans: a failed probe is a safe, supported fallback rather than a volume
+/// convergence failure, but it still needs to be diagnosable.
+public struct StorageBlockDeviceCapabilities: Equatable, Sendable {
+    public let discardSupported: Bool
+    public let discardUnavailableReason: String?
+    public let directIOSupported: Bool
+    public let directIOUnavailableReason: String?
+
+    public init(
+        discardSupported: Bool,
+        discardUnavailableReason: String? = nil,
+        directIOSupported: Bool,
+        directIOUnavailableReason: String? = nil
+    ) {
+        self.discardSupported = discardSupported
+        self.discardUnavailableReason = discardUnavailableReason
+        self.directIOSupported = directIOSupported
+        self.directIOUnavailableReason = directIOUnavailableReason
+    }
+
+    public static let unsupported = Self(
+        discardSupported: false,
+        discardUnavailableReason: "the storage backend did not advertise safe deallocation",
+        directIOSupported: false,
+        directIOUnavailableReason: "the storage backend did not advertise direct I/O")
+}
+
 // MARK: - Storage Backend Protocol
 
 /// Storage driver interface: everything that turns images and empty space into
@@ -77,6 +107,14 @@ public protocol StorageBackend: Actor {
     /// Deletes a volume and everything under its directory (idempotent).
     func deleteVolume(volumeId: String) async throws
 
+    /// Durably prevents a materialized volume rejected by admission from being
+    /// returned by `listVolumes()`, then attempts to remove its bytes.
+    ///
+    /// If physical deletion cannot finish, the backend must retain enough
+    /// durable state to keep the artifact out of inventory after a restart and
+    /// retry cleanup before it can report an authoritative inventory again.
+    func rejectVolume(volumeId: String) async throws
+
     /// Grows a volume to `newSizeBytes` (must be detached).
     ///
     /// The attachment is the backend-owned identity. Network backends do not
@@ -115,6 +153,11 @@ public protocol StorageBackend: Actor {
     /// Local and krbd paths need no preparation.
     func prepareAttachmentForQEMU(_ attachment: DiskAttachment) async throws
 
+    /// Probes whether this concrete attachment can safely carry QEMU discard
+    /// and cache-none/io_uring semantics. A negative result is not an error:
+    /// callers emit only the supported subset and report the reason.
+    func qemuBlockCapabilities(for attachment: DiskAttachment) async -> StorageBlockDeviceCapabilities
+
     /// Every volume whose data this backend currently holds, by id (STR-148).
     ///
     /// This is the agent's presence set for volume reconciliation: the
@@ -145,6 +188,10 @@ extension StorageBackend {
     }
 
     public func prepareAttachmentForQEMU(_: DiskAttachment) async throws {}
+
+    public func qemuBlockCapabilities(for _: DiskAttachment) async -> StorageBlockDeviceCapabilities {
+        .unsupported
+    }
 
 }
 

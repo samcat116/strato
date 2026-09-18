@@ -42,7 +42,8 @@ extension Agent {
             try await sandboxReconcileDelete(item)
         case .restore:
             try await sandboxReconcileRestore(item)
-        case .pause, .resume, .resize, .reboot, .attach, .detach, .export, .reconfigureNetworks:
+        case .pause, .resume, .resize, .reboot, .attach, .detach, .throttle, .export,
+            .reconfigureNetworks:
             // Not in the sandbox step vocabulary (v1); the planner never
             // emits these for sandbox items. `.reboot` in particular is a VM
             // edge only: `POST /api/sandboxes/:id/restart` is expressed as a
@@ -554,6 +555,9 @@ extension Agent {
             // a point in time nothing can recreate (STR-150).
             snapshots: await observedSnapshotStates(reconciler: reconciler),
             loadBalancers: await networkService?.observedLoadBalancers(),
+            networks: observedNetworkFabric.networks,
+            securityGroups: observedNetworkFabric.securityGroups,
+            portMemberships: observedNetworkFabric.portMemberships,
             storageDevices: await storageDeviceInventory.snapshot()
         )
         // A newer report started while this one was assembling — which is
@@ -844,6 +848,13 @@ extension Agent {
 
         var observed: [ObservedVolumeState] = []
         var reported = Set<String>()
+        let appliedPolicies = Dictionary(
+            (Array(managedVMs.values) + Array(orphanedVMs.values))
+                .flatMap(\.spec.volumes)
+                .compactMap { volume in
+                    volume.appliedBlockPolicy.map { (volume.volumeId.uuidString, $0) }
+                },
+            uniquingKeysWith: { first, _ in first })
 
         for (volumeId, presence) in present {
             guard let uuid = UUID(uuidString: volumeId), case .managed(let facts) = presence else { continue }
@@ -864,7 +875,13 @@ extension Agent {
                     convergencePhase: convergence.phase,
                     lastError: convergence.lastError,
                     failedGeneration: convergence.failedGeneration,
-                    failureClassification: convergence.failureClassification
+                    failureClassification: convergence.failureClassification,
+                    ioLimits: facts.ioLimits,
+                    blockPolicy: facts.attachedVMId == nil
+                        ? .inactive(
+                            requestedMode: desiredVolumeStates[volumeId]?.blockMode ?? .conservative)
+                        : appliedPolicies[volumeId],
+                    ioObservedRate: facts.ioObservedRate
                 ))
             reported.insert(volumeId)
         }

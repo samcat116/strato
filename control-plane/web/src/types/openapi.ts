@@ -1177,11 +1177,9 @@ export interface paths {
          * Replace a volume's I/O limits
          * @description Replaces the volume's absolute I/O ceilings. This is a **full replacement**: a field you omit clears that cap. Zero is rejected with `400` rather than treated as unlimited, so a typo cannot be mistaken for a deliberate removal — omit the field instead.
          *
-         *     **`conditions` converging does not mean the caps are in effect.** For every other volume mutation, convergence is the outcome; for this one it only means the owning agent accepted the sync carrying the request. An agent with no throttling support plans no work, reports the new generation, and converges — so a client that polls `conditions` alone will record an unenforced cap as applied.
+         *     A non-empty policy is accepted only when the volume's QEMU agent advertises per-volume I/O-limit support. Firecracker and legacy agents are rejected before the desired state changes.
          *
-         *     The applied signal is `appliedIOLimits` on the volume. Compare it against `ioLimits`: equal means the ceilings are in force, and a set `ioLimits` with `appliedIOLimits` omitted means they are not.
-         *
-         *     No agent enforces ceilings yet, so today `appliedIOLimits` is always absent and every request is a recorded intent rather than an enforced limit.
+         *     The applied signal is `appliedIOLimits` on the volume. Compare it against `ioLimits`: equal means libvirt read back the requested ceilings. `conditions.converged` remains false until that echo arrives, so generation acknowledgement alone cannot report success.
          */
         post: operations["setVolumeIOLimits"];
         delete?: never;
@@ -5826,6 +5824,7 @@ export interface components {
              * @description Storage pool for the managed boot volume. Omit to preserve the deployment's local default. A Ceph pool must belong to this project and constrains VM placement to fresh Ceph-client agents in its site; its bytes consume no agent-local disk reservation.
              */
             poolId?: string;
+            blockMode?: components["schemas"]["VolumeBlockMode"];
             environment?: string;
             cpu?: number;
             /**
@@ -6093,6 +6092,15 @@ export interface components {
             attachmentState: "attaching" | "attached" | "detaching" | "attach_failed" | "detach_failed";
             /** @description The current generation's convergence error for this interface, when failed. */
             attachmentError?: string;
+            /**
+             * @description The reporting host's observed result for this port's security-group membership. Absent until a current membership has been attempted.
+             * @enum {string}
+             */
+            securityGroupStatus?: "active" | "error";
+            /** @description Why the reporting host could not realize the current membership. */
+            securityGroupLastError?: string;
+            /** Format: date-time */
+            securityGroupLastErrorAt?: string;
             /** @description The security groups filtering this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
             securityGroupIds?: string[];
         };
@@ -6234,6 +6242,15 @@ export interface components {
             deviceName: string;
             /** @description The security groups attached to this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
             securityGroupIds?: string[];
+            /**
+             * @description The reporting host's observed result for this port's security-group membership. Absent until a current membership has been attempted.
+             * @enum {string}
+             */
+            securityGroupStatus?: "active" | "error";
+            /** @description Why the reporting host could not realize the current membership. */
+            securityGroupLastError?: string;
+            /** Format: date-time */
+            securityGroupLastErrorAt?: string;
         };
         /** @enum {string} */
         SandboxStatus: "Stopped" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
@@ -6467,14 +6484,15 @@ export interface components {
             sourceImageId?: string;
             /**
              * Format: int64
-             * @description Total (read + write) IOPS ceiling. Omit for uncapped; zero is rejected. Not enforced by any agent yet.
+             * @description Total (read + write) IOPS ceiling. Omit for uncapped; zero is rejected. Enforced by capable QEMU agents through libvirt.
              */
             iopsTotal?: number;
             /**
              * Format: int64
-             * @description Total (read + write) throughput ceiling in bytes per second. Omit for uncapped; zero is rejected. Not enforced by any agent yet.
+             * @description Total (read + write) throughput ceiling in bytes per second. Omit for uncapped; zero is rejected. Enforced by capable QEMU agents through libvirt.
              */
             bpsTotal?: number;
+            blockMode?: components["schemas"]["VolumeBlockMode"];
         };
         UpdateVolumeRequest: {
             name?: string;
@@ -6488,6 +6506,8 @@ export interface components {
             /** @description Boot priority, lower first. Unique per VM: reusing one another attached volume already holds is refused with 409, since two disks at one priority make the order of both arbitrary. */
             bootOrder?: number;
             readonly?: boolean;
+            /** @description Optional attachment-time policy override. Omit to retain the volume's existing requested mode. */
+            blockMode?: components["schemas"]["VolumeBlockMode"];
         };
         ResizeVolumeRequest: {
             sizeGB: number;
@@ -6569,12 +6589,11 @@ export interface components {
             conditions: components["schemas"]["ResourceConditions"];
             /** @description The I/O ceilings requested for this volume. **Omitted entirely** when the volume is uncapped — the key is absent, not null, so test for presence rather than comparing against null. */
             ioLimits?: components["schemas"]["VolumeIOLimits"];
-            /**
-             * @description The ceilings the owning agent reports it has actually applied, and the only signal that a cap is in force — `conditions` converging says the sync was accepted, not that the ceilings took effect. Compare against `ioLimits`: equal means in force.
-             *
-             *     **Omitted** (again absent, not null) means they are *not* in effect, either because the agent has not reported any or because it reported none. No agent applies ceilings yet, so this key is absent on every volume; a set `ioLimits` alongside an absent `appliedIOLimits` is the expected reading today, not a fault.
-             */
+            /** @description The ceilings the owning agent read back from libvirt. Compare against `ioLimits`: equal on an attached volume means the policy is in force, and attached convergence requires that equality. **Omitted** (again absent, not null) means no applied cap was reported. A successful explicit clear is also represented as an omitted response value because the database columns are null; the observed-state protocol keeps those cases distinct while merging. */
             appliedIOLimits?: components["schemas"]["VolumeIOLimits"];
+            blockMode: components["schemas"]["VolumeBlockMode"];
+            /** @description Exact attributes selected by the agent. Omitted until an agent supporting wire v62 reports; `active: false` explicitly means the volume is detached. `fallbackReason` explains any safe downgrade. */
+            appliedBlockPolicy?: components["schemas"]["AppliedBlockDevicePolicy"];
             /** Format: uuid */
             sourceImageId?: string;
             /** Format: uuid */
@@ -6676,6 +6695,27 @@ export interface components {
         };
         /** @enum {string} */
         VolumeFormat: "qcow2" | "raw";
+        /**
+         * @description Requested QEMU cache behavior. `conservative` emits no cache or AIO override. `direct` requests cache=none plus io_uring, subject to a live backend probe. `cachedShared` explicitly uses writeback host caching for read-mostly shared-base workloads. Neither optimized mode is the default until representative benchmarks have been reviewed.
+         * @default conservative
+         * @enum {string}
+         */
+        VolumeBlockMode: "conservative" | "direct" | "cachedShared";
+        AppliedBlockDevicePolicy: {
+            active: boolean;
+            requestedMode: components["schemas"]["VolumeBlockMode"];
+            /** @enum {string} */
+            cacheMode?: "none" | "writeback";
+            /** @enum {string} */
+            ioMode?: "io_uring";
+            /** @description Whether discard=unmap and detect_zeroes=unmap were emitted. */
+            discard: boolean;
+            /** @description Whether the realized guest device was advertised as non-rotational. */
+            nonRotational: boolean;
+            queueCount?: number;
+            /** @description Why one or more requested optimizations were omitted. */
+            fallbackReason?: string;
+        };
         /** @enum {string} */
         VolumeType: "boot" | "data";
         /** @enum {string} */
@@ -6765,6 +6805,7 @@ export interface components {
             primaryDnsZoneId?: string;
             /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will — the network's resolver is off, its site cannot run one, or it has no address yet. Absent for a network with no attached zone, which has nothing to fail to deliver. */
             zoneResolutionWarning?: string;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -7034,6 +7075,7 @@ export interface components {
             rules: components["schemas"]["SecurityGroupRule"][];
             /** @description How many VM NICs currently attach this group. */
             attachmentCount: number;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -8645,8 +8687,16 @@ export interface components {
              * @description Bytes.
              */
             totalDisk: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Bytes available for new provisioned commitments.
+             */
             availableDisk: number;
+            /**
+             * Format: int64
+             * @description Bytes physically free on the local volume filesystem.
+             */
+            physicalFreeDisk: number;
         };
         /**
          * @description Whether the latest sampling pass measured the signal. Unavailable is distinct from an available signal whose value is zero.
@@ -8763,6 +8813,8 @@ export interface components {
             supportsVsock?: boolean | null;
             /** @description Whether this agent can bridge guest-exec sessions to VMs using this hypervisor; null for agents that predate VM guest exec. */
             supportsGuestExec?: boolean | null;
+            /** @description Whether this backend can enforce and read back per-volume total IOPS and bytes-per-second ceilings; null is treated as unsupported. */
+            supportsVolumeIOLimits?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
         };

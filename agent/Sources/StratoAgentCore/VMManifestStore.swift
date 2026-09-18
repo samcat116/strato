@@ -177,16 +177,27 @@ public struct VMManifestEntry: Codable, Sendable {
     }
 
     /// Records the desired spec after re-adopting a surviving VM without
-    /// claiming that Firecracker's immutable MMDS allow-list changed with it.
+    /// claiming that immutable hypervisor policy changed with it.
     ///
     /// A Firecracker entry carrying the policy marker describes a VMM that was
     /// already configured from the manifest's network list. Desired state may
     /// have changed while the agent was down, but reconnecting to that process
     /// does not apply the new list. Keep the realized networks until the
     /// reconciler replaces the VMM; every other part of the desired spec can be
-    /// recorded immediately. Legacy entries have no reliable realized policy,
-    /// so their one-time upgrade path decides what to record instead.
+    /// recorded immediately. A missing QEMU policy can also describe an
+    /// interrupted hot attach, so leave it unknown until domain read-back.
     public func recordingAdoption(of desiredSpec: VMSpec) -> VMManifestEntry {
+        if hypervisorType == .qemu {
+            let policies = Dictionary(
+                spec.volumes.compactMap { volume in
+                    volume.appliedBlockPolicy.map { (volume.volumeId, $0) }
+                },
+                uniquingKeysWith: { first, _ in first })
+            let adoptedVolumes = desiredSpec.volumes.map { volume in
+                volume.withAppliedBlockPolicy(policies[volume.volumeId])
+            }
+            return with(spec: desiredSpec.withVolumes(adoptedVolumes))
+        }
         guard hypervisorType == .firecracker, firecrackerMMDSPolicyApplied == true else {
             return with(spec: desiredSpec)
         }

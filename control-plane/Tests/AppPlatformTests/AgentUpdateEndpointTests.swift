@@ -17,8 +17,24 @@ import AppTestSupport
 @Suite("Agent Update Endpoint Tests", .serialized)
 final class AgentUpdateEndpointTests {
 
+    private actor FirstInstantRecorder {
+        private var date: Date?
+
+        func record(_ date: Date) {
+            if self.date == nil { self.date = date }
+        }
+
+        func recordedDate() -> Date? { date }
+    }
+
     private static let target = "1.4.0"
     private static let validDigest = String(repeating: "ab", count: 32)
+
+    private static let stubArtifact = ResolvedAgentArtifact(
+        url: "https://releases.example/v1.4.0/strato-linux-x86_64.tar.gz",
+        sha256: validDigest,
+        kind: .tarball,
+        tarballMember: AgentUpdateArtifacts.defaultTarballMember)
 
     private func withUpdateTestApp(
         _ test: (Application, TestDataBuilder, Organization, String) async throws -> Void
@@ -222,6 +238,35 @@ final class AgentUpdateEndpointTests {
             #expect(update.sha256 == Self.validDigest)
             #expect(update.artifactKind == .tarball)
             #expect(update.tarballMember == AgentUpdateArtifacts.defaultTarballMember)
+        }
+    }
+
+    @Test("the manual update budget starts after artifact resolution")
+    func assignmentBudgetStartsAfterArtifactResolution() async throws {
+        try await withUpdateTestApp { app, _, org, token in
+            var environment = ProcessInfo.processInfo.environment
+            environment["AGENT_TARGET_VERSION"] = Self.target
+            app.controlPlaneConfiguration = try await ControlPlaneConfiguration.load(
+                environmentVariables: environment, for: .testing)
+            let artifactResolution = FirstInstantRecorder()
+            let database = app.db
+            app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in
+                let resolvedAt = try await ClusterClock.read(on: database)
+                await artifactResolution.record(resolvedAt.date)
+                return Self.stubArtifact
+            }
+            let agent = try await self.makeAgent(app: app, org: org)
+
+            try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let row = try await self.reload(agent, on: app)
+            let attemptedAt = try #require(row.updateAttemptedAt)
+            let artifactResolvedAt = try #require(await artifactResolution.recordedDate())
+            #expect(attemptedAt >= artifactResolvedAt)
         }
     }
 

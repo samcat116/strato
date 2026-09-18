@@ -103,7 +103,7 @@ private actor DetachDriver: HypervisorService {
     func consoleEndpoint(vmId: String) -> ConsoleEndpoint? { nil }
     func attachDisk(
         vmId: String, volumeId: String, attachment: DiskAttachment, deviceName: String, readonly: Bool,
-        orderedBootVolumeIds: [String]
+        blockPolicy: AppliedBlockDevicePolicy?, orderedBootVolumeIds: [String], ioLimits: VolumeIOLimits?
     ) {}
     func reservationInventory() -> HypervisorReservationInventory? { nil }
 }

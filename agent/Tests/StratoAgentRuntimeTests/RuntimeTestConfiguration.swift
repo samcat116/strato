@@ -1,9 +1,12 @@
 import StratoAgentCore
 @testable import StratoAgentRuntime
 
-func runtimeTestConfiguration(path: String) -> AgentRuntimeConfiguration {
+func runtimeTestConfiguration(
+    path: String, volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
+    simulation: SimulationConfig? = nil
+) -> AgentRuntimeConfiguration {
     AgentRuntimeConfiguration(
-        networkMode: .user,
+        networkMode: nil,
         ovnChassisConfig: OVNChassisConfig(),
         ovnUplink: nil,
         ovnDynamicRouting: nil,
@@ -15,7 +18,7 @@ func runtimeTestConfiguration(path: String) -> AgentRuntimeConfiguration {
         sandboxImageCachePath: nil,
         sandboxImageCacheMaxSizeBytes: nil,
         vmStoragePath: path,
-        volumeStoragePath: FileSystemStorageBackend.defaultStoragePath,
+        volumeStoragePath: volumeStoragePath,
         firmware: FirmwareOverrides(),
         firecrackerBinaryPath: "/usr/bin/firecracker",
         firecrackerSocketDir: "/tmp/firecracker",
@@ -30,7 +33,7 @@ func runtimeTestConfiguration(path: String) -> AgentRuntimeConfiguration {
         hypervisorType: .qemu,
         hardwareAccelerationEnabled: true,
         qemuMemoryOverheadBytes: Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
-        simulation: nil,
+        simulation: simulation,
         installMode: .detect(),
         spiffeConfig: nil,
         teardownGuard: TeardownGuard(),

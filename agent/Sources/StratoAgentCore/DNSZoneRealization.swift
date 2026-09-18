@@ -411,15 +411,23 @@ extension DNSZoneReconciler {
     /// Callers must not reach this with a nil `dnsZones` field: absence is "no
     /// opinion", and converging an empty list against it would tear down every
     /// live row (see `DesiredStateMessage.dnsZones`).
+    @discardableResult
     public static func reconcile(
         zones: [DesiredDNSZone],
+        networkIDsBySwitchName: [String: UUID] = [:],
         actuator: any NetworkActuator,
         logger: Logger
-    ) async throws {
+    ) async throws -> [ReconcileStepFailure] {
         let plans = plan(zones: zones)
         let observed = try await actuator.observeDNSZones()
+        let networkIDsByZone = Dictionary(
+            uniqueKeysWithValues: zones.map { ($0.zoneId, Set($0.networkIds)) })
+        var failures: [ReconcileStepFailure] = []
 
         for write in writes(desired: plans, observed: observed) {
+            let affectedNetworkIDs =
+                (networkIDsByZone[write.plan.zoneId] ?? [])
+                .union(write.detach.compactMap { networkIDsBySwitchName[$0] })
             // Logged per write rather than per pass: every sync assembles every
             // zone, so a zone holding one TXT record would otherwise warn
             // forever on the authority agent. Tied to the write, it fires when
@@ -439,27 +447,29 @@ extension DNSZoneReconciler {
                     "Rewriting a DNS zone whose row drifted from its stamp",
                     metadata: ["zone": .string(write.plan.zoneName)])
             }
-            do {
-                try await actuator.ensureDNSZone(write)
-            } catch {
-                logger.error(
-                    "Failed to converge DNS zone",
-                    metadata: [
-                        "zone": .string(write.plan.zoneName),
-                        "zoneId": .string(write.plan.zoneId.uuidString),
-                        "error": .string(error.localizedDescription),
-                    ])
+            if let failure = await observeAttempt(
+                logger,
+                "converge DNS zone \(write.plan.zoneName)",
+                affectedNetworkIds: affectedNetworkIDs,
+                { try await actuator.ensureDNSZone(write) })
+            {
+                failures.append(failure)
             }
         }
 
+        let observedByUUID = Dictionary(uniqueKeysWithValues: observed.map { ($0.uuid, $0) })
         for uuid in teardownUUIDs(desired: plans, observed: observed) {
-            do {
-                try await actuator.removeDNSZone(uuid: uuid)
-            } catch {
-                logger.error(
-                    "Failed to tear down DNS zone row",
-                    metadata: ["row": .string(uuid), "error": .string(error.localizedDescription)])
+            let affectedNetworkIDs = Set(
+                observedByUUID[uuid]?.switchNames.compactMap { networkIDsBySwitchName[$0] } ?? [])
+            if let failure = await observeAttempt(
+                logger,
+                "tear down DNS zone row \(uuid)",
+                affectedNetworkIds: affectedNetworkIDs,
+                { try await actuator.removeDNSZone(uuid: uuid) })
+            {
+                failures.append(failure)
             }
         }
+        return failures
     }
 }

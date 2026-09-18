@@ -12,6 +12,7 @@ public struct DesiredStateDerivations: Sendable {
         memberships += message.sandboxes.compactMap { sandbox in
             sandbox.spec.network.map { spec in
                 DesiredPortMembership(
+                    interfaceId: spec.interfaceId,
                     portName: OVNNaming.sandboxPortName(
                         sandboxId: sandbox.sandboxId.uuidString, nicIndex: 0),
                     securityGroupIds: spec.securityGroupIds)

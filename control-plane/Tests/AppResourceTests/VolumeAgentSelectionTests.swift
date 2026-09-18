@@ -6,18 +6,23 @@ import StratoShared
 @Suite("VolumeService agent selection Tests")
 struct VolumeAgentSelectionTests {
 
-    private func hypervisor(_ type: HypervisorType, available: Bool = true) -> HypervisorSupport {
+    private func hypervisor(
+        _ type: HypervisorType, available: Bool = true,
+        supportsVolumeIOLimits: Bool? = nil
+    ) -> HypervisorSupport {
         HypervisorSupport(
             type: type,
             available: available,
-            accelerated: true
+            accelerated: true,
+            supportsVolumeIOLimits: supportsVolumeIOLimits
         )
     }
 
     private func makeAgent(
         id: String,
         hypervisors: [HypervisorSupport],
-        status: AgentStatus = .online
+        status: AgentStatus = .online,
+        availableDisk: Int64 = 50
     ) -> Agent {
         let checkedAt = Date()
         let dependencyObservations =
@@ -42,7 +47,8 @@ struct VolumeAgentSelectionTests {
                 totalMemory: 16,
                 availableMemory: 8,
                 totalDisk: 100,
-                availableDisk: 50
+                availableDisk: availableDisk,
+                physicalFreeDisk: 75
             ),
             hypervisors: hypervisors,
             dependencyObservations: dependencyObservations,
@@ -59,7 +65,7 @@ struct VolumeAgentSelectionTests {
             makeAgent(id: "qemu-capable", hypervisors: [hypervisor(.qemu)]),
         ]
 
-        let selected = try #require(VolumeService.selectVolumeAgent(from: agents))
+        let selected = try #require(VolumeService.selectVolumeAgent(from: agents, at: .testing(Date())))
         #expect(selected.name == "qemu-capable")
     }
 
@@ -70,7 +76,7 @@ struct VolumeAgentSelectionTests {
             makeAgent(id: "fc-2", hypervisors: [hypervisor(.firecracker)]),
         ]
 
-        #expect(VolumeService.selectVolumeAgent(from: agents) == nil)
+        #expect(VolumeService.selectVolumeAgent(from: agents, at: .testing(Date())) == nil)
     }
 
     @Test("ignores QEMU agents that are not online")
@@ -80,7 +86,7 @@ struct VolumeAgentSelectionTests {
             makeAgent(id: "fc-online", hypervisors: [hypervisor(.firecracker)]),
         ]
 
-        #expect(VolumeService.selectVolumeAgent(from: agents) == nil)
+        #expect(VolumeService.selectVolumeAgent(from: agents, at: .testing(Date())) == nil)
     }
 
     @Test("ignores agents whose QEMU probe reported unavailable")
@@ -90,7 +96,7 @@ struct VolumeAgentSelectionTests {
             makeAgent(id: "qemu-good", hypervisors: [hypervisor(.qemu)]),
         ]
 
-        #expect(VolumeService.selectVolumeAgent(from: agents)?.name == "qemu-good")
+        #expect(VolumeService.selectVolumeAgent(from: agents, at: .testing(Date()))?.name == "qemu-good")
     }
 
     @Test("accepts an agent that supports both Firecracker and QEMU")
@@ -99,7 +105,7 @@ struct VolumeAgentSelectionTests {
             makeAgent(id: "dual", hypervisors: [hypervisor(.firecracker), hypervisor(.qemu)])
         ]
 
-        #expect(VolumeService.selectVolumeAgent(from: agents)?.name == "dual")
+        #expect(VolumeService.selectVolumeAgent(from: agents, at: .testing(Date()))?.name == "dual")
     }
 
     @Test("restricts selection to pool member agents when a member list is set")
@@ -109,12 +115,12 @@ struct VolumeAgentSelectionTests {
         let memberId = try #require(member.id?.uuidString)
 
         let selected = VolumeService.selectVolumeAgent(
-            from: [outsider, member], memberAgentIds: [memberId])
+            from: [outsider, member], memberAgentIds: [memberId], at: .testing(Date()))
         #expect(selected?.name == "member")
 
         // No eligible agent is in the member list.
         let outsiderOnly = VolumeService.selectVolumeAgent(
-            from: [outsider], memberAgentIds: [memberId])
+            from: [outsider], memberAgentIds: [memberId], at: .testing(Date()))
         #expect(outsiderOnly == nil)
     }
 
@@ -122,7 +128,68 @@ struct VolumeAgentSelectionTests {
     func testEmptyMemberListIsUnrestricted() {
         let agents = [makeAgent(id: "any", hypervisors: [hypervisor(.qemu)])]
 
-        #expect(VolumeService.selectVolumeAgent(from: agents, memberAgentIds: [])?.name == "any")
+        #expect(
+            VolumeService.selectVolumeAgent(
+                from: agents, memberAgentIds: [], at: .testing(Date()))?.name == "any")
+    }
+
+    @Test("selection filters on committed disk rather than physical free bytes")
+    func committedDiskFiltersSelection() throws {
+        let committedFull = makeAgent(
+            id: "committed-full", hypervisors: [hypervisor(.qemu)], availableDisk: 5)
+        let fits = makeAgent(
+            id: "fits", hypervisors: [hypervisor(.qemu)], availableDisk: 25)
+
+        let selected = try #require(
+            VolumeService.selectVolumeAgent(
+                from: [committedFull, fits], sizeBytes: 20, at: .testing(Date())))
+        #expect(selected.name == "fits")
+        #expect(committedFull.physicalFreeDisk == 75)
+    }
+
+    @Test("coordination reservations prevent sparse volumes from stacking past host capacity")
+    func volumeReservationsClosePlacementRace() async throws {
+        let agent = makeAgent(
+            id: "one-host", hypervisors: [hypervisor(.qemu)], availableDisk: 50)
+        let coordination = CoordinationService(
+            store: InMemoryCoordinationStore(),
+            logger: .init(label: "volume-placement-test"))
+
+        _ = try await VolumeService.selectAndReserveVolumeAgent(
+            sizeBytes: 30,
+            volumeId: UUID(),
+            agents: [agent],
+            memberAgentIds: [],
+            at: .testing(Date()),
+            coordination: coordination)
+
+        await #expect(throws: VolumeService.InsufficientHostDisk.self) {
+            _ = try await VolumeService.selectAndReserveVolumeAgent(
+                sizeBytes: 30,
+                volumeId: UUID(),
+                agents: [agent],
+                memberAgentIds: [],
+                at: .testing(Date()),
+                coordination: coordination)
+        }
+    }
+
+    @Test("I/O-limited volumes fail closed to an explicitly capable QEMU agent")
+    func testIOLimitsRequireExplicitCapability() throws {
+        let agents = [
+            makeAgent(id: "legacy-qemu", hypervisors: [hypervisor(.qemu)]),
+            makeAgent(
+                id: "capable-qemu",
+                hypervisors: [hypervisor(.qemu, supportsVolumeIOLimits: true)]),
+            makeAgent(
+                id: "firecracker-with-bit",
+                hypervisors: [hypervisor(.firecracker, supportsVolumeIOLimits: true)]),
+        ]
+
+        let selected = try #require(
+            VolumeService.selectVolumeAgent(
+                from: agents, requiresIOLimits: true, at: .testing(Date())))
+        #expect(selected.name == "capable-qemu")
     }
 
 }

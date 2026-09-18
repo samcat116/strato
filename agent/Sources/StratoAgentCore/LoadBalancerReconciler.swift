@@ -8,17 +8,22 @@ import StratoShared
 public struct ManagedLoadBalancerObservation: Sendable, Equatable {
     public let rowUUID: String
     public let ownerID: UUID
+    /// The network that owns the VIP and therefore owns teardown convergence.
+    /// Nil reads legacy rows created before the ownership tag existed.
+    public let networkID: UUID?
     public let switchNames: Set<String>
     public let routerNames: Set<String>
 
     public init(
         rowUUID: String,
         ownerID: UUID,
+        networkID: UUID? = nil,
         switchNames: Set<String> = [],
         routerNames: Set<String> = []
     ) {
         self.rowUUID = rowUUID
         self.ownerID = ownerID
+        self.networkID = networkID
         self.switchNames = switchNames
         self.routerNames = routerNames
     }
@@ -122,6 +127,7 @@ public protocol LoadBalancerActuator: Sendable {
     func observeManagedLoadBalancers() async throws -> [ManagedLoadBalancerObservation]
     func ensureLoadBalancer(
         _ desired: DesiredLoadBalancer,
+        networkID: UUID,
         routerName: String,
         switchNames: Set<String>,
         existing: ManagedLoadBalancerObservation?
@@ -134,9 +140,23 @@ public protocol LoadBalancerActuator: Sendable {
     func removeLoadBalancer(_ observed: ManagedLoadBalancerObservation) async throws
 }
 
+public struct LoadBalancerReconcileOutcome: Sendable {
+    public let observations: [ObservedLoadBalancerState]?
+    public let networkFailures: [ReconcileStepFailure]
+
+    public init(
+        observations: [ObservedLoadBalancerState]?,
+        networkFailures: [ReconcileStepFailure] = []
+    ) {
+        self.observations = observations
+        self.networkFailures = networkFailures
+    }
+}
+
 public enum LoadBalancerReconciler {
     private struct Placement: Sendable {
         let desired: DesiredLoadBalancer
+        let networkID: UUID
         let routerName: String
         let switchNames: Set<String>
     }
@@ -145,8 +165,26 @@ public enum LoadBalancerReconciler {
     public static func reconcile(
         networks: [DesiredNetworkState],
         actuator: any LoadBalancerActuator,
-        logger: Logger
+        logger: Logger,
+        protectedNetworkIDs: Set<UUID> = []
     ) async -> [ObservedLoadBalancerState]? {
+        await reconcileWithOutcome(
+            networks: networks,
+            actuator: actuator,
+            logger: logger,
+            protectedNetworkIDs: protectedNetworkIDs
+        ).observations
+    }
+
+    /// Reconcile load balancers and retain failures that also block an owning
+    /// network generation. The observations remain separate because active
+    /// load balancers have their own control-plane rows; stale deleted rows do not.
+    public static func reconcileWithOutcome(
+        networks: [DesiredNetworkState],
+        actuator: any LoadBalancerActuator,
+        logger: Logger,
+        protectedNetworkIDs: Set<UUID> = []
+    ) async -> LoadBalancerReconcileOutcome {
         var placements: [UUID: Placement] = [:]
         for network in networks {
             for desired in network.loadBalancers {
@@ -159,6 +197,7 @@ public enum LoadBalancerReconciler {
                 switches.insert(OVNNaming.switchName(networkId: network.networkId))
                 placements[desired.id] = Placement(
                     desired: desired,
+                    networkID: network.networkId,
                     routerName: OVNNaming.routerName(routerKey: network.routerKey),
                     switchNames: switches)
             }
@@ -171,13 +210,16 @@ public enum LoadBalancerReconciler {
             logger.error(
                 "Cannot observe managed OVN load balancers; skipping destructive reconciliation",
                 metadata: ["error": .string(error.localizedDescription)])
-            return placements.values.map {
-                failure(for: $0.desired, error: error.localizedDescription)
-            }.sorted { $0.id.uuidString < $1.id.uuidString }
+            return LoadBalancerReconcileOutcome(
+                observations: placements.values.map {
+                    failure(for: $0.desired, error: error.localizedDescription)
+                }.sorted { $0.id.uuidString < $1.id.uuidString },
+                networkFailures: [stepFailure("observe managed load balancers", error: error)])
         }
 
         let observedByOwner = Dictionary(grouping: observed, by: \.ownerID)
         var results: [ObservedLoadBalancerState] = []
+        var networkFailures: [ReconcileStepFailure] = []
         var retainedRows: Set<String> = []
 
         for ownerID in placements.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -188,6 +230,7 @@ public enum LoadBalancerReconciler {
             do {
                 let retained = try await actuator.ensureLoadBalancer(
                     placement.desired,
+                    networkID: placement.networkID,
                     routerName: placement.routerName,
                     switchNames: placement.switchNames,
                     existing: candidates.first)
@@ -221,13 +264,25 @@ public enum LoadBalancerReconciler {
                         "error": .string(error.localizedDescription),
                     ])
                 results.append(failure(for: placement.desired, error: error.localizedDescription))
+                networkFailures.append(
+                    stepFailure(
+                        "reconcile load balancer \(ownerID)",
+                        error: error,
+                        affectedNetworkIDs: [placement.networkID]))
             }
         }
 
         // Owner-tagged rows omitted from the authoritative desired set are
         // stale. Untagged/operator rows are absent from `observed` by contract.
+        let protectedSwitchNames = Set(
+            protectedNetworkIDs.map { OVNNaming.switchName(networkId: $0) })
         for stale in observed.sorted(by: { $0.rowUUID < $1.rowUUID })
         where placements[stale.ownerID] == nil && !retainedRows.contains(stale.rowUUID) {
+            if stale.networkID.map(protectedNetworkIDs.contains) == true
+                || !stale.switchNames.isDisjoint(with: protectedSwitchNames)
+            {
+                continue
+            }
             do {
                 try await actuator.removeLoadBalancer(stale)
             } catch {
@@ -237,9 +292,23 @@ public enum LoadBalancerReconciler {
                         "loadBalancerId": .string(stale.ownerID.uuidString),
                         "error": .string(error.localizedDescription),
                     ])
+                let inferredNetworkIDs = Set(
+                    networks.compactMap { network in
+                        stale.switchNames.contains(
+                            OVNNaming.switchName(networkId: network.networkId))
+                            ? network.networkId : nil
+                    })
+                networkFailures.append(
+                    stepFailure(
+                        "remove stale load balancer \(stale.ownerID)",
+                        error: error,
+                        affectedNetworkIDs: stale.networkID.map { Set([$0]) }
+                            ?? (inferredNetworkIDs.isEmpty ? nil : inferredNetworkIDs)))
             }
         }
-        return results
+        return LoadBalancerReconcileOutcome(
+            observations: results,
+            networkFailures: networkFailures)
     }
 
     private static func failure(for desired: DesiredLoadBalancer, error: String)
@@ -253,5 +322,16 @@ public enum LoadBalancerReconciler {
             backends: desired.backends.map {
                 ObservedLoadBalancerBackend(id: $0.id, healthStatus: .error)
             })
+    }
+
+    private static func stepFailure(
+        _ step: String,
+        error: any Error,
+        affectedNetworkIDs: Set<UUID>? = nil
+    ) -> ReconcileStepFailure {
+        ReconcileStepFailure(
+            message: "\(step): \(error.localizedDescription)",
+            classification: (error as? any ClassifiableError)?.failureClassification ?? .transient,
+            affectedNetworkIds: affectedNetworkIDs)
     }
 }

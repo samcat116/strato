@@ -517,7 +517,9 @@ struct HostPreflightTests {
         #expect(check.severity == .advisory)
         #expect(report.storageReady)
 
-        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true)
+        let qemu = HypervisorSupport(
+            type: .qemu, available: true, accelerated: true,
+            supportsVolumeIOLimits: true)
         #expect(report.gate([qemu]) == [qemu])
     }
 
@@ -739,7 +741,9 @@ struct HostPreflightTests {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
-        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true)
+        let qemu = HypervisorSupport(
+            type: .qemu, available: true, accelerated: true,
+            supportsVolumeIOLimits: true)
         let firecracker = HypervisorSupport(
             type: .firecracker, available: true, accelerated: true)
 
@@ -749,6 +753,7 @@ struct HostPreflightTests {
 
         #expect(gated[0].available == false)
         #expect(gated[0].unavailabilityReason?.contains("libvirt not usable") == true)
+        #expect(gated[0].supportsVolumeIOLimits == true)
         // Only the QEMU driver goes through libvirtd; Firecracker is untouched.
         #expect(gated[1] == firecracker)
 

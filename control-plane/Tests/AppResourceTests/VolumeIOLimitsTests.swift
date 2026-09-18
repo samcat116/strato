@@ -6,11 +6,11 @@ import StratoShared
 import AppTestSupport
 @testable import App
 
-/// Absolute per-volume I/O ceilings (STR-19).
+/// Absolute per-volume I/O ceilings (STR-19, STR-270).
 ///
 /// Two things here carry more weight than the endpoint's own validation,
-/// because no agent implements ceilings yet and so nothing downstream would
-/// catch getting them wrong:
+/// because they prevent a policy the API accepted from becoming an unverified
+/// claim of runtime enforcement:
 ///
 /// * the **normalization asymmetry** — an all-null desired pair must leave the
 ///   sync as an *absent* field, while an observed nil and an observed
@@ -56,10 +56,22 @@ final class VolumeIOLimitsTests {
     }
 
     private func registerAgent(
-        app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion
+        app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion,
+        supportsVolumeIOLimits: Bool? = true, includeFirecracker: Bool = false
     ) async throws -> String {
-        try await TestDataBuilder(db: app.db).registerAgent(
-            on: app, named: name, hostname: "\(name).test", protocolVersion: protocolVersion)
+        var hypervisors = [
+            HypervisorSupport(
+                type: .qemu, available: true, accelerated: true,
+                supportsVolumeIOLimits: supportsVolumeIOLimits)
+        ]
+        if includeFirecracker {
+            hypervisors.append(
+                HypervisorSupport(type: .firecracker, available: true, accelerated: true))
+        }
+        return try await TestDataBuilder(db: app.db).registerAgent(
+            on: app, named: name, hostname: "\(name).test",
+            hypervisors: hypervisors,
+            protocolVersion: protocolVersion)
     }
 
     /// Inserts a resting volume owned by `user`, with the creator's admin
@@ -147,6 +159,7 @@ final class VolumeIOLimitsTests {
     @Test("Creating a volume with ceilings persists them on the inserted row")
     func createPersistsCeilings() async throws {
         try await withVolumeApp { app, _, project, token in
+            let agentId = try await self.registerAgent(app: app, named: "io-create-agent")
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -155,21 +168,46 @@ final class VolumeIOLimitsTests {
                 #expect(res.status == .accepted)
             }
 
-            // Placement runs on a detached task that touches app.db; wait for it
-            // to settle (no agents connected → degraded) so it cannot race
-            // application shutdown during teardown.
+            // Placement runs on a detached task that touches app.db; wait for
+            // the capable agent's replica row so it cannot race shutdown.
             var placed: Volume?
             for _ in 0..<100 {
                 placed = try await Volume.query(on: app.db).first()
-                if placed?.conditions.degraded != nil { break }
+                if let id = placed?.id,
+                    try await VolumeReplica.query(on: app.db)
+                        .filter(\.$volume.$id == id)
+                        .filter(\.$agentId == agentId)
+                        .first() != nil
+                {
+                    break
+                }
                 try await Task.sleep(for: .milliseconds(50))
             }
             let stored = try #require(placed)
             #expect(stored.iopsTotal == 500)
             #expect(stored.bpsTotal == 1 << 20)
             #expect(stored.ioLimits?.iopsTotal == 500)
-            // Requested at create is still only requested: nothing has applied it.
+            // Requested at create is still only requested until the agent's
+            // libvirt readback arrives.
             #expect(stored.appliedIOLimits == nil)
+        }
+    }
+
+    @Test("Creating a capped volume fails before insertion without a capable agent")
+    func createRejectsUnsupportedCluster() async throws {
+        try await withVolumeApp { app, _, project, token in
+            _ = try await self.registerAgent(
+                app: app, named: "io-legacy-create-agent", supportsVolumeIOLimits: nil)
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    self.createBody(project: project, iopsTotal: 500, bpsTotal: nil))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
         }
     }
 
@@ -300,6 +338,60 @@ final class VolumeIOLimitsTests {
         }
     }
 
+    @Test("A legacy agent without the capability cannot accept a new ceiling")
+    func unsupportedAgentIsRefused() async throws {
+        try await withVolumeApp { app, user, project, token in
+            let agentId = try await self.registerAgent(
+                app: app, named: "io-legacy-agent", supportsVolumeIOLimits: nil)
+            let volume = try await self.makeVolume(
+                app: app, user: user, project: project, agentId: agentId)
+
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/io-limits") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(SetVolumeIOLimitsRequest(iopsTotal: 500, bpsTotal: nil))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            #expect(stored.ioLimits == nil)
+            #expect(stored.generation == 1)
+        }
+    }
+
+    @Test("A Firecracker volume is refused even when its agent also supports QEMU limits")
+    func firecrackerVolumeIsRefused() async throws {
+        try await withVolumeApp { app, user, project, token in
+            let agentId = try await self.registerAgent(
+                app: app, named: "io-dual-backend-agent", includeFirecracker: true)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "io-firecracker-vm", project: project)
+            vm.hypervisorType = .firecracker
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+            let volume = try await self.makeVolume(
+                app: app, user: user, project: project, agentId: agentId)
+            volume.volumeType = .boot
+            volume.$vm.id = try vm.requireID()
+            volume.attachedAgentId = agentId
+            volume.deviceName = "disk0"
+            volume.bootOrder = 0
+            try await volume.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/io-limits") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(SetVolumeIOLimitsRequest(iopsTotal: 500, bpsTotal: nil))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("not supported for Firecracker VMs"))
+            }
+
+            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            #expect(stored.ioLimits == nil)
+            #expect(stored.generation == 1)
+        }
+    }
+
     @Test("A terminating volume cannot be throttled")
     func terminatingVolumeIsRefused() async throws {
         try await withVolumeApp { app, user, project, token in
@@ -348,7 +440,7 @@ final class VolumeIOLimitsTests {
 
     // MARK: - The echo: the observed side does not normalize
 
-    /// The scenario every agent is in today. A report that says nothing about
+    /// A legacy or failed readback. A report that says nothing about
     /// applied limits must leave the recorded ones alone — writing its silence
     /// through would show an operator "the caps were removed".
     @Test("A report with no ioLimits leaves the applied ceilings untouched")
@@ -369,17 +461,46 @@ final class VolumeIOLimitsTests {
                             present: true,
                             attachment: .file(
                                 path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
+                            attachedVMId: UUID(),
                             observedGeneration: 2,
                             ioLimits: nil)
                     ]))
 
             let stored = try #require(try await Volume.find(volume.id!, on: app.db))
             #expect(stored.appliedIOPSTotal == 500)
-            // And the volume still converges by generation: an agent that
-            // cannot apply ceilings is not a degraded volume, it is a volume
-            // whose ceilings are not in effect.
-            #expect(stored.observedGeneration == 2)
-            #expect(stored.status == .available)
+            // Generation acknowledgement alone is not evidence that the
+            // throttle is in effect.
+            #expect(stored.observedGeneration == 1)
+            #expect(stored.status == .attached)
+            #expect(!stored.conditions.converged)
+        }
+    }
+
+    @Test("Clearing an attached ceiling still requires a current empty readback")
+    func clearRequiresAppliedEcho() async throws {
+        try await withVolumeApp { app, user, project, _ in
+            let agentId = try await self.registerAgent(app: app, named: "io-silent-clear-agent")
+            let volume = try await self.makeVolume(
+                app: app, user: user, project: project, agentId: agentId,
+                generation: 2, observedGeneration: 1)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volume.id!,
+                            present: true,
+                            attachment: .file(
+                                path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
+                            attachedVMId: UUID(),
+                            observedGeneration: 2,
+                            ioLimits: nil)
+                    ]))
+
+            let stored = try #require(try await Volume.find(volume.id!, on: app.db))
+            #expect(stored.observedGeneration == 1)
+            #expect(!stored.conditions.converged)
         }
     }
 
@@ -440,6 +561,7 @@ final class VolumeIOLimitsTests {
             // Requested and applied agree, which is the only way a caller can
             // tell a ceiling is actually in force.
             #expect(stored.ioLimits == stored.appliedIOLimits)
+            #expect(stored.conditions.converged)
         }
     }
 }

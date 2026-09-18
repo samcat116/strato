@@ -77,7 +77,7 @@ struct MetadataStoreTests {
             case .reboot, .restore: presence[item.id] = .managed(.running)
             // Steps this suite never plans: it drives VM items only, and the
             // rest belong to volumes (attach/detach) or snapshots (export).
-            case .adopt, .resize, .attach, .detach, .export, .reconfigureNetworks: break
+            case .adopt, .resize, .attach, .detach, .throttle, .export, .reconfigureNetworks: break
             }
         }
 

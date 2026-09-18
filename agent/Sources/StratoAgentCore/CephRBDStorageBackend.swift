@@ -117,6 +117,21 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         return true
     }
 
+    /// Native librbd discard is a backend operation and does not depend on a
+    /// host filesystem. cache=none/io_uring is deliberately not advertised:
+    /// QEMU's RBD driver has its own asynchronous I/O path, and claiming the
+    /// POSIX io_uring path without probing it would make domain creation fail.
+    public func qemuBlockCapabilities(
+        for attachment: DiskAttachment
+    ) async -> StorageBlockDeviceCapabilities {
+        guard case .rbd = attachment else { return .unsupported }
+        return StorageBlockDeviceCapabilities(
+            discardSupported: true,
+            directIOSupported: false,
+            directIOUnavailableReason:
+                "native RBD does not use the probed POSIX cache-none/io_uring path")
+    }
+
     public func createVolume(
         volumeId: String, sizeBytes: Int64, format: DiskFormat
     ) async throws -> DiskAttachment {
@@ -213,6 +228,13 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         }
         try await purgeAndRemoveImage(cloneMarker, operation: "rbd clone marker delete")
         logger.info("Ceph RBD volume removed", metadata: ["volumeId": .string(volumeId)])
+    }
+
+    public func rejectVolume(volumeId: String) async throws {
+        // Host-local admission never invokes this for Ceph, whose capacity is
+        // cluster-owned. Keep the protocol operation safe and idempotent if a
+        // caller does so anyway.
+        try await deleteVolume(volumeId: volumeId)
     }
 
     public func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {

@@ -27,7 +27,7 @@ import { useNetworks } from "@/lib/hooks/use-networks";
 import { useProjectStoragePools } from "@/lib/hooks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
-import type { MetadataSource } from "@/types/api";
+import type { MetadataSource, VolumeBlockMode } from "@/types/api";
 import { toast } from "sonner";
 
 interface CreateVMDialogProps {
@@ -51,6 +51,7 @@ export function CreateVMDialog({
     cpu: "2",
     memory: "4",
     disk: "50",
+    blockMode: "conservative" as VolumeBlockMode,
     poolId: "",
     poolProjectId: "",
     sshPublicKey: "",
@@ -232,6 +233,7 @@ export function CreateVMDialog({
       cpu: parseInt(formData.cpu) || 2,
       memory: (parseInt(formData.memory) || 4) * GB,
       disk: (parseInt(formData.disk) || 50) * GB,
+      blockMode: isFirecracker ? undefined : formData.blockMode,
       poolId: selectedPoolId || undefined,
       networkInterfaces: networkInterfaces.map((nic) => ({
         networkId: nic.networkId,
@@ -278,6 +280,7 @@ export function CreateVMDialog({
           cpu: "2",
           memory: "4",
           disk: "50",
+          blockMode: "conservative",
           poolId: "",
           poolProjectId: "",
           sshPublicKey: "",
@@ -485,6 +488,33 @@ export function CreateVMDialog({
                   disabled={isLoading}
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="vmBlockMode" className="text-foreground">
+                Boot-disk QEMU I/O mode
+              </Label>
+              <select
+                id="vmBlockMode"
+                value={formData.blockMode}
+                onChange={(event) =>
+                  setFormData({
+                    ...formData,
+                    blockMode: event.target.value as VolumeBlockMode,
+                  })
+                }
+                disabled={isLoading || isFirecracker}
+                className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="conservative">Conservative (default)</option>
+                <option value="direct">Direct I/O when supported</option>
+                <option value="cachedShared">Cached shared base</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {isFirecracker
+                  ? "Firecracker does not use QEMU block-device policy."
+                  : "Direct I/O is probed on the selected storage before the VM is defined; a failed probe falls back without failing creation."}
+              </p>
             </div>
 
             <VMNetworkInterfacesFields

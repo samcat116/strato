@@ -39,6 +39,7 @@ struct ObservedStateApplier {
         reportedFailedGeneration: Int64?,
         previousFailureGeneration: Int64?,
         defaultMutation: VMOperationKind,
+        at instant: ClusterInstant,
         prepareFailure: (R) -> Void = { _ in },
         on db: any Database
     ) async throws -> ConvergenceSettlement {
@@ -75,6 +76,7 @@ struct ObservedStateApplier {
             context: .observedReport(
                 previousFailureGeneration: previousFailureGeneration,
                 hadActiveDeadline: resource.convergenceDeadline != nil),
+            at: instant,
             on: db)
         if outcome == .alreadyRecorded, changed {
             try await resource.save(on: db)
@@ -208,7 +210,10 @@ struct ObservedStateApplier {
     /// Apply one report, returning what the caller should do about the
     /// workloads the agent holds that no sync accounted for.
     @discardableResult
-    func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
+    func apply(
+        _ report: ObservedStateReport,
+        at instant: ClusterInstant
+    ) async throws -> UnrecognizedOutcome {
         let db = app.db
 
         // Network observations are independent of the workload manifest. A
@@ -216,6 +221,18 @@ struct ObservedStateApplier {
         // author still has a valid view of shared load-balancer rows.
         if let loadBalancers = report.loadBalancers {
             try await applyObservedLoadBalancers(loadBalancers, on: db)
+        }
+        if let networks = report.networks {
+            try await applyObservedNetworks(
+                networks, reportedBy: report.agentId, at: instant, on: db)
+        }
+        if let securityGroups = report.securityGroups {
+            try await applyObservedSecurityGroups(
+                securityGroups, reportedBy: report.agentId, at: instant, on: db)
+        }
+        if let portMemberships = report.portMemberships {
+            try await applyObservedPortMemberships(
+                portMemberships, reportedBy: report.agentId, at: instant, on: db)
         }
 
         // A report from an agent that cannot read its own workload manifest
@@ -335,6 +352,23 @@ struct ObservedStateApplier {
                 uniquingKeysWith: { first, _ in first }
             )
             let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
+            let accountedVolumeReservationIDs = dbVolumes.compactMap { volume -> String? in
+                guard let id = volume.id, volume.observedGeneration == 0,
+                    let observed = reportedVolumes[id]
+                else { return nil }
+                let terminalCreateFailure =
+                    observed.lastError != nil
+                    && observed.failedGeneration == volume.generation
+                    && (observed.failureClassification == nil
+                        || observed.failureClassification == .permanent)
+                guard observed.present || terminalCreateFailure else { return nil }
+                return VolumeService.volumeReservationID(id)
+            }
+            if !accountedVolumeReservationIDs.isEmpty {
+                await app.coordination.releaseReservations(
+                    agentId: report.agentId,
+                    vmIds: accountedVolumeReservationIDs)
+            }
             for volume in dbVolumes {
                 guard let volumeID = volume.id else { continue }
                 if let observed = reportedVolumes[volumeID] {
@@ -343,15 +377,25 @@ struct ObservedStateApplier {
                     ) {
                         volume, tx in
                         return try await applyObservedVolumeState(
-                            volume: volume, observed: observed, agentId: report.agentId, on: tx)
+                            volume: volume, observed: observed, agentId: report.agentId,
+                            at: instant, on: tx)
                     }
                     unrecognizedOutcome.desiredStateChanged =
                         unrecognizedOutcome.desiredStateChanged || desiredStateChanged == true
                 } else {
-                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
+                    let abandonedCreate = try await withLockedCurrent(
+                        volume, reportedBy: report.agentId, on: db
+                    ) {
                         volume, tx in
+                        let wasTerminating = volume.isTerminating
                         try await handleReportedVolumeAbsence(
                             volume: volume, agentId: report.agentId, on: tx)
+                        return wasTerminating
+                    }
+                    if abandonedCreate == true {
+                        await app.coordination.releaseReservation(
+                            agentId: report.agentId,
+                            vmId: VolumeService.volumeReservationID(volumeID))
                     }
                 }
             }
@@ -386,12 +430,12 @@ struct ObservedStateApplier {
                     try await applyObservedVMState(
                         vm: vm, observed: observed, interfaces: interfaces,
                         bootVolumes: report.volumes == nil ? nil : bootVolumesByVMID[vmID] ?? [],
-                        on: tx)
+                        at: instant, on: tx)
                 }
             } else {
                 try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
                     try await handleReportedAbsence(
-                        vm: vm, agentId: report.agentId, on: tx)
+                        vm: vm, agentId: report.agentId, at: instant, on: tx)
                 }
             }
         }
@@ -402,13 +446,13 @@ struct ObservedStateApplier {
                 try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
                     sandbox, tx in
                     try await applyObservedSandboxState(
-                        sandbox: sandbox, observed: observed, on: tx)
+                        sandbox: sandbox, observed: observed, at: instant, on: tx)
                 }
             } else {
                 try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
                     sandbox, tx in
                     try await handleReportedSandboxAbsence(
-                        sandbox: sandbox, agentId: report.agentId, on: tx)
+                        sandbox: sandbox, agentId: report.agentId, at: instant, on: tx)
                 }
             }
         }
@@ -424,11 +468,14 @@ struct ObservedStateApplier {
                 uniquingKeysWith: { first, _ in first }
             )
             try await applyObservedSnapshots(
-                VolumeSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                VolumeSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
             try await applyObservedSnapshots(
-                VMSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                VMSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
             try await applyObservedSnapshots(
-                SandboxSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+                SandboxSnapshot.self, reported: reported, agentId: report.agentId,
+                at: instant, on: db)
         }
 
         return unrecognizedOutcome
@@ -479,6 +526,192 @@ struct ObservedStateApplier {
                 }
             }
         }
+    }
+
+    func applyObservedNetworks(
+        _ observations: [ObservedNetworkState],
+        reportedBy agentId: String,
+        at instant: ClusterInstant,
+        on db: any Database
+    ) async throws {
+        guard let reporterID = UUID(uuidString: agentId) else { return }
+        for observed in observations {
+            try await db.transaction { tx in
+                guard
+                    case .applied = try await DesiredStateGenerationWriter.lockCurrent(
+                        schema: LogicalNetwork.schema, id: observed.id, on: tx)
+                else { return }
+                guard
+                    let network = try await LogicalNetwork.query(on: tx)
+                        .filter(\.$id == observed.id)
+                        .with(\.$site)
+                        .first(),
+                    network.site.$networkControllerAgent.id == reporterID
+                else { return }
+                guard observed.observedGeneration <= network.generation else { return }
+                if observed.status == .active {
+                    guard observed.observedGeneration >= network.observedGeneration else { return }
+                } else {
+                    guard
+                        observed.failedGeneration == network.generation
+                            || observed.observedGeneration >= network.observedGeneration
+                    else { return }
+                }
+                applyFabricObservation(
+                    observedGeneration: observed.observedGeneration,
+                    status: observed.status,
+                    lastError: observed.lastError,
+                    failedGeneration: observed.failedGeneration,
+                    failureClassification: observed.failureClassification,
+                    at: instant,
+                    to: network)
+                try await network.save(on: tx)
+            }
+        }
+    }
+
+    func applyObservedSecurityGroups(
+        _ observations: [ObservedSecurityGroupState],
+        reportedBy agentId: String,
+        at instant: ClusterInstant,
+        on db: any Database
+    ) async throws {
+        guard let reporterID = UUID(uuidString: agentId) else { return }
+        // Only a currently designated site topology authority can make an ACL
+        // claim. Non-authority agents send nil, but this guard also closes the
+        // stale/malicious-report path at persistence.
+        guard
+            let site = try await Site.query(on: db)
+                .filter(\.$networkControllerAgent.$id == reporterID)
+                .first(),
+            let siteID = site.id
+        else { return }
+
+        for observed in observations {
+            try await SecurityGroupSiteConvergence.apply(
+                observed, siteID: siteID, at: instant, on: db)
+        }
+    }
+
+    private func applyFabricObservation<R: NetworkFabricConvergingResource>(
+        observedGeneration: Int64,
+        status: ObservedNetworkFabricStatus,
+        lastError: String?,
+        failedGeneration: Int64?,
+        failureClassification: ObservedFailureClassification?,
+        at instant: ClusterInstant,
+        to resource: R
+    ) {
+        resource.observedGeneration = max(resource.observedGeneration, observedGeneration)
+        let activeAtCurrentGeneration =
+            status == .active && resource.observedGeneration >= resource.generation
+        let preservesCurrentFailure =
+            !(status == .error && failedGeneration == resource.generation)
+            && resource.failedGeneration == resource.generation
+            && resource.lastError != nil
+            && !activeAtCurrentGeneration
+        if preservesCurrentFailure {
+            // A superseded report is not recovery from a timeout or
+            // explicit failure at the current desired generation. Keep the
+            // resource degraded until this authority actually acknowledges it.
+            return
+        }
+        let error = status == .error ? lastError : nil
+        let failed = status == .error ? failedGeneration : nil
+        let previousError = resource.lastError
+        let previousFailed = resource.failedGeneration
+        _ = resource.recordConvergence(phase: nil, lastError: error, failedGeneration: failed)
+        if error == nil {
+            resource.lastErrorAt = nil
+            if resource.observedGeneration >= resource.generation {
+                resource.convergenceDeadline = nil
+            }
+        } else if previousError != error || previousFailed != failed {
+            resource.lastErrorAt = instant.date
+        }
+        if error != nil,
+            failureClassification != .blocked,
+            failed == resource.generation
+        {
+            // The authority did answer; the resource is already explicitly
+            // degraded rather than silently stuck, so the silence deadline has
+            // served its purpose. A blocked result retains the deadline while
+            // the missing dependency remains retryable. A superseded failure
+            // also retains it because the authority has not answered for the
+            // resource's newer generation yet.
+            resource.convergenceDeadline = nil
+        }
+    }
+
+    func applyObservedPortMemberships(
+        _ observations: [ObservedPortMembershipState],
+        reportedBy agentId: String,
+        at instant: ClusterInstant,
+        on db: any Database
+    ) async throws {
+        for observed in observations {
+            try await db.transaction { tx in
+                if let nic = try await VMNetworkInterface.query(on: tx)
+                    .filter(\.$id == observed.interfaceId)
+                    .with(\.$vm)
+                    .first()
+                {
+                    guard nic.vm.hypervisorId == agentId else { return }
+                    // The attach/detach handlers take this same transaction-
+                    // scoped lock before changing the join rows and
+                    // invalidating status. Whichever side commits last has
+                    // therefore validated the membership it persists.
+                    try await SecurityGroupService.lockMembership(
+                        interfaceID: observed.interfaceId, on: tx)
+                    let current = try await VMInterfaceSecurityGroup.query(on: tx)
+                        .filter(\.$interface.$id == observed.interfaceId)
+                        .all()
+                        .map { $0.$securityGroup.id }
+                        .sorted { $0.uuidString < $1.uuidString }
+                    guard current == observed.securityGroupIds else { return }
+                    recordMembership(observed, at: instant, on: nic)
+                    try await nic.save(on: tx)
+                    return
+                }
+                if let nic = try await SandboxNetworkInterface.query(on: tx)
+                    .filter(\.$id == observed.interfaceId)
+                    .with(\.$sandbox)
+                    .first()
+                {
+                    guard nic.sandbox.hypervisorId == agentId else { return }
+                    try await SecurityGroupService.lockMembership(
+                        interfaceID: observed.interfaceId, on: tx)
+                    let current = try await SandboxInterfaceSecurityGroup.query(on: tx)
+                        .filter(\.$interface.$id == observed.interfaceId)
+                        .all()
+                        .map { $0.$securityGroup.id }
+                        .sorted { $0.uuidString < $1.uuidString }
+                    guard current == observed.securityGroupIds else { return }
+                    recordMembership(observed, at: instant, on: nic)
+                    try await nic.save(on: tx)
+                }
+            }
+        }
+    }
+
+    private func recordMembership(
+        _ observed: ObservedPortMembershipState,
+        at instant: ClusterInstant,
+        on nic: VMNetworkInterface
+    ) {
+        nic.securityGroupStatus = observed.status.rawValue
+        nic.securityGroupLastError = observed.lastError
+        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : instant.date
+    }
+
+    private func recordMembership(
+        _ observed: ObservedPortMembershipState,
+        at instant: ClusterInstant,
+        on nic: SandboxNetworkInterface
+    ) {
+        nic.securityGroupStatus = observed.status.rawValue
+        nic.securityGroupLastError = observed.lastError
+        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : instant.date
     }
 
     // MARK: - Unrecognized workloads (STR-98)

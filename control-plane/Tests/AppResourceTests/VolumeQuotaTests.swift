@@ -57,9 +57,22 @@ final class VolumeQuotaTests {
             iopsTotal: nil, bpsTotal: nil)
     }
 
-    private func registerAgent(app: Application, named name: String) async throws -> String {
+    private func registerAgent(
+        app: Application,
+        named name: String,
+        availableDisk: Int64 = 1 << 40
+    ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
-            on: app, named: name, hostname: "\(name).test")
+            on: app,
+            named: name,
+            hostname: "\(name).test",
+            resources: AgentResources(
+                totalCPU: 16,
+                availableCPU: 16,
+                totalMemory: 1 << 34,
+                availableMemory: 1 << 34,
+                totalDisk: 1 << 40,
+                availableDisk: availableDisk))
     }
 
     /// A volume the caller owns and can act on, inserted directly so the tests
@@ -305,6 +318,52 @@ final class VolumeQuotaTests {
         }
     }
 
+    @Test("An image-backed create charges the measured inherited virtual size")
+    func imageBackedCreateUsesVirtualSizeForQuota() async throws {
+        try await withVolumeQuotaApp { app, builder, user, project, token in
+            let quota = try await builder.createResourceQuota(
+                name: "sparse-image", maxStorageGB: 20, project: project)
+            let image = try await builder.createImage(
+                name: "sparse-source",
+                project: project,
+                size: gb(1),
+                virtualSize: gb(40),
+                uploadedBy: user)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: try user.requireID(),
+                role: .admin,
+                nodeType: .image,
+                nodeID: try image.requireID(),
+                createdBy: try user.requireID(),
+                on: app.db)
+            let body = CreateVolumeRequest(
+                name: "larger-than-request",
+                description: "must charge inherited capacity",
+                projectId: try project.requireID(),
+                environment: nil,
+                sizeGB: 10,
+                format: "qcow2",
+                volumeType: "data",
+                sourceImageId: try image.requireID(),
+                iopsTotal: nil,
+                bpsTotal: nil)
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(body)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
+            let refreshed = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(refreshed.reservedStorage == 0)
+            #expect(refreshed.volumeCount == 0)
+        }
+    }
+
     @Test("A create that fits is admitted and reserved")
     func createWithinQuotaIsAdmitted() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, token in
@@ -506,6 +565,7 @@ final class VolumeQuotaTests {
     @Test("A clone is admitted like a create, for the source's whole size")
     func cloneIsAdmittedLikeACreate() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, token in
+            let key = UUID().uuidString
             _ = try await builder.createResourceQuota(
                 name: "one-copy", maxStorageGB: 60, project: project)
             let agentId = try await registerAgent(app: app, named: "clone-host")
@@ -516,12 +576,62 @@ final class VolumeQuotaTests {
 
             try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
                 try req.content.encode(CloneVolumeRequest(name: "copy", description: nil))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
             #expect(try await Volume.query(on: app.db).count() == 1)
+            #expect(try await IdempotencyKey.query(on: app.db).count() == 0)
+            let reservations = await app.coordination.activeReservations(agentIds: [agentId])
+            #expect(reservations[agentId] == .zero)
+        }
+    }
+
+    @Test("Local clones reserve their fixed agent before acceptance")
+    func localCloneReservesSourceAgentCapacity() async throws {
+        try await withVolumeQuotaApp { app, _, user, project, token in
+            let agentId = try await registerAgent(
+                app: app, named: "clone-capacity-host", availableDisk: gb(50))
+            let source = try await seedVolume(
+                app: app, user: user, project: project, name: "clone-capacity-source",
+                sizeGB: 30, agentId: agentId)
+            let volumeID = try source.requireID()
+            let key = UUID().uuidString
+            let firstBody = CloneVolumeRequest(name: "first-copy", description: nil)
+
+            try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(firstBody)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let reservations = await app.coordination.activeReservations(agentIds: [agentId])
+            #expect(reservations[agentId]?.disk == gb(30))
+
+            // The original reservation leaves only 20 GiB. A retry of the
+            // accepted request must replay instead of attempting a second
+            // 30 GiB reservation.
+            try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                req.headers.replaceOrAdd(name: "Idempotency-Key", value: key)
+                try req.content.encode(firstBody)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            try await app.test(.POST, "/api/volumes/\(volumeID)/clone") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(CloneVolumeRequest(name: "second-copy", description: nil))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("clone-capacity-host"))
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 2)
         }
     }
 

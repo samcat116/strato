@@ -22,6 +22,20 @@ import StratoShared
 /// state to own.
 enum VolumeService {
 
+    struct InsufficientHostDisk: LocalizedError, Sendable {
+        let required: Int64
+        let candidates: [(name: String, available: Int64)]
+
+        var errorDescription: String? {
+            let hosts =
+                candidates
+                .map { "`\($0.name)` (\($0.available.formattedByteSize) available)" }
+                .joined(separator: ", ")
+            return "No local-pool agent has enough committed disk capacity for "
+                + "\(required.formattedByteSize). Checked: \(hosts.isEmpty ? "no eligible agents" : hosts)."
+        }
+    }
+
     struct AgentHoldingResolution: Sendable {
         let agentID: String?
         let previousAgentID: String?
@@ -169,13 +183,14 @@ enum VolumeService {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: nil, recordedAgentID: nil)
                 }
+                let instant = try await ClusterClock.read(on: tx)
 
                 let previous = committed.reconcilerAgentId
                 if let previous,
                     let reconcilerID = UUID(uuidString: previous),
                     let reconciler = try await Agent.find(reconcilerID, on: tx),
                     StoragePool.agentCanReach(
-                        agent: reconciler, pool: committedPool, replicaAgentIds: [])
+                        agent: reconciler, pool: committedPool, replicaAgentIds: [], at: instant)
                 {
                     return AgentHoldingResolution(
                         agentID: previous, previousAgentID: previous, recordedAgentID: previous)
@@ -195,7 +210,8 @@ enum VolumeService {
                 let agents = try await Agent.query(on: tx).all()
                 guard
                     let replacement = selectCephReconciler(
-                        from: agents, pool: committedPool)?.id?.uuidString
+                        from: agents, pool: committedPool,
+                        requiresIOLimits: committed.ioLimits != nil, at: instant)?.id?.uuidString
                 else {
                     return AgentHoldingResolution(
                         agentID: nil, previousAgentID: previous, recordedAgentID: previous)
@@ -323,9 +339,92 @@ enum VolumeService {
     /// restricts candidates to those members; an empty list (the default
     /// local pool) leaves all agents eligible.
     ///
-    static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {
+    static func selectVolumeAgent(
+        from agents: [Agent],
+        memberAgentIds: [String] = [],
+        sizeBytes: Int64 = 0,
+        requiresIOLimits: Bool = false, at instant: ClusterInstant
+    ) -> Agent? {
         agents.first {
-            $0.status == .online && $0.supportedHypervisors.contains(.qemu)
+            $0.status == .online && $0.supportedHypervisors(at: instant).contains(.qemu)
+                && (!requiresIOLimits || $0.supportsVolumeIOLimits(at: instant))
+                && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
+                && $0.availableDisk >= sizeBytes
+        }
+    }
+
+    /// Select and atomically reserve one host's committed disk pool. The
+    /// current allocation ratio is intentionally 1:1; a future site-scoped
+    /// ratio can widen `availableDisk` before it reaches this seam without
+    /// changing the race-closing reservation protocol.
+    static func selectAndReserveVolumeAgent(
+        sizeBytes: Int64,
+        volumeId: UUID,
+        agents: [Agent],
+        memberAgentIds: [String],
+        requiresIOLimits: Bool = false,
+        at instant: ClusterInstant,
+        coordination: CoordinationService
+    ) async throws -> Agent {
+        let eligible = eligibleLocalVolumeAgents(
+            from: agents,
+            memberAgentIds: memberAgentIds,
+            requiresIOLimits: requiresIOLimits,
+            at: instant)
+        let ids = eligible.compactMap { $0.id?.uuidString }
+        let reservationId = volumeReservationID(volumeId)
+
+        for _ in 1...max(1, eligible.count + 2) {
+            let active = await coordination.activeReservations(agentIds: ids)
+            guard
+                let selected = eligible.first(where: { agent in
+                    guard let id = agent.id?.uuidString else { return false }
+                    let reserved = max(Int64(0), active[id]?.disk ?? 0)
+                    let effective = reserved >= agent.availableDisk ? 0 : agent.availableDisk - reserved
+                    return effective >= sizeBytes
+                }), let agentId = selected.id?.uuidString
+            else {
+                throw InsufficientHostDisk(
+                    required: sizeBytes,
+                    candidates: eligible.map { agent in
+                        let id = agent.id?.uuidString ?? ""
+                        let reserved = max(Int64(0), active[id]?.disk ?? 0)
+                        return (
+                            agent.name,
+                            reserved >= agent.availableDisk ? 0 : agent.availableDisk - reserved
+                        )
+                    })
+            }
+
+            if await coordination.reserveCapacity(
+                agentId: agentId,
+                vmId: reservationId,
+                amounts: ReservationAmounts(cpu: 0, memory: 0, disk: sizeBytes),
+                capacity: ReservationAmounts(
+                    cpu: selected.availableCPU,
+                    memory: selected.availableMemory,
+                    disk: selected.availableDisk))
+            {
+                return selected
+            }
+        }
+
+        throw InsufficientHostDisk(
+            required: sizeBytes,
+            candidates: eligible.map { ($0.name, $0.availableDisk) })
+    }
+
+    static func volumeReservationID(_ volumeId: UUID) -> String {
+        "volume:\(volumeId.uuidString)"
+    }
+
+    private static func eligibleLocalVolumeAgents(
+        from agents: [Agent], memberAgentIds: [String], requiresIOLimits: Bool,
+        at instant: ClusterInstant
+    ) -> [Agent] {
+        agents.filter {
+            $0.status == .online && $0.supportedHypervisors(at: instant).contains(.qemu)
+                && (!requiresIOLimits || $0.supportsVolumeIOLimits(at: instant))
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
         }
     }
@@ -333,11 +432,18 @@ enum VolumeService {
     /// Pick one lifecycle executor for a shared RBD volume. Site membership
     /// plus a fresh functional Ceph-client observation is the complete client
     /// configuration gate; the selected id is not data placement.
-    static func selectCephReconciler(from agents: [Agent], pool: StoragePool) -> Agent? {
+    static func selectCephReconciler(
+        from agents: [Agent], pool: StoragePool, requiresIOLimits: Bool = false,
+        at instant: ClusterInstant
+    ) -> Agent? {
         guard pool.mode == .ceph else { return nil }
         return
             agents
-            .filter { StoragePool.agentCanReach(agent: $0, pool: pool, replicaAgentIds: []) }
+            .filter {
+                StoragePool.agentCanReach(
+                    agent: $0, pool: pool, replicaAgentIds: [], at: instant)
+                    && (!requiresIOLimits || $0.supportsVolumeIOLimits(at: instant))
+            }
             .sorted { ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "") }
             .first
     }

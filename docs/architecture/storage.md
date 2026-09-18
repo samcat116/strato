@@ -141,6 +141,75 @@ control plane stores it as JSON on `VolumeReplica`, and `VolumeSpec` echoes it
 back to the VM's agent. The control plane never derives or repurposes a path,
 and driver code no longer infers a file format from a filename.
 
+### QEMU block-device policy
+
+Each volume has a requested `blockMode`, and each QEMU agent reports the exact
+`AppliedBlockDevicePolicy` it selected for the concrete attachment. The two are
+kept separate because a request is not proof that the host can realize it:
+
+| Requested mode | Libvirt driver attributes | Intended use |
+| --- | --- | --- |
+| `conservative` | No `cache` or `io` override | Historical cache and AIO behavior; the default until benchmarks justify changing it |
+| `direct` | `cache='none' io='io_uring'`, only after a live probe succeeds | Avoid duplicating the guest cache in the host page cache |
+| `cachedShared` | `cache='writeback'` | Read-mostly images whose backing pages are genuinely shared between guests |
+
+Discard and multiqueue are independent of the cache mode. A QEMU disk gets
+`discard='unmap' detect_zeroes='unmap'` only when its storage backend confirms
+safe deallocation. Its virtio-blk queue count is the assigned vCPU count
+clamped to `1...256`; the project's libvirt 11.5 floor covers those XML
+attributes. Firecracker receives none of this QEMU policy.
+
+QEMU itself supports a virtio-blk `rotation_rate=1` device property, but
+libvirt currently rejects the domain `rotation_rate` attribute on a `virtio`
+disk. The `qemu:override` escape hatch applies only to initial device creation,
+not hot-plug, so it cannot satisfy the cold/hot consistency requirement.
+Strato therefore omits this unsupported XML, reports `nonRotational: false`,
+and includes the libvirt limitation in `fallbackReason`. This must remain
+fail-closed until libvirt has one supported representation that works for both
+paths.
+
+The filesystem backend probes the attachment immediately before cold boot or
+hot attach. It punches a hole in a temporary sibling file to prove that the
+backing filesystem can deallocate ranges, then opens the actual, still-
+unattached image read-only with `qemu-img bench -i io_uring -t none`. That one
+open checks the installed QEMU, kernel io_uring support, image format, file,
+and filesystem together. Failure does not fail the VM: the agent omits the
+unsupported attributes, logs the reason, and reports it in
+`appliedBlockPolicy.fallbackReason`.
+
+Native RBD advertises discard because unmap is a librbd operation. It does not
+claim the probed POSIX `cache=none`/io_uring path: QEMU's RBD driver has its own
+asynchronous I/O implementation, so a `direct` request currently falls back
+with that reason. RBD volumes are raw-only. For local storage, raw sparse files
+can release host extents directly, while qcow2 must first release guest data
+clusters through its metadata; both still depend on the host filesystem's
+hole-punch behavior. Discard support means the request reached a safe
+deallocation path, not that a particular storage system promises immediate
+physical-byte accounting.
+
+These modes do not relax write-ordering. Strato never emits `cache='unsafe'`;
+guests and applications must still issue flushes or `fsync` at their normal
+durability boundaries. `cachedShared` is not a promise that pages are shared:
+the current filesystem image-materialization path makes independent copies,
+so it benefits cross-VM density only after a backing-file or reflink layout
+actually gives the guests common host pages. Writable golden images should use
+an overlay and retain the base read-only.
+
+The applied policy is persisted in the VM manifest and used by the same disk
+renderer for cold boot and hot attach. Re-adoption preserves it across an agent
+restart. A missing manifest policy stays unknown until the agent reads the
+installed disk attributes from libvirt. This recovers an interrupted hot attach
+without inventing conservative settings or changing the running disk. The control plane stores non-null reports but
+does not erase one when an older agent is silent; current agents report an
+explicit inactive policy after detach. The detach request retains the observed
+attachment owner until that host acknowledges the detach, so storage-only
+replicas cannot clear its active policy.
+
+The benchmark and live-validation gate is documented in
+[QEMU block policy validation](../operations/qemu-block-policy-benchmark.md).
+Neither optimized cache mode should become the default without results from
+that matrix.
+
 ### One image-materialization path
 
 `materializeDisk(at:from:format:)` is the single image → disk path, used by:
@@ -612,32 +681,61 @@ difference is "this tenant is capped" versus "this tenant is not".
 
 The ceilings travel on `DesiredVolumeState.ioLimits` (wire v35) and come back on
 `ObservedVolumeState.ioLimits` as an **echo of what the agent actually applied**,
-recorded separately from what was requested. The echo exists because STR-19
-ships no capability gate: an agent that has never heard of ceilings drops the
-field and still advances its `observedGeneration`, so the generation pair alone
-would call an ignored mutation converged. Its nil rule is the load-bearing part
-— nil means *"this agent does not report applied limits"*, never *"the caps were
-removed"*, and an agent reporting an explicitly uncapped disk sends a
-present-but-empty value instead.
+recorded separately from what was requested. A QEMU agent advertises the
+additive `supportsVolumeIOLimits` capability (wire v60); absence is fail-closed.
+Creating, attaching, or adding a cap is rejected before it can target an agent
+that did not advertise support. Firecracker does not advertise the capability.
 
-**Nothing enforces these yet.** No agent applies ceilings, so `appliedIOLimits`
-is null for every volume and a set `ioLimits` alongside a null `appliedIOLimits`
-is the expected reading rather than a fault. Enforcement arrives with the
-agent-side work; the desired state, the API and the receiving end are what
-exists today.
+The QEMU path writes `<iotune>` into the libvirt domain definition at cold boot
+and hot attach. A later change uses `virDomainSetBlockIoTune` with both live and
+config flags when the domain is running, so raising, lowering, or clearing a
+ceiling takes effect without a reboot and also survives the next one. The agent
+then reads the values back with `virDomainGetBlockIoTune`; only that readback is
+echoed as `ObservedVolumeState.ioLimits`. The VM manifest also stores the desired
+limits, which preserves them through agent restart and adoption. Reattachment
+and placement on another compatible QEMU agent rebuild the same domain XML.
+
+The echo's nil rule is load-bearing: nil means *"this agent does not report
+applied limits"*, never *"the caps were removed"*. An agent reporting an
+explicitly uncapped disk sends a present-but-empty value instead. The control
+plane preserves the last applied columns for operator history but refuses to
+advance a capped volume's observed generation without a current echo. Therefore
+`conditions.converged` cannot report success from desired state alone.
+
+For an end-to-end enforcement check, run `fio` against the attached volume for
+at least 60 seconds after a 10-second ramp (`direct=1`, one job, and a working
+set larger than guest memory). Test IOPS and bandwidth separately. The measured
+steady-state total must not exceed the configured ceiling by more than 10%; no
+minimum is asserted because the backing store may be slower than the ceiling.
+Repeat after raising and lowering each limit while the VM remains running, then
+after an agent restart and a VM reboot.
 
 ### Volume placement across agents
 
-Volumes are host-local. `VolumeService.selectVolumeAgent` places a volume on an
-online, QEMU-capable agent (attachment goes through QEMU's block layer) that
-speaks wire v31 or later, and attachment requires the VM's agent to be able to
-reach the volume's data — for a local pool, the same agent that holds it.
+Volumes are host-local. `VolumeService.selectAndReserveVolumeAgent` places a
+volume on an online, QEMU-capable agent whose committed disk availability can
+hold the requested virtual size. It atomically reserves that capacity in the
+coordination store, so concurrent sparse-volume creates cannot all spend the
+same advertised bytes. Attachment requires the VM's agent to reach the
+volume's data — for a local pool, the same agent that holds it.
 
 Placement is a committed database fact *before* any sync can carry the volume,
-because sync assembly finds a volume by its `hypervisor_id`. It therefore runs
-as the create mutation's dispatch rather than in-band, and a create with no
-eligible agent degrades the volume with that reason instead of failing the
-request.
+because sync assembly finds a volume through its replica row. When eligible
+hosts exist, create selects and reserves one before acceptance and commits that
+replica in the same transaction as the volume. A fleet with eligible hosts but
+insufficient committed disk therefore returns `409` before a volume row is
+created. A create made while no eligible agent exists retains the established
+asynchronous behavior: it is accepted, then degraded with that reason.
+
+Wire v60 separates the two local-disk quantities that sparse images made easy
+to conflate. `availableDisk` is provisioned availability (`total - committed`)
+and is the placement/admission input. `physicalFreeDisk` is the live filesystem
+free-byte observation used for operational utilization. Local volume virtual
+sizes and the worst-case growth of local snapshot overlays are committed;
+Ceph-backed volumes are not charged to the agent's local filesystem.
+The current allocation ratio is explicitly 1:1. A site-scoped ratio can widen
+that bound at this placement seam when controlled overcommit is introduced;
+physical headroom remains a separate pressure signal either way.
 
 The wire-version filter is the one placement gate here that refuses rather than
 degrades: with the imperative volume frames gone, a volume on a pre-v31 agent

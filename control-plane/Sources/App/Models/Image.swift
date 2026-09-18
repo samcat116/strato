@@ -128,8 +128,24 @@ extension Image {
     /// The disk artifact that is complete and architecture-compatible enough
     /// to seed a managed volume.
     var usableDiskArtifact: ImageArtifact? {
-        diskArtifact.flatMap { artifact in
-            artifact.architecture == architecture && artifact.isUsable ? artifact : nil
+        usableBootArtifact(for: .qemu)
+    }
+
+    /// The disk-like artifact that initializes a VM's managed boot volume.
+    /// Keep this selection aligned with `StorageCarrierAssembler`: QEMU boots
+    /// from the disk image, while Firecracker boots from the rootfs.
+    func usableBootArtifact(for hypervisorType: HypervisorType) -> ImageArtifact? {
+        let requiredKind: ArtifactKind
+        switch hypervisorType {
+        case .qemu:
+            requiredKind = .diskImage
+        case .firecracker:
+            requiredKind = .rootfs
+        }
+        return ($artifacts.value ?? []).first { artifact in
+            artifact.kind == requiredKind
+                && artifact.architecture == architecture
+                && artifact.isUsable
         }
     }
 

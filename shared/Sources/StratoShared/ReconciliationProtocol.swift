@@ -329,6 +329,23 @@ public struct VolumeIOLimits: Codable, Sendable, Equatable {
     }
 }
 
+/// The measured aggregate I/O rate for one attached volume (STR-270).
+///
+/// This is deliberately a rate rather than raw libvirt counters. A QEMU
+/// process resets those counters on every restart, while operators need a
+/// directly comparable value beside the configured and applied ceilings.
+/// Nil on `ObservedVolumeState` means no two live samples were available yet
+/// (including a stopped or newly adopted domain), never zero activity.
+public struct VolumeIOObservedRate: Codable, Sendable, Equatable {
+    public let iops: Double
+    public let bytesPerSecond: Double
+
+    public init(iops: Double, bytesPerSecond: Double) {
+        self.iops = iops
+        self.bytesPerSecond = bytesPerSecond
+    }
+}
+
 /// Where a volume should be plugged in. Nil on the desired entry means
 /// "detached"; a value means the agent should have this volume presented to
 /// `vmId` as `deviceName`.
@@ -397,6 +414,9 @@ public struct DesiredVolumeState: Codable, Sendable {
     /// so an all-nil pair travels as an absent field — see the type's note on
     /// why the desired and observed sides normalize in opposite directions.
     public let ioLimits: VolumeIOLimits?
+    /// Requested QEMU host-cache policy. Existing desired entries decode to
+    /// the conservative path so optimized caching never appears by upgrade.
+    public let blockMode: VolumeBlockMode
 
     public init(
         volumeId: UUID,
@@ -407,7 +427,8 @@ public struct DesiredVolumeState: Codable, Sendable {
         storage: DesiredVolumeStorage = .local,
         source: DesiredVolumeSource? = nil,
         attachment: DesiredVolumeAttachment? = nil,
-        ioLimits: VolumeIOLimits? = nil
+        ioLimits: VolumeIOLimits? = nil,
+        blockMode: VolumeBlockMode = .conservative
     ) {
         self.volumeId = volumeId
         self.desiredStatus = desiredStatus
@@ -418,11 +439,12 @@ public struct DesiredVolumeState: Codable, Sendable {
         self.source = source
         self.attachment = attachment
         self.ioLimits = ioLimits
+        self.blockMode = blockMode
     }
 
     private enum CodingKeys: String, CodingKey {
         case volumeId, desiredStatus, generation, sizeBytes, format, storage
-        case source, attachment, ioLimits
+        case source, attachment, ioLimits, blockMode
     }
 
     /// Agent manifests written before wire v53 contain no storage field. They
@@ -441,7 +463,9 @@ public struct DesiredVolumeState: Codable, Sendable {
             source: try container.decodeIfPresent(DesiredVolumeSource.self, forKey: .source),
             attachment: try container.decodeIfPresent(
                 DesiredVolumeAttachment.self, forKey: .attachment),
-            ioLimits: try container.decodeIfPresent(VolumeIOLimits.self, forKey: .ioLimits))
+            ioLimits: try container.decodeIfPresent(VolumeIOLimits.self, forKey: .ioLimits),
+            blockMode: try container.decodeIfPresent(VolumeBlockMode.self, forKey: .blockMode)
+                ?? .conservative)
     }
 }
 
@@ -1456,17 +1480,23 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// not a derivation, and the only thing that distinguishes "capped" from
     /// "ignored".
     ///
-    /// STR-19 ships no capability gate, so an agent that has never heard of
-    /// ceilings drops `DesiredVolumeState.ioLimits` on the floor and still
-    /// advances `observedGeneration`. The generation pair alone would call that
-    /// mutation converged. This field is what makes the disagreement visible.
+    /// The capability gate prevents new work from reaching an agent that has
+    /// never heard of ceilings, while this field proves that a capable agent
+    /// actually read the requested values back. The generation pair alone is
+    /// not sufficient evidence for this mutation.
     ///
-    /// Nil means **this agent does not report applied limits** — which is every
-    /// agent until the online-throttling work lands. It must never be written
-    /// through as a clear. "Applied, and the answer is uncapped" is spelled
+    /// Nil means **this agent does not report applied limits**. It must never be
+    /// written through as a clear. "Applied, and the answer is uncapped" is spelled
     /// `VolumeIOLimits(iopsTotal: nil, bpsTotal: nil)`: present but empty. So
     /// unlike the desired side, this one is deliberately *not* normalized.
     public let ioLimits: VolumeIOLimits?
+    /// Block policy this agent actually applied, or an explicit inactive value
+    /// for a detached volume. Nil is reserved for agents predating wire v62.
+    public let blockPolicy: AppliedBlockDevicePolicy?
+    /// Measured read + write rate between two live libvirt block-stat samples.
+    /// Optional because a first sample, a stopped domain, or a failed stats
+    /// read has no honest rate to report.
+    public let ioObservedRate: VolumeIOObservedRate?
 
     public init(
         volumeId: UUID,
@@ -1479,7 +1509,9 @@ public struct ObservedVolumeState: Codable, Sendable {
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
-        ioLimits: VolumeIOLimits? = nil
+        ioLimits: VolumeIOLimits? = nil,
+        blockPolicy: AppliedBlockDevicePolicy? = nil,
+        ioObservedRate: VolumeIOObservedRate? = nil
     ) {
         self.volumeId = volumeId
         self.present = present
@@ -1492,6 +1524,8 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.failedGeneration = failedGeneration
         self.failureClassification = failureClassification
         self.ioLimits = ioLimits
+        self.blockPolicy = blockPolicy
+        self.ioObservedRate = ioObservedRate
     }
 }
 
@@ -1623,6 +1657,104 @@ public struct ObservedManifestStatus: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Observed Network Fabric State
+
+/// Whether one desired network-fabric object was realized by the reporting
+/// agent. Reports are statements about the agent's own OVSDB writes, not packet
+/// probes: `.active` means the requested writes and the verification read
+/// completed, while `.error` preserves a failed attempt for the control plane.
+public enum ObservedNetworkFabricStatus: String, Codable, Sendable, Equatable {
+    case active
+    case error
+}
+
+/// What the site's OVN topology authority observed after reconciling one
+/// logical network. Optional at the report level because a non-authority has no
+/// opinion about shared topology; an empty list is an authoritative opinion
+/// about an empty desired set.
+public struct ObservedNetworkState: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let observedGeneration: Int64
+    public let status: ObservedNetworkFabricStatus
+    public let lastError: String?
+    public let failedGeneration: Int64?
+    public let failureClassification: ObservedFailureClassification?
+
+    public init(
+        id: UUID,
+        observedGeneration: Int64,
+        status: ObservedNetworkFabricStatus,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil
+    ) {
+        self.id = id
+        self.observedGeneration = observedGeneration
+        self.status = status
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
+    }
+}
+
+/// What the site's OVN topology authority observed after reconciling one
+/// security group's port group and ACLs. A group can be realized by more than
+/// one site; each report remains scoped to its reporting authority and the
+/// control plane is responsible for combining those opinions.
+public struct ObservedSecurityGroupState: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let observedGeneration: Int64
+    public let status: ObservedNetworkFabricStatus
+    public let lastError: String?
+    public let failedGeneration: Int64?
+    public let failureClassification: ObservedFailureClassification?
+
+    public init(
+        id: UUID,
+        observedGeneration: Int64,
+        status: ObservedNetworkFabricStatus,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil,
+        failureClassification: ObservedFailureClassification? = nil
+    ) {
+        self.id = id
+        self.observedGeneration = observedGeneration
+        self.status = status
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+        self.failureClassification = failureClassification
+    }
+}
+
+/// The result of converging one VM or sandbox port's security-group
+/// membership. `securityGroupIds` is the desired set this result belongs to;
+/// the control plane compares it with the current attachment rows before
+/// applying the result so a delayed report cannot bless a newer membership.
+public struct ObservedPortMembershipState: Codable, Sendable, Equatable {
+    public let interfaceId: UUID
+    public let portName: String
+    public let securityGroupIds: [UUID]
+    public let status: ObservedNetworkFabricStatus
+    public let lastError: String?
+    public let failureClassification: ObservedFailureClassification?
+
+    public init(
+        interfaceId: UUID,
+        portName: String,
+        securityGroupIds: [UUID],
+        status: ObservedNetworkFabricStatus,
+        lastError: String? = nil,
+        failureClassification: ObservedFailureClassification? = nil
+    ) {
+        self.interfaceId = interfaceId
+        self.portName = portName
+        self.securityGroupIds = securityGroupIds
+        self.status = status
+        self.lastError = lastError
+        self.failureClassification = failureClassification
+    }
+}
+
 // MARK: - Observed Load Balancer State
 
 public enum ObservedLoadBalancerStatus: String, Codable, Sendable {
@@ -1746,6 +1878,16 @@ public struct ObservedStateReport: WebSocketMessage {
     /// Native LB programming and backend health observed by the site's
     /// topology author. Nil means no opinion, not an empty authoritative set.
     public let loadBalancers: [ObservedLoadBalancerState]?
+    /// Logical-switch/router/SNAT/DHCP realization observed by the site's
+    /// topology authority. Nil means this agent has no topology opinion.
+    public let networks: [ObservedNetworkState]?
+    /// Port-group and ACL realization observed by the site's topology
+    /// authority. Nil means this agent has no authority-side opinion.
+    public let securityGroups: [ObservedSecurityGroupState]?
+    /// Per-workload port-group membership observed by this agent. Nil means the
+    /// agent did not attempt or cannot identify membership; an empty list is an
+    /// authoritative statement that this sync contained no managed local port.
+    public let portMemberships: [ObservedPortMembershipState]?
     /// Whole physical disks observed by this agent. A non-nil value is the
     /// complete current inventory, including an authoritative empty list.
     /// Nil means enumeration failed or is unsupported and must not be read as
@@ -1767,6 +1909,9 @@ public struct ObservedStateReport: WebSocketMessage {
         volumes: [ObservedVolumeState]? = nil,
         snapshots: [ObservedSnapshotState]? = nil,
         loadBalancers: [ObservedLoadBalancerState]? = nil,
+        networks: [ObservedNetworkState]? = nil,
+        securityGroups: [ObservedSecurityGroupState]? = nil,
+        portMemberships: [ObservedPortMembershipState]? = nil,
         storageDevices: [ObservedStorageDevice]? = nil
     ) {
         self.requestId = requestId
@@ -1783,6 +1928,9 @@ public struct ObservedStateReport: WebSocketMessage {
         self.volumes = volumes
         self.snapshots = snapshots
         self.loadBalancers = loadBalancers
+        self.networks = networks
+        self.securityGroups = securityGroups
+        self.portMemberships = portMemberships
         self.storageDevices = storageDevices
     }
 
