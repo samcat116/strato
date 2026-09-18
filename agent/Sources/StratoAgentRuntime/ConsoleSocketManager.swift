@@ -317,7 +317,11 @@ private final class ConsoleChannelHandler: ChannelInboundHandler, Sendable {
             // arrival order. Spawning a Task here instead would let two reads
             // reach the control plane transposed — invisible on a text console,
             // and unrecoverable for an RFB stream.
-            relay.send(Data(bytes))
+            if !relay.send(Data(bytes)) {
+                // A slow consumer exceeded its output budget. Closing reports
+                // the ended session; never continue a stream with missing bytes.
+                context.close(promise: nil)
+            }
         }
     }
 

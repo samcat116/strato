@@ -48,7 +48,6 @@ extension AgentConfig {
             "log_level": ConfigValue(.string(defaults.logLevel?.rawValue ?? "info"), isSecret: false),
             "network_mode": ConfigValue(
                 .string(defaults.networkMode?.rawValue ?? NetworkMode.user.rawValue), isSecret: false),
-            "enable_hvf": ConfigValue(.bool(defaults.enableHVF ?? false), isSecret: false),
             "enable_kvm": ConfigValue(.bool(defaults.enableKVM ?? false), isSecret: false),
             "vm_storage_dir": ConfigValue(
                 .string(defaults.vmStoragePath ?? defaultVMStoragePath), isSecret: false),
@@ -67,18 +66,15 @@ extension AgentConfig {
     public static var builtinDefaults: AgentConfig {
         #if os(Linux)
         let networkMode = NetworkMode.ovn
-        let enableHVF = false
         let enableKVM = true
         #else
         let networkMode = NetworkMode.user
-        let enableHVF = true
         let enableKVM = false
         #endif
         return AgentConfig(
             controlPlaneURL: "wss://localhost:8443/agent/ws",
             logLevel: .info,
             networkMode: networkMode,
-            enableHVF: enableHVF,
             enableKVM: enableKVM,
             vmStoragePath: defaultVMStoragePath
         )

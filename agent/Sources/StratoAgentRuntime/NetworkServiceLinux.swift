@@ -75,6 +75,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     var ovsManager: OVSManager?
     var isConnected = false
     var connecting: Task<Void, any Error>?
+    var disconnecting = false
+    var southboundConnecting: Task<Void, any Error>?
+    var southboundRetryAfter: ContinuousClock.Instant?
     #endif
 
     init(

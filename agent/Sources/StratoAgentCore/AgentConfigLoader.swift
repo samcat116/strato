@@ -20,7 +20,6 @@ extension AgentConfig {
         ["ovn_northbound_tls", "client_key"],
         ["ovn_northbound_tls", "verify_server_certificate"],
         ["ovn_northbound_tls", "server_hostname"],
-        ["enable_hvf"],
         ["enable_kvm"],
         ["qemu_memory_overhead_mb"],
         ["vm_storage_dir"],
@@ -180,7 +179,6 @@ extension AgentConfig {
         } else {
             ovnNorthboundTLS = nil
         }
-        let enableHVF = try await values.bool("enable_hvf")
         let enableKVM = try await values.bool("enable_kvm")
         let qemuMemoryOverheadMB = try await values.int("qemu_memory_overhead_mb")
         if let qemuMemoryOverheadMB, !Self.qemuMemoryOverheadRange.contains(qemuMemoryOverheadMB) {
@@ -492,10 +490,6 @@ extension AgentConfig {
         if enableKVM == true {
             logger?.warning("enable_kvm is not supported on macOS, will be ignored")
         }
-        #elseif os(Linux)
-        if enableHVF == true {
-            logger?.warning("enable_hvf is only supported on macOS, will be ignored")
-        }
         #endif
 
         return AgentConfig(
@@ -508,7 +502,6 @@ extension AgentConfig {
             ovnBootstrapChassis: ovnBootstrapChassis,
             ovnNorthbound: ovnNorthbound,
             ovnNorthboundTLS: ovnNorthboundTLS,
-            enableHVF: enableHVF,
             enableKVM: enableKVM,
             qemuMemoryOverheadMB: qemuMemoryOverheadMB,
             vmStoragePath: vmStoragePath,

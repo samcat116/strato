@@ -511,10 +511,10 @@ extension Agent {
         let backend = try await requireStorageBackend(
             volumeId: item.id, desired: item.desiredVolume)
         // Unplug before removing the bytes, or a running guest keeps an open
-        // handle on a file that no longer exists. Best effort: a VM that is
-        // already gone leaves nothing to unplug.
+        // handle on a file that no longer exists. Only confirmed absence is
+        // idempotent success; a failed detach must preserve the backing bytes.
         if let attachment = recordedVolumeAttachments()[item.id] {
-            try? await detachVolumeFromVM(
+            try await detachVolumeFromVM(
                 volumeId: item.id, vmId: attachment.vmId, deviceName: attachment.deviceName)
         }
         try await backend.deleteVolume(volumeId: item.id)
@@ -586,10 +586,26 @@ extension Agent {
         // device that is already gone, which the next sync's detach clears
         // idempotently; dropping the record first would strand a plugged device
         // nothing describes.
-        if let service = getHypervisorServiceForVM(vmId: vmId), await service.hasLiveSession(vmId: vmId) {
-            try await service.detachDisk(vmId: vmId, volumeId: volumeId, deviceName: deviceName)
-        }
         guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else { return }
+        guard let service = getHypervisorServiceForVM(vmId: vmId) else {
+            throw ConvergenceError.blocked("cannot detach volume \(volumeId): VM \(vmId) has no available driver")
+        }
+        var processGone = false
+        if orphanedVMs[vmId] != nil {
+            do {
+                _ = try await service.adoptVM(vmId: vmId, spec: entry.spec)
+            } catch let error as HypervisorServiceError {
+                guard case .adoptionTargetGone = error else { throw error }
+                processGone = true
+            }
+        }
+        if !processGone {
+            do {
+                try await service.detachDisk(vmId: vmId, volumeId: volumeId, deviceName: deviceName)
+            } catch let error as HypervisorServiceError {
+                guard case .vmNotFound = error else { throw error }
+            }
+        }
         let remaining = entry.spec.volumes.filter { $0.volumeId.uuidString != volumeId }
         let updated = entry.with(spec: entry.spec.withVolumes(remaining))
         if managedVMs[vmId] != nil {
@@ -647,7 +663,7 @@ extension Agent {
                 throw ConvergenceError.sourceNotReady(
                     "managed volume \(volumeId) for VM \(vmId) is not present on this agent yet")
             }
-            if hypervisorType == .qemu {
+            if configuration.hypervisorType == .qemu {
                 try await backend.prepareAttachmentForQEMU(disk)
             }
             volumes.append(
@@ -786,7 +802,7 @@ extension Agent {
         _ desired: DesiredVMState
     ) async -> InstanceMetadata? {
         guard desired.hypervisorType == .firecracker else { return desired.metadata }
-        guard metadataServiceEnabled else { return nil }
+        guard configuration.metadataServiceEnabled else { return nil }
         return await metadataStore.metadata(for: desired.vmId)
     }
 

@@ -7,9 +7,7 @@ import StratoShared
 /// OVN/OVS are not supported on macOS, so we use QEMU's built-in user-mode networking
 actor NetworkServiceMacOS: NetworkServiceProtocol {
     private let logger: Logger
-    private let maxMACGenerationAttempts = 100
 
-    private var usedMACs: Set<String> = []
     private var lastObservedLoadBalancers: [ObservedLoadBalancerState]?
 
     init(logger: Logger) {
@@ -46,16 +44,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             "Creating VM network with user-mode networking",
             metadata: ["strato.vm.id": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
 
-        let macAddress: String
-        if let configuredMAC = config.macAddress {
-            guard let parsedMAC = MACAddress(configuredMAC) else {
-                throw NetworkError.invalidConfiguration(
-                    "MAC address '\(configuredMAC)' is not a six-octet unicast address")
-            }
-            macAddress = parsedMAC.description
-        } else {
-            macAddress = generateMACAddress()
-        }
+        let macAddress = config.macAddress.description
 
         // User-mode networking provides automatic DHCP: VMs get addresses in the
         // 10.0.2.0/24 range from QEMU's SLIRP, so no IP is allocated (or honored)
@@ -117,29 +106,4 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         lastObservedLoadBalancers
     }
 
-    private func generateMACAddress() -> String {
-        // Use QEMU's OUI (52:54:00) for better compatibility
-        var macAddress: String
-        var attempts = 0
-
-        repeat {
-            let bytes = (0..<3).map { _ in UInt8.random(in: 0...255) }
-            macAddress = "52:54:00:" + bytes.map { String(format: "%02x", $0) }.joined(separator: ":")
-            attempts += 1
-
-            if attempts > maxMACGenerationAttempts {
-                // Fallback to deterministic MAC if we can't find a unique one
-                let timestamp = UInt32(Date().timeIntervalSince1970)
-                macAddress = String(
-                    format: "52:54:00:%02x:%02x:%02x",
-                    UInt8(timestamp >> 16 & 0xFF),
-                    UInt8(timestamp >> 8 & 0xFF),
-                    UInt8(timestamp & 0xFF))
-                break
-            }
-        } while usedMACs.contains(macAddress)
-
-        usedMACs.insert(macAddress)
-        return macAddress
-    }
 }

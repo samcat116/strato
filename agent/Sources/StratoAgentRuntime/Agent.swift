@@ -57,6 +57,7 @@ actor Agent {
     // its SPIFFE X.509 SVID over mTLS — only the agent's `name`.
     let webSocketURL: String
     let logger: Logger
+    let configuration: AgentRuntimeConfiguration
 
     /// The HTTP(S) base of the control plane, derived from the dialed
     /// WebSocket URL: query off first (the `name` parameter would otherwise
@@ -92,6 +93,7 @@ actor Agent {
     // handler calling stop()). Guards start() against parking if stop() ran
     // during startup, which would otherwise hang the process on exit.
     var shutdownRequested = false
+    var stopStarted = false
     // Resumed by stop() to unblock start(), which parks here for the agent's
     // lifetime instead of busy-sleeping.
     var shutdownContinuation: CheckedContinuation<Void, Never>?
@@ -130,8 +132,6 @@ actor Agent {
     // Debounces the durable write: a 100-VM sync applies 100 records and must
     // still cost one file write.
     var metadataPersistTrigger: CoalescingTrigger?
-    let metadataServiceEnabled: Bool
-    let metadataHopLimit: Int
     // Whether the control plane we registered with speaks state sync (wire
     // protocol >= 2). Gates observed-state reports so an old control plane
     // isn't sent envelopes it logs as unknown.
@@ -272,18 +272,6 @@ actor Agent {
     /// Minimum spacing between guest-info refreshes.
     static let guestInfoRefreshInterval: Duration = .seconds(30)
 
-    let networkMode: NetworkMode?
-    // Chassis-level OVN settings (ovn-remote/encap external_ids) the network
-    // service bootstraps onto the local OVS at connect time.
-    let ovnChassisConfig: OVNChassisConfig
-    let ovnUplink: OVNUplinkConfig?
-    // OVN native dynamic routing (issue #344): BGP advertisement of floating
-    // IPs / connected routes via FRR on the egress host.
-    let ovnDynamicRouting: OVNDynamicRoutingConfig?
-    // Per-network DNS resolver settings (STR-40). Nil means the defaults, which
-    // is deliberately "on": the feature is an opt-out on the *network*, so a
-    // host whose config says nothing about it is one that should run it.
-    let resolverConfig: NetworkResolverConfig?
     // The CoreDNS this host will run, resolved once at network-service setup.
     // Nil means the host cannot answer on a resolver address at all — no
     // binary, the feature disabled here, or user-mode networking — which is
@@ -294,9 +282,6 @@ actor Agent {
     // network service so shutdown can stop it: a draining host must not keep
     // answering for networks it no longer serves.
     var resolverSupervisor: ResolverSupervisor?
-    let ovnNorthbound: String?
-    // TLS material for an ssl: ovn_northbound endpoint (nil = tcp/unix).
-    let ovnNorthboundTLS: OVNNorthboundTLSConfig?
     // The networking backend actually selected at startup (config value plus
     // platform fallbacks). Drives the typed networking report at registration:
     // a Linux agent configured for user-mode networking must not claim
@@ -322,43 +307,11 @@ actor Agent {
     var resourceTelemetryTask: Task<Void, Never>?
     var hostResourceTelemetry: HostResourceTelemetry?
     var workloadResourceTelemetry: [String: WorkloadResourceTelemetry] = [:]
-    let installMode: AgentInstallMode
-    let imageCachePath: String?
-    // Byte budgets for the image caches; nil means unbounded (see
-    // image_cache_max_size_gb / sandbox_image_cache_max_size_gb).
-    let imageCacheMaxSizeBytes: Int64?
-    let sandboxImageCachePath: String?
-    let sandboxImageCacheMaxSizeBytes: Int64?
-    let vmStoragePath: String
-    // Root of the managed-volume tree for the filesystem storage backend and
-    // the host preflight's writability probe.
-    let volumeStoragePath: String
-    // Operator-configured EDK2 firmware paths (issue #565): the split
-    // CODE/VARS pairs and the legacy monolithic image.
-    let firmware: FirmwareOverrides
     // The QEMU driver, kept typed as well as in `hypervisorServices` so the
     // registration path can hand it what only the host preflight knows: whether
     // this host's libvirt can back a guest vTPM. Nil off Linux, where the
     // registered `.qemu` backend is a mock.
     var libvirtService: LibvirtService?
-    let firecrackerBinaryPath: String
-    let firecrackerSocketDir: String
-    // Where the sandbox guest base image (issue #419) is installed; its
-    // presence gates the sandbox-runtime capability advertised at
-    // registration (issue #415).
-    let sandboxGuestImagePath: String?
-    // Sandbox jailer policy (issue #425): resolved once at start() into
-    // either a SandboxJailerConfig for the runtime or, when mode is
-    // `required` and the host can't satisfy it, a blocked-reason that keeps
-    // the sandbox capability dark at every registration.
-    let sandboxJailerMode: SandboxJailerMode
-    let sandboxJailerBinaryPath: String
-    let sandboxJailerChrootDir: String
-    let sandboxJailerUidBase: UInt32
-    /// Base used only to reconstruct manifests written before jailUID was
-    /// persisted. This remains the old default when the current allocation
-    /// default moves, unless the operator explicitly configured a base.
-    let legacySandboxJailerUidBase: UInt32
     var sandboxJailerBlockedReason: String?
     /// Live host-range failure under `required`, refreshed by preflight on
     /// every registration and checked again on the create path.
@@ -385,13 +338,6 @@ actor Agent {
     /// runtime exists. The runtime receives this complete namespace and owns
     /// subsequent sandbox/template leases.
     var sandboxJailUIDs: SandboxJailUIDAllocator
-    // Warm start (issue #426): provision sandboxes from per-image template
-    // snapshots when possible. Default on; warm failures cold-boot.
-    let sandboxWarmStart: Bool
-    let sandboxWarmCacheMaxSizeBytes: Int64?
-    let hypervisorType: HypervisorType
-    let hardwareAccelerationEnabled: Bool
-    let qemuMemoryOverheadBytes: Int64
 
     // Cross-VM reconciliation lanes are concurrent. This ledger closes the
     // stale-snapshot race between reading host inventory and committing the
@@ -412,28 +358,13 @@ actor Agent {
     /// this sequence instead of sorting them again (STR-308).
     var desiredVMVolumeSpecs: [String: [VolumeSpec]] = [:]
 
-    // Simulation ("dummy agent") mode: the agent speaks the full control-plane
-    // protocol but drives a no-op mock hypervisor with no real
-    // networking/storage, and reports the configured fake host capacity instead
-    // of probing the machine. Lets a fleet of dummies scale-test a control plane
-    // far larger than the compute available to run real VMs. Nil/disabled means
-    // a normal agent.
-    let simulation: SimulationConfig?
-    var isSimulationMode: Bool { simulation?.enabled ?? false }
+    var isSimulationMode: Bool { configuration.simulation?.enabled ?? false }
     // The observed-state report reads this cache without starting subprocesses.
     // Registration forces a scan; heartbeats refresh it on a bounded cadence.
     let storageDeviceInventory: StorageDeviceInventoryCache
 
-    // SPIFFE/SPIRE support
-    let spiffeConfig: SPIFFEConfig?
     var svidManager: SVIDManager?
 
-    // How much of this host one sync's confirmed teardowns may remove (STR-98).
-    let teardownGuard: TeardownGuard
-
-    // Desired-state transport (STR-146): the long-poll loop, started once
-    // registration confirms the control plane.
-    let desiredStateFullRefetchInterval: Duration
     var desiredStatePoller: DesiredStatePoller<ContinuousClock>?
 
     // Set when a failure is unrecoverable (e.g. the agent's identity was
@@ -456,104 +387,33 @@ actor Agent {
     var autoUpdateStatus: ObservedAgentUpdateStatus?
     var attemptedAutoUpdateArtifacts: Set<String> = []
 
-    init(
-        agentID: String,
-        webSocketURL: String,
-        networkMode: NetworkMode?,
-        ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
-        ovnUplink: OVNUplinkConfig? = nil,
-        ovnDynamicRouting: OVNDynamicRoutingConfig? = nil,
-        resolverConfig: NetworkResolverConfig? = nil,
-        ovnNorthbound: String? = nil,
-        ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
-        logger: Logger,
-        imageCachePath: String? = nil,
-        imageCacheMaxSizeBytes: Int64? = nil,
-        sandboxImageCachePath: String? = nil,
-        sandboxImageCacheMaxSizeBytes: Int64? = nil,
-        vmStoragePath: String,
-        volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
-        firmware: FirmwareOverrides = FirmwareOverrides(),
-        firecrackerBinaryPath: String = "/usr/bin/firecracker",
-        firecrackerSocketDir: String = "/tmp/firecracker",
-        sandboxGuestImagePath: String? = nil,
-        sandboxJailerMode: SandboxJailerMode = .auto,
-        sandboxJailerBinaryPath: String = "/usr/local/bin/jailer",
-        sandboxJailerChrootDir: String = "/var/lib/strato/vms/jailer",
-        sandboxJailerUidBase: UInt32 = AgentConfig.defaultSandboxJailerUidBase,
-        legacySandboxJailerUidBase: UInt32? = nil,
-        sandboxWarmStart: Bool = true,
-        sandboxWarmCacheMaxSizeBytes: Int64? = nil,
-        hypervisorType: HypervisorType = .qemu,
-        hardwareAccelerationEnabled: Bool = true,
-        qemuMemoryOverheadBytes: Int64 = Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
-        simulation: SimulationConfig? = nil,
-        installMode: AgentInstallMode = .detect(),
-        spiffeConfig: SPIFFEConfig? = nil,
-        teardownGuard: TeardownGuard = TeardownGuard(),
-        desiredStateFullRefetchInterval: Duration = DesiredStatePoller<ContinuousClock>.defaultFullRefetchInterval,
-        metadataServiceEnabled: Bool = true,
-        metadataHopLimit: Int = 1
-    ) {
+    init(agentID: String, webSocketURL: String, configuration: AgentRuntimeConfiguration, logger: Logger) {
+        self.configuration = configuration
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
-        self.networkMode = networkMode
-        self.ovnChassisConfig = ovnChassisConfig
-        self.ovnUplink = ovnUplink
-        self.ovnDynamicRouting = ovnDynamicRouting
-        self.resolverConfig = resolverConfig
-        self.ovnNorthbound = ovnNorthbound
-        self.ovnNorthboundTLS = ovnNorthboundTLS
         self.logger = logger
-        self.imageCachePath = imageCachePath
-        self.imageCacheMaxSizeBytes = imageCacheMaxSizeBytes
-        self.sandboxImageCachePath = sandboxImageCachePath
-        self.sandboxImageCacheMaxSizeBytes = sandboxImageCacheMaxSizeBytes
-        self.vmStoragePath = vmStoragePath
-        self.volumeStoragePath = volumeStoragePath
-        self.firmware = firmware
-        self.firecrackerBinaryPath = firecrackerBinaryPath
-        self.firecrackerSocketDir = firecrackerSocketDir
-        self.sandboxGuestImagePath = sandboxGuestImagePath
-        self.sandboxJailerMode = sandboxJailerMode
-        self.sandboxJailerBinaryPath = sandboxJailerBinaryPath
-        self.sandboxJailerChrootDir = sandboxJailerChrootDir
-        self.sandboxJailerUidBase = sandboxJailerUidBase
-        self.legacySandboxJailerUidBase = legacySandboxJailerUidBase ?? sandboxJailerUidBase
-        self.sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: sandboxJailerUidBase)
-        self.sandboxWarmStart = sandboxWarmStart
-        self.sandboxWarmCacheMaxSizeBytes = sandboxWarmCacheMaxSizeBytes
-        self.hypervisorType = hypervisorType
-        self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
-        self.qemuMemoryOverheadBytes = qemuMemoryOverheadBytes
-        self.simulation = simulation
-        if simulation?.enabled == true {
+        self.sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: configuration.sandboxJailerUidBase)
+        if configuration.simulation?.enabled == true {
             self.storageDeviceInventory = StorageDeviceInventoryCache(observer: { nil })
         } else {
             let storageDeviceProbe = BlockDeviceInventoryProbe()
             self.storageDeviceInventory = StorageDeviceInventoryCache(
                 observer: { await storageDeviceProbe.observe() })
         }
-        self.installMode = installMode
-        self.spiffeConfig = spiffeConfig
-        self.teardownGuard = teardownGuard
-        self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
         self.manifestStore = VMManifestStore(
-            path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
+            path: (configuration.vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
             logger: logger
         )
         self.snapshotRecordStore = SnapshotRecordStore(
-            path: (vmStoragePath as NSString).appendingPathComponent("snapshot-records.json"),
+            path: (configuration.vmStoragePath as NSString).appendingPathComponent("snapshot-records.json"),
             logger: logger
         )
         // Beside the VM manifest, because it answers the same question about
         // the same workloads and shares its lifetime (STR-56).
         self.metadataSnapshotStore = MetadataSnapshotStore(
-            path: (vmStoragePath as NSString).appendingPathComponent("instance-metadata.json"),
+            path: (configuration.vmStoragePath as NSString).appendingPathComponent("instance-metadata.json"),
             logger: logger
         )
-        self.metadataServiceEnabled = metadataServiceEnabled
-        self.metadataHopLimit = metadataHopLimit
         self.vmExecSessionManager = VMExecSessionManager(logger: logger)
 
         let (stream, continuation) = AsyncStream.makeStream(of: ControlPlaneInboundFrame.self)

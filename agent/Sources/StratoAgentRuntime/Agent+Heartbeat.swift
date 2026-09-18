@@ -337,7 +337,7 @@ extension Agent {
         // is probed live from the machine the agent runs on.
         let totalCPU: Int
         let totalMemory: Int64
-        if let simulation, simulation.enabled {
+        if let simulation = configuration.simulation, simulation.enabled {
             totalCPU = simulation.resolvedCPUCores
             totalMemory = simulation.resolvedMemoryBytes
         } else {
@@ -459,19 +459,19 @@ extension Agent {
         // tracking reservations.
         let totalDisk: Int64
         let availableDisk: Int64
-        if let simulation, simulation.enabled {
+        if let simulation = configuration.simulation, simulation.enabled {
             totalDisk = simulation.resolvedDiskBytes
             let reservedDisk =
                 managedVMs.values.totalReservedDiskBytes + orphanedVMs.values.totalReservedDiskBytes
                 + quarantinedWorkloads.values.reduce(0) { $0 + $1.diskBytes }
             availableDisk = inventoryUnknown ? 0 : max(0, totalDisk - reservedDisk)
         } else {
-            let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
+            let disk = HostResources.diskCapacity(forPath: configuration.volumeStoragePath)
             if disk == nil {
                 logger.warning(
                     "Unable to determine disk capacity for managed volume storage path",
                     metadata: [
-                        "path": .string(volumeStoragePath)
+                        "path": .string(configuration.volumeStoragePath)
                     ])
             }
             totalDisk = disk?.total ?? 0

@@ -146,35 +146,6 @@ extension StorageBackend {
 
     public func prepareAttachmentForQEMU(_: DiskAttachment) async throws {}
 
-    /// Source-compatible conveniences for filesystem-only callers and tests.
-    /// New reconciliation code carries the typed attachment end to end.
-    public func resizeVolume(volumePath: String, newSizeBytes: Int64) async throws {
-        try await resizeVolume(
-            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)),
-            newSizeBytes: newSizeBytes)
-    }
-
-    public func createSnapshot(
-        volumeId: String, snapshotId: String, volumePath: String
-    ) async throws -> String {
-        try await createSnapshot(
-            volumeId: volumeId, snapshotId: snapshotId,
-            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
-    }
-
-    public func cloneVolume(
-        sourceVolumeId: String, sourcePath: String, targetVolumeId: String
-    ) async throws -> DiskAttachment {
-        try await cloneVolume(
-            sourceVolumeId: sourceVolumeId,
-            sourceAttachment: .file(path: sourcePath, format: DiskFormat(volumePath: sourcePath)),
-            targetVolumeId: targetVolumeId)
-    }
-
-    public func volumeInfo(volumePath: String) async throws -> VolumeInfoResult {
-        try await volumeInfo(
-            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
-    }
 }
 
 // MARK: - Errors

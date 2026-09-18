@@ -9,32 +9,28 @@ package) for contributors; the protocol it speaks is documented in
 
 ## Target split
 
-`agent/Package.swift` defines four targets, split around one constraint —
-SwiftPM cannot unit-test an executable target:
+`agent/Package.swift` separates runtime effects from reusable planning and
+protocol types:
 
-- **`StratoAgentCore`** (library) — the testable core. Depends on
-  `StratoShared`, Logging, Toml, Crypto, and the transport/file plumbing its
-  services need (NIOCore/`_NIOFileSystem`, NIOSSL, AsyncHTTPClient), plus
-  swift-libvirt for the pure layer of the libvirt driver (it is pure Swift
-  with no system dependency) — deliberately **no SwiftFirecracker or
-  SwiftOVN** — so the reconcile engine, config parsing, storage backend, OCI
-  pipeline, manifest store, domain XML builder, and updater are all unit tests
-  away from any daemon.
-- **`StratoAgentSPIFFE`** (library) — SPIFFE/SPIRE support (SVID types, TLS
-  config, Workload API client), split out so tests can import it.
-- **`StratoAgent`** (executable) — the binary and everything that talks to a
-  live daemon: the `Agent` actor, `LibvirtService`, `FirecrackerService`,
-  `FirecrackerSandboxRuntime`, the platform network services, and
-  `WebSocketClient`. SwiftOVN and SwiftFirecracker link only on Linux (but
-  are declared unconditionally so `Package.resolved` is identical on every
-  host; imports are `#if os(Linux)`-guarded).
-- **`StratoAgentTests`** — imports Core + SPIFFE. The executable has no
-  direct tests; anything worth testing gets pushed down into Core.
+- **`StratoAgentKit`** — shared agent types, disk/network attachments, and
+  protocol contracts.
+- **`StratoAgentDomainXML`** — libvirt domain planning and XML transformations.
+- **`StratoAgentCore`** — reconciliation, configuration, storage, OCI images,
+  manifests, and host utilities. Re-exports Kit and DomainXML.
+- **`StratoAgentSPIFFE`** — SVID types, TLS configuration, and Workload API clients.
+- **`StratoAgentRuntime`** — the `Agent` actor, hypervisor drivers, network
+  services, WebSocket client, and CLI bootstrap. Importable by runtime tests;
+  SwiftOVN and SwiftFirecracker link only on Linux.
+- **`StratoAgent`** — the executable entry point.
+
+The test targets cover core behavior, storage, platform helpers, SPIFFE, and
+runtime integration separately. `StratoAgentTestSupport` holds shared fixtures.
 
 ## Startup, registration, reconnect
 
-`StratoAgent.swift` is an ArgumentParser `@main` whose `run` subcommand (the
-default) funnels into `launchAgent`.
+The executable calls the runtime CLI, whose default `run` subcommand funnels
+into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
+`Agent` stores that immutable configuration alongside its mutable runtime state.
 
 - **Config**: TOML (`AgentConfig` in `StratoAgentCore/AgentConfig.swift`),
   resolved field-by-field with precedence **CLI flag > config file >
@@ -71,7 +67,7 @@ default) funnels into `launchAgent`.
   (`NIOSSLClientHandler` → HTTP upgrade → hand-off to websocket-kit); the
   shared `SPIFFEVerification` target holds the verifier, which the control
   plane also uses to pin the SPIRE server's identity. See issue #552.
-- **`WebSocketClient`** (actor, executable target): WebSocketKit with a
+- **`WebSocketClient`** (actor, runtime target): WebSocketKit with a
   16 MiB max frame, inbound frames decoded and yielded into an `AsyncStream`
   to preserve arrival order, and a connection-scoped 20s heartbeat.
   Connection loss triggers `Agent.runReconnectLoop`: exponential backoff
@@ -1128,7 +1124,7 @@ to the host filesystem.
 
 ## Networking
 
-`NetworkOrchestrator` (executable target) resolves a VM's `[NetworkSpec]`
+`NetworkOrchestrator` (runtime target) resolves a VM's `[NetworkSpec]`
 into typed `ResolvedNetworkAttachment`s **before** the hypervisor driver
 runs, and tears them down after — drivers consume attachments
 (`.tap(interface:)` or `.userMode`) and never talk to the network service
@@ -1553,3 +1549,34 @@ the storage backends, the manifest store, the updater and its gate, the
 full OCI suite, the sandbox suite (config drive, control protocol, jail,
 log assembly), and networking (attachments, reconciler, OVN bootstrap,
 DHCP, gateway planning).
+
+## Failure and shutdown boundaries
+
+A volume delete first detaches every recorded attachment it acts on. A driver
+error preserves both the volume and its manifest attachment. Orphan adoption
+must prove that the process is gone or restore a driver session; a failed probe
+is not absence. Libvirt detaches live and persistent definitions separately and
+checks the resulting XML before allowing backing storage deletion. Disks with
+unknown serial identities block absence confirmation; seed CD-ROMs do not.
+
+Shutdown closes the resource queue to new and pending work, then joins active
+mutations before releasing drivers and network clients. It preserves guest
+processes for adoption by the next agent.
+
+OVN/OVS connection attempts own a 30-second deadline. Expiry explicitly closes
+transports and joins setup and cleanup before another attempt can start.
+Southbound load-balancer health connects lazily on observation, with a separate
+10-second connection deadline and a minimum five-second retry interval after
+failure. A Southbound startup failure does not permanently disable health.
+
+Console relays preserve order and allow at most 4 MiB or 1,024 chunks, including
+the write currently waiting on the client. Exceeding either budget closes that
+console session; the client must reconnect. The relay never drops bytes and
+continues the same stream.
+
+New network realization requires a valid control-plane-assigned unicast MAC.
+The agent no longer allocates random fallback addresses. Older manifests remain
+readable and live adoption preserves their existing identity. A legacy NIC with
+no MAC must receive one in desired state before network realization can proceed.
+The retired `enable_hvf` TOML key is rejected: macOS uses the mock hypervisor;
+Linux still supports `enable_kvm`.

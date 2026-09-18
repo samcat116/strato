@@ -133,7 +133,7 @@ extension Agent {
         logger.info("SVID rotated, updating WebSocket TLS configuration")
 
         do {
-            guard let spiffe = spiffeConfig else {
+            guard let spiffe = configuration.spiffeConfig else {
                 // Unreachable while SPIFFE is mandatory at startup; log rather
                 // than return silently so a future refactor that loosens that
                 // shows up as a rotation that stopped happening.
@@ -204,14 +204,14 @@ extension Agent {
             await libvirtService?.setTPMSupported(tpmAvailable)
             let probed = preflight.gate(
                 HypervisorProbe.probeAll(
-                    libvirt: libvirt, firecrackerBinaryPath: firecrackerBinaryPath))
+                    libvirt: libvirt, firecrackerBinaryPath: configuration.firecrackerBinaryPath))
             // Firecracker's binary version rides the registration (issue
             // #428): snapshot mobility keys cross-agent restore placement on
             // version equality, so the control plane needs to know what each
             // host would load snapshots with.
             let versioned = HypervisorProbe.stampingFirecrackerVersion(
                 probed,
-                version: await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath))
+                version: await HypervisorProbe.firecrackerVersion(binaryPath: configuration.firecrackerBinaryPath))
             hypervisors = versioned.map { support in
                 guard support.type == .qemu else { return support }
                 return HypervisorSupport(
@@ -231,7 +231,7 @@ extension Agent {
         // Firecracker VMs. Refresh on every registration so fixing the host's
         // passwd/group/subordinate-id reservations recovers capability without
         // restarting the agent.
-        if sandboxJailerMode == .required {
+        if configuration.sandboxJailerMode == .required {
             sandboxJailerUIDRangeBlockedReason =
                 hostPreflightReport?.sandboxJailerUIDRangeFailureDetail
         } else {
@@ -266,7 +266,7 @@ extension Agent {
         } else {
             sandboxProbe = SandboxRuntimeProbe.probe(
                 firecracker: hypervisors.first { $0.type == .firecracker },
-                guestImagePath: sandboxGuestImagePath,
+                guestImagePath: configuration.sandboxGuestImagePath,
                 jailerBlockedReason: sandboxJailCreationBlockedReason,
                 jailsNewSandboxes: sandboxJailNewSandboxes,
                 networkCapability: networkCapability
@@ -485,7 +485,7 @@ extension Agent {
                 await self?.routeInboundMessage(envelope)
             },
             logger: logger,
-            fullRefetchInterval: desiredStateFullRefetchInterval
+            fullRefetchInterval: configuration.desiredStateFullRefetchInterval
         )
         desiredStatePoller = poller
         await poller.start()
@@ -493,7 +493,8 @@ extension Agent {
             "Desired state is now fetched by long-poll",
             metadata: [
                 "url": .string(url.absoluteString),
-                "fullRefetchSeconds": .stringConvertible(desiredStateFullRefetchInterval.components.seconds),
+                "fullRefetchSeconds": .stringConvertible(
+                    configuration.desiredStateFullRefetchInterval.components.seconds),
             ])
     }
 

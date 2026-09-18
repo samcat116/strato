@@ -47,7 +47,6 @@ public struct NodeDependencyInspection: Sendable, Equatable {
 public protocol NodeDependencyModule: Sendable {
     var id: NodeDependencyID { get }
     var role: NodeDependencyRole { get }
-    var dependencies: [NodeDependencyID] { get }
     var desiredState: NodeDependencyDesiredState { get }
     var ownership: NodeDependencyOwnership { get }
     var affectedCapabilities: [NodeCapability] { get }
@@ -56,29 +55,22 @@ public protocol NodeDependencyModule: Sendable {
 }
 
 extension NodeDependencyModule {
-    public var dependencies: [NodeDependencyID] { [] }
     public var desiredState: NodeDependencyDesiredState { .required }
     public var ownership: NodeDependencyOwnership { .observeOnly }
 }
 
-public enum NodeDependencyGraphError: Error, Equatable, CustomStringConvertible {
+public enum NodeDependencyRegistryError: Error, Equatable, CustomStringConvertible {
     case duplicate(NodeDependencyID)
-    case missingDependency(module: NodeDependencyID, dependency: NodeDependencyID)
-    case cycle([NodeDependencyID])
 
     public var description: String {
         switch self {
         case .duplicate(let id):
             return "dependency module \(id.rawValue) is registered more than once"
-        case .missingDependency(let module, let dependency):
-            return "dependency module \(module.rawValue) requires unregistered module \(dependency.rawValue)"
-        case .cycle(let ids):
-            return "dependency graph contains a cycle: \(ids.map(\.rawValue).joined(separator: ", "))"
         }
     }
 }
 
-/// Continuously inspects a validated dependency DAG and owns the policy state
+/// Continuously inspects the registered dependencies and owns the policy state
 /// around those inspections. It delegates all host effects to modules and will
 /// never call reconciliation for externally owned (`observeOnly`) software.
 public actor NodeDependencyManager {
@@ -92,7 +84,6 @@ public actor NodeDependencyManager {
     private static let inspectionTimeoutSeconds = 10
 
     private let modules: [NodeDependencyID: any NodeDependencyModule]
-    private let layers: [[NodeDependencyID]]
     private let now: @Sendable () -> Date
     private let logger: Logger
     private var states: [NodeDependencyID: ModuleState] = [:]
@@ -102,83 +93,63 @@ public actor NodeDependencyManager {
         now: @escaping @Sendable () -> Date = Date.init,
         logger: Logger
     ) throws {
-        let graph = try Self.validate(modules)
-        self.modules = graph.modules
-        self.layers = graph.layers
+        var registry: [NodeDependencyID: any NodeDependencyModule] = [:]
+        for module in modules {
+            guard registry.updateValue(module, forKey: module.id) == nil else {
+                throw NodeDependencyRegistryError.duplicate(module.id)
+            }
+        }
+        self.modules = registry
         self.now = now
         self.logger = logger
     }
 
-    /// Inspect all modules. Independent modules in each graph layer run
-    /// concurrently; dependants wait for the layer they require.
+    /// Inspect independent modules concurrently, preserving per-module health policy.
     @discardableResult
     public func refresh() async -> [NodeDependencyObservation] {
-        var refreshed: [NodeDependencyID: NodeDependencyObservation] = [:]
-
-        for layer in layers {
-            let inspectionTimeoutSeconds = Self.inspectionTimeoutSeconds
-            let results = await withTaskGroup(
-                of: (NodeDependencyID, NodeDependencyInspection).self,
-                returning: [(NodeDependencyID, NodeDependencyInspection)].self
-            ) { group in
-                for id in layer {
-                    guard let module = modules[id] else { continue }
-                    let failedDependencies = module.dependencies.filter { dependency in
-                        guard let observation = refreshed[dependency] else { return true }
-                        return !observation.permitsDependentWork
-                    }
-                    group.addTask {
-                        if let failed = failedDependencies.first {
-                            return (
-                                id,
-                                NodeDependencyInspection(
-                                    supervisorState: .unknown,
-                                    compatibility: .unknown,
-                                    functionalState: .unhealthy,
-                                    reason: NodeDependencyFailureReason(
-                                        code: .dependencyFailed,
-                                        message: "required dependency \(failed.rawValue) is unavailable"))
-                            )
+        let inspectionTimeoutSeconds = Self.inspectionTimeoutSeconds
+        let results = await withTaskGroup(
+            of: (NodeDependencyID, NodeDependencyInspection).self,
+            returning: [(NodeDependencyID, NodeDependencyInspection)].self
+        ) { group in
+            for (id, module) in modules {
+                group.addTask {
+                    do {
+                        let inspection = try await StageBudget.run(
+                            seconds: inspectionTimeoutSeconds,
+                            stage: "inspect node dependency \(id.rawValue)",
+                            onTimeout: .abandon
+                        ) {
+                            await module.inspect()
                         }
-                        do {
-                            let inspection = try await StageBudget.run(
-                                seconds: inspectionTimeoutSeconds,
-                                stage: "inspect node dependency \(id.rawValue)",
-                                onTimeout: .abandon
-                            ) {
-                                await module.inspect()
-                            }
-                            return (id, inspection)
-                        } catch {
-                            return (
-                                id,
-                                NodeDependencyInspection(
-                                    supervisorState: .unknown,
-                                    compatibility: .unknown,
-                                    functionalState: .unhealthy,
-                                    reason: NodeDependencyFailureReason(
-                                        code: .commandTimedOut,
-                                        message: "dependency inspection exceeded its time budget"))
-                            )
-                        }
+                        return (id, inspection)
+                    } catch {
+                        return (
+                            id,
+                            NodeDependencyInspection(
+                                supervisorState: .unknown,
+                                compatibility: .unknown,
+                                functionalState: .unhealthy,
+                                reason: NodeDependencyFailureReason(
+                                    code: .commandTimedOut,
+                                    message: "dependency inspection exceeded its time budget"))
+                        )
                     }
                 }
-
-                var values: [(NodeDependencyID, NodeDependencyInspection)] = []
-                for await value in group { values.append(value) }
-                return values
             }
 
-            for (id, inspection) in results.sorted(by: { $0.0.rawValue < $1.0.rawValue }) {
-                guard let module = modules[id] else { continue }
-                let observation = stabilize(inspection, for: module)
-                refreshed[id] = observation
-                logTransition(from: states[id]?.observation, to: observation)
-                var state = states[id] ?? ModuleState()
-                state.observation = observation
-                states[id] = state
+            var values: [(NodeDependencyID, NodeDependencyInspection)] = []
+            for await value in group { values.append(value) }
+            return values
+        }
 
-            }
+        for (id, inspection) in results.sorted(by: { $0.0.rawValue < $1.0.rawValue }) {
+            guard let module = modules[id] else { continue }
+            let observation = stabilize(inspection, for: module)
+            logTransition(from: states[id]?.observation, to: observation)
+            var state = states[id] ?? ModuleState()
+            state.observation = observation
+            states[id] = state
         }
 
         return snapshot()
@@ -280,34 +251,4 @@ public actor NodeDependencyManager {
         }
     }
 
-    private static func validate(
-        _ modules: [any NodeDependencyModule]
-    ) throws -> (modules: [NodeDependencyID: any NodeDependencyModule], layers: [[NodeDependencyID]]) {
-        var registry: [NodeDependencyID: any NodeDependencyModule] = [:]
-        for module in modules {
-            guard registry[module.id] == nil else { throw NodeDependencyGraphError.duplicate(module.id) }
-            registry[module.id] = module
-        }
-        for module in modules {
-            for dependency in module.dependencies where registry[dependency] == nil {
-                throw NodeDependencyGraphError.missingDependency(module: module.id, dependency: dependency)
-            }
-        }
-
-        var remaining = Set(registry.keys)
-        var resolved: Set<NodeDependencyID> = []
-        var layers: [[NodeDependencyID]] = []
-        while !remaining.isEmpty {
-            let layer = remaining.filter { id in
-                registry[id]?.dependencies.allSatisfy(resolved.contains) == true
-            }.sorted { $0.rawValue < $1.rawValue }
-            guard !layer.isEmpty else {
-                throw NodeDependencyGraphError.cycle(remaining.sorted { $0.rawValue < $1.rawValue })
-            }
-            layers.append(layer)
-            resolved.formUnion(layer)
-            remaining.subtract(layer)
-        }
-        return (registry, layers)
-    }
 }

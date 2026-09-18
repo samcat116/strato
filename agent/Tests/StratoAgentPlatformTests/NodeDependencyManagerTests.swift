@@ -62,44 +62,12 @@ struct NodeDependencyManagerTests {
         #expect(await firecrackerWithoutLibvirt.inspect().isHealthy)
     }
 
-    @Test("The registry rejects missing dependencies and cycles")
-    func validatesGraph() throws {
-        let missing = module(.libvirt, dependencies: [.spire], inspection: healthy)
-        #expect(throws: NodeDependencyGraphError.self) {
-            try NodeDependencyManager(modules: [missing], logger: Logger(label: "test"))
+    @Test("The registry rejects duplicate module identities")
+    func rejectsDuplicateModules() throws {
+        let entry = module(.spire, inspection: healthy)
+        #expect(throws: NodeDependencyRegistryError.duplicate(.spire)) {
+            try NodeDependencyManager(modules: [entry, entry], logger: Logger(label: "test"))
         }
-
-        let a = module(.spire, dependencies: [.libvirt], inspection: healthy)
-        let b = module(.libvirt, dependencies: [.spire], inspection: healthy)
-        #expect(throws: NodeDependencyGraphError.self) {
-            try NodeDependencyManager(modules: [a, b], logger: Logger(label: "test"))
-        }
-    }
-
-    @Test("A categorically failed prerequisite blocks its dependant inspection")
-    func blocksDependants() async throws {
-        let downstream = CallCounter()
-        let prerequisiteFailure = NodeDependencyInspection(
-            supervisorState: .failed,
-            compatibility: .compatible,
-            functionalState: .unhealthy,
-            reason: .init(code: .functionalProbeFailed, message: "probe failed"))
-        let manager = try NodeDependencyManager(
-            modules: [
-                module(.spire, inspection: prerequisiteFailure),
-                TestNodeDependencyModule(
-                    id: .libvirt, role: .compute, dependencies: [.spire],
-                    desiredState: .required, ownership: .observeOnly,
-                    affectedCapabilities: [.qemuPlacement]
-                ) {
-                    await downstream.increment()
-                    return self.healthy
-                },
-            ], logger: Logger(label: "test"))
-
-        let observations = await manager.refresh()
-        #expect(await downstream.value == 0)
-        #expect(observations.first { $0.id == .libvirt }?.reason?.code == .dependencyFailed)
     }
 
     @Test("Functional hysteresis delays failure and confirms recovery")
@@ -258,12 +226,11 @@ struct NodeDependencyManagerTests {
 
     private func module(
         _ id: NodeDependencyID,
-        dependencies: [NodeDependencyID] = [],
         inspection: NodeDependencyInspection
     ) -> any NodeDependencyModule {
         TestNodeDependencyModule(
             id: id, role: id == .spire ? .identity : .compute,
-            dependencies: dependencies, desiredState: .required,
+            desiredState: .required,
             ownership: .observeOnly, affectedCapabilities: []
         ) { inspection }
     }
@@ -714,7 +681,6 @@ private actor InspectionSequence {
 private struct TestNodeDependencyModule: NodeDependencyModule {
     let id: NodeDependencyID
     let role: NodeDependencyRole
-    let dependencies: [NodeDependencyID]
     let desiredState: NodeDependencyDesiredState
     let ownership: NodeDependencyOwnership
     let affectedCapabilities: [NodeCapability]
@@ -723,7 +689,6 @@ private struct TestNodeDependencyModule: NodeDependencyModule {
     init(
         id: NodeDependencyID,
         role: NodeDependencyRole,
-        dependencies: [NodeDependencyID] = [],
         desiredState: NodeDependencyDesiredState = .required,
         ownership: NodeDependencyOwnership = .observeOnly,
         affectedCapabilities: [NodeCapability],
@@ -731,7 +696,6 @@ private struct TestNodeDependencyModule: NodeDependencyModule {
     ) {
         self.id = id
         self.role = role
-        self.dependencies = dependencies
         self.desiredState = desiredState
         self.ownership = ownership
         self.affectedCapabilities = affectedCapabilities

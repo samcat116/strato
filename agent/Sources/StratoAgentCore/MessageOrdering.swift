@@ -14,6 +14,7 @@ public actor SerialTaskQueue {
     /// never a successor that has since taken the slot.
     private var tailIDs: [String: UInt64] = [:]
     private var nextID: UInt64 = 0
+    private var isClosed = false
 
     public init() {}
 
@@ -24,6 +25,7 @@ public actor SerialTaskQueue {
     /// task only ever waits on tasks submitted before it — dependencies form a DAG that
     /// respects submission order.
     public func enqueue(keys rawKeys: [String], operation: @escaping @Sendable () async -> Void) {
+        guard !isClosed else { return }
         let keys = rawKeys.isEmpty ? [""] : Array(Set(rawKeys))
         nextID += 1
         let id = nextID
@@ -31,13 +33,24 @@ public actor SerialTaskQueue {
         let task = Task {
             // Wait for the previous item on each involved lane, preserving arrival order.
             for predecessor in predecessors { await predecessor.value }
-            await operation()
+            if !self.isClosed { await operation() }
             self.retireTails(keys: keys, id: id)
         }
         for key in keys {
             tails[key] = task
             tailIDs[key] = id
         }
+    }
+
+    /// Refuse new work and prevent queued operations from starting.
+    public func close() { isClosed = true }
+
+    /// Fence submission and join active mutations before releasing their dependencies.
+    /// Call outside a queued operation so it cannot wait for itself.
+    public func closeAndDrain() async {
+        close()
+        let pending = Array(tails.values)
+        for task in pending { await task.value }
     }
 
     /// Drop each key's bookkeeping once this task (identified by `id`) is still its tail, so

@@ -69,6 +69,7 @@ struct OrderedByteRelayTests {
         relay.send(Data([2]))
         relay.send(Data([3]))
         relay.finish()
+        #expect(!relay.send(Data([9])))
 
         for await _ in allDelivered.stream {}
         #expect(await recorder.snapshot() == [1, 2, 3])
@@ -84,4 +85,31 @@ struct OrderedByteRelayTests {
         relay.send(Data([9]))
         #expect(await recorder.snapshot().isEmpty)
     }
+    @Test("in-flight bytes count against the budget and overflow closes the relay")
+    func overflowIncludesInFlightBytes() async {
+        let entered = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let relay = OrderedByteRelay(byteLimit: 4) { _ in
+            entered.continuation.finish()
+            for await _ in release.stream {}
+        }
+        #expect(relay.send(Data([1, 2, 3, 4])))
+        for await _ in entered.stream {}
+        #expect(!relay.send(Data([5])))
+        #expect(!relay.send(Data([6])))
+        release.continuation.finish()
+    }
+
+    @Test("tiny chunks cannot bypass the queue budget")
+    func chunkBudget() async {
+        let release = AsyncStream<Void>.makeStream()
+        let relay = OrderedByteRelay(byteLimit: 100, chunkLimit: 2) { _ in
+            for await _ in release.stream {}
+        }
+        #expect(relay.send(Data([1])))
+        #expect(relay.send(Data([2])))
+        #expect(!relay.send(Data([3])))
+        release.continuation.finish()
+    }
+
 }

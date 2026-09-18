@@ -1,0 +1,40 @@
+import StratoAgentCore
+@testable import StratoAgentRuntime
+
+func runtimeTestConfiguration(path: String) -> AgentRuntimeConfiguration {
+    AgentRuntimeConfiguration(
+        networkMode: .user,
+        ovnChassisConfig: OVNChassisConfig(),
+        ovnUplink: nil,
+        ovnDynamicRouting: nil,
+        resolverConfig: nil,
+        ovnNorthbound: nil,
+        ovnNorthboundTLS: nil,
+        imageCachePath: nil,
+        imageCacheMaxSizeBytes: nil,
+        sandboxImageCachePath: nil,
+        sandboxImageCacheMaxSizeBytes: nil,
+        vmStoragePath: path,
+        volumeStoragePath: FileSystemStorageBackend.defaultStoragePath,
+        firmware: FirmwareOverrides(),
+        firecrackerBinaryPath: "/usr/bin/firecracker",
+        firecrackerSocketDir: "/tmp/firecracker",
+        sandboxGuestImagePath: nil,
+        sandboxJailerMode: .auto,
+        sandboxJailerBinaryPath: "/usr/local/bin/jailer",
+        sandboxJailerChrootDir: "/var/lib/strato/vms/jailer",
+        sandboxJailerUidBase: AgentConfig.defaultSandboxJailerUidBase,
+        legacySandboxJailerUidBase: AgentConfig.defaultSandboxJailerUidBase,
+        sandboxWarmStart: true,
+        sandboxWarmCacheMaxSizeBytes: nil,
+        hypervisorType: .qemu,
+        hardwareAccelerationEnabled: true,
+        qemuMemoryOverheadBytes: Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
+        simulation: nil,
+        installMode: .detect(),
+        spiffeConfig: nil,
+        teardownGuard: TeardownGuard(),
+        desiredStateFullRefetchInterval: DesiredStatePoller<ContinuousClock>.defaultFullRefetchInterval,
+        metadataServiceEnabled: true,
+        metadataHopLimit: 1)
+}
