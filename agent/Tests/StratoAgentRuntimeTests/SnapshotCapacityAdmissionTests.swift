@@ -23,11 +23,11 @@ struct SnapshotCapacityAdmissionTests {
         let agent = Agent(
             agentID: "hv-snapshot",
             webSocketURL: "ws://127.0.0.1:8080/agent",
-            networkMode: nil,
-            logger: logger,
-            vmStoragePath: root.appendingPathComponent("vms").path,
-            volumeStoragePath: root.appendingPathComponent("volumes").path,
-            simulation: SimulationConfig(enabled: true, diskGB: 100))
+            configuration: runtimeTestConfiguration(
+                path: root.appendingPathComponent("vms").path,
+                volumeStoragePath: root.appendingPathComponent("volumes").path,
+                simulation: SimulationConfig(enabled: true, diskGB: 100)),
+            logger: logger)
         await agent.installStorageBackendForSnapshotCapacityTest(backend)
 
         let parentId = UUID()
@@ -76,11 +76,11 @@ struct SnapshotCapacityAdmissionTests {
         let agent = Agent(
             agentID: "hv-snapshot-full",
             webSocketURL: "ws://127.0.0.1:8080/agent",
-            networkMode: nil,
-            logger: logger,
-            vmStoragePath: root.appendingPathComponent("vms").path,
-            volumeStoragePath: root.appendingPathComponent("volumes").path,
-            simulation: SimulationConfig(enabled: true, diskGB: 70))
+            configuration: runtimeTestConfiguration(
+                path: root.appendingPathComponent("vms").path,
+                volumeStoragePath: root.appendingPathComponent("volumes").path,
+                simulation: SimulationConfig(enabled: true, diskGB: 70)),
+            logger: logger)
         await agent.installStorageBackendForSnapshotCapacityTest(backend)
 
         let parentId = UUID()

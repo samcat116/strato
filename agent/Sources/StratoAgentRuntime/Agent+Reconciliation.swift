@@ -587,6 +587,7 @@ extension Agent: ReconcileActuator {
     }
 
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        guard !shutdownRequested else { throw CancellationError() }
         if item.kind.isSnapshotArtifact {
             try await performSnapshot(step, item: item)
             return

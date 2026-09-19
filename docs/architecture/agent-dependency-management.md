@@ -31,8 +31,8 @@ absolute executables, argument arrays, timeouts, and output limits.
 
 ## Observation and gating
 
-The agent manager validates the dependency graph at startup. It runs independent
-checks concurrently and waits for dependencies before their dependants. Each
+The agent manager rejects duplicate module IDs at startup and runs independent
+checks concurrently. Modules have no dependency graph or execution layers. Each
 observation reports supervisor state, installed and daemon versions,
 compatibility, functional state, timestamps, a structured failure, failure and
 repair counters, and the affected capabilities.

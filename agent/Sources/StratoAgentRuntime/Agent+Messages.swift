@@ -334,7 +334,8 @@ extension Agent {
     func getHypervisorService(for hypervisorType: HypervisorType) -> (any HypervisorService)? {
         guard let service = hypervisorServices[hypervisorType] else {
             logger.error(
-                "No \(hypervisorType.displayName) driver on this host; rejecting request for unsupported hypervisor")
+                "No \(hypervisorType.displayName) driver on this host; rejecting request for unsupported hypervisor"
+            )
             return nil
         }
         return service
@@ -476,8 +477,8 @@ extension Agent {
     func legacyJailUID(for sandboxId: String) -> UInt32? {
         let jailDirectory = SandboxJailPlan.jailDirectory(
             sandboxId: sandboxId,
-            chrootBaseDir: sandboxJailerChrootDir,
-            firecrackerBinaryPath: firecrackerBinaryPath)
+            chrootBaseDir: configuration.sandboxJailerChrootDir,
+            firecrackerBinaryPath: configuration.firecrackerBinaryPath)
         for path in [
             jailDirectory + "/root",
             jailDirectory + "/root/rootfs.ext4",
@@ -508,13 +509,13 @@ extension Agent {
         }
         do {
             return try SandboxJailPlan.legacyUID(
-                sandboxId: sandboxId, uidBase: legacySandboxJailerUidBase)
+                sandboxId: sandboxId, uidBase: configuration.legacySandboxJailerUidBase)
         } catch {
             logger.error(
                 "Cannot recover a legacy sandbox jail UID",
                 metadata: [
                     "strato.sandbox.id": .string(sandboxId),
-                    "legacyUIDBase": .stringConvertible(legacySandboxJailerUidBase),
+                    "legacyUIDBase": .stringConvertible(configuration.legacySandboxJailerUidBase),
                     "error": .string(error.localizedDescription),
                 ])
             return nil
@@ -718,7 +719,7 @@ extension Agent {
             inFlightReconcileItems += await reconciler.inFlightWorkloads(kind: .sandbox).count
         }
         let conditions = AutoUpdateGate.Conditions(
-            installMode: installMode,
+            installMode: configuration.installMode,
             inFlightReconcileItems: inFlightReconcileItems
         )
         if let reason = AutoUpdateGate.blockedReason(conditions) {

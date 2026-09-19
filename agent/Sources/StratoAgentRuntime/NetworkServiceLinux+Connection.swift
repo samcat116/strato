@@ -13,25 +13,32 @@ extension NetworkServiceLinux {
 
     func connect() async throws {
         #if os(Linux)
+        guard !disconnecting else { throw CancellationError() }
         if isConnected { return }
 
         let task: Task<Void, any Error>
         if let connecting {
             task = connecting
         } else {
-            task = Task { try await self.establishConnection() }
+            task = Task {
+                try await ConnectionDeadline.run(
+                    timeout: .seconds(30),
+                    connect: { try await self.establishConnection() },
+                    interrupt: { await self.disconnectManagers() })
+            }
             connecting = task
         }
 
         do {
             try await task.value
+            guard !disconnecting, !Task.isCancelled else { throw CancellationError() }
             if connecting == task {
                 connecting = nil
                 isConnected = true
             }
+            guard isConnected else { throw CancellationError() }
         } catch {
             if connecting == task { connecting = nil }
-            await disconnectManagers()
             throw error
         }
         #else
@@ -41,6 +48,7 @@ extension NetworkServiceLinux {
 
     #if os(Linux)
     private func establishConnection() async throws {
+        try Task.checkCancellation()
         logger.info("Connecting to OVN/OVS services")
 
         // Initialize OVN manager. The string form can't express TLS options
@@ -60,15 +68,18 @@ extension NetworkServiceLinux {
         }
         ovnManager = OVNManager(endpoint: nbEndpoint, logger: logger)
         try await ovnManager?.connect()
+        try Task.checkCancellation()
         logger.info("Connected to OVN database", metadata: ["endpoint": .string(ovnNBConnection)])
 
         // Initialize OVS manager
         ovsManager = OVSManager(socketPath: ovsSocketPath, logger: logger)
         try await ovsManager?.connect()
+        try Task.checkCancellation()
         logger.info("Connected to OVS database", metadata: ["socket": .string(ovsSocketPath)])
 
         // Ensure integration bridge exists
         try await ensureIntegrationBridge()
+        try Task.checkCancellation()
 
         // Ensure the chassis is registered with OVN (ovn-remote/encap
         // external_ids), then prove ovn-controller actually connected — a
@@ -76,39 +87,9 @@ extension NetworkServiceLinux {
         // are ever programmed, which must gate the capability, not pass
         // silently (issue #328).
         try await ensureChassisConfiguration()
+        try Task.checkCancellation()
         try await verifyOVNControllerConnected()
-
-        // Service_Monitor lives in Southbound. Keep this connection separate
-        // from the single-writer NB manager and do not make basic networking
-        // unavailable if the operator's SB RBAC permits ovn-controller but not
-        // this read — health observation will report a backend error until the
-        // access is fixed.
-        do {
-            let connection = try await southboundConnectionString()
-            var endpoint = try OVSDBEndpoint(parsing: connection)
-            if case .ssl(let host, let port, _) = endpoint, let tls = ovnNBTLS {
-                endpoint = .ssl(
-                    host: host, port: port,
-                    tls: OVSDBTLSConfiguration(
-                        caCertificatePath: tls.caCertPath,
-                        clientCertificatePath: tls.clientCertPath,
-                        clientPrivateKeyPath: tls.clientKeyPath,
-                        verifiesServerCertificate: tls.verifyServerCertificate,
-                        serverHostname: tls.serverHostname))
-            }
-            let manager = OVNManager(
-                endpoint: endpoint, database: OVNDatabase.southbound, logger: logger)
-            try await manager.connect()
-            ovnSouthboundManager = manager
-            logger.info(
-                "Connected to OVN Southbound database for load-balancer health",
-                metadata: ["endpoint": .string(connection)])
-        } catch {
-            ovnSouthboundManager = nil
-            logger.error(
-                "Cannot connect to OVN Southbound database; native LB health will report an error",
-                metadata: ["error": .string(error.localizedDescription)])
-        }
+        try Task.checkCancellation()
 
         logger.info("Network service connected successfully")
     }
@@ -117,10 +98,19 @@ extension NetworkServiceLinux {
     func disconnect() async {
         #if os(Linux)
         logger.info("Disconnecting from OVN/OVS services")
-        connecting?.cancel()
-        connecting = nil
-        await disconnectManagers()
+        disconnecting = true
         isConnected = false
+        let attempt = connecting
+        let healthAttempt = southboundConnecting
+        attempt?.cancel()
+        healthAttempt?.cancel()
+        await disconnectManagers()
+        _ = await attempt?.result
+        _ = await healthAttempt?.result
+        connecting = nil
+        southboundConnecting = nil
+        southboundRetryAfter = nil
+        disconnecting = false
 
         logger.info("Network service disconnected")
         #else
@@ -130,16 +120,68 @@ extension NetworkServiceLinux {
 
     #if os(Linux)
     private func disconnectManagers() async {
-        do {
-            try await ovnManager?.disconnect()
-            try await ovnSouthboundManager?.disconnect()
-            try await ovsManager?.disconnect()
-        } catch {
-            logger.error("Error disconnecting from OVN/OVS: \(error)")
-        }
+        // Release every transport even if a peer's close fails. These local
+        // references belong to this attempt and cannot close a later retry.
+        let northbound = ovnManager
+        let southbound = ovnSouthboundManager
+        let ovs = ovsManager
         ovnManager = nil
         ovnSouthboundManager = nil
         ovsManager = nil
+        do { try await northbound?.disconnect() } catch { logger.warning("Could not close OVN Northbound: \(error)") }
+        do { try await southbound?.disconnect() } catch { logger.warning("Could not close OVN Southbound: \(error)") }
+        do { try await ovs?.disconnect() } catch { logger.warning("Could not close OVS: \(error)") }
+    }
+
+    /// Health is optional and recovers on a later observation without taking
+    /// ordinary networking down. Concurrent LB observations share one attempt.
+    func ensureSouthboundConnection() async throws {
+        guard isConnected, !disconnecting else {
+            throw NetworkError.notConnected("OVN networking is not connected")
+        }
+        if let southboundConnecting { return try await southboundConnecting.value }
+        if ovnSouthboundManager != nil { return }
+        if let retryAfter = southboundRetryAfter, ContinuousClock.now < retryAfter {
+            throw NetworkError.notConnected("OVN Southbound connection is waiting to retry")
+        }
+        let task = Task {
+            let connection = try await self.southboundConnectionString()
+            try Task.checkCancellation()
+            var endpoint = try OVSDBEndpoint(parsing: connection)
+            if case .ssl(let host, let port, _) = endpoint, let tls = self.ovnNBTLS {
+                endpoint = .ssl(
+                    host: host, port: port,
+                    tls: OVSDBTLSConfiguration(
+                        caCertificatePath: tls.caCertPath, clientCertificatePath: tls.clientCertPath,
+                        clientPrivateKeyPath: tls.clientKeyPath,
+                        verifiesServerCertificate: tls.verifyServerCertificate,
+                        serverHostname: tls.serverHostname))
+            }
+            let manager = OVNManager(endpoint: endpoint, database: OVNDatabase.southbound, logger: self.logger)
+            try await ConnectionDeadline.run(
+                timeout: .seconds(10), connect: { try await manager.connect() },
+                interrupt: { try? await manager.disconnect() })
+            // Publish only after the attempt is complete and still wanted.
+            guard !Task.isCancelled, !self.disconnecting else {
+                try? await manager.disconnect()
+                throw CancellationError()
+            }
+            self.ovnSouthboundManager = manager
+        }
+        southboundConnecting = task
+        do {
+            try await task.value
+            if southboundConnecting == task {
+                southboundConnecting = nil
+                southboundRetryAfter = nil
+            }
+        } catch {
+            if southboundConnecting == task {
+                southboundConnecting = nil
+                southboundRetryAfter = .now.advanced(by: .seconds(5))
+            }
+            throw error
+        }
     }
     #endif
 

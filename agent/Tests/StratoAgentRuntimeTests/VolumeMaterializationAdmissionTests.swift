@@ -103,11 +103,11 @@ struct VolumeMaterializationAdmissionTests {
         let agent = Agent(
             agentID: "hv-03",
             webSocketURL: "ws://127.0.0.1:8080/agent",
-            networkMode: nil,
-            logger: logger,
-            vmStoragePath: root.appendingPathComponent("vms").path,
-            volumeStoragePath: root.appendingPathComponent("volumes").path,
-            simulation: SimulationConfig(enabled: true, diskGB: 30))
+            configuration: runtimeTestConfiguration(
+                path: root.appendingPathComponent("vms").path,
+                volumeStoragePath: root.appendingPathComponent("volumes").path,
+                simulation: SimulationConfig(enabled: true, diskGB: 30)),
+            logger: logger)
         await agent.installStorageBackendForAdmissionTest(backend)
 
         let volumeId = UUID()
@@ -171,11 +171,11 @@ struct VolumeMaterializationAdmissionTests {
         let agent = Agent(
             agentID: "hv-03",
             webSocketURL: "ws://127.0.0.1:8080/agent",
-            networkMode: nil,
-            logger: logger,
-            vmStoragePath: root.appendingPathComponent("vms").path,
-            volumeStoragePath: root.appendingPathComponent("volumes").path,
-            simulation: SimulationConfig(enabled: true, diskGB: 100))
+            configuration: runtimeTestConfiguration(
+                path: root.appendingPathComponent("vms").path,
+                volumeStoragePath: root.appendingPathComponent("volumes").path,
+                simulation: SimulationConfig(enabled: true, diskGB: 100)),
+            logger: logger)
         await agent.installStorageBackendForAdmissionTest(backend)
 
         let volumeId = UUID()

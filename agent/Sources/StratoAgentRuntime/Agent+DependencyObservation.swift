@@ -41,8 +41,8 @@ extension Agent {
             var registry: [any NodeDependencyModule] = [
                 SPIRENodeDependencyModule(
                     systemd: systemd,
-                    source: spiffeConfig?.sourceType == "files" ? .files : .workloadAPI,
-                    installMode: installMode,
+                    source: configuration.spiffeConfig?.sourceType == "files" ? .files : .workloadAPI,
+                    installMode: configuration.installMode,
                     version: {
                         await spireVersionCache.value(maxAge: 300) {
                             await DependencyVersionProbe.version(
@@ -88,7 +88,7 @@ extension Agent {
                         }
                     },
                     libvirt: { await LibvirtProbe.probe() },
-                    qemuAttachmentsEnabled: hypervisorType == .qemu,
+                    qemuAttachmentsEnabled: configuration.hypervisorType == .qemu,
                     functional: {
                         let files = FileManager.default
                         guard files.isExecutableFile(atPath: CephRBDStorageBackend.defaultRBDPath) else {

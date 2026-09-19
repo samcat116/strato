@@ -1,6 +1,6 @@
 import Foundation
 
-public enum NetworkMode: String {
+public enum NetworkMode: String, Sendable {
     case ovn
     case user
 }

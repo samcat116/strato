@@ -202,12 +202,7 @@ private func launchAgent(options: AgentOptions) async throws {
             sandboxExitAfterSeconds: config.simulation?.sandboxExitAfterSeconds)
         : nil
 
-    // Resolve hardware acceleration preference. Acceleration is on by default;
-    // operators can disable it (forcing TCG emulation) via config. `enable_kvm`
-    // applies on Linux and `enable_hvf` on macOS — the other is ignored per platform.
-    #if os(macOS)
-    let finalHardwareAcceleration = config.enableHVF ?? true
-    #elseif os(Linux)
+    #if os(Linux)
     let finalHardwareAcceleration = config.enableKVM ?? true
     #else
     let finalHardwareAcceleration = false
@@ -273,9 +268,7 @@ private func launchAgent(options: AgentOptions) async throws {
             "sourceType": .string(spiffe.sourceType ?? "workload_api"),
         ])
 
-    let agent = Agent(
-        agentID: finalAgentID,
-        webSocketURL: finalWebSocketURL,
+    let runtimeConfiguration = AgentRuntimeConfiguration(
         networkMode: config.networkMode,
         ovnChassisConfig: config.ovnChassisConfig,
         ovnUplink: config.ovnUplink,
@@ -283,7 +276,6 @@ private func launchAgent(options: AgentOptions) async throws {
         resolverConfig: config.resolver,
         ovnNorthbound: config.ovnNorthbound,
         ovnNorthboundTLS: config.ovnNorthboundTLS,
-        logger: logger,
         imageCachePath: config.imageCacheDir,
         imageCacheMaxSizeBytes: config.imageCacheMaxSizeBytes,
         sandboxImageCachePath: config.sandboxImageCacheDir,
@@ -305,12 +297,17 @@ private func launchAgent(options: AgentOptions) async throws {
         hardwareAccelerationEnabled: finalHardwareAcceleration,
         qemuMemoryOverheadBytes: config.qemuMemoryOverheadBytes,
         simulation: finalSimulation,
+        installMode: .detect(),
         spiffeConfig: config.spiffe,
         teardownGuard: config.teardownGuard,
         desiredStateFullRefetchInterval: config.desiredStateFullRefetchInterval,
         metadataServiceEnabled: config.servesInstanceMetadata,
         metadataHopLimit: config.metadataHopLimit
     )
+
+    let agent = Agent(
+        agentID: finalAgentID, webSocketURL: finalWebSocketURL,
+        configuration: runtimeConfiguration, logger: logger)
 
     // Install signal handlers so `systemctl stop`/Ctrl-C triggers a graceful
     // shutdown: unregistering from the control plane, disconnecting consoles,

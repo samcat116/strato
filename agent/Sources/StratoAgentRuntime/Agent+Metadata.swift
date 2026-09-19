@@ -37,7 +37,7 @@ extension Agent {
         vmId: String, using service: any HypervisorService
     ) async {
         guard let id = UUID(uuidString: vmId) else { return }
-        let metadata = metadataServiceEnabled ? await metadataStore.metadata(for: id) : nil
+        let metadata = configuration.metadataServiceEnabled ? await metadataStore.metadata(for: id) : nil
         do {
             try await service.refreshInstanceMetadata(vmId: vmId, metadata: metadata)
         } catch {
@@ -80,7 +80,7 @@ extension Agent {
             interval: .seconds(2), logger: logger,
             action: { [weak self] in await self?.persistInstanceMetadata() })
 
-        guard metadataServiceEnabled else {
+        guard configuration.metadataServiceEnabled else {
             logger.info("Instance metadata service disabled by configuration")
             return
         }
@@ -104,7 +104,7 @@ extension Agent {
         }
         let spawner = MetadataServerProcessSpawner(
             ipBinaryPath: ipBinaryPath, logLevel: logger.logLevel.rawValue,
-            hopLimit: metadataHopLimit,
+            hopLimit: configuration.metadataHopLimit,
             identityMinter: GuestIdentityMinter { [weak self] vmId, audience, ttlSeconds in
                 guard let self else { throw GuestIdentityMintingError.unavailable }
                 return try await self.mintGuestIdentity(

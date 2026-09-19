@@ -340,7 +340,7 @@ extension Agent {
         let simulatedDiskBytes: Int64?
         let diskCapacityBefore: (total: Int64, free: Int64)?
         var diskInventoryKnown = true
-        if let simulation, simulation.enabled {
+        if let simulation = configuration.simulation, simulation.enabled {
             totalCPU = simulation.resolvedCPUCores
             totalMemory = simulation.resolvedMemoryBytes
             simulatedDiskBytes = simulation.resolvedDiskBytes
@@ -351,7 +351,7 @@ extension Agent {
             totalCPU = HostResources.logicalCoreCount
             totalMemory = HostResources.physicalMemoryBytes
             simulatedDiskBytes = nil
-            diskCapacityBefore = HostResources.diskCapacity(forPath: volumeStoragePath)
+            diskCapacityBefore = HostResources.diskCapacity(forPath: configuration.volumeStoragePath)
         }
 
         // Resources committed to VMs currently managed on this host. We report
@@ -443,7 +443,7 @@ extension Agent {
             do {
                 let inventory = try await storageBackends.localInventory()
                 for (volumeId, attachment) in inventory {
-                    if simulation?.enabled != true {
+                    if configuration.simulation?.enabled != true {
                         if case .file(let path, _) = attachment {
                             managedDiskPaths.insert(path)
                         } else {
@@ -498,7 +498,7 @@ extension Agent {
                     ?? desiredVolumeStates[record.parentId.uuidString]?.sizeBytes
                     ?? 0
                 reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
-                if simulation?.enabled != true {
+                if configuration.simulation?.enabled != true {
                     if let path = record.facts.storagePath {
                         managedDiskPaths.insert(path)
                     } else {
@@ -530,10 +530,10 @@ extension Agent {
             let orderedPaths = managedDiskPaths.sorted()
             let firstAllocations = HostResources.managedDiskAllocations(
                 paths: orderedPaths, measure: SnapshotFootprint.allocatedBytes(at:))
-            let diskCapacityBetween = HostResources.diskCapacity(forPath: volumeStoragePath)
+            let diskCapacityBetween = HostResources.diskCapacity(forPath: configuration.volumeStoragePath)
             let secondAllocations = HostResources.managedDiskAllocations(
                 paths: Array(orderedPaths.reversed()), measure: SnapshotFootprint.allocatedBytes(at:))
-            let diskCapacityAfter = HostResources.diskCapacity(forPath: volumeStoragePath)
+            let diskCapacityAfter = HostResources.diskCapacity(forPath: configuration.volumeStoragePath)
             var samples: [(total: Int64, free: Int64)] = []
             if let diskCapacityBefore { samples.append(diskCapacityBefore) }
             if let diskCapacityBetween { samples.append(diskCapacityBetween) }
@@ -542,7 +542,7 @@ extension Agent {
             if diskCapacityBefore == nil || diskCapacityBetween == nil || diskCapacityAfter == nil {
                 logger.warning(
                     "Unable to determine disk capacity for managed volume storage path",
-                    metadata: ["path": .string(volumeStoragePath)])
+                    metadata: ["path": .string(configuration.volumeStoragePath)])
                 diskInventoryKnown = false
             }
             totalDisk = samples.map { $0.total }.min() ?? 0
@@ -602,8 +602,8 @@ extension Agent {
             diskInventoryKnown: raw.diskInventoryKnown)
         let available = accounted.available
 
-        let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
-        let physicalFreeDisk = simulation?.enabled == true ? raw.total.diskBytes : (disk?.free ?? 0)
+        let disk = HostResources.diskCapacity(forPath: configuration.volumeStoragePath)
+        let physicalFreeDisk = configuration.simulation?.enabled == true ? raw.total.diskBytes : (disk?.free ?? 0)
 
         return AgentResources(
             totalCPU: raw.total.cpus,

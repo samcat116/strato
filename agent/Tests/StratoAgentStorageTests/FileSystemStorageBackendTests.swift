@@ -638,7 +638,9 @@ struct FileSystemStorageBackendTests {
 
         let sourcePath = "\(root)/vol-1/volume.qcow2"
         let attachment = try await backend.cloneVolume(
-            sourceVolumeId: "vol-1", sourcePath: sourcePath, targetVolumeId: "vol-2")
+            sourceVolumeId: "vol-1",
+            sourceAttachment: .file(path: sourcePath, format: DiskFormat(volumePath: sourcePath)),
+            targetVolumeId: "vol-2")
 
         #expect(attachment == .file(path: "\(root)/vol-2/volume.qcow2", format: .qcow2))
         let convert = await recorder.invocations.first { $0.arguments.first == "convert" }
@@ -665,7 +667,7 @@ struct FileSystemStorageBackendTests {
         await #expect(throws: StorageBackendError.self) {
             try await backend.cloneVolume(
                 sourceVolumeId: "source",
-                sourcePath: "\(root)/source/volume.qcow2",
+                sourceAttachment: .file(path: "\(root)/source/volume.qcow2", format: .qcow2),
                 targetVolumeId: "target")
         }
 
@@ -801,7 +803,8 @@ struct FileSystemStorageBackendTests {
 
         let volumePath = "\(root)/vol-1/volume.raw"
         let snapshotPath = try await backend.createSnapshot(
-            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+            volumeId: "vol-1", snapshotId: "snap-1",
+            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
 
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = await recorder.invocations.first { $0.arguments.first == "create" }
@@ -832,7 +835,7 @@ struct FileSystemStorageBackendTests {
         let snapshotPath = try await backend.createSnapshot(
             volumeId: "vol-1",
             snapshotId: "snap-1",
-            volumePath: "\(root)/vol-1/volume.qcow2")
+            attachment: .file(path: "\(root)/vol-1/volume.qcow2", format: .qcow2))
 
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
@@ -850,12 +853,14 @@ struct FileSystemStorageBackendTests {
         let volumePath = "\(root)/vol-1/volume.raw"
 
         let snapshotPath = try await backend.createSnapshot(
-            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+            volumeId: "vol-1", snapshotId: "snap-1",
+            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
         let originalPointInTime = Data("original-point-in-time".utf8)
         try originalPointInTime.write(to: URL(fileURLWithPath: snapshotPath))
 
         let retriedPath = try await backend.createSnapshot(
-            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+            volumeId: "vol-1", snapshotId: "snap-1",
+            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
 
         #expect(retriedPath == snapshotPath)
         #expect(FileManager.default.contents(atPath: snapshotPath) == originalPointInTime)
@@ -925,7 +930,10 @@ struct FileSystemStorageBackendTests {
         let recorder = SubprocessRecorder()
         let backend = makeBackend(root: root, recorder: recorder)
 
-        try await backend.resizeVolume(volumePath: "\(root)/vol-1/volume.qcow2", newSizeBytes: 99)
+        try await backend.resizeVolume(
+            attachment: .file(
+                path: "\(root)/vol-1/volume.qcow2", format: DiskFormat(volumePath: "\(root)/vol-1/volume.qcow2")),
+            newSizeBytes: 99)
 
         let invocations = await recorder.invocations
         #expect(invocations[0].arguments == ["resize", "\(root)/vol-1/volume.qcow2", "99"])
@@ -938,7 +946,9 @@ struct FileSystemStorageBackendTests {
         await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2", virtualSize: 555))
         let backend = makeBackend(root: root, recorder: recorder)
 
-        let info = try await backend.volumeInfo(volumePath: "\(root)/vol-1/volume.qcow2")
+        let info = try await backend.volumeInfo(
+            attachment: .file(
+                path: "\(root)/vol-1/volume.qcow2", format: DiskFormat(volumePath: "\(root)/vol-1/volume.qcow2")))
 
         #expect(info.format == "qcow2")
         #expect(info.virtualSize == 555)
@@ -956,7 +966,9 @@ struct FileSystemStorageBackendTests {
         await recorder.holdImageLock()
         let backend = makeBackend(root: root, recorder: recorder)
 
-        let info = try await backend.volumeInfo(volumePath: "\(root)/vol-1/volume.qcow2")
+        let info = try await backend.volumeInfo(
+            attachment: .file(
+                path: "\(root)/vol-1/volume.qcow2", format: DiskFormat(volumePath: "\(root)/vol-1/volume.qcow2")))
 
         #expect(info.virtualSize == 555)
         let query = try #require(await recorder.invocations.first { $0.arguments.first == "info" })
@@ -977,7 +989,8 @@ struct FileSystemStorageBackendTests {
 
         let volumePath = "\(root)/vol-1/volume.raw"
         let snapshotPath = try await backend.createSnapshot(
-            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+            volumeId: "vol-1", snapshotId: "snap-1",
+            attachment: .file(path: volumePath, format: DiskFormat(volumePath: volumePath)))
 
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
@@ -1004,10 +1017,18 @@ struct FileSystemStorageBackendTests {
             volumeId: "vol-2", imageInfo: makeImageInfo(), format: .raw,
             artifactKind: .diskImage)
         _ = try await backend.cloneVolume(
-            sourceVolumeId: "vol-1", sourcePath: "\(root)/vol-1/volume.qcow2", targetVolumeId: "vol-3")
+            sourceVolumeId: "vol-1",
+            sourceAttachment: .file(
+                path: "\(root)/vol-1/volume.qcow2", format: DiskFormat(volumePath: "\(root)/vol-1/volume.qcow2")),
+            targetVolumeId: "vol-3")
         _ = try await backend.createSnapshot(
-            volumeId: "vol-1", snapshotId: "snap-1", volumePath: "\(root)/vol-1/volume.qcow2")
-        try await backend.resizeVolume(volumePath: "\(root)/vol-1/volume.qcow2", newSizeBytes: 99)
+            volumeId: "vol-1", snapshotId: "snap-1",
+            attachment: .file(
+                path: "\(root)/vol-1/volume.qcow2", format: DiskFormat(volumePath: "\(root)/vol-1/volume.qcow2")))
+        try await backend.resizeVolume(
+            attachment: .file(
+                path: "\(root)/vol-1/volume.qcow2", format: DiskFormat(volumePath: "\(root)/vol-1/volume.qcow2")),
+            newSizeBytes: 99)
 
         let mutating = await recorder.invocations.filter { $0.arguments.first != "info" }
         #expect(!mutating.isEmpty)
