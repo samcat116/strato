@@ -867,11 +867,11 @@ extension Agent {
                 throw ConvergenceError.sourceNotReady(
                     "managed volume \(volumeId) for VM \(vmId) is not present on this agent yet")
             }
-            if configuration.hypervisorType == .qemu {
+            if hypervisorType == .qemu {
                 try await backend.prepareAttachmentForQEMU(disk)
             }
             let blockPolicy =
-                configuration.hypervisorType == .qemu
+                hypervisorType == .qemu
                 ? await selectedQEMUBlockPolicy(
                     for: disk, requestedMode: volume.blockMode,
                     vCPUCount: spec.cpus, backend: backend,

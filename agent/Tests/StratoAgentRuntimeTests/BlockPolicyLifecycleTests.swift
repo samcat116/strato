@@ -8,6 +8,10 @@ import Testing
 
 private actor BlockPolicyTestStorage: CephStorageBackend {
     let attachment: DiskAttachment
+    private(set) var preparationCount = 0
+    private(set) var capabilityProbeCount = 0
+
+    func prepareAttachmentForQEMU(_ attachment: DiskAttachment) { preparationCount += 1 }
 
     init(attachment: DiskAttachment) {
         self.attachment = attachment
@@ -43,7 +47,8 @@ private actor BlockPolicyTestStorage: CephStorageBackend {
     func qemuBlockCapabilities(
         for attachment: DiskAttachment
     ) async -> StorageBlockDeviceCapabilities {
-        StorageBlockDeviceCapabilities(discardSupported: true, directIOSupported: true)
+        capabilityProbeCount += 1
+        return StorageBlockDeviceCapabilities(discardSupported: true, directIOSupported: true)
     }
     func listVolumes() async throws -> [String: DiskAttachment] { [:] }
     func invalidateForCredentialRevocation() async {}
@@ -138,6 +143,36 @@ extension Agent {
 
 @Suite("QEMU block policy lifecycle")
 struct BlockPolicyLifecycleTests {
+
+    @Test(arguments: [HypervisorType.qemu, .firecracker])
+    func volumePreparationUsesRequestedBackend(requested: HypervisorType) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        let agent = Agent(
+            agentID: "test", webSocketURL: "ws://localhost/agent/ws",
+            configuration: runtimeTestConfiguration(
+                path: path, hypervisorType: requested == .qemu ? .firecracker : .qemu),
+            logger: Logger(label: "backend-preparation-test"))
+        let id = UUID()
+        let volume = VolumeSpec(volumeId: id, deviceName: .disk(0))
+        let storage = BlockPolicyTestStorage(attachment: .file(path: "/unused/disk.raw", format: .raw))
+        await agent.configureBlockPolicyTest(
+            vmId: "test-vm", volumeId: id, backend: storage, hypervisor: BlockPolicyAttachHypervisor(),
+            desired: DesiredVolumeState(
+                volumeId: id, desiredStatus: .present, generation: 1, sizeBytes: 1, format: "raw"),
+            volumeSpec: volume)
+        do {
+            let spec = try await agent.specWithRealizedVolumeAttachments(
+                VMSpec(cpus: 2, memoryBytes: 1024, boot: .disk(firmware: nil), volumes: [volume]),
+                vmId: "test-vm", hypervisorType: requested)
+            #expect(await storage.preparationCount == (requested == .qemu ? 1 : 0))
+            #expect(await storage.capabilityProbeCount == (requested == .qemu ? 1 : 0))
+            #expect((spec.volumes.first?.appliedBlockPolicy != nil) == (requested == .qemu))
+            try await agent.shutDownBlockPolicyTestResources()
+        } catch {
+            try? await agent.shutDownBlockPolicyTestResources()
+            throw error
+        }
+    }
     @Test("hot attach publishes an active policy only after the hypervisor accepts it")
     func attachPolicyCommitsAfterSuccess() async throws {
         let directory = FileManager.default.temporaryDirectory

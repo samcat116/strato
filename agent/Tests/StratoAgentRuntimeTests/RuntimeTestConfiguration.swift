@@ -1,9 +1,10 @@
+import StratoShared
 import StratoAgentCore
 @testable import StratoAgentRuntime
 
 func runtimeTestConfiguration(
     path: String, volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
-    simulation: SimulationConfig? = nil
+    simulation: SimulationConfig? = nil, hypervisorType: HypervisorType = .qemu
 ) -> AgentRuntimeConfiguration {
     AgentRuntimeConfiguration(
         networkMode: nil,
@@ -30,7 +31,7 @@ func runtimeTestConfiguration(
         legacySandboxJailerUidBase: AgentConfig.defaultSandboxJailerUidBase,
         sandboxWarmStart: true,
         sandboxWarmCacheMaxSizeBytes: nil,
-        hypervisorType: .qemu,
+        hypervisorType: hypervisorType,
         hardwareAccelerationEnabled: true,
         qemuMemoryOverheadBytes: Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
         simulation: simulation,

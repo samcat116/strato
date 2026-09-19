@@ -332,9 +332,9 @@ extension Agent {
     /// as an error instead of booting the VM under a different hypervisor
     /// than requested.
     func getHypervisorService(for hypervisorType: HypervisorType) -> (any HypervisorService)? {
-        guard let service = hypervisorServices[configuration.hypervisorType] else {
+        guard let service = hypervisorServices[hypervisorType] else {
             logger.error(
-                "No \(configuration.hypervisorType.displayName) driver on this host; rejecting request for unsupported hypervisor"
+                "No \(hypervisorType.displayName) driver on this host; rejecting request for unsupported hypervisor"
             )
             return nil
         }
