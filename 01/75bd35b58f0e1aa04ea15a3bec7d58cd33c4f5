@@ -1,0 +1,21 @@
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  s_457de9942b8cfd::t_7cac1eb5abac37 1709-1720,2207-2227
+agent/Tests/StratoAgentRuntimeTests/DiskRemovalWaitTests.swift
+  s_457de9942b8cfd::t_9d8af8ffe9f2a5 1-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0175bd35b58f0e1aa04ea15a3bec7d58cd33c4f5",
+  "prompts": {},
+  "sessions": {
+    "s_457de9942b8cfd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0b7bf-1890-7ee1-9d80-b843efa7f4b4",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
