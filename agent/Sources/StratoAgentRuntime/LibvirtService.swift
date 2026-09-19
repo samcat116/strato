@@ -1706,14 +1706,18 @@ actor LibvirtService: HypervisorService {
                     try await client.domainDetachDeviceFlags(
                         dom: dom, xml: DomainDeviceXML.detachDisk(disk), flags: scope, deadline: deadline)
                 }
-                let observedXML =
-                    scope == LibvirtDomain.affectLive
-                    ? try await domainXML(dom, vmId: vmId)
-                    : try await inactiveDomainXML(dom, vmId: vmId)
-                let remaining = try DomainDiskInventory.disks(inDomainXML: observedXML)
-                guard DomainDiskInventory.disk(forVolume: volumeId, in: remaining) == nil else {
-                    throw HypervisorServiceError.timeout(
-                        "waiting for volume \(volumeId) to disappear from VM \(vmId)'s domain definition")
+                try await Self.waitForDiskRemoval(volumeId: volumeId, vmId: vmId) {
+                    if scope == LibvirtDomain.affectLive {
+                        let stillLive = LibvirtDomain.holdsResources(
+                            rawState: try await self.state(of: dom, vmId: vmId))
+                        if !stillLive { return false }
+                    }
+                    let observedXML =
+                        scope == LibvirtDomain.affectLive
+                        ? try await self.domainXML(dom, vmId: vmId)
+                        : try await self.inactiveDomainXML(dom, vmId: vmId)
+                    let remaining = try DomainDiskInventory.disks(inDomainXML: observedXML)
+                    return DomainDiskInventory.disk(forVolume: volumeId, in: remaining) != nil
                 }
             }
         }
@@ -2198,6 +2202,27 @@ actor LibvirtService: HypervisorService {
         let definition = scope == .live ? "live" : "persistent"
         throw HypervisorServiceError.timeout(
             "network interface \(macAddress) remained in VM \(vmId)'s \(definition) domain XML after detach")
+    }
+
+    /// An unplug acknowledgement is not proof of removal. Keep observing until
+    /// the guest releases the disk; errors and cancellation never imply absence.
+    static func waitForDiskRemoval(
+        volumeId: String, vmId: String,
+        timeout: Duration = .seconds(StageBudget.hypervisorControlSeconds),
+        pollInterval: Duration = .milliseconds(200),
+        isPresent: () async throws -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            try Task.checkCancellation()
+            if try await !isPresent() { return }
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            if remaining > .zero {
+                try await Task.sleep(for: min(pollInterval, remaining))
+            }
+        }
+        throw HypervisorServiceError.timeout(
+            "waiting for volume \(volumeId) to disappear from VM \(vmId)'s domain definition")
     }
 
     private func domainDisks(_ dom: Domain, vmId: String) async throws -> [DomainDisk] {
