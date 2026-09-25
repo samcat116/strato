@@ -4,6 +4,7 @@
 #
 #   sudo RUN_DIR=... bash deploy/compose/e2e-agent.sh start
 #   sudo RUN_DIR=... bash deploy/compose/e2e-agent.sh stop
+#   sudo RUN_DIR=... bash deploy/compose/e2e-agent.sh identity-reset # preserves VMs
 #   sudo RUN_DIR=... bash deploy/compose/e2e-agent.sh reset   # DESTRUCTIVE, see below
 #   sudo RUN_DIR=... bash deploy/compose/e2e-agent.sh status
 #
@@ -49,7 +50,7 @@ ASSUME_YES=0
 [[ "${2:-}" == "--yes" || "${2:-}" == "-y" ]] && ASSUME_YES=1
 
 case "$ACTION" in
-  start|stop|reset|status) ;;
+  start|stop|identity-reset|reset|status) ;;
   # Derived, not a fixed line range: a hardcoded range silently drifts into the
   # code below whenever the header grows, printing `set -uo pipefail` as usage.
   *) awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; exit 1 ;;
@@ -273,9 +274,25 @@ do_reset() {
   do_start
 }
 
+do_identity_reset() {
+  # A managed systemd agent can race this launcher for the same SPIRE data
+  # directory. Refuse that case even though this action preserves VM state.
+  local state active enabled
+  read -r state active enabled <<<"$(strato_unit_state)"
+  [[ "$state" != in-use ]] || die "the strato-agent systemd unit is in use
+       (is-active=$active, is-enabled=$enabled). Refusing to replace its SPIRE
+       identity. Disable the managed unit first if this is intentional."
+
+  do_stop
+  say "clearing stale SPIRE identity (VM state preserved)"
+  rm -rf /var/lib/spire/agent && mkdir -p /var/lib/spire/agent
+  do_start
+}
+
 case "$ACTION" in
-  start)  do_start ;;
-  stop)   do_stop ;;
-  status) do_status ;;
-  reset)  do_reset ;;
+  start)          do_start ;;
+  stop)           do_stop ;;
+  status)         do_status ;;
+  identity-reset) do_identity_reset ;;
+  reset)          do_reset ;;
 esac
