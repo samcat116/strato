@@ -156,6 +156,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Verify Swift toolchain
+        run: bash .github/scripts/check-swift-version.sh
+
       # libjemalloc-dev: the control-plane binary links -ljemalloc.
       # The ARC pod runs as a non-root user with passwordless sudo; guard in
       # case a runner has no sudo binary.
