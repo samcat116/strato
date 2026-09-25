@@ -3,9 +3,8 @@ import StratoShared
 
 /// Errors that can occur when interacting with a hypervisor service.
 ///
-/// Lives in the testable core rather than beside `HypervisorService` (which is
-/// in the executable target, and so unreachable from tests) because the
-/// decisions taken *from* these cases — `OrphanDeleteAdoption` below, which
+/// Lives in Core so reconciliation policy can classify driver failures without
+/// importing the runtime driver implementations. The decisions taken from these cases — `OrphanDeleteAdoption` below, which
 /// governs whether a delete may unlink a VM's disk — are worth pinning.
 public enum HypervisorServiceError: Error, LocalizedError, Sendable {
     /// The specified VM was not found

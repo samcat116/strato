@@ -51,14 +51,14 @@ extension Agent {
     }
 
     /// Runs the host-readiness checks against this agent's resolved
-    /// configuration. Called at every registration (initial and reconnect) so
+    ///  Called at every registration (initial and reconnect) so
     /// the reported capabilities always reflect the host as it is now.
     func runHostPreflight(
         libvirt: LibvirtProbe.Status? = nil,
         tpmSupport: LibvirtProbe.TPMSupport = .unknown("not probed")
     ) -> HostPreflight.Report {
         #if os(Linux)
-        let firecrackerSocketDirectory: String? = firecrackerSocketDir
+        let firecrackerSocketDirectory: String? = configuration.firecrackerSocketDir
         let firecrackerPIDFDSupport: HostPreflight.FirecrackerPIDFDSupport? = {
             switch FirecrackerClient.probePIDFDSupport() {
             case .available:
@@ -86,7 +86,7 @@ extension Agent {
         // what a VM would actually boot with: the split pair's CODE image when
         // one resolves, else the monolithic fallback (issue #565).
         let resolvedFirmwarePath: String?
-        switch try? FirmwareResolver.resolve(secureBoot: false, overrides: firmware) {
+        switch try? FirmwareResolver.resolve(secureBoot: false, overrides: configuration.firmware) {
         case .pflash(let code, _):
             resolvedFirmwarePath = code
         case .monolithic(let path):
@@ -97,9 +97,9 @@ extension Agent {
 
         return HostPreflight.run(
             HostPreflight.Inputs(
-                vmStoragePath: vmStoragePath,
-                volumeStoragePath: volumeStoragePath,
-                imageCachePath: imageCachePath ?? ImageCacheService.defaultCachePath,
+                vmStoragePath: configuration.vmStoragePath,
+                volumeStoragePath: configuration.volumeStoragePath,
+                imageCachePath: configuration.imageCachePath ?? ImageCacheService.defaultCachePath,
                 qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
                 firecrackerPIDFDSupport: firecrackerPIDFDSupport,
@@ -109,8 +109,8 @@ extension Agent {
                 libvirt: libvirt,
                 vhostVsock: vhostVsock,
                 ovnMode: effectiveNetworkMode == .ovn,
-                ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
-                ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? [],
+                ovnNBConnection: configuration.ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
+                ovnNBTLSFilePaths: configuration.ovnNorthboundTLS?.configuredFilePaths ?? [],
                 sandboxJailerUIDRange: sandboxJailerUIDRange
             ))
     }
@@ -121,8 +121,8 @@ extension Agent {
     /// `HostPreflight`.
     func sandboxJailerUIDRangeInputs() -> HostPreflight.SandboxJailerUIDRangeInputs {
         HostPreflight.SandboxJailerUIDRangeInputs(
-            mode: sandboxJailerMode,
-            uidBase: sandboxJailerUidBase,
+            mode: configuration.sandboxJailerMode,
+            uidBase: configuration.sandboxJailerUidBase,
             passwd: hostIdentityFile(at: "/etc/passwd"),
             group: hostIdentityFile(at: "/etc/group"),
             subuid: hostIdentityFile(at: "/etc/subuid"),

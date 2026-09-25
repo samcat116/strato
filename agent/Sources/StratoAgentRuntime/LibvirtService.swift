@@ -1675,61 +1675,51 @@ actor LibvirtService: HypervisorService {
         return DomainBlockIOTune.limits(from: result.params)
     }
 
-    /// Unplugs `volumeId` from the VM's domain, live and in its definition.
-    ///
-    /// Resolved by the serial the disk carries — the volume id, unique by
-    /// construction — and never by `deviceName`, for the reason STR-129 gives:
-    /// a device name is a per-VM label two volumes can share, and unplugging
-    /// "whichever one answers to it" pulls a live disk out from under a guest.
-    ///
-    /// A serial no disk carries is a **success**: detaches are level-triggered
-    /// and replayed, so a request whose post-condition already holds has to
-    /// converge rather than fail forever. The one case that hides behind that —
-    /// a domain defined before serials existed, whose create-time volumes are
-    /// unidentifiable — is called out in the log instead, because nothing here
-    /// can fix it and the remedy is to recreate the VM.
+    /// Detach from each definition independently, then prove the disk is gone.
+    /// A successful hot-unplug request can precede the guest releasing it.
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
         try await perform("detach-disk", vmId: vmId) {
             let dom = try await domain(vmId)
-            let disks = try await domainDisks(dom, vmId: vmId)
-            guard let disk = DomainDiskInventory.disk(forVolume: volumeId, in: disks) else {
-                let anonymous = disks.filter { $0.serial == nil }.map(\.target)
-                if anonymous.isEmpty {
-                    logger.info(
-                        "No disk on this domain carries the volume; treating the detach as a no-op",
-                        metadata: ["strato.vm.id": .string(vmId), "volumeId": .string(volumeId)])
-                } else {
-                    logger.warning(
-                        """
-                        No disk on this domain carries the volume, and the domain has disks with no serial \
-                        at all — if one of those is this volume it was attached before STR-134 and cannot be \
-                        identified; recreate the VM to detach it
-                        """,
-                        metadata: [
-                            "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
-                            "unidentifiedTargets": .string(anonymous.joined(separator: ",")),
-                        ])
+            let isLive = LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId))
+            let scopes: [UInt32] =
+                isLive
+                ? [LibvirtDomain.affectLive, LibvirtDomain.affectConfig]
+                : [LibvirtDomain.affectConfig]
+            for scope in scopes {
+                let xml =
+                    scope == LibvirtDomain.affectLive
+                    ? try await domainXML(dom, vmId: vmId)
+                    : try await inactiveDomainXML(dom, vmId: vmId)
+                let disks = try DomainDiskInventory.disks(inDomainXML: xml)
+                guard let disk = DomainDiskInventory.disk(forVolume: volumeId, in: disks) else {
+                    // Seed media is not a volume. Unidentified writable disks,
+                    // however, cannot prove that this volume is absent.
+                    let anonymous = disks.filter { $0.serial == nil && $0.device != "cdrom" }
+                    guard anonymous.isEmpty else {
+                        throw HypervisorServiceError.diskError(
+                            "Cannot prove volume \(volumeId) is detached: VM \(vmId) has disks without serial identities"
+                        )
+                    }
+                    continue
                 }
-                return
+                try await call("libvirt-detach-disk", vmId: vmId) { client, deadline in
+                    try await client.domainDetachDeviceFlags(
+                        dom: dom, xml: DomainDeviceXML.detachDisk(disk), flags: scope, deadline: deadline)
+                }
+                try await Self.waitForDiskRemoval(volumeId: volumeId, vmId: vmId) {
+                    if scope == LibvirtDomain.affectLive {
+                        let stillLive = LibvirtDomain.holdsResources(
+                            rawState: try await self.state(of: dom, vmId: vmId))
+                        if !stillLive { return false }
+                    }
+                    let observedXML =
+                        scope == LibvirtDomain.affectLive
+                        ? try await self.domainXML(dom, vmId: vmId)
+                        : try await self.inactiveDomainXML(dom, vmId: vmId)
+                    let remaining = try DomainDiskInventory.disks(inDomainXML: observedXML)
+                    return DomainDiskInventory.disk(forVolume: volumeId, in: remaining) != nil
+                }
             }
-
-            let flags = try await deviceFlags(dom, vmId: vmId)
-            logger.info(
-                "Detaching disk from libvirt domain",
-                metadata: [
-                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
-                    "deviceName": .string(deviceName), "target": .string(disk.target),
-                ])
-            try await call("libvirt-detach-disk", vmId: vmId) { client, deadline in
-                try await client.domainDetachDeviceFlags(
-                    dom: dom, xml: DomainDeviceXML.detachDisk(disk), flags: flags, deadline: deadline)
-            }
-            logger.info(
-                "Disk detached",
-                metadata: [
-                    "strato.vm.id": .string(vmId), "volumeId": .string(volumeId),
-                    "target": .string(disk.target),
-                ])
         }
     }
 
@@ -2212,6 +2202,27 @@ actor LibvirtService: HypervisorService {
         let definition = scope == .live ? "live" : "persistent"
         throw HypervisorServiceError.timeout(
             "network interface \(macAddress) remained in VM \(vmId)'s \(definition) domain XML after detach")
+    }
+
+    /// An unplug acknowledgement is not proof of removal. Keep observing until
+    /// the guest releases the disk; errors and cancellation never imply absence.
+    static func waitForDiskRemoval(
+        volumeId: String, vmId: String,
+        timeout: Duration = .seconds(StageBudget.hypervisorControlSeconds),
+        pollInterval: Duration = .milliseconds(200),
+        isPresent: () async throws -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            try Task.checkCancellation()
+            if try await !isPresent() { return }
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            if remaining > .zero {
+                try await Task.sleep(for: min(pollInterval, remaining))
+            }
+        }
+        throw HypervisorServiceError.timeout(
+            "waiting for volume \(volumeId) to disappear from VM \(vmId)'s domain definition")
     }
 
     private func domainDisks(_ dom: Domain, vmId: String) async throws -> [DomainDisk] {

@@ -27,16 +27,8 @@ extension NetworkServiceLinux {
         // the TAP/veth step below is identical for VMs and sandboxes — only the
         // port's namespace and how the device is realized differ.
         let portName = Self.portName(workloadId: vmId, nicIndex: nicIndex, placement: placement)
-        var macAddress: String
-        if let configuredMAC = config.macAddress {
-            guard let parsedMAC = MACAddress(configuredMAC) else {
-                throw NetworkError.invalidConfiguration(
-                    "MAC address '\(configuredMAC)' is not a six-octet unicast address")
-            }
-            macAddress = parsedMAC.description
-        } else {
-            macAddress = generateMACAddress()
-        }
+        var macAddress = config.macAddress.description
+
         // The control plane owns IPAM; an absent IP means the port is bound by
         // MAC only. The old fake allocation (random 192.168.1.x) is gone.
         var ipAddress = config.ipAddress
@@ -219,7 +211,7 @@ extension NetworkServiceLinux {
             portName: "mock-vm-\(vmId)",
             portUUID: UUID().uuidString,
             attachment: .tap(interface: "tap-\(vmId)"),
-            macAddress: config.macAddress ?? "02:00:00:00:00:01",
+            macAddress: config.macAddress.description,
             ipAddress: config.ipAddress ?? "192.168.1.100"
         )
         #endif

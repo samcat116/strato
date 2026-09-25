@@ -85,6 +85,10 @@ struct NetworkOrchestrator: Sendable {
         metadataDenied: Bool = false,
         placement: NICPlacement = .hostNamespace
     ) async throws -> ResolvedNetworkAttachment {
+        guard let address = spec.macAddress, let macAddress = MACAddress(address) else {
+            throw NetworkError.invalidConfiguration(
+                "Network realization requires a control-plane-assigned six-octet unicast MAC address")
+        }
         guard let networkService else {
             logger.warning(
                 "Network service not available; falling back to user-mode networking",
@@ -96,7 +100,7 @@ struct NetworkOrchestrator: Sendable {
         let config = VMNetworkConfig(
             networkName: spec.network,
             networkId: spec.networkId,
-            macAddress: spec.macAddress,
+            macAddress: macAddress,
             ipAddress: spec.ipAddress,
             subnet: subnetCIDR(ipAddress: spec.ipAddress, netmask: spec.netmask),
             gateway: spec.gateway,

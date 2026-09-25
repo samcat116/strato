@@ -546,7 +546,6 @@ struct AgentConfigTests {
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 log_level = "info"
                 network_mode = "ovn"
-                enable_hvf = false
                 enable_kvm = true
                 """
 
@@ -558,7 +557,6 @@ struct AgentConfigTests {
             #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
             #expect(config.logLevel == .info)
             #expect(config.networkMode == .ovn)
-            #expect(config.enableHVF == false)
             #expect(config.enableKVM == true)
         }
     }
@@ -972,10 +970,8 @@ struct AgentConfigTests {
         #if os(Linux)
         #expect(config.networkMode == .ovn)
         #expect(config.enableKVM == true)
-        #expect(config.enableHVF == false)
         #else
         #expect(config.networkMode == .user)
-        #expect(config.enableHVF == true)
         #expect(config.enableKVM == false)
         #endif
 
@@ -1228,33 +1224,17 @@ struct AgentConfigTests {
 
     // MARK: - Platform-Specific Configuration Tests
 
-    @Test("Platform-specific settings are handled correctly")
-    func loadConfigWithPlatformSpecificSettings() async throws {
-        try await withTempDirectory { tempDirectory in
-            #if os(macOS)
-            // Test that KVM warning appears on macOS
-            let tomlContent = """
-                control_plane_url = "ws://localhost:8080/agent/ws"
-                enable_kvm = true
-                """
-            #else
-            // Test that HVF warning appears on Linux
-            let tomlContent = """
-                control_plane_url = "ws://localhost:8080/agent/ws"
-                enable_hvf = true
-                """
-            #endif
-
-            let configPath = tempDirectory.appendingPathComponent("platform-specific.toml").path
-            try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-
-            // Should load successfully despite platform-specific warnings
-            let config = try await loadConfig(from: configPath)
-            #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
+    @Test("The retired HVF setting is rejected instead of silently ignored")
+    func rejectsRetiredHVFSetting() async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("retired.toml").path
+            try "control_plane_url = \"wss://localhost/agent/ws\"\nenable_hvf = true\n"
+                .write(toFile: path, atomically: true, encoding: .utf8)
+            await #expect(throws: AgentConfigError.self) {
+                try await loadConfig(from: path)
+            }
         }
     }
-
-    // MARK: - Teardown blast-radius guard (STR-98)
 
     @Test("Load the teardown guard settings")
     func loadTeardownGuardSettings() async throws {

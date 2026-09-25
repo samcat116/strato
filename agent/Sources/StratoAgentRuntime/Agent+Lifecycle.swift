@@ -49,7 +49,7 @@ extension Agent {
 
             // Initialize network service based on config, falling back to platform defaults
             let selectedMode =
-                networkMode
+                configuration.networkMode
                 ?? {
                     #if os(Linux)
                     return .ovn
@@ -76,9 +76,9 @@ extension Agent {
                 // startup so `resolverBinaryPath` is nil on every path that
                 // cannot run it, and `resolverCapable` follows from one check.
                 let discoveredResolverBinaryPath =
-                    (resolverConfig?.enabled ?? true)
+                    (configuration.resolverConfig?.enabled ?? true)
                     ? NetworkResolverDefaults.resolveBinaryPath(
-                        configured: resolverConfig?.corednsBinaryPath, isExecutable: isExecutable)
+                        configured: configuration.resolverConfig?.corednsBinaryPath, isExecutable: isExecutable)
                     : nil
                 // A resolver is only a real capability when the host can also
                 // build its isolated host-side foot. `ip` has no `sysctl`
@@ -93,7 +93,7 @@ extension Agent {
                     // without it there is nothing for the resolver to answer on.
                     guard let ipBinaryPath, sysctlBinaryPath != nil else { return nil }
                     return ResolverSupervisor(
-                        root: resolverConfig?.effectiveConfigDirectory
+                        root: configuration.resolverConfig?.effectiveConfigDirectory
                             ?? NetworkResolverDefaults.configDirectory,
                         host: ResolverProcessHost(
                             binaryPath: binaryPath, ipBinaryPath: ipBinaryPath, logger: logger),
@@ -101,12 +101,13 @@ extension Agent {
                 }
                 self.resolverSupervisor = resolverSupervisor
                 networkService = NetworkServiceLinux(
-                    nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
-                    uplink: ovnUplink, dynamicRouting: ovnDynamicRouting,
+                    nbConnection: configuration.ovnNorthbound, nbTLS: configuration.ovnNorthboundTLS,
+                    chassisConfig: configuration.ovnChassisConfig,
+                    uplink: configuration.ovnUplink, dynamicRouting: configuration.ovnDynamicRouting,
                     ipBinaryPath: ipBinaryPath,
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable),
                     sysctlBinaryPath: sysctlBinaryPath,
-                    linkLocalServiceRatePPS: resolverConfig?.effectiveRateLimitPPS
+                    linkLocalServiceRatePPS: configuration.resolverConfig?.effectiveRateLimitPPS
                         ?? NetworkResolverDefaults.rateLimitPPS,
                     resolverSupervisor: resolverSupervisor,
                     logger: logger)
@@ -150,7 +151,7 @@ extension Agent {
             // restart, exactly as the real backend's bytes on disk do.
             storageBackend = MockStorageBackend(
                 logger: logger,
-                metadataPath: (vmStoragePath as NSString).appendingPathComponent("mock-volumes.json")
+                metadataPath: (configuration.vmStoragePath as NSString).appendingPathComponent("mock-volumes.json")
             )
         } else {
             logger.info("Initializing image cache service")
@@ -161,16 +162,16 @@ extension Agent {
             let artifactDownloader = makeMTLSArtifactDownloader()
             imageCacheService = ImageCacheService(
                 logger: logger,
-                cachePath: imageCachePath,
+                cachePath: configuration.imageCachePath,
                 controlPlaneURL: controlPlaneHTTPBase,
-                maxCacheSizeBytes: imageCacheMaxSizeBytes,
+                maxCacheSizeBytes: configuration.imageCacheMaxSizeBytes,
                 fetch: { url in try await artifactDownloader.fetchToTemporaryFile(url: url) }
             )
 
             logger.info("Initializing storage backend")
             storageBackend = FileSystemStorageBackend(
                 logger: logger,
-                volumeStoragePath: volumeStoragePath,
+                volumeStoragePath: configuration.volumeStoragePath,
                 imageSource: imageCacheService
             )
         }
@@ -211,8 +212,8 @@ extension Agent {
             logger.info("Simulation mode: registering mock sandbox runtime")
             sandboxRuntime = MockSandboxRuntime(
                 logger: logger,
-                workloadLifetime: simulation?.resolvedSandboxLifetime,
-                logInterval: simulation?.resolvedSandboxLogInterval
+                workloadLifetime: configuration.simulation?.resolvedSandboxLifetime,
+                logInterval: configuration.simulation?.resolvedSandboxLogInterval
             )
         } else {
             // `.qemu` means libvirtd now — there is no second driver to choose
@@ -228,9 +229,9 @@ extension Agent {
                 "Initializing libvirt hypervisor service", metadata: ["uri": .string(LibvirtProbe.systemURI)])
             let libvirt = LibvirtService(
                 logger: logger, storage: storageBackend,
-                vmStoragePath: vmStoragePath, firmware: firmware,
-                hardwareAccelerationEnabled: hardwareAccelerationEnabled,
-                memoryOverheadBytes: qemuMemoryOverheadBytes)
+                vmStoragePath: configuration.vmStoragePath, firmware: configuration.firmware,
+                hardwareAccelerationEnabled: configuration.hardwareAccelerationEnabled,
+                memoryOverheadBytes: configuration.qemuMemoryOverheadBytes)
             libvirtService = libvirt
             hypervisorServices[.qemu] = libvirt
             #else
@@ -254,8 +255,8 @@ extension Agent {
             // One Firecracker client backs both VMs and sandboxes so they share the
             // process registry, socket directory, and re-adoption machinery.
             let firecrackerClient = FirecrackerClient(
-                firecrackerBinaryPath: firecrackerBinaryPath,
-                socketDirectory: firecrackerSocketDir,
+                firecrackerBinaryPath: configuration.firecrackerBinaryPath,
+                socketDirectory: configuration.firecrackerSocketDir,
                 logger: logger
             )
             hypervisorServices[.firecracker] = FirecrackerService(
@@ -263,11 +264,12 @@ extension Agent {
                 storage: storageBackend,
                 diskRealizer: KRBDDiskRealizer(),
                 imageSource: imageCacheService,
-                vmStoragePath: vmStoragePath,
-                firecrackerBinaryPath: firecrackerBinaryPath,
-                socketDirectory: firecrackerSocketDir,
+                vmStoragePath: configuration.vmStoragePath,
+                firecrackerBinaryPath: configuration.firecrackerBinaryPath,
+                socketDirectory: configuration.firecrackerSocketDir,
                 firecrackerClient: firecrackerClient,
-                metadataProvider: { [metadataStore, metadataServiceEnabled] vmId in
+                metadataProvider: {
+                    [metadataStore, metadataServiceEnabled = configuration.metadataServiceEnabled] vmId in
                     guard metadataServiceEnabled else { return nil }
                     return await metadataStore.metadata(for: vmId)
                 }
@@ -277,7 +279,7 @@ extension Agent {
             // when a guest base image (issue #419) is configured — the same
             // prerequisite the capability probe gates on — so a build without one
             // leaves `sandboxRuntime` nil and never attracts sandbox placements.
-            if let sandboxGuestImagePath {
+            if let sandboxGuestImagePath = configuration.sandboxGuestImagePath {
                 // Resolve the jailer barrier (issue #425) once, at start: sandboxes
                 // run untrusted workloads, so the production posture is jailed.
                 // The config (layout) is built unconditionally — even an unjailed
@@ -286,23 +288,23 @@ extension Agent {
                 // sandboxes get the barrier.
                 let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
                 let jailerConfig = try SandboxJailerConfig(
-                    jailerBinaryPath: sandboxJailerBinaryPath,
-                    chrootBaseDir: sandboxJailerChrootDir,
-                    uidBase: sandboxJailerUidBase,
+                    jailerBinaryPath: configuration.sandboxJailerBinaryPath,
+                    chrootBaseDir: configuration.sandboxJailerChrootDir,
+                    uidBase: configuration.sandboxJailerUidBase,
                     ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable),
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable))
                 sandboxJailerConfig = jailerConfig
                 let jailUIDRangeCheck = HostPreflight.checkSandboxJailerUIDRange(
                     sandboxJailerUIDRangeInputs())
-                if sandboxJailerMode == .required, !jailUIDRangeCheck.passed {
+                if configuration.sandboxJailerMode == .required, !jailUIDRangeCheck.passed {
                     sandboxJailerUIDRangeBlockedReason =
                         jailUIDRangeCheck.detail
                         ?? "the configured sandbox jail uid/gid range is not isolated"
                 }
                 var jailNewSandboxes = false
                 switch SandboxJailerResolver.resolve(
-                    mode: sandboxJailerMode,
-                    jailerBinaryPath: sandboxJailerBinaryPath,
+                    mode: configuration.sandboxJailerMode,
+                    jailerBinaryPath: configuration.sandboxJailerBinaryPath,
                     isRoot: geteuid() == 0,
                     isExecutable: isExecutable
                 ) {
@@ -311,10 +313,10 @@ extension Agent {
                     logger.info(
                         "Sandbox jailer enabled",
                         metadata: [
-                            "jailerBinaryPath": .string(sandboxJailerBinaryPath),
-                            "chrootBaseDir": .string(sandboxJailerChrootDir),
+                            "jailerBinaryPath": .string(configuration.sandboxJailerBinaryPath),
+                            "chrootBaseDir": .string(configuration.sandboxJailerChrootDir),
                         ])
-                    if !jailUIDRangeCheck.passed, sandboxJailerMode == .auto {
+                    if !jailUIDRangeCheck.passed, configuration.sandboxJailerMode == .auto {
                         // Auto keeps its advisory semantics: retain the other
                         // jailer barriers instead of dropping the whole jail,
                         // while stating plainly that UID isolation is weak.
@@ -367,20 +369,20 @@ extension Agent {
                     client: firecrackerClient,
                     imageService: SandboxImageService(
                         logger: logger,
-                        cacheRootPath: sandboxImageCachePath,
-                        cacheMaxSizeBytes: sandboxImageCacheMaxSizeBytes
+                        cacheRootPath: configuration.sandboxImageCachePath,
+                        cacheMaxSizeBytes: configuration.sandboxImageCacheMaxSizeBytes
                     ),
-                    socketDirectory: firecrackerSocketDir,
-                    sandboxStoragePath: vmStoragePath,
+                    socketDirectory: configuration.firecrackerSocketDir,
+                    sandboxStoragePath: configuration.vmStoragePath,
                     guestImagePath: sandboxGuestImagePath,
-                    firecrackerBinaryPath: firecrackerBinaryPath,
+                    firecrackerBinaryPath: configuration.firecrackerBinaryPath,
                     jailer: jailerConfig,
                     jailUIDAllocator: sandboxJailUIDs,
-                    legacyJailerUIDBase: legacySandboxJailerUidBase,
+                    legacyJailerUIDBase: configuration.legacySandboxJailerUidBase,
                     jailNewSandboxes: jailNewSandboxes,
                     jailerBlockedReason: sandboxJailCreationBlockedReason,
-                    warmStartEnabled: sandboxWarmStart,
-                    warmCacheBudgetBytes: sandboxWarmCacheMaxSizeBytes,
+                    warmStartEnabled: configuration.sandboxWarmStart,
+                    warmCacheBudgetBytes: configuration.sandboxWarmCacheMaxSizeBytes,
                     snapshotTransfer: snapshotTransfer
                 )
             } else {
@@ -410,7 +412,7 @@ extension Agent {
         // lanes; all hypervisor side effects go through this agent (the
         // actuator), so it must exist before the message consumer starts.
         reconciler = Reconciler(
-            actuator: self, queue: messageQueue, logger: logger, teardownGuard: teardownGuard,
+            actuator: self, queue: messageQueue, logger: logger, teardownGuard: configuration.teardownGuard,
             metadataStore: metadataStore)
 
         await startMetadataService()
@@ -428,7 +430,7 @@ extension Agent {
         // Initialize SPIFFE/mTLS. A SPIRE-issued X.509 SVID is the agent's only
         // means of authenticating to the control plane, so it is mandatory:
         // missing config or a failed issuance is fatal, never a fallback.
-        guard let spiffe = spiffeConfig, spiffe.enabled else {
+        guard let spiffe = configuration.spiffeConfig, spiffe.enabled else {
             throw AgentError.spiffeConfigurationError(
                 "SPIFFE authentication is not configured. The agent authenticates to the control plane with a "
                     + "SPIRE-issued X.509 SVID; add a [spiffe] section with enabled = true to the agent config file."
@@ -572,9 +574,20 @@ extension Agent {
     }
 
     func stop() async {
+        guard !stopStarted else { return }
+        stopStarted = true
         logger.info("Stopping agent")
         shutdownRequested = true
         isRunning = false
+
+        // Fence work before closing any resource it can still mutate. A queue
+        // item already executing finishes before the backends are released.
+        inboundContinuation.finish()
+        messageConsumerTask?.cancel()
+        messageConsumerTask = nil
+        await messageQueue.closeAndDrain()
+        await desiredStatePoller?.stop()
+        desiredStatePoller = nil
 
         // Before anything else that can block: the listeners are separate
         // processes, and one left running would keep answering guests with
@@ -607,21 +620,11 @@ extension Agent {
         await resolverSupervisor?.shutdown()
         resolverSupervisor = nil
 
-        // Stop polling before the inbound stream is finished, so an in-flight
-        // poll cannot deliver into a consumer that is already gone.
-        await desiredStatePoller?.stop()
-        desiredStatePoller = nil
-
         // Fail any in-flight registration wait so a caller parked on it (and its
         // timeout timer) doesn't linger past shutdown.
         if let continuation = takeRegistrationContinuation() {
             continuation.resume(throwing: AgentError.registrationSuperseded)
         }
-
-        // Stop draining inbound frames; finishing the stream ends the consumer loop.
-        inboundContinuation.finish()
-        messageConsumerTask?.cancel()
-        messageConsumerTask = nil
 
         // End VM exec channels before stopping their event pump. Closing a
         // channel before exec_exit is also the guest-side process-group kill.
@@ -721,7 +724,7 @@ extension Agent {
         managedSandboxes.removeAll()
         orphanedSandboxes.removeAll()
         vsockCIDs = VsockCIDAllocator()
-        sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: sandboxJailerUidBase)
+        sandboxJailUIDs = SandboxJailUIDAllocator(uidBase: configuration.sandboxJailerUidBase)
 
         logger.info("Agent stopped")
 

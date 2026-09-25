@@ -1,63 +1,78 @@
 import Foundation
+import Synchronization
 
-/// A single-consumer, order-preserving hand-off from a NIO channel's event loop
-/// to an `async` sink.
-///
-/// The console bridge used to spawn a detached `Task` per socket read and await
-/// the sink inside it. Detached tasks are scheduled independently, so two reads
-/// could reach the sink transposed — and once the sink suspends (sending a
-/// WebSocket frame does), a third could interleave between them. For a text
-/// console that shows up as rare scrambled output. For a byte stream with a
-/// handshake and length-prefixed messages — RFB — it is fatal: the client reads
-/// a framebuffer rectangle where it expects a message header and never
-/// recovers.
-///
-/// This is the discipline the sandbox exec path already uses (see
-/// `GuestExecWebSocketController`'s pump): producers `yield` synchronously,
-/// preserving arrival order, and exactly one consumer task drains the stream,
-/// so the sink is entered once at a time and in order.
+/// Preserves console byte order while bounding queued and in-flight output.
+/// The owner closes the session when `send` refuses a chunk; dropping bytes
+/// and continuing would corrupt the console protocol.
 public final class OrderedByteRelay: Sendable {
+    public static let defaultByteLimit = 4 * 1024 * 1024
+    private struct State {
+        var accepting = true
+        var bytes = 0
+        var chunks = 0
+    }
+    private final class Accounting: Sendable {
+        let state = Mutex(State())
+    }
+    private let accounting = Accounting()
     private let continuation: AsyncStream<Data>.Continuation
-
-    /// The task draining the stream. Held so the owner can cancel it, and so
-    /// the relay's lifetime is explicit rather than implicit in a detached task.
     private let pump: Task<Void, Never>
+    private let byteLimit: Int
+    private let chunkLimit: Int
 
-    /// Starts a relay that feeds every chunk to `sink`, in order.
-    ///
-    /// The buffer is unbounded on purpose: dropping a chunk mid-stream corrupts
-    /// the byte stream just as reordering would, so there is nothing safer to
-    /// do under pressure than queue. RFB is request-driven — QEMU sends no
-    /// framebuffer update until the client asks for the next one — so a slow
-    /// consumer throttles the producer at the protocol level rather than
-    /// growing this queue without bound.
-    public init(sink: @escaping @Sendable (Data) async -> Void) {
-        let (stream, continuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .unbounded)
+    public init(
+        byteLimit: Int = OrderedByteRelay.defaultByteLimit,
+        chunkLimit: Int = 1024,
+        sink: @escaping @Sendable (Data) async -> Void
+    ) {
+        precondition(byteLimit > 0 && chunkLimit > 0)
+        self.byteLimit = byteLimit
+        self.chunkLimit = chunkLimit
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
         self.continuation = continuation
+        // Capture only the accounting box, not the relay that owns the pump.
+        let accounting = self.accounting
         self.pump = Task {
             for await chunk in stream {
+                guard !Task.isCancelled else { break }
                 await sink(chunk)
+                accounting.state.withLock {
+                    $0.bytes -= chunk.count
+                    $0.chunks -= 1
+                }
             }
         }
     }
 
-    /// Enqueues a chunk. Synchronous and non-suspending, so it is safe to call
-    /// from a channel handler on its event loop — and so arrival order *is*
-    /// enqueue order.
-    public func send(_ data: Data) {
-        continuation.yield(data)
+    /// False means this session must close. The budget includes the chunk
+    /// currently awaiting the sink and bounds tiny chunks as well as large ones.
+    @discardableResult
+    public func send(_ data: Data) -> Bool {
+        let result = accounting.state.withLock { state in
+            guard state.accepting else { return (accepted: false, overflow: false) }
+            guard !data.isEmpty else { return (accepted: true, overflow: false) }
+            guard data.count <= byteLimit - state.bytes, state.chunks < chunkLimit else {
+                state.accepting = false
+                return (accepted: false, overflow: true)
+            }
+            state.bytes += data.count
+            state.chunks += 1
+            continuation.yield(data)
+            return (accepted: true, overflow: false)
+        }
+        if result.overflow { cancel() }
+        return result.accepted
     }
 
-    /// Stops accepting chunks and lets the pump finish the ones already queued.
+    /// Stop accepting chunks and drain those already accepted.
     public func finish() {
+        accounting.state.withLock { $0.accepting = false }
         continuation.finish()
     }
 
-    /// Stops the pump without draining. Use this when the peer is already gone
-    /// and queued bytes no longer have a destination.
+    /// Close immediately when the peer is gone or its output budget is exceeded.
     public func cancel() {
-        continuation.finish()
+        finish()
         pump.cancel()
     }
-
 }

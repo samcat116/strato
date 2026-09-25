@@ -20,6 +20,11 @@ HARNESS="$WORK_DIR/harness.sh"
   echo 'set -uo pipefail'
   extract_function redeem_agent_enrollment
   extract_function bootstrap_value
+  extract_function bundle_fingerprints
+  extract_function bundles_share_certificate
+  extract_function envoy_server_cert_ready
+  extract_function reissue_existing_agent_identity
+  extract_function ensure_control_plane_spire_identity
 } > "$HARNESS"
 # shellcheck source=/dev/null
 . "$HARNESS"
@@ -69,6 +74,126 @@ else
   CASES=$((CASES + 1))
   echo "  ok: an unknown bootstrap bundle version is rejected"
 fi
+
+# A normal SPIRE CA rotation overlaps roots. Only a complete lack of shared
+# certificates means the persisted node identity belongs to a replaced server.
+for name in old overlap replacement; do
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$name" \
+    -keyout "$WORK_DIR/$name.key" -out "$WORK_DIR/$name.pem" >/dev/null 2>&1
+done
+cat "$WORK_DIR/old.pem" "$WORK_DIR/overlap.pem" > "$WORK_DIR/saved-bundle.pem"
+cat "$WORK_DIR/overlap.pem" "$WORK_DIR/replacement.pem" > "$WORK_DIR/rotated-bundle.pem"
+
+check "all certificates in a bundle are fingerprinted" 2 \
+  "$(bundle_fingerprints "$WORK_DIR/saved-bundle.pem" | wc -l)"
+if bundles_share_certificate "$WORK_DIR/saved-bundle.pem" "$WORK_DIR/rotated-bundle.pem"; then
+  CASES=$((CASES + 1))
+  echo "  ok: overlapping CA rotation keeps the registration"
+else
+  fail "overlapping CA rotation keeps the registration"
+fi
+if bundles_share_certificate "$WORK_DIR/old.pem" "$WORK_DIR/replacement.pem"; then
+  fail "disjoint CA bundles require identity replacement"
+else
+  CASES=$((CASES + 1))
+  echo "  ok: disjoint CA bundles require identity replacement"
+fi
+if bundles_share_certificate "$WORK_DIR/missing.pem" "$WORK_DIR/replacement.pem"; then
+  fail "a missing saved bundle requires identity replacement"
+else
+  CASES=$((CASES + 1))
+  echo "  ok: a missing saved bundle requires identity replacement"
+fi
+
+check "partial CA recovery preserves the agent registration" 0 \
+  "$(grep -c 'api DELETE "/api/agents/' "$E2E_UP" || true)"
+check "partial CA recovery prints identity-reset" 2 \
+  "$(grep -c 'AGENT_START_ACTION=identity-reset' "$E2E_UP")"
+
+# A certificate is ready only when the current SPIRE CA verifies it. Merely
+# receiving an old certificate from Envoy must not satisfy the recovery probe.
+OPENSSL_ARGS="$WORK_DIR/openssl-args"
+OPENSSL_RESULT=valid
+OPENSSL_CALLS="$WORK_DIR/openssl-calls"
+openssl() {
+  printf '%s\n' "$*" > "$OPENSSL_ARGS"
+  printf '%s\n' '-----BEGIN CERTIFICATE-----'
+  local calls=0
+  if [[ "$OPENSSL_RESULT" == recover ]]; then
+    [[ -r "$OPENSSL_CALLS" ]] && calls="$(cat "$OPENSSL_CALLS")"
+    calls=$((calls + 1))
+    printf '%s' "$calls" > "$OPENSSL_CALLS"
+  fi
+  if [[ "$OPENSSL_RESULT" == valid \
+    || ( "$OPENSSL_RESULT" == recover && "$calls" -gt 15 ) ]]; then
+    printf '%s\n' 'Verify return code: 0 (ok)'
+  else
+    printf '%s\n' 'Verify return code: 20 (unable to get local issuer certificate)'
+  fi
+}
+export AGENT_MTLS_PORT_VALUE=8443
+export AGENT_TLS_NAME=control-plane
+export CURRENT_BUNDLE="$WORK_DIR/replacement.pem"
+envoy_server_cert_ready
+check "Envoy probe trusts the current SPIRE bundle" 1 \
+  "$(grep -c -- "-CAfile $CURRENT_BUNDLE" "$OPENSSL_ARGS")"
+OPENSSL_RESULT=stale
+if envoy_server_cert_ready; then
+  fail "an Envoy certificate from the old CA is rejected"
+else
+  CASES=$((CASES + 1))
+  echo "  ok: an Envoy certificate from the old CA is rejected"
+fi
+
+# Reissuing identity uses the stable node name and never touches the Agent API
+# row whose UUID owns workload placements.
+SPIRE_ACTIONS="$WORK_DIR/spire-actions"
+: > "$SPIRE_ACTIONS"
+docker() {
+  printf '%s\n' "$*" >> "$SPIRE_ACTIONS"
+  [[ "$*" == *"token generate"* ]] && echo 'Token: replacement-token'
+  return 0
+}
+write_agent_config() { printf '%s\n' "$JOIN_TOKEN" > "$WORK_DIR/join-token"; }
+die() { echo "unexpected die: $*" >&2; return 1; }
+export TRUST_DOMAIN=strato.local
+export AGENT_NAME=compose-node
+reissue_existing_agent_identity
+check "identity refresh keeps the stable SPIRE node ID" 2 \
+  "$(grep -c 'spiffe://strato.local/node/compose-node' "$SPIRE_ACTIONS")"
+check "identity refresh restores the workload entry" 1 \
+  "$(grep -c 'entry create.*spiffe://strato.local/agent/compose-node' "$SPIRE_ACTIONS")"
+check "identity refresh writes the new join token" replacement-token \
+  "$(cat "$WORK_DIR/join-token")"
+
+# The control-plane recovery must leave every persistent workload volume alone:
+# only the generated CP-side SPIRE identity volume is removed and recreated.
+DOCKER_ACTIONS="$WORK_DIR/docker-actions"
+: > "$DOCKER_ACTIONS"
+say() { :; }
+die() { echo "unexpected die: $*" >&2; return 1; }
+sleep() { :; }
+docker() {
+  printf '%s\n' "$*" >> "$DOCKER_ACTIONS"
+  case "$*" in
+    "compose ps -q spire-agent-cp") echo cp-container ;;
+    "inspect cp-container --format "*) echo compose_spire_agent_cp_data ;;
+  esac
+}
+
+OPENSSL_RESULT=valid
+ensure_control_plane_spire_identity
+check "a healthy Envoy identity is left untouched" 0 "$(wc -l < "$DOCKER_ACTIONS")"
+
+OPENSSL_RESULT=recover
+: > "$OPENSSL_CALLS"
+ensure_control_plane_spire_identity
+check "stale CP sidecars are stopped" 1 \
+  "$(grep -c '^compose stop envoy spire-agent-cp$' "$DOCKER_ACTIONS")"
+check "only the resolved CP identity volume is removed" 1 \
+  "$(grep -c '^volume rm compose_spire_agent_cp_data$' "$DOCKER_ACTIONS")"
+check "CP sidecars are recreated through Compose bootstrap" 1 \
+  "$(grep -c '^compose up -d spire-agent-cp envoy$' "$DOCKER_ACTIONS")"
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

@@ -24,7 +24,6 @@ public struct AgentConfig {
     /// `ovn_northbound` to actually be `ssl:` — rejected at load time
     /// otherwise, so TLS settings can never be silently ignored.
     public let ovnNorthboundTLS: OVNNorthboundTLSConfig?
-    public let enableHVF: Bool?
     public let enableKVM: Bool?
     /// Fixed QEMU process allowance above current guest RAM. This only sizes
     /// libvirt's cgroup ceiling; it is not a placement reservation.
@@ -180,7 +179,6 @@ public struct AgentConfig {
         ovnBootstrapChassis: Bool? = nil,
         ovnNorthbound: String? = nil,
         ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
-        enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
         qemuMemoryOverheadMB: Int? = nil,
         vmStoragePath: String? = nil,
@@ -226,7 +224,6 @@ public struct AgentConfig {
         self.ovnBootstrapChassis = ovnBootstrapChassis
         self.ovnNorthbound = ovnNorthbound
         self.ovnNorthboundTLS = ovnNorthboundTLS
-        self.enableHVF = enableHVF
         self.enableKVM = enableKVM
         self.qemuMemoryOverheadMB = qemuMemoryOverheadMB
         self.vmStoragePath = vmStoragePath

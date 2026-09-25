@@ -19,31 +19,12 @@ import Glibc
 extension Agent {
     // MARK: - Network service connection
 
-    struct NetworkConnectTimeout: Error, LocalizedError {
-        let seconds: Int64
-        var errorDescription: String? {
-            "network service connect timed out after \(seconds)s — are the OVN/OVS daemons responsive?"
-        }
-    }
-
-    /// Attempts to connect the network service, bounded by a timeout so a
-    /// hung OVN/OVS database socket cannot stall agent startup indefinitely
-    /// (the underlying connect has no deadline of its own). The budget covers
-    /// the database connects plus chassis bootstrap and the ovn-controller
-    /// connection check (which polls for several seconds on an unhealthy
-    /// host). Returns whether the service is connected.
-    func connectNetworkService(timeoutSeconds: Int64 = 30) async -> Bool {
-        guard let service = networkService else { return false }
+    /// The network service owns its attempt, transport deadline, and cleanup.
+    func connectNetworkService() async -> Bool {
+        guard !shutdownRequested, let service = networkService else { return false }
         do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { try await service.connect() }
-                group.addTask {
-                    try await Task.sleep(for: .seconds(timeoutSeconds))
-                    throw NetworkConnectTimeout(seconds: timeoutSeconds)
-                }
-                defer { group.cancelAll() }
-                try await group.next()
-            }
+            try await service.connect()
+            guard !shutdownRequested, !Task.isCancelled else { return false }
             logger.info("Network service connected successfully")
             return true
         } catch {
@@ -78,12 +59,6 @@ extension Agent {
                 return  // cancelled (agent stopping)
             }
             guard !shutdownRequested else { return }
-
-            // Reset any half-open state left by the failed (or timed-out)
-            // attempt before dialing again.
-            if let service = networkService {
-                await service.disconnect()
-            }
 
             if await connectNetworkService() {
                 networkServiceConnected = true

@@ -111,6 +111,7 @@ extension NetworkServiceLinux: LoadBalancerActuator {
                 ObservedLoadBalancerBackend(id: $0.id, healthStatus: .unknown)
             }
         }
+        try await ensureSouthboundConnection()
         guard let ovnSouthboundManager else {
             throw NetworkError.notConnected(
                 "OVN Southbound manager is not connected; cannot read Service_Monitor")

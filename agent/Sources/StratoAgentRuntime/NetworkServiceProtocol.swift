@@ -121,7 +121,7 @@ struct VMNetworkConfig: Sendable {
     /// the logical switch and the DHCP row's `network-id` external-id — so
     /// user-chosen names never enter the OVN namespace (issue #342).
     let networkId: UUID
-    let macAddress: String?
+    let macAddress: MACAddress
     let ipAddress: String?
     let subnet: String?
     let gateway: String?
@@ -173,7 +173,7 @@ struct VMNetworkConfig: Sendable {
     let resolverAddresses: [String]
 
     init(
-        networkName: String, networkId: UUID, macAddress: String? = nil, ipAddress: String? = nil,
+        networkName: String, networkId: UUID, macAddress: MACAddress, ipAddress: String? = nil,
         subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
         domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil,

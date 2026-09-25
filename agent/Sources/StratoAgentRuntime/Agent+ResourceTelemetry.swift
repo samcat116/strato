@@ -35,7 +35,7 @@ extension Agent {
     }
 
     /// A bounded target list derived only from durable workload identity and
-    /// backend configuration. UUID workload ids are safe path components; no
+    /// backend  UUID workload ids are safe path components; no
     /// tenant-controlled workload name is used for path discovery or metrics.
     func resourceTelemetryProbeTargets() -> [WorkloadTelemetryProbeTarget] {
         var targets: [WorkloadTelemetryProbeTarget] = []
@@ -61,7 +61,7 @@ extension Agent {
         for (id, entry) in managedVMs { appendVM(id, entry: entry) }
         for (id, entry) in orphanedVMs { appendVM(id, entry: entry) }
 
-        let firecrackerCgroupParent = URL(fileURLWithPath: firecrackerBinaryPath).lastPathComponent
+        let firecrackerCgroupParent = URL(fileURLWithPath: configuration.firecrackerBinaryPath).lastPathComponent
         func appendSandbox(_ id: String, entry: VMManifestEntry) {
             guard seen.insert(id).inserted else { return }
             let cgroupPath =

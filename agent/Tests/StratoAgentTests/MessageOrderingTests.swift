@@ -115,6 +115,29 @@ struct MessageOrderingTests {
         #expect(valuesB == Array(0..<count))
     }
 
+    @Test("shutdown fences queued work and joins active operations")
+    func closeAndDrain() async {
+        let queue = SerialTaskQueue()
+        let recorder = Recorder()
+        let started = Signal()
+        let release = Signal()
+        await queue.enqueue(keys: ["vm-A"]) {
+            await started.fire()
+            await release.wait()
+            await recorder.append(1)
+        }
+        await started.wait()
+        await queue.enqueue(keys: ["vm-A", "volume-A"]) { await recorder.append(2) }
+        await queue.close()
+        await queue.enqueue(keys: ["unrelated"]) { await recorder.append(3) }
+        let draining = Task { await queue.closeAndDrain() }
+        #expect(await recorder.values.isEmpty)
+        await release.fire()
+        await draining.value
+        #expect(await recorder.values == [1])
+        await queue.closeAndDrain()  // repeated shutdown is safe
+    }
+
     // MARK: - serializationKey routing
 
     @Test("Desired-state syncs route without decoding their payload")

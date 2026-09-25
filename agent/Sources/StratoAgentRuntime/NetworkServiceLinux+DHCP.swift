@@ -96,15 +96,6 @@ extension NetworkServiceLinux {
         return (mac, Array(tokens.dropFirst()))
     }
 
-    func generateMACAddress() -> String {
-        // Generate a random MAC address with the locally administered bit set
-        let bytes = (0..<6).map { _ in UInt8.random(in: 0...255) }
-        var macBytes = bytes
-        macBytes[0] = (macBytes[0] & 0xFC) | 0x02  // Set locally administered bit
-
-        return macBytes.map { String(format: "%02x", $0) }.joined(separator: ":")
-    }
-
     /// Resolves the OVN `DHCP_Options` UUIDs a VM's port should bind to, per
     /// family. Nil when DHCP is disabled for the network or that family's
     /// subnet/gateway aren't known (OVN needs a CIDR and a server identity to
