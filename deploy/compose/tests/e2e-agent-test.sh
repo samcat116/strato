@@ -155,14 +155,22 @@ check "matches the VM state directory, not qemu/firecracker by name" 1 \
 # must never remove VM disks.
 IDENTITY_ACTIONS="$WORK_DIR/identity-actions"
 : > "$IDENTITY_ACTIONS"
+export IDENTITY_ACTIONS
 strato_unit_state() { echo "absent - -"; }
 do_stop() { echo stop >> "$IDENTITY_ACTIONS"; }
 do_start() { echo start >> "$IDENTITY_ACTIONS"; }
 say() { :; }
 die() { echo "unexpected die: $*" >&2; return 1; }
-rm() { printf 'rm %s\n' "$*" >> "$IDENTITY_ACTIONS"; }
-mkdir() { printf 'mkdir %s\n' "$*" >> "$IDENTITY_ACTIONS"; }
-do_identity_reset
+cat > "$STUB_DIR/rm" <<'EOF'
+#!/usr/bin/env bash
+printf 'rm %s\n' "$*" >> "$IDENTITY_ACTIONS"
+EOF
+cat > "$STUB_DIR/mkdir" <<'EOF'
+#!/usr/bin/env bash
+printf 'mkdir %s\n' "$*" >> "$IDENTITY_ACTIONS"
+EOF
+chmod +x "$STUB_DIR/rm" "$STUB_DIR/mkdir"
+PATH="$STUB_DIR:$PATH" do_identity_reset
 check "identity-reset removes only the SPIRE data directory" 1 \
   "$(grep -c '^rm -rf /var/lib/spire/agent$' "$IDENTITY_ACTIONS")"
 check "identity-reset preserves VM state" 0 \

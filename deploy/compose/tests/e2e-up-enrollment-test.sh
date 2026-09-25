@@ -114,18 +114,26 @@ check "partial CA recovery prints identity-reset" 2 \
 # receiving an old certificate from Envoy must not satisfy the recovery probe.
 OPENSSL_ARGS="$WORK_DIR/openssl-args"
 OPENSSL_RESULT=valid
+OPENSSL_CALLS="$WORK_DIR/openssl-calls"
 openssl() {
   printf '%s\n' "$*" > "$OPENSSL_ARGS"
   printf '%s\n' '-----BEGIN CERTIFICATE-----'
-  if [[ "$OPENSSL_RESULT" == valid ]]; then
+  local calls=0
+  if [[ "$OPENSSL_RESULT" == recover ]]; then
+    [[ -r "$OPENSSL_CALLS" ]] && calls="$(cat "$OPENSSL_CALLS")"
+    calls=$((calls + 1))
+    printf '%s' "$calls" > "$OPENSSL_CALLS"
+  fi
+  if [[ "$OPENSSL_RESULT" == valid \
+    || ( "$OPENSSL_RESULT" == recover && "$calls" -gt 15 ) ]]; then
     printf '%s\n' 'Verify return code: 0 (ok)'
   else
     printf '%s\n' 'Verify return code: 20 (unable to get local issuer certificate)'
   fi
 }
-AGENT_MTLS_PORT_VALUE=8443
-AGENT_TLS_NAME=control-plane
-CURRENT_BUNDLE="$WORK_DIR/replacement.pem"
+export AGENT_MTLS_PORT_VALUE=8443
+export AGENT_TLS_NAME=control-plane
+export CURRENT_BUNDLE="$WORK_DIR/replacement.pem"
 envoy_server_cert_ready
 check "Envoy probe trusts the current SPIRE bundle" 1 \
   "$(grep -c -- "-CAfile $CURRENT_BUNDLE" "$OPENSSL_ARGS")"
@@ -148,8 +156,8 @@ docker() {
 }
 write_agent_config() { printf '%s\n' "$JOIN_TOKEN" > "$WORK_DIR/join-token"; }
 die() { echo "unexpected die: $*" >&2; return 1; }
-TRUST_DOMAIN=strato.local
-AGENT_NAME=compose-node
+export TRUST_DOMAIN=strato.local
+export AGENT_NAME=compose-node
 reissue_existing_agent_identity
 check "identity refresh keeps the stable SPIRE node ID" 2 \
   "$(grep -c 'spiffe://strato.local/node/compose-node' "$SPIRE_ACTIONS")"
@@ -162,12 +170,6 @@ check "identity refresh writes the new join token" replacement-token \
 # only the generated CP-side SPIRE identity volume is removed and recreated.
 DOCKER_ACTIONS="$WORK_DIR/docker-actions"
 : > "$DOCKER_ACTIONS"
-READY_CALLS=0
-READY_AFTER=0
-envoy_server_cert_ready() {
-  READY_CALLS=$((READY_CALLS + 1))
-  [[ "$READY_CALLS" -gt "$READY_AFTER" ]]
-}
 say() { :; }
 die() { echo "unexpected die: $*" >&2; return 1; }
 sleep() { :; }
@@ -179,11 +181,12 @@ docker() {
   esac
 }
 
+OPENSSL_RESULT=valid
 ensure_control_plane_spire_identity
 check "a healthy Envoy identity is left untouched" 0 "$(wc -l < "$DOCKER_ACTIONS")"
 
-READY_CALLS=0
-READY_AFTER=15
+OPENSSL_RESULT=recover
+: > "$OPENSSL_CALLS"
 ensure_control_plane_spire_identity
 check "stale CP sidecars are stopped" 1 \
   "$(grep -c '^compose stop envoy spire-agent-cp$' "$DOCKER_ACTIONS")"
