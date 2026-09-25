@@ -378,7 +378,7 @@ if [[ -n "$AGENT_ID" ]]; then
 else
   [[ -x "$REPO_ROOT/agent/.build/debug/StratoAgent" ]] \
     || say "WARNING: no agent binary at agent/.build/debug/StratoAgent —
-       build it first: swiftly run +6.3.2 swift build --package-path agent"
+       build it first: swiftly run +6.4.0 swift build --package-path agent"
   echo
   say "The agent must run as root (the SPIRE workload entry's default selector"
   say "is unix:uid:0). sudo does not forward the environment, so RUN_DIR is"

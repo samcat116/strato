@@ -22,6 +22,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Verify Swift toolchain
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/check-swift-version.sh"
+
     - name: Claim build scratch slot
       if: inputs.pool != ''
       shell: bash

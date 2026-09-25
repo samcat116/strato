@@ -14,8 +14,8 @@ echo "=== Claude Code Remote Environment Detected ==="
 echo "Installing Swift and dependencies for Strato..."
 
 # Swift toolchain version. Must be >= the swift-tools-version in the package
-# manifests (6.2); pinned to match the swift:6.3.2-noble container CI builds in.
-SWIFT_VERSION="6.3.2"
+# manifests (6.4); pinned to match the swift:6.4.0-noble container CI builds in.
+SWIFT_VERSION="6.4.0"
 
 # Check if a new enough Swift is already installed. A preinstalled older
 # toolchain can't build the packages, so fall through and install ours.

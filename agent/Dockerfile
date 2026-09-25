@@ -1,7 +1,7 @@
 # ================================
 # Build image
 # ================================
-FROM swift:6.3.2-noble AS build
+FROM swift:6.4.0-noble AS build
 
 # Set to the artifacts subdirectory (e.g. "artifacts/agent") when CI supplies
 # a prebuilt release binary; skips the in-image Swift build.

@@ -29,11 +29,11 @@ from `SPIRE_AGENT_SELECTORS`; if your deployment overrides it, adjust to match.)
   driver for the console and guest-boot checks below. Set `GUEST_IMAGE` to its
   absolute path before setup; without it, the script skips image seeding and
   prints an unusable `<image>` placeholder in the VM creation payload.
-- A Swift toolchain new enough for the agent's dependencies. `swift-toml` tracks
-  a `swift-tools-version:6.3` manifest, so if your default `swift` is older:
+- Swift 6.4 or later, as required by the package manifests. If your default
+  `swift` is older:
 
   ```bash
-  swiftly run +6.3.2 swift build --package-path agent
+  swiftly run +6.4.0 swift build --package-path agent
   ```
 
 - `spire-agent` on the host, and an agent config at `/etc/strato/config.toml`.
