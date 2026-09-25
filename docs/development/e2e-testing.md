@@ -118,6 +118,10 @@ alone does not require deleting volumes.
 
 Stages run in order — `stack → key → enroll → agent → fixtures → smoke` — and
 the whole script is idempotent, so re-running it reuses whatever already exists.
+It also repairs partial SPIRE resets: an unusable control-plane-side identity is
+regenerated automatically, while an offline host agent that trusts a replaced
+CA is re-enrolled and gets a printed `e2e-agent.sh reset` command. The reset
+still runs as root and retains its destructive confirmation.
 
 ## Booting a VM
 
@@ -297,6 +301,13 @@ docker compose run --rm bootstrap grant-platform-admin --email you@example.com -
 re-attest with it and silently ignore the fresh join token. `e2e-agent.sh reset`
 clears it. It also clears `/var/lib/strato/vms`, whose VMs the new control plane
 has never heard of and would otherwise report as orphans.
+
+The same mismatch can occur after only some Compose volumes are removed. On the
+next run, `e2e-up.sh` compares the saved host bootstrap bundle with the current
+server roots. If an offline registration has no root in common, it retires and
+re-enrolls that registration, then prints `reset` rather than `start`. It also
+probes Envoy's certificate and regenerates the disposable control-plane SPIRE
+agent identity volume when that sidecar retained an SVID from the replaced CA.
 
 **`reset` refuses on a managed hypervisor node.** It deletes
 `/var/lib/spire/agent` and `/var/lib/strato/vms`, which are the same paths
