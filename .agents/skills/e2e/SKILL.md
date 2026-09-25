@@ -24,6 +24,11 @@ host, VM sections for lifecycle checks, and traps when diagnosing failures.
   use available authorized root access and continue through registration.
 - If UI access is part of the request, supply `--admin-email` at bootstrap;
   see the runbook's headless-admin recovery for an existing deployment.
+- Partial SPIRE resets self-heal: the script regenerates a stale
+  control-plane-side identity and reissues SPIRE credentials for an offline
+  host agent whose saved bundle has no CA in common with the server. It keeps
+  the agent registration and VM placements, then prints `identity-reset` to
+  clear only the cached node SVID; relay the printed command verbatim.
 
 ## Completion
 

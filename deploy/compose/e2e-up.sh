@@ -151,6 +151,147 @@ print(value)
 ' "$field"
 }
 
+# bundle_fingerprints <pem-bundle> — one stable SHA-256 fingerprint per cert.
+# Comparing whole PEM files is too strict: SPIRE legitimately overlaps old and
+# new roots during CA rotation, and may reorder them when exporting the bundle.
+bundle_fingerprints() {
+  local file="$1" line cert="" in_cert=0
+  [[ -r "$file" ]] || return 0
+  while IFS= read -r line; do
+    if [[ "$line" == "-----BEGIN CERTIFICATE-----" ]]; then
+      cert="$line"$'\n'
+      in_cert=1
+    elif [[ "$in_cert" == 1 ]]; then
+      cert+="$line"$'\n'
+      if [[ "$line" == "-----END CERTIFICATE-----" ]]; then
+        printf '%s' "$cert" | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+          | sed 's/^sha256 Fingerprint=//; s/^SHA256 Fingerprint=//'
+        cert=""
+        in_cert=0
+      fi
+    fi
+  done < "$file"
+}
+
+bundles_share_certificate() { # bundles_share_certificate <old> <current>
+  local shared
+  shared="$(comm -12 \
+    <(bundle_fingerprints "$1" | sort -u) \
+    <(bundle_fingerprints "$2" | sort -u))"
+  [[ -n "$shared" ]]
+}
+
+envoy_server_cert_ready() {
+  local cert_out
+  cert_out="$(openssl s_client \
+    -connect "127.0.0.1:${AGENT_MTLS_PORT_VALUE}" \
+    -servername "$AGENT_TLS_NAME" \
+    -CAfile "$CURRENT_BUNDLE" </dev/null 2>/dev/null)"
+  # Envoy requires a client certificate, so s_client can fail after it verifies
+  # the server. Its verification result is the signal we need here.
+  [[ "$cert_out" == *"BEGIN CERTIFICATE"* \
+    && "$cert_out" == *"Verify return code: 0 (ok)"* ]]
+}
+
+write_agent_config() {
+  cp "$CURRENT_BUNDLE" "$RUN_DIR/bundle.pem" \
+    || die "could not install the current SPIRE trust bundle"
+  say "refreshed $RUN_DIR/bundle.pem"
+
+  # `sed` exits 0 when it matches nothing, so a `|| echo` fallback here would be
+  # dead code and an older .env (setup.sh never rewrites an existing one) would
+  # silently produce an empty port and an opaque spire-agent config error.
+  local node_port
+  node_port="$(sed -n 's/^SPIRE_NODE_PORT=//p' .env | tr -d '\r')"
+  node_port="${node_port:-8085}"
+
+  cat > "$RUN_DIR/spire-agent.conf" <<EOF
+agent {
+    data_dir = "/var/lib/spire/agent"
+    log_level = "INFO"
+    server_address = "127.0.0.1"
+    server_port = "$node_port"
+    socket_path = "/var/run/spire/sockets/workload.sock"
+    trust_bundle_path = "$RUN_DIR/bundle.pem"
+    trust_domain = "$TRUST_DOMAIN"
+    # Used only on first attestation; ignored once an SVID exists in data_dir.
+    join_token = "$JOIN_TOKEN"
+}
+
+plugins {
+    KeyManager "disk" { plugin_data { directory = "/var/lib/spire/agent" } }
+    NodeAttestor "join_token" { plugin_data {} }
+    WorkloadAttestor "unix" { plugin_data { discover_workload_path = true } }
+}
+EOF
+  say "wrote $RUN_DIR/spire-agent.conf (join token embedded; mode 600)"
+}
+
+reissue_existing_agent_identity() {
+  local node_id workload_id entry_out token_out
+  node_id="spiffe://${TRUST_DOMAIN}/node/${AGENT_NAME}"
+  workload_id="spiffe://${TRUST_DOMAIN}/agent/${AGENT_NAME}"
+
+  if ! entry_out="$(docker compose exec -T spire-server spire-server entry create \
+    -socketPath /tmp/spire-server/private/api.sock \
+    -parentID "$node_id" \
+    -spiffeID "$workload_id" \
+    -selector unix:uid:0 \
+    -x509SVIDTTL 3600 2>&1)"; then
+    if ! grep -qiE 'already exists|similar entry' <<<"$entry_out"; then
+      printf '%s\n' "$entry_out" >&2
+      die "could not restore the SPIRE workload entry for '$AGENT_NAME'"
+    fi
+  fi
+
+  token_out="$(docker compose exec -T spire-server spire-server token generate \
+    -socketPath /tmp/spire-server/private/api.sock \
+    -spiffeID "$node_id" -ttl 86400)" \
+    || die "could not mint a new SPIRE join token for '$AGENT_NAME'"
+  JOIN_TOKEN="$(awk '/Token:/{print $2; exit}' <<<"$token_out")"
+  [[ -n "$JOIN_TOKEN" ]] || die "SPIRE returned an empty join token for '$AGENT_NAME'"
+  write_agent_config
+}
+
+ensure_control_plane_spire_identity() {
+  local container volume
+  for _ in $(seq 1 15); do
+    envoy_server_cert_ready && return 0
+    sleep 1
+  done
+
+  # The database and SPIRE server volumes can survive independently. If the
+  # server CA was replaced while the CP-side agent volume survived, that agent
+  # crash-loops with an old SVID and Envoy never receives a server certificate.
+  # This volume contains only the generated sidecar identity, so regenerate it
+  # and let `docker compose up` mint a fresh one-time join token via bootstrap.
+  container="$(docker compose ps -q spire-agent-cp)"
+  [[ -n "$container" ]] || die "spire-agent-cp container is missing"
+  volume="$(docker inspect "$container" --format \
+    '{{range .Mounts}}{{if eq .Destination "/var/lib/spire/agent"}}{{.Name}}{{end}}{{end}}')"
+  [[ -n "$volume" ]] || die "could not resolve the spire-agent-cp identity volume"
+
+  say "Envoy has no server certificate; regenerating its SPIRE identity"
+  docker compose stop envoy spire-agent-cp >/dev/null \
+    || die "could not stop stale control-plane SPIRE sidecars"
+  docker compose rm -f envoy spire-agent-cp >/dev/null \
+    || die "could not remove stale control-plane SPIRE sidecars"
+  docker volume rm "$volume" >/dev/null \
+    || die "could not remove stale control-plane SPIRE identity volume $volume"
+  docker compose up -d spire-agent-cp envoy >/dev/null \
+    || die "could not restart control-plane SPIRE sidecars"
+
+  for _ in $(seq 1 30); do
+    if envoy_server_cert_ready; then
+      say "control-plane SPIRE identity regenerated; Envoy certificate ready"
+      return 0
+    fi
+    sleep 1
+  done
+  docker compose logs --tail=80 spire-agent-cp envoy >&2
+  die "Envoy never received a server certificate after SPIRE identity regeneration"
+}
+
 should_stop() { [[ "$STOP_AFTER" == "$1" ]]; }
 
 # --- --down --------------------------------------------------------------------
@@ -166,8 +307,14 @@ fi
 bold "Preflight"
 command -v docker >/dev/null || die "docker not found"
 docker compose version >/dev/null 2>&1 || die "docker compose plugin not found"
+command -v openssl >/dev/null || die "openssl not found"
 [[ -f .env ]] || die ".env missing — run ./setup.sh first to generate secrets"
 say "docker + .env present"
+
+AGENT_MTLS_PORT_VALUE="$(sed -n 's/^AGENT_MTLS_PORT=//p' .env | tr -d '\r')"
+AGENT_MTLS_PORT_VALUE="${AGENT_MTLS_PORT_VALUE:-8443}"
+AGENT_TLS_NAME="$(sed -n 's/^STRATO_HOSTNAME=//p' .env | tr -d '\r')"
+AGENT_TLS_NAME="${AGENT_TLS_NAME:-localhost}"
 
 if [[ "$BUILD" == 1 ]]; then
   # The compose file pins `image:` to GHCR tags; a build only happens when an
@@ -220,6 +367,13 @@ for _ in $(seq 1 120); do
 done
 curl -sS "${ORIGIN}/health/ready" 2>/dev/null | grep -q '"status":"healthy"' \
   || die "control plane never became healthy — docker compose logs control-plane"
+
+CURRENT_BUNDLE="$(mktemp)" || die "could not create a temporary bundle file"
+trap 'rm -f "$CURRENT_BUNDLE"' EXIT
+docker compose exec -T spire-server spire-server bundle show \
+  -socketPath /tmp/spire-server/private/api.sock -format pem > "$CURRENT_BUNDLE" \
+  || die "could not export the current SPIRE trust bundle"
+ensure_control_plane_spire_identity
 
 should_stop stack && { bold "Stopped after: stack"; exit 0; }
 
@@ -295,11 +449,27 @@ bold "Enrolling node '$AGENT_NAME'"
 # on one inherited from an earlier branch.
 umask 077
 
-agent_count() { # agent_count — how many agents carry $AGENT_NAME
-  api GET /api/agents | jget "sum(1 for a in d['items'] if a['name']=='$AGENT_NAME')"
-}
+mkdir -p "$RUN_DIR" || die "cannot write $RUN_DIR"
 
-if [[ "$(agent_count)" == "0" ]]; then
+agents_json="$(api GET /api/agents)" || die "could not list agents"
+existing_agent_id="$(jget "next((a['id'] for a in d['items'] if a['name']=='$AGENT_NAME'), '')" <<<"$agents_json")"
+existing_agent_status="$(jget "next((a['status'] for a in d['items'] if a['name']=='$AGENT_NAME'), '')" <<<"$agents_json")"
+AGENT_START_ACTION=start
+[[ "$FRESH" == 1 ]] && AGENT_START_ACTION=reset
+SAVED_BUNDLE_MATCHES_CURRENT=0
+bundles_share_certificate "$RUN_DIR/bundle.pem" "$CURRENT_BUNDLE" \
+  && SAVED_BUNDLE_MATCHES_CURRENT=1
+
+if [[ -n "$existing_agent_id" && "$existing_agent_status" != "online" ]] \
+  && [[ "$SAVED_BUNDLE_MATCHES_CURRENT" != 1 ]]; then
+  say "offline agent '$AGENT_NAME' trusts a replaced SPIRE CA — refreshing its identity"
+  # Keep the control-plane Agent row: its UUID owns workload placements. Only
+  # the SPIRE node identity and local trust material need replacement.
+  reissue_existing_agent_identity
+  AGENT_START_ACTION=identity-reset
+fi
+
+if [[ -z "$existing_agent_id" ]]; then
   enroll="$(api POST /api/agent-enrollments \
     "{\"agentName\":\"$AGENT_NAME\",\"siteId\":\"$SITE_ID\",\"organizationId\":\"$ORG_ID\",\"expirationHours\":24}")" \
     || die "enrollment request failed: $enroll"
@@ -317,42 +487,10 @@ if [[ "$(agent_count)" == "0" ]]; then
   TRUST_DOMAIN="$(bootstrap_value trustDomain <<<"$bootstrap")" \
     || die "bootstrap response did not contain a valid trust domain"
 
-  mkdir -p "$RUN_DIR" || die "cannot write $RUN_DIR"
-
-  # A `down -v` gives the SPIRE server a brand-new CA, so both the trust bundle
-  # and any cached node SVID are stale. Refresh the bundle here; e2e-agent.sh
-  # reset clears the SVID.
-  docker compose exec -T spire-server spire-server bundle show \
-    -socketPath /tmp/spire-server/private/api.sock > "$RUN_DIR/bundle.pem" \
-    || die "could not export the SPIRE trust bundle"
-  say "refreshed $RUN_DIR/bundle.pem"
-
-  # `sed` exits 0 when it matches nothing, so a `|| echo` fallback here would be
-  # dead code and an older .env (setup.sh never rewrites an existing one) would
-  # silently produce an empty port and an opaque spire-agent config error.
-  node_port="$(sed -n 's/^SPIRE_NODE_PORT=//p' .env | tr -d '\r')"
-  node_port="${node_port:-8085}"
-
-  cat > "$RUN_DIR/spire-agent.conf" <<EOF
-agent {
-    data_dir = "/var/lib/spire/agent"
-    log_level = "INFO"
-    server_address = "127.0.0.1"
-    server_port = "$node_port"
-    socket_path = "/var/run/spire/sockets/workload.sock"
-    trust_bundle_path = "$RUN_DIR/bundle.pem"
-    trust_domain = "$TRUST_DOMAIN"
-    # Used only on first attestation; ignored once an SVID exists in data_dir.
-    join_token = "$JOIN_TOKEN"
-}
-
-plugins {
-    KeyManager "disk" { plugin_data { directory = "/var/lib/spire/agent" } }
-    NodeAttestor "join_token" { plugin_data {} }
-    WorkloadAttestor "unix" { plugin_data { discover_workload_path = true } }
-}
-EOF
-  say "wrote $RUN_DIR/spire-agent.conf (join token embedded; mode 600)"
+  write_agent_config
+  if [[ "$FRESH" != 1 && "$SAVED_BUNDLE_MATCHES_CURRENT" != 1 ]]; then
+    AGENT_START_ACTION=identity-reset
+  fi
 else
   say "agent '$AGENT_NAME' already registered — skipping enrollment"
 fi
@@ -384,15 +522,8 @@ else
   say "is unix:uid:0). sudo does not forward the environment, so RUN_DIR is"
   say "passed explicitly — run this now:"
   echo
-  if [[ "$FRESH" == 1 ]]; then
-    # A fresh stack means a new SPIRE CA, so the cached SVID and the VM state
-    # from the previous deployment are both stale.
-    printf '      sudo RUN_DIR=%s bash %s/deploy/compose/e2e-agent.sh reset\n' \
-      "$RUN_DIR" "$REPO_ROOT"
-  else
-    printf '      sudo RUN_DIR=%s bash %s/deploy/compose/e2e-agent.sh start\n' \
-      "$RUN_DIR" "$REPO_ROOT"
-  fi
+  printf '      sudo RUN_DIR=%s bash %s/deploy/compose/e2e-agent.sh %s\n' \
+    "$RUN_DIR" "$REPO_ROOT" "$AGENT_START_ACTION"
   echo
   say "waiting for '$AGENT_NAME' to come online (Ctrl-C to stop waiting)..."
   for _ in $(seq 1 240); do
