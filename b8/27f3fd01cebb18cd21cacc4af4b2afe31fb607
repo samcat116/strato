@@ -1,0 +1,25 @@
+docs/deployment/rate-limiting.md
+  s_04010436684dd2::t_05e9549d2f7433 14,19-23
+control-plane/Tests/AppPlatformTests/RateLimitTests.swift
+  s_04010436684dd2::t_1ad56aa7e53aec 129-134
+  s_04010436684dd2::t_408b0d9fd17db1 36-45,135-195
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_04010436684dd2::t_28e0fe5f3a46c8 14,74,263-267
+  s_04010436684dd2::t_3560fd8bf92121 268-269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b827f3fd01cebb18cd21cacc4af4b2afe31fb607",
+  "prompts": {},
+  "sessions": {
+    "s_04010436684dd2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0da05-5445-7100-87b4-3d68745f159f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
