@@ -33,6 +33,16 @@ struct RateLimitTests {
             app.post("auth", "login", "throw") { _ -> Response in throw Abort(.unauthorized) }
             // Auth route that succeeds (scope: auth) — clears failure state.
             app.post("auth", "login", "ok") { _ in Response(status: .ok) }
+            // Session probes may return or throw 401; neither is a failed login.
+            app.get("auth", "session") { req -> Response in
+                if req.headers.first(name: "X-Test-Session") == "valid" {
+                    return Response(status: .ok)
+                }
+                if req.headers.first(name: "X-Test-Throw") == "true" {
+                    throw Abort(.unauthorized)
+                }
+                return Response(status: .unauthorized)
+            }
             // Health probe (must never be throttled).
             app.get("health") { _ in "healthy" }
             // Guest minting is limited only after mTLS authentication in its
@@ -111,6 +121,73 @@ struct RateLimitTests {
                 }
             }
             try await app.test(.POST, "/auth/login/ok") { res async throws in
+                #expect(res.status == .tooManyRequests)
+            }
+        }
+    }
+
+    @Test(
+        "Anonymous session probes use API throttling without locking out login",
+        arguments: [false, true], [1, 100]
+    )
+    func testSessionProbesDoNotLockOutLogin(throwsUnauthorized: Bool, authLimit: Int) async throws {
+        let config = baseConfig(authLimit: authLimit, apiLimit: 4, failureThreshold: 1, failureBaseDelay: 60)
+        try await withRateLimitedApp(config: config) { app in
+            var headers = HTTPHeaders()
+            headers.add(name: "X-Test-Throw", value: String(throwsUnauthorized))
+            for _ in 0..<4 {
+                try await app.test(.GET, "/auth/session", headers: headers) { res async throws in
+                    #expect(res.status == .unauthorized)
+                }
+            }
+            try await app.test(.GET, "/auth/session", headers: headers) { res async throws in
+                #expect(res.status == .tooManyRequests)
+                #expect(res.headers.first(name: "X-RateLimit-Limit") == "4")
+                #expect(res.headers.first(name: "X-RateLimit-Remaining") == "0")
+                #expect(res.headers.first(name: "Retry-After") != nil)
+            }
+            try await app.test(.POST, "/auth/login/ok") { res async throws in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("Successful session probes do not clear login failures")
+    func testSessionSuccessDoesNotResetBackoff() async throws {
+        let config = baseConfig(failureThreshold: 1, failureBaseDelay: 60)
+        try await withRateLimitedApp(config: config) { app in
+            try await app.test(.POST, "/auth/login/finish") { res async throws in
+                #expect(res.status == .unauthorized)
+            }
+            var headers = HTTPHeaders()
+            headers.add(name: "X-Test-Session", value: "valid")
+            try await app.test(.GET, "/auth/session", headers: headers) { res async throws in
+                #expect(res.status == .ok)
+            }
+            try await app.test(.POST, "/auth/login/finish") { res async throws in
+                #expect(res.status == .unauthorized)
+            }
+            try await app.test(.POST, "/auth/login/finish") { res async throws in
+                #expect(res.status == .tooManyRequests)
+            }
+        }
+    }
+
+    @Test("Login lockouts do not block session probes", arguments: [false, true])
+    func testSessionProbesIgnoreLoginLockout(validSession: Bool) async throws {
+        let config = baseConfig(failureThreshold: 1, failureBaseDelay: 60)
+        try await withRateLimitedApp(config: config) { app in
+            for _ in 0..<2 {
+                try await app.test(.POST, "/auth/login/finish") { res async throws in
+                    #expect(res.status == .unauthorized)
+                }
+            }
+            var headers = HTTPHeaders()
+            headers.add(name: "X-Test-Session", value: validSession ? "valid" : "missing")
+            try await app.test(.GET, "/auth/session", headers: headers) { res async throws in
+                #expect(res.status == (validSession ? .ok : .unauthorized))
+            }
+            try await app.test(.POST, "/auth/login/finish") { res async throws in
                 #expect(res.status == .tooManyRequests)
             }
         }
