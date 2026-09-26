@@ -526,7 +526,7 @@ SSF poll delivery are all timer-driven, with no enclosing span to attach to.
 
 ### Correlating traces with logs
 
-`entrypoint.swift` bootstraps SwiftLog once with the console handler, the
+`ControlPlaneMain.swift` bootstraps SwiftLog once with the console handler, the
 optional OTLP handler, and swift-otel's logging metadata provider. Any line
 logged inside a span therefore carries `trace_id`, `span_id` and `trace_flags`
 in both sinks. The default console handler renders metadata as a sorted,

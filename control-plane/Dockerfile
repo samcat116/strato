@@ -69,7 +69,7 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
         echo "Building from source"; \
         cp "$(swift build --package-path /build/control-plane -c release --show-bin-path)/App" ./ && \
         (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || echo "Warning: swift-backtrace-static not found") && \
-        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra -t ./ {} +; \
+        find -L "$(swift build --package-path /build/control-plane -c release --show-bin-path)/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra -t ./ {} +; \
     fi
 
 # Ensure proper permissions

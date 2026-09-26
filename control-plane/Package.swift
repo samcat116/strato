@@ -8,6 +8,9 @@ let package = Package(
         // production runs on Linux, so this only affects local dev builds.
         .macOS(.v15)
     ],
+    products: [
+        .executable(name: "App", targets: ["Run"])
+    ],
     dependencies: [
         // StratoShared for common models and protocols
         .package(path: "../shared"),
@@ -81,7 +84,13 @@ let package = Package(
             exclude: ["Generated/README.md", "Generated/proto"],
             swiftSettings: swiftSettings
         ),
-        .executableTarget(
+        // The control plane's code is a library so AppTestSupport (a regular
+        // target) can import it: SwiftPM's default build system from 6.4 on
+        // refuses to expose an executable target's module to a non-test
+        // target. `Run` only holds @main; the product keeps the name `App` so
+        // `--product App`, the ./App binary, and the strato_App resource
+        // bundle are unchanged.
+        .target(
             name: "App",
             dependencies: [
                 .target(name: "StratoAPITypes"),
@@ -146,6 +155,11 @@ let package = Package(
         // be subclassed across module boundaries (that needs `open`, which its
         // stored properties of App-internal types rule out), so it lives in
         // AppIdentityTests alongside the suites that inherit from it.
+        .executableTarget(
+            name: "Run",
+            dependencies: [.target(name: "App")],
+            swiftSettings: swiftSettings
+        ),
         .target(
             name: "AppTestSupport",
             dependencies: [

@@ -99,7 +99,7 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
           # Copy application resources
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
@@ -120,7 +120,7 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
