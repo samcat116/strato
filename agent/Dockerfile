@@ -1,7 +1,7 @@
 # ================================
 # Build image
 # ================================
-FROM swift:6.3.2-noble AS build
+FROM swift:6.4.0-noble AS build
 
 # Set to the artifacts subdirectory (e.g. "artifacts/agent") when CI supplies
 # a prebuilt release binary; skips the in-image Swift build.
@@ -77,7 +77,7 @@ RUN if [ -n "$PREBUILT_ARTIFACTS" ]; then \
         (cp "/usr/lib/swift/linux/swift-backtrace-static" ./ 2>/dev/null || \
          cp "/usr/libexec/swift/linux/swift-backtrace-static" ./ 2>/dev/null || \
          echo "Warning: swift-backtrace-static not found") && \
-        find -L "$(swift build --package-path /build/agent -c release --show-bin-path)/" -regex '.*\.resources$' -exec cp -Ra {} ./ \; ; \
+        find -L "$(swift build --package-path /build/agent -c release --show-bin-path)/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ./ \; ; \
     fi
 
 # CI artifact upload/download drops the execute bit

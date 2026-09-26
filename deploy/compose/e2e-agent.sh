@@ -93,7 +93,7 @@ do_stop() {
 
 do_start() {
   [[ -x "$AGENT_BIN" ]] || die "no agent binary at $AGENT_BIN
-       build it: swiftly run +6.3.2 swift build --package-path agent"
+       build it: swiftly run +6.4.0 swift build --package-path agent"
   [[ -f "$AGENT_CFG" ]] || die "no agent config at $AGENT_CFG
        it needs at least control_plane_url and network_mode — see
        docs/development/e2e-testing.md"

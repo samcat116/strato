@@ -23,13 +23,13 @@ jobs:
     # scale-set runners match on the installation name as their only label.
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'swift-runners-strato' }}
     # The x64 leg runs directly on the runner pod — the scale set's runner
-    # image bakes in the Swift 6.3.2 toolchain, so nothing pulls the multi-GB
+    # image must provide Swift 6.4.0, so nothing pulls the multi-GB
     # Swift image through dind per job. The GitHub-hosted arm64 runner has no
     # Swift toolchain, so that leg still builds inside the official Swift
     # image (the string form of `container:`; an empty value means "no job
     # container"). vapor/swiftly-action remains unusable on the ARC pods
     # ($USER is unset).
-    container: ${{ matrix.arch == 'arm64' && 'swift:6.3.2-noble' || '' }}
+    container: ${{ matrix.arch == 'arm64' && 'swift:6.4.0-noble' || '' }}
     # Backstop for a hung build: the default 360-minute timeout would pin an
     # ARC pool slot (x64) for six hours. Warm builds take ~12 minutes; a cold
     # arm64 release build is the slow case.
@@ -63,9 +63,8 @@ jobs:
       # GHCR — those type=gha blobs were ~3.8GB of the ~11GB that used to evict
       # this 1.6GB .build between runs. There is far more headroom now than
       # before that change.
-      # Cache key salt (`v2`): #386 moved the x64 leg out of the swift job
-      # container, poisoning the pre-#386 .build ModuleCache; the salt bump
-      # sidestepped it. x64 no longer uses this step (see above); arm64 does.
+      # The compiler version in the key prevents restoring Swift 6.3 build
+      # artifacts after the upgrade. Only the arm64 leg uses this cache.
       - name: Cache Swift packages
         if: matrix.arch == 'arm64'
         uses: actions/cache@v4
@@ -74,9 +73,9 @@ jobs:
             control-plane/.build
             agent/.build
             shared/.build
-          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-swift-release-6.4.0-v3-${{ hashFiles('control-plane/Package.resolved', 'agent/Package.resolved', 'shared/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-swift-release-v2-
+            ${{ runner.os }}-${{ matrix.arch }}-swift-release-6.4.0-v3-
 
       - name: Prepare Swift build environment
         uses: ./.github/actions/swift-build-env
@@ -100,7 +99,7 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
           # Copy application resources
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
@@ -121,7 +120,7 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

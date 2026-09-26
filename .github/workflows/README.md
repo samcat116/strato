@@ -123,7 +123,7 @@ Used for:
 - Main branch x64 Swift release binaries (main-build.yaml)
 - Release x64 Swift image binaries (release.yaml — the jemalloc-linked binaries
   the container images copy in; the static-stdlib release-asset tarballs build
-  on GitHub-hosted runners in the `swift:6.3.2-noble` container)
+  on GitHub-hosted runners in the `swift:6.4.0-noble` container)
 
 Jobs target the scale set with `runs-on: swift-runners-strato`. ARC
 scale-set runners match on **exactly one label — the installation name** —
@@ -161,16 +161,22 @@ Requirements for the scale set's runner image / pods:
   Optional: jobs probe it and fall back to a pod-local cold directory when it is
   absent, because SwiftPM will not create a missing cache root itself.
 
+The shared build setup verifies Swift 6.4.0 before claiming a scratch slot.
+Rebuild the homelab runner image with Swift 6.4.0 before enabling these jobs;
+the runner image is not changed by this repository. Give the scratch mount a
+new toolchain-specific root (for example `/cache/build-scratch/6.4.0-noble-r1`)
+to avoid reusing the old compiler cache.
+
 When bumping the Swift toolchain, rebuild the runner image with the new
 toolchain and update the remaining `swift:x.y.z-noble` container tags
 (the main-build arm64 leg and the release Swift binary/tarball legs) together
-with the Dockerfiles and the `vapor/swiftly-action` pin in the swift-format
-lint job.
+with the Dockerfiles, the version/install scripts in `.github/scripts/`, and
+the `vapor/swiftly-action` pin in the swift-format lint job.
 
 ### Static Self-Hosted Runner (x64/AMD64)
 No workflow uses this machine anymore. The last job on it — the Linux x86_64
 release-asset tarball (release.yaml, `build-swift-binaries`) — moved to a
-GitHub-hosted runner inside the pinned `swift:6.3.2-noble` container, after
+GitHub-hosted runner inside the pinned `swift:6.4.0-noble` container, after
 the host's persistent swiftly state selected a stale 6.2.1 toolchain and
 failed the v0.1.0 release (`swiftly install --use` does not switch an
 already-installed toolchain). The runner can be decommissioned.
@@ -179,20 +185,20 @@ already-installed toolchain). The runner can be decommissioned.
 Used for:
 - PR validation — swift-format lint, frontend lint/build, OpenAPI lint, the
   frontend image build check (`ubuntu-latest`); the `Package.resolved` macOS
-  drift check (`macos-14`)
+  drift check (`macos-15`)
 - The opt-in Docker source build in `main-tests.yaml` (`ubuntu-latest`)
 - All Helm chart tests (`ubuntu-latest`)
 - Claude Code workflows (`ubuntu-latest`)
 - Docs deployment (`ubuntu-latest`)
 - Release x64 Docker image assembly from prebuilt binaries (`ubuntu-latest`)
 - Release binary tarballs for both Linux arches (`ubuntu-24.04` /
-  `ubuntu-24.04-arm`, inside the pinned `swift:6.3.2-noble` container so the
+  `ubuntu-24.04-arm`, inside the pinned `swift:6.4.0-noble` container so the
   compiler never depends on host or runner-image toolchain state)
 - Main branch ARM64 builds (`ubuntu-24.04-arm`)
 - Release ARM64 Swift binaries + Docker images (`ubuntu-24.04-arm`; the arm64
-  Swift build runs inside the pinned `swift:6.3.2-noble` container so it links
-  against the same runtime the Dockerfiles ship, not the runner's newer Swift)
-- macOS binary builds (`macos-latest`)
+  Swift build runs inside the pinned `swift:6.4.0-noble` container so it links
+  against the same runtime the Dockerfiles ship)
+- macOS binary builds (`macos-15`, with the Swift 6.4.0 release toolchain)
 
 This hybrid approach:
 - Lets Swift jobs scale out on the ARC runner set instead of queueing on one machine

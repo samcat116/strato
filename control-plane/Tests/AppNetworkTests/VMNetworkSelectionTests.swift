@@ -77,7 +77,7 @@ final class VMNetworkSelectionTests {
         ).save(on: db)
         try await ImageArtifact(
             imageID: imageID, kind: .rootfs, format: .raw,
-            architecture: image.architecture, filename: "rootfs.raw", size: 1,
+            architecture: image.architecture, filename: "rootfs.raw", size: 1, virtualSize: 1,
             checksum: checksum, storagePath: "images/\(imageID)/rootfs/rootfs.raw"
         ).save(on: db)
     }

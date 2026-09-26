@@ -637,7 +637,7 @@ final class CephStorageTests {
             ).save(on: fixture.app.db)
             try await ImageArtifact(
                 imageID: imageID, kind: .rootfs, format: .raw, architecture: .arm64,
-                filename: "rootfs.raw", size: 1, checksum: checksum,
+                filename: "rootfs.raw", size: 1, virtualSize: 1, checksum: checksum,
                 storagePath: "images/\(imageID)/rootfs/rootfs.raw"
             ).save(on: fixture.app.db)
 
