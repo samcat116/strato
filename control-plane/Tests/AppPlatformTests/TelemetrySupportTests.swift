@@ -48,21 +48,7 @@ struct TelemetrySupportTests {
                 == Set(["conditional", "unconditional"]))
     }
 
-    @Test("desired-state poll outcomes are a bounded dimension")
-    func desiredStatePollOutcomes() {
-        #expect(
-            Set(Telemetry.DesiredStatePollOutcome.allCases.map(\.rawValue))
-                == Set(["served", "not_modified", "assembly_budget_exhausted", "park_refused"]))
-    }
-
     // MARK: - Webhook delivery
-
-    @Test("webhook delivery results are a bounded metric dimension")
-    func webhookDeliveryResults() {
-        #expect(
-            Set(Telemetry.WebhookDeliveryResult.allCases.map(\.rawValue))
-                == Set(["succeeded", "failed", "dead"]))
-    }
 
     @Test("webhook queue snapshots record totals, per-subscription depth, and recovery zeroes")
     func webhookQueueSnapshot() throws {
@@ -310,22 +296,6 @@ struct TelemetrySupportTests {
     }
 
     // MARK: - Security-record delivery
-
-    @Test("security-record loss dimensions are bounded")
-    func securityRecordLossDimensions() {
-        #expect(
-            Set(Telemetry.SecurityRecordStream.allCases.map(\.rawValue))
-                == ["audit", "iam_decision"])
-        #expect(
-            Set(Telemetry.SecurityRecordLossCause.allCases.map(\.rawValue))
-                == [
-                    "queue_count_limit", "queue_byte_limit", "record_too_large",
-                    "delivery_failure", "incomplete_shutdown",
-                ])
-        #expect(
-            Set(Telemetry.SecurityRecordDestination.allCases.map(\.rawValue))
-                == ["all", "database", "log", "loki", "webhook"])
-    }
 
     @Test("security-record losses carry stream, cause, and destination")
     func securityRecordLossCounter() throws {

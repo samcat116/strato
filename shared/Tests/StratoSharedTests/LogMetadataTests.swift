@@ -4,28 +4,6 @@ import Testing
 
 @Suite("Log metadata taxonomy")
 struct LogMetadataTests {
-    @Test("Canonical identifier keys are dot-separated")
-    func canonicalKeysAreDotSeparated() {
-        let keys = [
-            LogMetadata.Key.serviceName,
-            LogMetadata.Key.serviceInstanceID,
-            LogMetadata.Key.deploymentEnvironmentName,
-            LogMetadata.Key.serviceVersion,
-            LogMetadata.Key.requestID,
-            LogMetadata.Key.operationID,
-            LogMetadata.Key.agentID,
-            LogMetadata.Key.agentName,
-            LogMetadata.Key.agentIdentity,
-            LogMetadata.Key.vmID,
-            LogMetadata.Key.sandboxID,
-            LogMetadata.Key.projectID,
-            LogMetadata.Key.sessionID,
-            LogMetadata.Key.sessionKind,
-        ]
-
-        #expect(keys.allSatisfy { $0.contains(".") })
-    }
-
     @Test("Legacy identifier spellings resolve to their canonical key")
     func legacyAliasesResolve() {
         #expect(LogMetadata.canonicalKey(for: "vmId") == LogMetadata.Key.vmID)

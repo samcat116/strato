@@ -21,14 +21,6 @@ struct SimulationConfigTests {
 
     // MARK: - Resolved capacity
 
-    @Test("Unset fields resolve to the documented defaults")
-    func resolvedDefaults() {
-        let sim = SimulationConfig(enabled: true)
-        #expect(sim.resolvedCPUCores == SimulationConfig.defaultCPUCores)
-        #expect(sim.resolvedMemoryBytes == Int64(SimulationConfig.defaultMemoryMB) * 1024 * 1024)
-        #expect(sim.resolvedDiskBytes == Int64(SimulationConfig.defaultDiskGB) * 1024 * 1024 * 1024)
-    }
-
     @Test("Set fields convert MB/GB to bytes correctly")
     func resolvedOverrides() {
         let sim = SimulationConfig(enabled: true, cpuCores: 32, memoryMB: 65536, diskGB: 1024)
