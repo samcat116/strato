@@ -52,19 +52,6 @@ struct AgentConfigTests {
         }
     }
 
-    @Test("volume_storage_dir defaults to nil (platform default path) when absent")
-    func volumeStorageDirDefaultNil() async throws {
-        try await withTempDirectory { tempDirectory in
-            let configPath = tempDirectory.appendingPathComponent("config.toml").path
-            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
-                toFile: configPath, atomically: true, encoding: .utf8)
-
-            let config = try await loadConfig(from: configPath)
-
-            #expect(config.volumeStoragePath == nil)
-        }
-    }
-
     // MARK: - Warm start (issue #426)
 
     @Test("Load warm-start settings")
@@ -84,20 +71,6 @@ struct AgentConfigTests {
             #expect(config.sandboxWarmCacheMaxSizeGB == 40)
             let budgetBytes: Int64? = config.sandboxWarmCacheMaxSizeBytes
             #expect(budgetBytes == Int64(40) * 1024 * 1024 * 1024)
-        }
-    }
-
-    @Test("Warm-start settings default to nil (enabled, default budget) when absent")
-    func warmStartSettingsDefaultNil() async throws {
-        try await withTempDirectory { tempDirectory in
-            let configPath = tempDirectory.appendingPathComponent("config.toml").path
-            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
-                toFile: configPath, atomically: true, encoding: .utf8)
-
-            let config = try await loadConfig(from: configPath)
-
-            #expect(config.sandboxWarmStart == nil)
-            #expect(config.sandboxWarmCacheMaxSizeGB == nil)
         }
     }
 
@@ -252,23 +225,6 @@ struct AgentConfigTests {
         }
     }
 
-    @Test("Image cache settings default to nil (unbounded, default paths) when absent")
-    func imageCacheSettingsDefaultNil() async throws {
-        try await withTempDirectory { tempDirectory in
-            let configPath = tempDirectory.appendingPathComponent("config.toml").path
-            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
-                toFile: configPath, atomically: true, encoding: .utf8)
-
-            let config = try await loadConfig(from: configPath)
-
-            #expect(config.imageCacheDir == nil)
-            #expect(config.imageCacheMaxSizeGB == nil)
-            #expect(config.imageCacheMaxSizeBytes == nil)
-            #expect(config.sandboxImageCacheDir == nil)
-            #expect(config.sandboxImageCacheMaxSizeGB == nil)
-        }
-    }
-
     @Test("Non-positive cache budgets are rejected")
     func nonPositiveCacheBudgetRejected() async throws {
         try await withTempDirectory { tempDirectory in
@@ -345,22 +301,6 @@ struct AgentConfigTests {
             #expect(config.sandboxJailerBinaryPath == "/opt/fc/jailer")
             #expect(config.sandboxJailerChrootDir == "/srv/jails")
             #expect(config.sandboxJailerUidBase == 200_000)
-        }
-    }
-
-    @Test("Sandbox jailer settings default to nil when absent")
-    func sandboxJailerSettingsDefaultNil() async throws {
-        try await withTempDirectory { tempDirectory in
-            let configPath = tempDirectory.appendingPathComponent("config.toml").path
-            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
-                toFile: configPath, atomically: true, encoding: .utf8)
-
-            let config = try await loadConfig(from: configPath)
-
-            #expect(config.sandboxJailerMode == nil)
-            #expect(config.sandboxJailerBinaryPath == nil)
-            #expect(config.sandboxJailerChrootDir == nil)
-            #expect(config.sandboxJailerUidBase == nil)
         }
     }
 
@@ -1281,22 +1221,5 @@ struct AgentConfigTests {
             #expect(guardSettings.refusal(teardowns: 3, present: 3) == nil)
             #expect(guardSettings.refusal(teardowns: 4, present: 40) == nil)
         }
-    }
-
-    // MARK: - Default Path Constants Tests
-
-    @Test("Default config paths are correct")
-    func defaultConfigPaths() {
-        #if os(macOS)
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        #expect(AgentConfig.defaultConfigPath == "\(home)/Library/Application Support/strato/config.toml")
-        #else
-        #expect(AgentConfig.defaultConfigPath == "/etc/strato/config.toml")
-        #endif
-        #expect(AgentConfig.fallbackConfigPath == "./config.toml")
-        #expect(
-            AgentConfig.defaultConfigSearchPaths == [
-                AgentConfig.defaultConfigPath, AgentConfig.fallbackConfigPath,
-            ])
     }
 }

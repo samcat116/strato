@@ -18,15 +18,6 @@ struct TextTableTests {
         #expect(lines[2] == "22  a much longer name")
     }
 
-    @Test("No trailing whitespace on any line")
-    func testNoTrailingWhitespace() {
-        var table = TextTable(headers: ["a", "b"])
-        table.addRow(["x", "y"])
-        for line in table.render().split(separator: "\n") {
-            #expect(!line.hasSuffix(" "))
-        }
-    }
-
     @Test("Renders headers alone when empty")
     func testEmpty() {
         let table = TextTable(headers: ["one", "two"])

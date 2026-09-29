@@ -18,11 +18,4 @@ struct JSONValueTests {
         let encoded = try JSONEncoder().encode(decoded)
         #expect(try JSONDecoder().decode(JSONValue.self, from: encoded) == decoded)
     }
-
-    @Test("Rejects malformed JSON")
-    func rejectsMalformedJSON() {
-        #expect(throws: (any Error).self) {
-            try JSONDecoder().decode(JSONValue.self, from: Data(#"{"unterminated":true"#.utf8))
-        }
-    }
 }

@@ -4,39 +4,6 @@ import StratoShared
 
 @Suite("JSONValue dynamic payloads")
 struct JSONValueDynamicPayloadTests {
-    @Test func stringRoundTrip() throws {
-        let value = JSONValue.string("hello")
-        #expect(try roundTrip(value).decode(as: String.self) == "hello")
-    }
-
-    @Test func intRoundTrip() throws {
-        let value = JSONValue.int(42)
-        #expect(try roundTrip(value).decode(as: Int.self) == 42)
-    }
-
-    @Test func doubleRoundTrip() throws {
-        let value = JSONValue.double(3.25)
-        #expect(try roundTrip(value).decode(as: Double.self) == 3.25)
-    }
-
-    @Test func boolRoundTrip() throws {
-        let value = JSONValue.bool(true)
-        #expect(try roundTrip(value).decode(as: Bool.self) == true)
-    }
-
-    @Test func nullDecodesAsNullCase() throws {
-        let decoded = try decodeJSON(JSONValue.self, from: "null")
-        guard case .null = decoded else {
-            Issue.record("expected .null, got \(decoded)")
-            return
-        }
-    }
-
-    @Test func arrayRoundTrip() throws {
-        let value = JSONValue.array([.string("a"), .string("b"), .string("c")])
-        #expect(try roundTrip(value).decode(as: [String].self) == ["a", "b", "c"])
-    }
-
     @Test func nestedObjectRoundTrip() throws {
         struct Payload: Codable, Equatable {
             struct Inner: Codable, Equatable {

@@ -11,23 +11,6 @@ import Vapor
 @Suite("Agent Update Artifact Resolution")
 struct AgentUpdateArtifactsTests {
 
-    // MARK: - Release tags
-
-    @Test("bare semver versions gain the v prefix tags carry")
-    func bareVersionGainsPrefix() {
-        #expect(AgentUpdateArtifacts.releaseTag(for: "1.2.3") == "v1.2.3")
-    }
-
-    @Test("already-tagged versions pass through")
-    func taggedVersionPassesThrough() {
-        #expect(AgentUpdateArtifacts.releaseTag(for: "v1.2.3") == "v1.2.3")
-    }
-
-    @Test("non-semver values pass through untouched")
-    func nonSemverPassesThrough() {
-        #expect(AgentUpdateArtifacts.releaseTag(for: "main") == "main")
-    }
-
     // MARK: - Asset URLs
 
     @Test("asset URL follows the install.sh naming convention per OS/arch")

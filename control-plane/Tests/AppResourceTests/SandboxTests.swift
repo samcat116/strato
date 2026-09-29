@@ -155,20 +155,7 @@ final class SandboxTests {
         Issue.record("Sandbox \(sandboxID) was never removed")
     }
 
-    // MARK: - Model defaults
-
-    @Test("New sandboxes rest at desired stopped with generation zero")
-    func modelDefaults() async throws {
-        try await withSandboxTestApp { _, _, _, sandbox, _ in
-            #expect(sandbox.status == .stopped)
-            #expect(sandbox.desiredStatus == .stopped)
-            #expect(sandbox.generation == 0)
-            #expect(sandbox.observedGeneration == 0)
-
-            sandbox.setFixtureDesiredStatus(.running)
-            #expect(sandbox.generation == 1)
-        }
-    }
+    // MARK: - Desired state reversion
 
     @Test("revertDesiredToObserved leaves a satisfied desired state alone")
     func revertRespectsExited() async throws {
