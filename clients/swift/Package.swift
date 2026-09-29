@@ -1,4 +1,4 @@
-// swift-tools-version:6.2
+// swift-tools-version:6.4
 import PackageDescription
 
 // The Strato API client, generated from the same `openapi.yaml` the control

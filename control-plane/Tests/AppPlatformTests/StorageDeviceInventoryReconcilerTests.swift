@@ -30,7 +30,9 @@ struct StorageDeviceInventoryReconcilerTests {
     func stableIdentityPreservesIntentAcrossRenumbering() async throws {
         try await withStorageSchema { database, agent in
             let agentID = try agent.requireID()
-            let receivedAt = Date()
+            // Use an exact timestamp so PostgreSQL's microsecond precision
+            // does not change the value under comparison.
+            let receivedAt = Date(timeIntervalSince1970: 100)
             let wwn = device(agentID: agentID, identityKind: .wwn, identityValue: "5000cca1")
             wwn.role = .osd
             wwn.osdId = 7

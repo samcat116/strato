@@ -1026,7 +1026,10 @@ final class DesiredStateReconciliationTests {
             vm.setFixtureDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
-            let originalDeadline = try #require(vm.convergenceDeadline)
+            // Compare persisted values: PostgreSQL rounds the in-memory date
+            // to microsecond precision on the initial save.
+            let persisted = try #require(await VM.find(vm.id, on: app.db))
+            let originalDeadline = try #require(persisted.convergenceDeadline)
             let reason = "agent `hv-03` has 12 GiB available; this operation requires 64 GiB additional memory"
 
             let envelope = try self.report(

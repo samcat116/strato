@@ -8,7 +8,7 @@
 # interchangeable slot directories and advertises it through two env vars:
 #
 #   RUNNER_BUILD_SCRATCH_ROOT   toolchain-keyed root, e.g.
-#                               /cache/build-scratch/6.3.2-noble-r1
+#                               /cache/build-scratch/6.4.0-noble-r1
 #   RUNNER_BUILD_SCRATCH_SLOTS  number of slots in each pool
 #
 # A single shared tree would not work: SwiftPM takes an exclusive lock on a

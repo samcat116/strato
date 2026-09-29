@@ -11,12 +11,16 @@ controllers so throttled requests are rejected before doing real work.
 
 Two fixed-window policies are enforced per identity:
 
-- **Auth** — `/auth/*`, `POST /api/users/register`,
+- **Auth** — `/auth/*` except `GET /auth/session`, `POST /api/users/register`,
   `/oauth/device_authorization`, and `/oauth/revoke` (the OAuth endpoints
   that create rows or probe token hashes). Strict: **10 requests / 60s** by
   default.
 - **API** — every other route. Looser: **300 requests / 60s** by default.
-  This deliberately includes `/oauth/token`: the device grant polls it every
+  This includes `GET /auth/session`: an anonymous session probe returns `401`
+  as part of normal page loading, not a failed login attempt. Session probes
+  neither trigger nor clear authentication lockouts and remain available during
+  a login lockout, subject to the API request limit.
+  This also deliberately includes `/oauth/token`: the device grant polls it every
   ~5s per login, device codes are 256-bit, and per-code interval enforcement
   returns `slow_down`, so it needs the roomy bucket.
 

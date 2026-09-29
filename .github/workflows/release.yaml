@@ -117,14 +117,14 @@ jobs:
 
   # Compile the release binaries that the container images copy in, mirroring
   # main-build.yaml's prebuilt split: amd64 builds on the swift-runners-strato
-  # ARC scale set (its runner image bakes in the Swift 6.3.2 toolchain, so the
+  # ARC scale set (its runner image must provide the Swift 6.4.0 toolchain, so the
   # build runs directly on the pod — no dind, no toolchain install); arm64 runs
-  # on the GitHub-hosted ubuntu-24.04-arm runner but INSIDE the swift:6.3.2-noble
-  # container (not the runner's newer preinstalled Swift). Both must be 6.3.2:
+  # on the GitHub-hosted ubuntu-24.04-arm runner but INSIDE the swift:6.4.0-noble
+  # container (independent of the runner's preinstalled Swift). Both must be 6.4.0:
   # the Dockerfiles copy the Swift runtime .so files into the final images from
-  # swift:6.3.2-noble, so a binary linked against a different Swift (the hosted
-  # arm64 runner ships 6.3.3) would run against 6.3.2 runtime libs — and Swift on
-  # Linux has no stable-ABI guarantee across versions. Pinning the container
+  # swift:6.4.0-noble, so a binary linked against a different Swift would run
+  # against 6.4.0 runtime libs. Swift on Linux has no stable-ABI guarantee
+  # across versions. Pinning the container
   # keeps build and runtime lockstep. build-image-digests below just copies
   # these binaries, so the Docker steps stay light on GitHub-hosted runners.
   #
@@ -139,9 +139,9 @@ jobs:
     needs: create-release
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'swift-runners-strato' }}
     # arm64 pins the Swift toolchain to the container the Dockerfiles source
-    # runtime libs from; amd64's ARC runner image already bakes in 6.3.2, so it
+    # runtime libs from; amd64's ARC runner image must provide 6.4.0, so it
     # runs container-less on the pod (empty string = no job container).
-    container: ${{ matrix.arch == 'arm64' && 'swift:6.3.2-noble' || '' }}
+    container: ${{ matrix.arch == 'arm64' && 'swift:6.4.0-noble' || '' }}
     # Backstop for a hung build: the default 360-minute timeout would pin an
     # ARC pool slot (amd64) for six hours. Release builds run cold by design,
     # so allow well over the ~30-minute worst case.
@@ -155,6 +155,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Verify Swift toolchain
+        run: bash .github/scripts/check-swift-version.sh
 
       # libjemalloc-dev: the control-plane binary links -ljemalloc.
       # The ARC pod runs as a non-root user with passwordless sudo; guard in
@@ -185,7 +188,7 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/control-plane/resources/ \; || true
           # Copy application resources
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
@@ -206,7 +209,7 @@ jobs:
             echo "Warning: swift-backtrace-static not found, skipping"
           fi
           # Copy resources
-          find -L "$BIN/" -regex '.*\.resources$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+          find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -501,8 +504,8 @@ jobs:
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
     needs: create-release
-    # Both Linux legs pin the Swift toolchain via the swift:6.3.2-noble
-    # container (the hosted runners' preinstalled Swift is newer); macOS runs
+    # Both Linux legs pin the Swift toolchain via the swift:6.4.0-noble
+    # container (independent of the host compiler); macOS runs
     # container-less (empty string = no job container).
     container: ${{ matrix.container || '' }}
     # Backstop for a hung cold build (default would be 360 minutes).
@@ -515,7 +518,7 @@ jobs:
       matrix:
         include:
           # Both Linux legs build on GitHub-hosted runners inside the pinned
-          # swift:6.3.2-noble container: the same compiler everywhere, with no
+          # swift:6.4.0-noble container: the same compiler everywhere, with no
           # dependence on any host's swiftly state (a stale in-use 6.2.1
           # toolchain on the old static self-hosted runner is what failed the
           # v0.1.0 release — its release-mode compiler crashes on FluentKit).
@@ -524,25 +527,26 @@ jobs:
           # not ABI lockstep.
           - os: ubuntu-24.04
             asset_name: strato-linux-x86_64
-            container: swift:6.3.2-noble
+            container: swift:6.4.0-noble
           # linux-arm64 (issue #431): install.sh derives strato-linux-arm64
           # from uname on aarch64 hosts, so this asset must exist.
           - os: ubuntu-24.04-arm
             asset_name: strato-linux-arm64
-            container: swift:6.3.2-noble
-          # macos-latest runners are Apple Silicon (arm64) — this asset was
-          # previously mislabeled strato-macos-x86_64. The macOS leg builds
-          # with the runner's Xcode toolchain rather than the 6.3.2 pin used
-          # everywhere else: that drift is intentional (the pinned 6.3.2
-          # toolchain cannot compile the agent's NIOEmbedded dependency on
-          # macOS; newer Xcode Swift can), and these standalone binaries link
-          # the OS-provided runtime, so there is no lockstep requirement with
-          # the swift:6.3.2-noble image runtimes.
-          - os: macos-latest
+            container: swift:6.4.0-noble
+          # The macOS asset is arm64 and uses the same pinned compiler.
+          # It links the OS runtime rather than the Linux container runtime.
+          - os: macos-15
             asset_name: strato-macos-arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install Swift 6.4.0 toolchain on macOS
+        if: runner.os == 'macOS'
+        run: bash .github/scripts/install-swift-macos.sh
+
+      - name: Verify Swift toolchain
+        run: bash .github/scripts/check-swift-version.sh
 
       # The asset upload below is raw curl; make sure the container has it
       # (the macOS leg always does).

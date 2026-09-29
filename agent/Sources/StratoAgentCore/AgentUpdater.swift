@@ -145,16 +145,19 @@ public struct AgentUpdater: Sendable {
         logger: Logger,
         installMode: AgentInstallMode = .detect(),
         binaryPath: String? = nil,
-        download: @escaping Downloader = AgentUpdater.defaultDownload,
+        download: Downloader? = nil,
         probe: BinaryProbe? = nil,
-        runSubprocess: @escaping SubprocessRunner = { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
+        runSubprocess: SubprocessRunner? = nil
     ) {
         self.logger = logger
         self.installMode = installMode
         self.binaryPathOverride = binaryPath
-        self.download = download
+        self.download = download ?? AgentUpdater.defaultDownload
         self.probe = probe
-        self.runSubprocess = runSubprocess
+        // Apple Swift 6.4 can crash when async callbacks are emitted as default
+        // arguments across modules. Construct them here; the default-download
+        // and default-probe tests exercise these real callback paths.
+        self.runSubprocess = runSubprocess ?? { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
     }
 
     /// Downloads, verifies, and atomically installs a new agent binary.

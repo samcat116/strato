@@ -9,10 +9,10 @@ the code for contributors; the system-level design lives in
 
 ## Targets and layout
 
-Two targets under `control-plane/Sources/`:
+Targets under `control-plane/Sources/`:
 
-- **`App`** — the executable. Boot files at the top level
-  (`entrypoint.swift`, `configure.swift`, `routes.swift`), then:
+- **`App`** — the control plane, as a library. Boot files at the top level
+  (`ControlPlaneMain.swift`, `configure.swift`, `routes.swift`), then:
 
   | Directory | Contents |
   |---|---|
@@ -25,6 +25,12 @@ Two targets under `control-plane/Sources/`:
   | `OpenAPI/` | The OpenAPI-generated handler surface (issue #583): `ProjectsAPIService.swift` implements the project routes generated from `Sources/App/openapi.yaml` (scoped by the generator config's `filter`) |
   | `Extensions/` | `Request+…` per-object authz helpers, `Application+LazyService.swift` |
   | `Telemetry/` | Static metrics facade (`Telemetry.…`) |
+
+- **`Run`** — the executable: only `@main`, which calls
+  `ControlPlaneMain.run()`. Its product is still named `App`, so the binary is
+  `./App`. `App` is a library because `AppTestSupport` (a regular target)
+  imports it, and SwiftPM's default build system from 6.4 on will not expose
+  an executable target's module to a non-test target.
 
 - **`SPIREServerAPI`** — a small library holding the hand-written SPIRE
   gRPC client and its generated protobuf, kept separate so generated code

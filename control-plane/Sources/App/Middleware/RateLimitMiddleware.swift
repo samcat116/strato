@@ -11,7 +11,7 @@ import Vapor
 struct RateLimitConfig: Sendable {
     var enabled: Bool
 
-    /// Strict bucket for `/auth/*` and registration.
+    /// Strict bucket for `/auth/*` (except session probes) and registration.
     var authLimit: Int
     var authWindow: Int
 
@@ -71,7 +71,7 @@ private enum RateLimitScope: String {
 /// controllers so throttled requests are rejected before doing real work. It:
 ///
 ///  1. Applies a strict fixed-window limit to `/auth/*` and registration, and a
-///     looser one to the rest of the API.
+///     looser one to session probes and the rest of the API.
 ///  2. Escalates an *exponential* lockout for an identity that keeps failing
 ///     authentication, on top of the fixed window (mitigates credential
 ///     stuffing / brute force against passkeys).
@@ -258,6 +258,13 @@ struct RateLimitMiddleware: AsyncMiddleware {
             components[3] == "jwt-svid"
         {
             return nil
+        }
+
+        // Session probes are reads, not login attempts. Anonymous page loads
+        // normally return 401, often sharing the frontend server's IP. Keep
+        // request throttling without recording or applying login lockouts.
+        if request.method == .GET, path == "/auth/session" {
+            return .api
         }
 
         if path.hasPrefix("/auth/") || path == "/api/users/register" {

@@ -3,9 +3,12 @@ import NIOCore
 import NIOPosix
 import Vapor
 
-@main
-enum Entrypoint {
-    static func main() async throws {
+/// Process entry point for the control plane. It lives in the `App` library,
+/// rather than the `Run` executable that calls it, because the test-support
+/// target imports `App`: SwiftPM's default build system (6.4+) does not let a
+/// non-test target import an executable target's module.
+public enum ControlPlaneMain {
+    public static func run() async throws {
         var env = try Environment.detect()
         let environmentVariables = ProcessInfo.processInfo.environment
         let controlPlaneConfiguration = try await ControlPlaneConfiguration.load(
