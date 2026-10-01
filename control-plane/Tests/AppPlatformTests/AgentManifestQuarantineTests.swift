@@ -285,6 +285,66 @@ final class AgentManifestQuarantineTests {
         }
     }
 
+    @Test("Healthy workloads cannot mask loss of every established snapshot")
+    func mixedSectionLossPreservesSnapshots() async throws {
+        try await withQuarantineApp { app, builder, org, project in
+            let agent = try await self.makeAgent(app: app, org: org, name: "mixed-inventory-agent")
+            let agentId = try agent.requireID().uuidString
+            let owner = try await builder.createUser(
+                username: "snapshotowner", email: "snapshotowner@example.com", displayName: "Snapshot Owner",
+                isSystemAdmin: false)
+            var workloads: [ObservedVMState] = []
+            for index in 0..<100 {
+                let vm = try await builder.createVM(name: "mixed-vm-\(index)", project: project)
+                vm.hypervisorId = agentId
+                vm.setStatus(.running)
+                try await vm.save(on: app.db)
+                workloads.append(ObservedVMState(vmId: try vm.requireID(), status: .running, observedGeneration: 0))
+            }
+            let parentID = try #require(workloads.first?.vmId)
+            var snapshots: [VMSnapshot] = []
+            var observations: [ObservedSnapshotState] = []
+            for index in 0..<4 {
+                let snapshot = VMSnapshot(
+                    name: "mixed-checkpoint-\(index)", vmID: parentID, projectID: try project.requireID(),
+                    environment: "development", agentId: agentId, createdByID: try owner.requireID())
+                try await snapshot.save(on: app.db)
+                snapshots.append(snapshot)
+                observations.append(
+                    ObservedSnapshotState(
+                        snapshotId: try snapshot.requireID(), kind: .vmCheckpoint, parentId: parentID,
+                        present: true, observedGeneration: 1))
+            }
+            let resources = self.healthyReport(agentId: agentId).resources
+            let baseline = ObservedStateReport(
+                agentId: agentId, vms: workloads, resources: resources, snapshots: observations)
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: baseline), fromAgentKey: agent.identity.key)
+            let healthy = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(healthy.manifestInventoryComplete != false)
+            for snapshot in snapshots {
+                snapshot.desiredStatus = .absent
+                snapshot.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                try await snapshot.save(on: app.db)
+            }
+            let loss = ObservedStateReport(agentId: agentId, vms: workloads, resources: resources, snapshots: [])
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: loss), fromAgentKey: agent.identity.key)
+            for snapshot in snapshots {
+                let held = try #require(try await VMSnapshot.find(snapshot.id, on: app.db))
+                #expect(held.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+                #expect(held.desiredStatus == .absent)
+            }
+            let refused = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(refused.manifestInventoryComplete == false)
+            #expect(refused.manifestStatusReason?.contains("snapshots") == true)
+            #expect(refused.manifestStatusReason?.contains("first authoritative") == false)
+            #expect(refused.availableCPU == 0)
+            #expect(refused.availableMemory == 0)
+            #expect(refused.availableDisk == 0)
+        }
+    }
+
     @Test("Nil storage lists do not authorize later loss of replicas or checkpoints")
     func storageSectionsRequireTheirOwnBaseline() async throws {
         try await withQuarantineApp { app, builder, org, project in

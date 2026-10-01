@@ -36,6 +36,32 @@ struct ObservedInventoryGuardTests {
         )
     }
 
+    @Test("Healthy sections cannot dilute another section's destructive inventory")
+    func mixedSectionLoss() async throws {
+        let policy = ObservedInventoryGuard(
+            configuration: try await ControlPlaneConfiguration.load(environmentVariables: [:], for: .testing))
+        let sections: [ObservedInventoryGuard.Section] = [.workloads, .volumes, .snapshots]
+        for lost in sections {
+            for healthy in sections where healthy != lost {
+                for (placed, absent, refused) in [(4, 4, true), (3, 3, false), (16, 4, false), (15, 4, true)] {
+                    let counts: [ObservedInventoryGuard.Section: ObservedInventoryGuard.Counts] = [
+                        healthy: .init(placed: 100), lost: .init(placed: placed, destructiveAbsences: absent),
+                    ]
+                    let reason = policy.refusal(counts: counts, acceptedSections: Set(sections))
+                    #expect((reason != nil) == refused)
+                    if refused { #expect(reason?.contains(lost.rawValue) == true) }
+                }
+            }
+        }
+        let override = ObservedInventoryGuard(
+            configuration: try await ControlPlaneConfiguration.load(
+                environmentVariables: ["OBSERVED_INVENTORY_ALLOW_BULK_LOSS": "true"], for: .testing))
+        #expect(
+            override.refusal(
+                counts: [.workloads: .init(placed: 100), .snapshots: .init(placed: 4, destructiveAbsences: 4)],
+                acceptedSections: Set(sections)) == nil)
+    }
+
     @Test("Nil storage observations cannot establish their first inventory or dilute loss")
     func independentStorageBaseline() async throws {
         let policy = ObservedInventoryGuard(

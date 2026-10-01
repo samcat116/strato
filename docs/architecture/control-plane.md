@@ -751,7 +751,10 @@ placed rows before applying any report effects. It does not rely on the agent's
 each connection's workloads, volumes, and snapshots may not confirm destructive
 absence; later reports may not omit more than both the configured resource floor
 (default 3) and percentage of established/terminating placed resources (default
-25%). Only omissions that would remove a finalizer/replica or move an established
+25%). These limits apply independently to each authoritative section and to the
+combined inventory: healthy workloads cannot mask missing snapshots, and combined
+loss cannot evade the guard by staying below each section’s resource floor.
+Only omissions that would remove a finalizer/replica or move an established
 resource to error count; pending creates are not treated as loss and cannot dilute
 the denominator. Nil volume/snapshot sections are no opinion and neither establish
 a baseline nor dilute the denominator.

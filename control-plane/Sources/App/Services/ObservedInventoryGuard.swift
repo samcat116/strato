@@ -37,15 +37,24 @@ struct ObservedInventoryGuard {
         if !unproven.isEmpty {
             cause = "first authoritative inventory after registration for \(unproven.joined(separator: ", "))"
         } else {
-            guard destructive > minimumResources,
-                Double(destructive) / Double(max(1, placed)) > Double(percentOfPlaced) / 100
-            else { return nil }
-            cause = "more than \(minimumResources) resources and \(percentOfPlaced)% of placed resources"
+            // Healthy inventory in one section cannot corroborate another
+            // section's losses. Retain the aggregate check for combined losses
+            // that stay below the absolute floor in each individual section.
+            let excessiveSections = counts.filter { exceedsLimits($0.value) }.keys.map(\.rawValue).sorted()
+            let aggregateExceeded = exceedsLimits(Counts(placed: placed, destructiveAbsences: destructive))
+            guard aggregateExceeded || !excessiveSections.isEmpty else { return nil }
+            let scope = excessiveSections.isEmpty ? "aggregate inventory" : excessiveSections.joined(separator: ", ")
+            cause = "more than \(minimumResources) resources and \(percentOfPlaced)% of placed resources in \(scope)"
         }
         return
             "Control-plane inventory guard refused \(destructive) destructive absences among \(placed) placed resources: "
             + cause + ". No workload or storage observations from this report were applied. "
             + "Restore the host inventory or verify the loss before temporarily setting OBSERVED_INVENTORY_ALLOW_BULK_LOSS=true."
+    }
+
+    private func exceedsLimits(_ counts: Counts) -> Bool {
+        counts.destructiveAbsences > minimumResources
+            && Double(counts.destructiveAbsences) / Double(max(1, counts.placed)) > Double(percentOfPlaced) / 100
     }
 
     /// Count only authoritative sections. Nil storage lists cannot establish a
