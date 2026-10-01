@@ -766,8 +766,10 @@ and measured by `strato_agent_observed_inventory_refused{agent}`. Available
 capacity stays zero across heartbeats and reconnects while the condition stands.
 The acceptance baseline is local to the socket-owning replica; registration and
 replica restart require a new baseline. A refused report never spends that
-baseline, and an in-flight report from a previous registration cannot establish
-the new one.
+baseline. Session replacement and removal share the report-application queue:
+they drain the complete preceding report, including its destructive transactions,
+before resetting the baseline. Reports capture their session when enqueued, so
+queued predecessor inventory cannot establish the successor’s baseline.
 
 Restoring a complete report clears the condition. For independently verified loss
 or a deliberate bulk drain, an operator may temporarily set

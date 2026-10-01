@@ -285,6 +285,81 @@ final class AgentManifestQuarantineTests {
         }
     }
 
+    @Test(
+        "Session replacement drains suspended reports and drops queued predecessor inventory", arguments: [false, true])
+    func sessionReplacementDrainsReports(pauseInsideApplier: Bool) async throws {
+        try await withQuarantineApp { app, builder, org, project in
+            let agent = try await self.makeAgent(app: app, org: org, name: "session-race-agent")
+            let agentId = try agent.requireID().uuidString
+            let key = agent.identity.key
+            let service = app.agentService
+            await service.beginObservedInventorySession(for: key)
+            let originalSession = await service.observedInventorySessions[key]
+            let owner = try await builder.createUser(
+                username: "raceowner", email: "raceowner@example.com", displayName: "Race Owner", isSystemAdmin: false)
+            let vm = try await builder.createVM(name: "race-vm", project: project)
+            var snapshots: [VMSnapshot] = []
+            var observations: [ObservedSnapshotState] = []
+            for index in 0..<2 {
+                let snapshot = VMSnapshot(
+                    name: "race-checkpoint-\(index)", vmID: try vm.requireID(), projectID: try project.requireID(),
+                    environment: vm.environment, agentId: agentId, createdByID: try owner.requireID())
+                snapshot.desiredStatus = .absent
+                snapshot.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                try await snapshot.save(on: app.db)
+                snapshots.append(snapshot)
+                observations.append(
+                    ObservedSnapshotState(
+                        snapshotId: try snapshot.requireID(), kind: .vmCheckpoint, parentId: try vm.requireID(),
+                        present: true, observedGeneration: 1))
+            }
+            let resources = self.healthyReport(agentId: agentId).resources
+            let baseline = ObservedStateReport(agentId: agentId, vms: [], resources: resources, snapshots: observations)
+            await service.applyObservedStateReport(try MessageEnvelope(message: baseline), fromAgentKey: key)
+
+            let gate = InventoryReportGate()
+            if pauseInsideApplier {
+                app.databases.middleware.use(PauseSnapshotDeletion(gate: gate))
+            } else {
+                app.databases.middleware.use(PauseAgentInventorySave(gate: gate))
+            }
+            // Force an agent save after validation; omit only one snapshot,
+            // which the established session is legitimately allowed to reap.
+            let changedResources = AgentResources(
+                totalCPU: 8, availableCPU: 5, totalMemory: 16_000_000_000, availableMemory: 7_000_000_000,
+                totalDisk: 100_000_000_000, availableDisk: 40_000_000_000)
+            let oldReport = ObservedStateReport(
+                agentId: agentId, vms: [], resources: changedResources, snapshots: [observations[1]])
+            let oldTask = await service.enqueueObservedStateReport(
+                try MessageEnvelope(message: oldReport), fromAgentKey: key)
+            await gate.waitUntilEntered()
+            let previousTail = await service.nextReportTailId
+            let successor = Task { await service.beginObservedInventorySession(for: key) }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while await service.nextReportTailId == previousTail, ContinuousClock.now < deadline { await Task.yield() }
+            #expect(await service.nextReportTailId > previousTail)
+            // The old transaction is still suspended: no successor session may
+            // become visible until all of its writes have finished.
+            #expect(await service.observedInventorySessions[key] == originalSession)
+            let queuedOldBaseline = await service.enqueueObservedStateReport(
+                try MessageEnvelope(message: oldReport), fromAgentKey: key)
+            await gate.release()
+            await oldTask.value
+            await successor.value
+            await queuedOldBaseline.value
+            #expect(await service.observedInventorySessions[key] != originalSession)
+            #expect(try await VMSnapshot.find(snapshots[0].id, on: app.db) == nil)
+            // A stale queued report must not spend the successor's baseline.
+            let loss = ObservedStateReport(agentId: agentId, vms: [], resources: resources, snapshots: [])
+            await service.applyObservedStateReport(try MessageEnvelope(message: loss), fromAgentKey: key)
+            let held = try #require(try await VMSnapshot.find(snapshots[1].id, on: app.db))
+            #expect(held.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+            let row = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(row.manifestStatusReason?.contains("first authoritative") == true)
+            #expect(row.availableCPU == 0)
+        }
+    }
+
     @Test("Healthy workloads cannot mask loss of every established snapshot")
     func mixedSectionLossPreservesSnapshots() async throws {
         try await withQuarantineApp { app, builder, org, project in
@@ -530,5 +605,46 @@ final class AgentManifestQuarantineTests {
             let escalated = try #require(try await VM.find(vmID, on: app.db))
             #expect(escalated.status == .error)
         }
+    }
+}
+
+/// One-shot suspension at a real database write, after inventory admission.
+private actor InventoryReportGate {
+    private var entered = false
+    private var entryWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func pauseOnce() async {
+        guard !entered else { return }
+        entered = true
+        entryWaiter?.resume()
+        entryWaiter = nil
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiter = $0 }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
+private struct PauseAgentInventorySave: AsyncModelMiddleware {
+    let gate: InventoryReportGate
+    func update(model: Agent, on db: any Database, next: any AnyAsyncModelResponder) async throws {
+        await gate.pauseOnce()
+        try await next.update(model, on: db)
+    }
+}
+
+private struct PauseSnapshotDeletion: AsyncModelMiddleware {
+    let gate: InventoryReportGate
+    func delete(model: VMSnapshot, force: Bool, on db: any Database, next: any AnyAsyncModelResponder) async throws {
+        await gate.pauseOnce()
+        try await next.delete(model, force: force, on: db)
     }
 }

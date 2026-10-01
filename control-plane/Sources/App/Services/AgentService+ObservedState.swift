@@ -20,16 +20,31 @@ extension AgentService {
     /// report finishing last could flip `vm.status` backwards and fire
     /// spurious drift telemetry. Chaining on the previous report preserves the
     /// agent's own send order.
-    func enqueueObservedStateReport(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) {
+    @discardableResult
+    func enqueueObservedStateReport(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) -> Task<Void, Never> {
+        let session = observedInventorySessions[agentKey]
+        return enqueueInventoryOperation(for: agentKey) { [weak self] in
+            await self?.applyQueuedObservedStateReport(envelope, fromAgentKey: agentKey, inventorySession: session)
+        }
+    }
+
+    /// Session transitions share this lane with the entire asynchronous apply,
+    /// including its destructive transactions. A successor drains its predecessor
+    /// before resetting the baseline; actor reentrancy cannot cross that boundary.
+    @discardableResult
+    func enqueueInventoryOperation(
+        for agentKey: String, operation: @escaping @Sendable () async -> Void
+    ) -> Task<Void, Never> {
         nextReportTailId &+= 1
         let id = nextReportTailId
         let predecessor = reportTails[agentKey]?.task
         let task = Task { [weak self] in
             await predecessor?.value
-            await self?.applyObservedStateReport(envelope, fromAgentKey: agentKey)
+            await operation()
             await self?.retireReportTail(agentKey: agentKey, id: id)
         }
         reportTails[agentKey] = (id, task)
+        return task
     }
 
     /// Drop the chain bookkeeping once the finishing link is still the tail,
@@ -49,6 +64,16 @@ extension AgentService {
     /// heartbeat's ownership check. Callers outside tests should go through
     /// `enqueueObservedStateReport` so same-agent reports apply in order.
     func applyObservedStateReport(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) async {
+        await enqueueObservedStateReport(envelope, fromAgentKey: agentKey).value
+    }
+
+    private func applyQueuedObservedStateReport(
+        _ envelope: MessageEnvelope, fromAgentKey agentKey: String, inventorySession: UUID?
+    ) async {
+        guard observedInventorySessions[agentKey] == inventorySession else {
+            app.logger.warning("Ignoring observed inventory queued by a superseded registration")
+            return
+        }
         let report: ObservedStateReport
         do {
             report = try envelope.decode(as: ObservedStateReport.self)
@@ -85,7 +110,6 @@ extension AgentService {
             return
         }
 
-        let inventorySession = observedInventorySessions[agentKey]
         var inventoryCounts: [ObservedInventoryGuard.Section: ObservedInventoryGuard.Counts] = [:]
         var inventoryRefusal: String?
         if report.manifestStatus?.inventoryComplete != false {

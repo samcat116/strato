@@ -109,13 +109,20 @@ struct ObservedInventoryGuard {
 extension AgentService {
     /// Reset per connection. A replica restart also starts with no accepted
     /// baseline; losing coordination must never authorize deletion.
-    func beginObservedInventorySession(for agentKey: String) {
-        observedInventorySessions[agentKey] = UUID()
-        acceptedInventorySections.removeValue(forKey: agentKey)
+    func beginObservedInventorySession(for agentKey: String) async {
+        await enqueueInventoryOperation(for: agentKey) { [weak self] in
+            await self?.replaceObservedInventorySession(UUID(), for: agentKey)
+        }.value
     }
 
-    func endObservedInventorySession(for agentKey: String) {
-        observedInventorySessions.removeValue(forKey: agentKey)
+    func endObservedInventorySession(for agentKey: String) async {
+        await enqueueInventoryOperation(for: agentKey) { [weak self] in
+            await self?.replaceObservedInventorySession(nil, for: agentKey)
+        }.value
+    }
+
+    private func replaceObservedInventorySession(_ session: UUID?, for agentKey: String) {
+        observedInventorySessions[agentKey] = session
         acceptedInventorySections.removeValue(forKey: agentKey)
     }
 }
