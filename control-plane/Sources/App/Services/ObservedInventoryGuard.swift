@@ -1,0 +1,158 @@
+import Fluent
+import Foundation
+import StratoShared
+import Vapor
+
+/// Admission for the destructive, full-list side of observed-state ingestion.
+/// Agent-supplied completeness is necessary but cannot authorize mass loss.
+struct ObservedInventoryGuard {
+    enum Section: String, Hashable, Sendable {
+        case workloads, volumes, snapshots
+    }
+
+    struct Counts: Sendable {
+        var placed = 0
+        var destructiveAbsences = 0
+    }
+
+    let minimumResources: Int
+    let percentOfPlaced: Int
+    let allowBulkLoss: Bool
+
+    init(configuration: ControlPlaneConfiguration) {
+        minimumResources = configuration.int(.observedInventoryMinimumResources)
+        percentOfPlaced = configuration.int(.observedInventoryPercentOfPlaced)
+        allowBulkLoss = configuration.bool(.observedInventoryAllowBulkLoss)
+    }
+
+    func refusal(counts: [Section: Counts], acceptedSections: Set<Section>) -> String? {
+        guard !allowBulkLoss else { return nil }
+        let destructive = counts.values.reduce(0) { $0 + $1.destructiveAbsences }
+        let placed = counts.values.reduce(0) { $0 + $1.placed }
+        guard destructive > 0 else { return nil }
+        let unproven = counts.keys.filter {
+            !acceptedSections.contains($0) && counts[$0]!.destructiveAbsences > 0
+        }.map(\.rawValue).sorted()
+        let cause: String
+        if !unproven.isEmpty {
+            cause = "first authoritative inventory after registration for \(unproven.joined(separator: ", "))"
+        } else {
+            // Healthy inventory in one section cannot corroborate another
+            // section's losses. Retain the aggregate check for combined losses
+            // that stay below the absolute floor in each individual section.
+            let excessiveSections = counts.filter { exceedsLimits($0.value) }.keys.map(\.rawValue).sorted()
+            let aggregateExceeded = exceedsLimits(Counts(placed: placed, destructiveAbsences: destructive))
+            guard aggregateExceeded || !excessiveSections.isEmpty else { return nil }
+            let scope = excessiveSections.isEmpty ? "aggregate inventory" : excessiveSections.joined(separator: ", ")
+            cause = "more than \(minimumResources) resources and \(percentOfPlaced)% of placed resources in \(scope)"
+        }
+        return
+            "Control-plane inventory guard refused \(destructive) destructive absences among \(placed) placed resources: "
+            + cause + ". No workload or storage observations from this report were applied. "
+            + "Restore the host inventory or verify the loss before temporarily setting OBSERVED_INVENTORY_ALLOW_BULK_LOSS=true."
+    }
+
+    private func exceedsLimits(_ counts: Counts) -> Bool {
+        counts.destructiveAbsences > minimumResources
+            && Double(counts.destructiveAbsences) / Double(max(1, counts.placed)) > Double(percentOfPlaced) / 100
+    }
+
+    /// Count only authoritative sections. Nil storage lists cannot establish a
+    /// baseline, dilute the percentage, or imply deletion. Pending creates do
+    /// not assert presence and therefore are not treated as lost resources.
+    static func counts(for report: ObservedStateReport, on db: any Database) async throws -> [Section: Counts] {
+        let vms = try await VM.query(on: db).filter(\.$hypervisorId == report.agentId).all()
+        let sandboxes = try await Sandbox.query(on: db).filter(\.$hypervisorId == report.agentId).all()
+        let establishedVMs = vms.filter { $0.isTerminating || $0.status.assertsAgentPresence }
+        let establishedSandboxes = sandboxes.filter {
+            $0.isTerminating || ($0.observedGeneration > 0 && $0.status.assertsAgentPresence)
+        }
+        let vmIDs = Set(report.vms.map(\.vmId))
+        let sandboxIDs = Set(report.sandboxes.map(\.sandboxId))
+        var counts: [Section: Counts] = [
+            .workloads: Counts(
+                placed: establishedVMs.count + establishedSandboxes.count,
+                destructiveAbsences: establishedVMs.filter { isAbsent($0.id, from: vmIDs) }.count
+                    + establishedSandboxes.filter { isAbsent($0.id, from: sandboxIDs) }.count)
+        ]
+        if let observations = report.volumes {
+            let ids = Set(observations.map(\.volumeId))
+            let volumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
+            let established = volumes.filter { $0.isTerminating || ($0.observedGeneration > 0 && $0.status != .error) }
+            counts[.volumes] = Counts(
+                placed: established.count,
+                destructiveAbsences: established.filter { isAbsent($0.id, from: ids) }.count)
+        }
+        if let observations = report.snapshots {
+            let ids = Set(observations.map(\.snapshotId))
+            var snapshots = Counts()
+            func include<A: SnapshotArtifactResource>(_ artifacts: [A]) {
+                let established = artifacts.filter {
+                    $0.isTerminating || ($0.observedGeneration > 0 && $0.isPresentOnAgent)
+                }
+                snapshots.placed += established.count
+                snapshots.destructiveAbsences += established.filter { isAbsent($0.id, from: ids) }.count
+            }
+            include(try await VolumeSnapshot.placed(onAgent: report.agentId, on: db))
+            include(try await VMSnapshot.placed(onAgent: report.agentId, on: db))
+            include(try await SandboxSnapshot.placed(onAgent: report.agentId, on: db))
+            counts[.snapshots] = snapshots
+        }
+        return counts
+    }
+
+    private static func isAbsent(_ id: UUID?, from reported: Set<UUID>) -> Bool {
+        id.map { !reported.contains($0) } ?? false
+    }
+}
+
+extension AgentService {
+    /// Reset per connection. A replica restart also starts with no accepted
+    /// baseline; losing coordination must never authorize deletion.
+    func beginObservedInventorySession(for agentKey: String) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            enqueueInventoryOperation(for: agentKey) {
+                do {
+                    try await self.rotateObservedInventorySession(for: agentKey)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func rotateObservedInventorySession(for agentKey: String) async throws {
+        guard let id = await agentId(forKey: agentKey), let agentID = UUID(uuidString: id) else {
+            throw Abort(.notFound, reason: "Cannot register inventory session for an unknown agent")
+        }
+        let session = UUID()
+        try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
+            try await InventorySessionFence.replace(session, agentID: agentID, on: db)
+        }
+        observedInventorySessions[agentKey] = session
+        acceptedInventorySections.removeValue(forKey: agentKey)
+    }
+
+    func endObservedInventorySession(for agentKey: String) async {
+        await enqueueInventoryOperation(for: agentKey) {
+            await self.revokeObservedInventorySession(for: agentKey)
+        }.value
+    }
+
+    private func revokeObservedInventorySession(for agentKey: String) async {
+        let session = observedInventorySessions.removeValue(forKey: agentKey)
+        acceptedInventorySections.removeValue(forKey: agentKey)
+        guard let session, let id = await agentId(forKey: agentKey), let agentID = UUID(uuidString: id) else { return }
+        do {
+            try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
+                // A delayed disconnect from an old replica cannot revoke its successor.
+                if try await InventorySessionFence.current(agentID: agentID, on: db) == session {
+                    try await InventorySessionFence.replace(UUID(), agentID: agentID, on: db)
+                }
+            }
+        } catch {
+            app.logger.error("Failed to revoke inventory session: \(error)")
+        }
+    }
+}

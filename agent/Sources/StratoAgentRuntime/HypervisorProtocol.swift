@@ -289,6 +289,10 @@ public protocol HypervisorService: Actor, Sendable {
     /// daemon-side workload has disappeared.
     func reservationInventory() async -> HypervisorReservationInventory?
 
+    /// A live enumeration that includes unmanaged workloads after restart.
+    /// Nil means unknown; cached or process-local inventories cannot certify a fresh host.
+    func bootstrapWorkloadIDs() async -> Set<String>?
+
     /// Re-adopts a VM whose hypervisor process survived an agent restart
     /// (reconciliation phase 2, issue #260): reconnects the control session
     /// and returns the VM's observed status. Backends without a reattachable
@@ -400,6 +404,8 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    func bootstrapWorkloadIDs() async -> Set<String>? { nil }
+
     func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {}
 
     func restoreMetadataInterfaceInventory(vmId: String, interfaces: [String]) async {}

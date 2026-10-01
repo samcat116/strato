@@ -14,6 +14,8 @@ import SQLKit
 /// `pg_locks`). Keep values stable once shipped so dashboards and operator
 /// queries continue to name the same subsystem.
 enum AdvisoryLockNamespace: Int32, CaseIterable, Sendable {
+    // Inventory fencing encloses report transactions and their resource locks.
+    case agentInventory = 0
     case schemaMigration = 1
     case userRegistration = 2
     case projectNetwork = 3
@@ -31,6 +33,7 @@ enum AdvisoryLockNamespace: Int32, CaseIterable, Sendable {
     /// Stable, bounded label used in logs, metrics, and operator tooling.
     var name: String {
         switch self {
+        case .agentInventory: "agent_inventory"
         case .schemaMigration: "schema_migration"
         case .userRegistration: "user_registration"
         case .projectNetwork: "project_network"

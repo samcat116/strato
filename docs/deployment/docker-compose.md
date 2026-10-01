@@ -371,3 +371,17 @@ control plane drains in-flight requests and agent WebSockets within
 See [Deploying agents](/deployment/agents). The control plane hands agents
 the URL from `EXTERNAL_HOSTNAME` in `.env`, so make sure it is reachable from
 your hypervisor hosts.
+
+### Observed inventory safety
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OBSERVED_INVENTORY_MINIMUM_RESOURCES` | `3` | Absolute floor for destructive absences in one established report; nonnegative. |
+| `OBSERVED_INVENTORY_PERCENT_OF_PLACED` | `25` | Percentage limit (0–100); both limits must be exceeded to refuse an established report. |
+| `OBSERVED_INVENTORY_ALLOW_BULK_LOSS` | `false` | Deliberate operator override after verifying loss or a bulk drain. Restore to false afterward. |
+
+A first destructive inventory after registration is refused regardless of the
+limits, unless the explicit override is enabled. Refused inventories appear on
+the agent's workload-safety card and suppress placements. Recover the host's
+inventory before overriding: an empty report is not proof that guests or their
+storage are gone. See [control-plane architecture](../architecture/control-plane.md#observed-inventory-blast-radius-guard-1428).

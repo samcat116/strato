@@ -44,11 +44,11 @@ struct SnapshotRecordStoreTests {
             exported: exported)
     }
 
-    @Test("A host that has never captured anything reads as fresh")
-    func missingFileIsFresh() throws {
+    @Test("Missing snapshot records do not assert that artifacts are gone")
+    func missingFileIsAbsent() throws {
         try withStore { store, _ in
-            guard case .fresh = store.load() else {
-                Issue.record("expected .fresh for a missing record file")
+            guard case .absent = store.load() else {
+                Issue.record("expected .absent for a missing record file")
                 return
             }
         }

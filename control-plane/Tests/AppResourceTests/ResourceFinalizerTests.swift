@@ -73,6 +73,9 @@ final class ResourceFinalizerTests {
     ) async throws -> String {
         let agentID = try await TestDataBuilder(db: app.db).registerAgent(
             on: app, named: agentName, hostname: "test-host")
+        // This suite exercises teardown after a healthy initial inventory.
+        await app.agentService.applyObservedStateReport(
+            try emptyReport(agentId: agentID), fromAgentKey: agentKey(agentName))
         if let vm {
             vm.hypervisorId = agentID
             try await vm.save(on: app.db)

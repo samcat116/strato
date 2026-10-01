@@ -258,9 +258,18 @@ affinity: {}
 # container-env entries rendered through tpl. Use this for settings without a
 # dedicated chart value,
 # e.g. SSF_*, AUDIT_*, RATE_LIMIT_*, WEBHOOK_*, SCHEDULING_STRATEGY,
-# STRATO_DEFAULT_NETWORK_*, REQUEST_LOGGING. (Image storage has dedicated
+# STRATO_DEFAULT_NETWORK_*, REQUEST_LOGGING, OBSERVED_INVENTORY_*. (Image storage has dedicated
 # values — see strato.imageStorage.)
+# Inventory safety defaults: minimum resources 3, percent of placed resources 25,
+# and bulk loss override false. The first destructive inventory after registration
+# is always refused unless an operator explicitly overrides verified loss.
 # extraEnv:
+#   - name: OBSERVED_INVENTORY_MINIMUM_RESOURCES
+#     value: "3"
+#   - name: OBSERVED_INVENTORY_PERCENT_OF_PLACED
+#     value: "25"
+#   - name: OBSERVED_INVENTORY_ALLOW_BULK_LOSS
+#     value: "false"
 #   - name: SCHEDULING_STRATEGY
 #     value: best_fit
 #   - name: AUDIT_WEBHOOK_URL

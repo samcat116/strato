@@ -102,9 +102,10 @@ public enum SnapshotRecordCredentialScrubber {
 /// bytes are gone, and reaps the row. A host that cannot read its own record
 /// file must therefore be able to say so rather than report nothing.
 public enum SnapshotInventory: Sendable {
-    /// No record file: a host that has never captured anything. The only case
-    /// that may be read as "this host holds no artifacts".
+    /// Independently verified empty inventory.
     case fresh
+    /// A missing record file is not evidence that its artifacts are gone.
+    case absent
     case loaded([UUID: SnapshotRecord])
     /// The file exists but could not be read or parsed.
     case unreadable(reason: String)
@@ -131,11 +132,11 @@ public struct SnapshotRecordStore: Sendable {
     }
 
     public func load() -> SnapshotInventory {
-        guard FileManager.default.fileExists(atPath: path) else { return .fresh }
-
         let data: Data
         do {
             data = try Data(contentsOf: URL(fileURLWithPath: path))
+        } catch CocoaError.fileReadNoSuchFile {
+            return .absent
         } catch {
             return unreadable("could not be read: \(error)")
         }
@@ -221,7 +222,7 @@ public struct SnapshotRecordStore: Sendable {
         logger.error(
             """
             Snapshot record file is unreadable; this host cannot say which checkpoints it holds, \
-            so it will report none and converge no snapshot work until the file is repaired or removed
+            so it will withhold inventory and converge no snapshot work until the file is restored
             """,
             metadata: ["path": .string(path), "reason": .string(reason)])
         return .unreadable(reason: reason)

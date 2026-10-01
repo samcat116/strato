@@ -223,5 +223,7 @@ extension Application {
         // the replica offset that stamped them. Restart their safe runway from
         // PostgreSQL time before database-clock sweeps judge them.
         migrations.add(RebaseLegacyClusterClockDeadlines())
+
+        migrations.add(AddAgentInventorySession())
     }
 }

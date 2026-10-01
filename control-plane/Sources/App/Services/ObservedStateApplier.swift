@@ -212,9 +212,10 @@ struct ObservedStateApplier {
     @discardableResult
     func apply(
         _ report: ObservedStateReport,
-        at instant: ClusterInstant
+        at instant: ClusterInstant,
+        on database: (any Database)? = nil
     ) async throws -> UnrecognizedOutcome {
-        let db = app.db
+        let db = database ?? app.db
 
         // Network observations are independent of the workload manifest. A
         // host can fail to enumerate its local VM store while its site's OVN

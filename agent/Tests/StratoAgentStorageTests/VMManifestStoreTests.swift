@@ -25,8 +25,8 @@ extension ManifestLoad {
         return failure
     }
 
-    fileprivate var isFresh: Bool {
-        if case .fresh = self { return true }
+    fileprivate var isAbsent: Bool {
+        if case .absent = self { return true }
         return false
     }
 }
@@ -584,16 +584,15 @@ struct VMManifestStoreTests {
         #expect(entries.values.totalReservedDiskBytes == 5_368_709_120)
     }
 
-    @Test("A host with no manifest at all reads as fresh, not as a failed read")
-    func freshWhenMissing() throws {
+    @Test("A missing manifest is unproven, not a fresh host")
+    func absentWhenMissing() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
-        // The first-boot path, and the one case that may be read as "nothing
-        // is running here": no manifest, nothing to salvage. It must stay
-        // distinguishable from an unreadable file.
+        // A repointed or unmounted state directory has the same shape as a
+        // new host. The store cannot distinguish them without outside evidence.
         let load = makeStore(dir: dir).load()
-        #expect(load.isFresh)
+        #expect(load.isAbsent)
         #expect(load.readFailure == nil)
         #expect(load.loadedEntries.isEmpty)
     }
@@ -608,7 +607,7 @@ struct VMManifestStoreTests {
         let load = store.load()
         #expect(load.readFailure == nil)
         #expect(load.loadedEntries.isEmpty)
-        #expect(!load.isFresh)
+        #expect(!load.isAbsent)
     }
 
     // MARK: - Unreadable manifests (STR-138)
@@ -623,7 +622,7 @@ struct VMManifestStoreTests {
 
         let load = store.load()
         #expect(load.readFailure?.path == store.path)
-        #expect(!load.isFresh)
+        #expect(!load.isAbsent)
         #expect(load.loadedEntries.isEmpty)
     }
 
@@ -668,8 +667,7 @@ struct VMManifestStoreTests {
         let preservedPath = try #require(failure.preservedCopyPath)
         #expect(try Data(contentsOf: URL(fileURLWithPath: preservedPath)) == original)
         // A copy, not a move: the original is what a build that understands
-        // the file needs to find, and moving it aside would make the next
-        // start read the host as fresh.
+        // the file needs to find after an upgrade or late storage mount.
         #expect(try Data(contentsOf: URL(fileURLWithPath: store.path)) == original)
     }
 

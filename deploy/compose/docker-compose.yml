@@ -329,6 +329,10 @@ services:
       WEBHOOK_DELIVERY_INTERVAL_SECONDS: ${WEBHOOK_DELIVERY_INTERVAL_SECONDS:-15}
       WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS: ${WEBHOOK_DELIVERY_PASS_BUDGET_SECONDS:-30}
       WEBHOOK_AUTO_DISABLE_DAYS: ${WEBHOOK_AUTO_DISABLE_DAYS:-3}
+      # Refuse destructive observed inventories until the host is verified.
+      OBSERVED_INVENTORY_MINIMUM_RESOURCES: ${OBSERVED_INVENTORY_MINIMUM_RESOURCES:-3}
+      OBSERVED_INVENTORY_PERCENT_OF_PLACED: ${OBSERVED_INVENTORY_PERCENT_OF_PLACED:-25}
+      OBSERVED_INVENTORY_ALLOW_BULK_LOSS: ${OBSERVED_INVENTORY_ALLOW_BULK_LOSS:-false}
       # Public browser origin used to build OIDC redirect URIs (SSO login
       # callback, post-logout redirect). OIDC login refuses to start without it
       # in production. Set by setup.sh; defaults to CONTROL_PLANE_URL (the

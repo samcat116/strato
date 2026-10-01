@@ -1146,6 +1146,23 @@ actor LibvirtService: HypervisorService {
         return endpoint.isEmpty ? nil : endpoint
     }
 
+    /// Bootstrap must never certify emptiness from a cached pre-failure answer.
+    func bootstrapWorkloadIDs() async -> Set<String>? {
+        do {
+            return try await call(
+                "libvirt-bootstrap-inventory", vmId: Self.hostScope, seconds: StageBudget.statusQuerySeconds
+            ) { client, deadline in
+                let domains = try await client.connectListAllDomains(
+                    needResults: 1, flags: LibvirtDomain.listAllDomains, deadline: deadline
+                ).domains
+                return Set(domains.map(\.name).filter(LibvirtDomain.isStratoDomainName))
+            }
+        } catch {
+            logger.warning("Cannot corroborate missing manifest with libvirt", metadata: ["error": .string("\(error)")])
+            return nil
+        }
+    }
+
     /// vCPUs and memory committed to the domains on this host — or nil if the
     /// daemon could not be read and this driver has never had an answer to
     /// serve.

@@ -327,15 +327,20 @@ final class Agent: Model, Content, @unchecked Sendable {
     /// messages that arrive on the same cadence.
     @discardableResult
     func updateAvailableResources(_ resources: AgentResources) -> Bool {
+        // A heartbeat or reconnect from an older agent must not undo a
+        // server-side inventory refusal and resume placement on a blind host.
+        let cpu = manifestInventoryComplete == false ? 0 : resources.availableCPU
+        let memory: Int64 = manifestInventoryComplete == false ? 0 : resources.availableMemory
+        let disk: Int64 = manifestInventoryComplete == false ? 0 : resources.availableDisk
         guard
-            availableCPU != resources.availableCPU
-                || availableMemory != resources.availableMemory
-                || availableDisk != resources.availableDisk
+            availableCPU != cpu
+                || availableMemory != memory
+                || availableDisk != disk
                 || physicalFreeDisk != resources.physicalFreeDisk
         else { return false }
-        availableCPU = resources.availableCPU
-        availableMemory = resources.availableMemory
-        availableDisk = resources.availableDisk
+        availableCPU = cpu
+        availableMemory = memory
+        availableDisk = disk
         physicalFreeDisk = resources.physicalFreeDisk
         return true
     }
@@ -448,10 +453,7 @@ extension Agent {
         totalCPU = registration.resources.totalCPU
         totalMemory = registration.resources.totalMemory
         totalDisk = registration.resources.totalDisk
-        availableCPU = registration.resources.availableCPU
-        availableMemory = registration.resources.availableMemory
-        availableDisk = registration.resources.availableDisk
-        physicalFreeDisk = registration.resources.physicalFreeDisk
+        _ = updateAvailableResources(registration.resources)
         lastHeartbeat = receivedAt
         status = .online
     }

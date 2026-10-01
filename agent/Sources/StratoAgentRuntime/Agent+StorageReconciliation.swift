@@ -317,10 +317,16 @@ extension Agent {
 
     func applySnapshotInventory(_ inventory: SnapshotInventory) {
         switch inventory {
+        case .absent:
+            snapshotInventoryAbsent = true
+            snapshotInventoryUnreadable = true
+            logger.warning("Snapshot record file is missing; withholding snapshot inventory until corroborated")
         case .fresh:
+            snapshotInventoryAbsent = false
             snapshotRecords = [:]
             snapshotInventoryUnreadable = false
         case .loaded(let records):
+            snapshotInventoryAbsent = false
             snapshotRecords = records
             snapshotInventoryUnreadable = false
             if !records.isEmpty {
@@ -329,6 +335,7 @@ extension Agent {
                     metadata: ["count": .stringConvertible(records.count)])
             }
         case .unreadable:
+            snapshotInventoryAbsent = false
             // The store has already logged this loudly.
             snapshotInventoryUnreadable = true
         }
