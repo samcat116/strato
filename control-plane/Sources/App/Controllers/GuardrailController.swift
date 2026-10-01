@@ -369,9 +369,7 @@ struct GuardrailController: RouteCollection {
     // MARK: - Helpers
 
     private func find(_ req: Request) async throws -> Guardrail {
-        guard let id = req.parameters.get("guardrailID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Guardrail id must be a UUID")
-        }
+        let id = try req.requireUUIDParameter("guardrailID", reason: "Guardrail id must be a UUID")
         guard let guardrail = try await Guardrail.find(id, on: req.db) else {
             throw Abort(.notFound, reason: "Guardrail not found")
         }

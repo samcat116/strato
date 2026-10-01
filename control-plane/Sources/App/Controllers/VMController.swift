@@ -341,9 +341,7 @@ struct VMController: RouteCollection {
         guard vm.hypervisorType == .qemu else {
             throw Abort(.conflict, reason: "Post-create network-interface changes are supported only for QEMU VMs")
         }
-        guard let interfaceID = req.parameters.get("interfaceID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid interface ID")
-        }
+        let interfaceID = try req.requireUUIDParameter("interfaceID", reason: "Invalid interface ID")
         let vmID = try vm.requireID()
         guard
             let initial = try await VMNetworkInterface.query(on: req.db)
@@ -487,9 +485,7 @@ struct VMController: RouteCollection {
     /// per-object authorization logic lives in one place (also used by other VM-scoped
     /// controllers such as `LogsController`).
     private func fetchVMWithAction(req: Request, action: String) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
+        let vmID = try req.requireUUIDParameter("vmID", reason: "Invalid VM ID")
 
         return try await req.authorizedVM(vmID, action: action)
     }

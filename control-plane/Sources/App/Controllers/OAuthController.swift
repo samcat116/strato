@@ -447,9 +447,7 @@ struct OAuthController: RouteCollection {
         guard let user = req.auth.get(User.self) else {
             throw Abort(.unauthorized)
         }
-        guard let sessionID = req.parameters.get("sessionID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid session ID")
-        }
+        let sessionID = try req.requireUUIDParameter("sessionID", reason: "Invalid session ID")
 
         guard
             let session = try await CLISession.query(on: req.db)

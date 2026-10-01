@@ -115,9 +115,7 @@ struct SiteController: RouteCollection {
     }
 
     private func findSite(_ req: Request) async throws -> Site {
-        guard let siteId = req.parameters.get("siteId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid site ID")
-        }
+        let siteId = try req.requireUUIDParameter("siteId", reason: "Invalid site ID")
         guard let site = try await Site.find(siteId, on: req.db) else {
             throw Abort(.notFound, reason: "Site not found")
         }
@@ -332,9 +330,7 @@ struct SiteController: RouteCollection {
     func assignAgent(req: Request) async throws -> AgentResponse {
         let site = try await findSite(req)
         try await requireSiteAction(req, site: site, action: "site:manage")
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }

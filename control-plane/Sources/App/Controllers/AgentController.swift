@@ -565,9 +565,7 @@ struct AgentController: RouteCollection {
     }
 
     func revokeEnrollment(req: Request) async throws -> HTTPStatus {
-        guard let enrollmentId = req.parameters.get("enrollmentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid enrollment ID")
-        }
+        let enrollmentId = try req.requireUUIDParameter("enrollmentId", reason: "Invalid enrollment ID")
 
         guard let enrollment = try await AgentEnrollment.find(enrollmentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent enrollment not found")
@@ -732,9 +730,7 @@ struct AgentController: RouteCollection {
     }
 
     func getAgent(req: Request) async throws -> AgentResponse {
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
@@ -823,9 +819,7 @@ struct AgentController: RouteCollection {
     /// are *currently placed* on `fromAgentId` move. There is no way to use
     /// this to point a workload at a host that isn't running it.
     func adoptWorkloads(req: Request) async throws -> AdoptWorkloadsResponse {
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
@@ -972,9 +966,7 @@ struct AgentController: RouteCollection {
     }
 
     func deregisterAgent(req: Request) async throws -> HTTPStatus {
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
@@ -1091,9 +1083,7 @@ struct AgentController: RouteCollection {
     }
 
     func forceAgentOffline(req: Request) async throws -> HTTPStatus {
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
@@ -1171,9 +1161,7 @@ struct AgentController: RouteCollection {
     /// `updateDesiredVersion` / `updateBlockedReason` / `updateFailureReason`
     /// on the agent (the same fields the fleet rollout has always used).
     func updateAgent(req: Request) async throws -> Response {
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
@@ -1377,9 +1365,7 @@ struct AgentController: RouteCollection {
     ///
     /// Idempotent: cancelling an agent with no assignment is a no-op success.
     func cancelAgentUpdate(req: Request) async throws -> AgentResponse {
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
@@ -1425,9 +1411,7 @@ struct AgentController: RouteCollection {
     /// to `agent#manage` like the update action, since enrollment authorizes
     /// future restarts of this capacity.
     func patchAgent(req: Request) async throws -> AgentResponse {
-        guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid agent ID")
-        }
+        let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }

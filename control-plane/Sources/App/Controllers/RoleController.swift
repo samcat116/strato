@@ -424,9 +424,7 @@ struct RoleController: RouteCollection {
     }
 
     private func find(_ req: Request) async throws -> IAMRoleDefinition {
-        guard let id = req.parameters.get("roleID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Role id must be a UUID")
-        }
+        let id = try req.requireUUIDParameter("roleID", reason: "Role id must be a UUID")
         guard let role = try await IAMRoleDefinition.find(id, on: req.db) else {
             throw Abort(.notFound, reason: "Role not found")
         }

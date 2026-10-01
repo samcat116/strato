@@ -84,9 +84,7 @@ struct FloatingIPController: RouteCollection {
     }
 
     private func findPool(_ req: Request) async throws -> FloatingIPPool {
-        guard let poolId = req.parameters.get("poolId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid pool ID")
-        }
+        let poolId = try req.requireUUIDParameter("poolId", reason: "Invalid pool ID")
         guard let pool = try await FloatingIPPool.find(poolId, on: req.db) else {
             throw Abort(.notFound, reason: "Floating IP pool not found")
         }
@@ -776,9 +774,7 @@ struct FloatingIPController: RouteCollection {
     }
 
     private func fetchFloatingIPWithAction(req: Request, action: String) async throws -> FloatingIP {
-        guard let floatingIpId = req.parameters.get("floatingIpId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid floating IP ID")
-        }
+        let floatingIpId = try req.requireUUIDParameter("floatingIpId", reason: "Invalid floating IP ID")
         return try await req.authorizedResource(
             floatingIpId, as: FloatingIP.self, nodeType: .floatingIP, action: action,
             notFoundReason: "Floating IP not found")

@@ -156,9 +156,7 @@ struct NetworkACLController: RouteCollection {
     func deleteRule(req: Request) async throws -> HTTPStatus {
         let network = try await authorizedNetwork(req: req, action: "network:update")
         let networkID = try network.requireID()
-        guard let ruleID = req.parameters.get("ruleId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid rule ID")
-        }
+        let ruleID = try req.requireUUIDParameter("ruleId", reason: "Invalid rule ID")
 
         try await req.db.transaction { db in
             try await NetworkACLService.lockNetwork(networkID, on: db)
@@ -207,9 +205,7 @@ struct NetworkACLController: RouteCollection {
     /// tree and prevents an opaque ACL id from becoming a cross-project probe.
     private func authorizedNetwork(req: Request, action: String) async throws -> LogicalNetwork {
         _ = try req.auth.require(User.self)
-        guard let networkID = req.parameters.get("networkId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid network ID")
-        }
+        let networkID = try req.requireUUIDParameter("networkId", reason: "Invalid network ID")
         guard let network = try await LogicalNetwork.find(networkID, on: req.db) else {
             throw Abort(.notFound, reason: "Network not found")
         }

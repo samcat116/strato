@@ -234,9 +234,9 @@ extension SandboxController {
         }
         let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
 
-        guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self),
-            let snapshotID = req.parameters.get("snapshotID", as: UUID.self),
-            let kindRaw = req.parameters.get("artifactKind"),
+        let sandboxID = try req.requireUUIDParameter("sandboxID", reason: "Invalid snapshot artifact path")
+        let snapshotID = try req.requireUUIDParameter("snapshotID", reason: "Invalid snapshot artifact path")
+        guard let kindRaw = req.parameters.get("artifactKind"),
             let kind = SandboxSnapshotArtifactKind(rawValue: kindRaw)
         else {
             throw Abort(.badRequest, reason: "Invalid snapshot artifact path")

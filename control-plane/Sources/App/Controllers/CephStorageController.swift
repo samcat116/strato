@@ -631,9 +631,7 @@ struct CephStorageController: RouteCollection {
     }
 
     private func requireSite(_ req: Request) async throws -> Site {
-        guard let siteID = req.parameters.get("siteId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid site ID")
-        }
+        let siteID = try req.requireUUIDParameter("siteId", reason: "Invalid site ID")
         guard let site = try await Site.find(siteID, on: req.db) else {
             throw Abort(.notFound, reason: "Site not found")
         }

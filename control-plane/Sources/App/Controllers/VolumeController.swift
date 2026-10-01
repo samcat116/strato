@@ -1540,9 +1540,7 @@ struct VolumeController: RouteCollection {
     /// Fetch a volume and check permission, mirroring
     /// `fetchVMWithAction`/`fetchSandboxWithAction`.
     private func fetchVolumeWithAction(req: Request, action: String) async throws -> Volume {
-        guard let volumeId = req.parameters.get("volumeId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid volume ID")
-        }
+        let volumeId = try req.requireUUIDParameter("volumeId", reason: "Invalid volume ID")
 
         return try await req.authorizedVolume(volumeId, action: action)
     }

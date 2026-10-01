@@ -235,9 +235,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let node = try folder.node()
         try await requireGrantAdmin(on: node, write: true, req: req)
 
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
         let body = try req.content.decode(UpdateMemberRoleRequest.self)
         let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
 
@@ -285,9 +283,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let node = try folder.node()
         try await requireGrantAdmin(on: node, write: true, req: req)
 
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
         try await revokeGrant(principalType: .user, principalID: userID, node: node, req: req)
         return .noContent
     }
@@ -344,9 +340,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let node = try folder.node()
         try await requireGrantAdmin(on: node, write: true, req: req)
 
-        guard let groupID = req.parameters.get("groupID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid group ID")
-        }
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid group ID")
         try await revokeGrant(principalType: .group, principalID: groupID, node: node, req: req)
         return .noContent
     }
@@ -400,11 +394,8 @@ struct OrganizationalUnitMemberController: RouteCollection {
     /// path also names — the same containment check the folder CRUD routes make,
     /// so `/organizations/A/ous/<folder in B>` cannot be used to reach B.
     private func requireFolder(_ req: Request) async throws -> OrganizationalUnit {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
         guard let folder = try await OrganizationalUnit.find(ouID, on: req.db) else {
             throw Abort(.notFound, reason: "Folder not found")
         }

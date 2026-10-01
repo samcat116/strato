@@ -116,9 +116,7 @@ struct SandboxController: RouteCollection {
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a
     /// permission on it (per-handler defense in depth over the middleware).
     func fetchSandboxWithAction(req: Request, action: String) async throws -> Sandbox {
-        guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid sandbox ID")
-        }
+        let sandboxID = try req.requireUUIDParameter("sandboxID", reason: "Invalid sandbox ID")
 
         return try await req.authorizedSandbox(sandboxID, action: action)
     }

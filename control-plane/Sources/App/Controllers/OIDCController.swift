@@ -37,9 +37,7 @@ struct OIDCController: RouteCollection {
     // MARK: - Provider Management
 
     func listProviders(req: Request) async throws -> [OIDCProviderResponse] {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has access to this organization
         try await verifyOrganizationAccess(req: req, organizationID: organizationID)
@@ -54,9 +52,7 @@ struct OIDCController: RouteCollection {
     }
 
     func createProvider(req: Request) async throws -> OIDCProviderResponse {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has admin access to this organization
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
@@ -118,11 +114,9 @@ struct OIDCController: RouteCollection {
     }
 
     func getProvider(req: Request) async throws -> OIDCProviderResponse {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let providerID = req.parameters.get("providerID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
-        }
+        let organizationID = try req.requireUUIDParameter(
+            "organizationID", reason: "Invalid organization or provider ID")
+        let providerID = try req.requireUUIDParameter("providerID", reason: "Invalid organization or provider ID")
 
         try await verifyOrganizationAccess(req: req, organizationID: organizationID)
 
@@ -141,11 +135,9 @@ struct OIDCController: RouteCollection {
     }
 
     func updateProvider(req: Request) async throws -> OIDCProviderResponse {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let providerID = req.parameters.get("providerID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
-        }
+        let organizationID = try req.requireUUIDParameter(
+            "organizationID", reason: "Invalid organization or provider ID")
+        let providerID = try req.requireUUIDParameter("providerID", reason: "Invalid organization or provider ID")
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
@@ -261,11 +253,9 @@ struct OIDCController: RouteCollection {
     }
 
     func deleteProvider(req: Request) async throws -> HTTPStatus {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let providerID = req.parameters.get("providerID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
-        }
+        let organizationID = try req.requireUUIDParameter(
+            "organizationID", reason: "Invalid organization or provider ID")
+        let providerID = try req.requireUUIDParameter("providerID", reason: "Invalid organization or provider ID")
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
@@ -296,11 +286,9 @@ struct OIDCController: RouteCollection {
     // MARK: - Provider Testing
 
     func testProvider(req: Request) async throws -> OIDCProviderTestResponse {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let providerID = req.parameters.get("providerID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
-        }
+        let organizationID = try req.requireUUIDParameter(
+            "organizationID", reason: "Invalid organization or provider ID")
+        let providerID = try req.requireUUIDParameter("providerID", reason: "Invalid organization or provider ID")
 
         try await verifyOrganizationAdminAccess(req: req, organizationID: organizationID)
 
@@ -350,9 +338,7 @@ struct OIDCController: RouteCollection {
     // MARK: - Public Provider Listing
 
     func listPublicProviders(req: Request) async throws -> [OIDCProviderPublicResponse] {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         let providers = try await OIDCProvider.query(on: req.db)
             .filter(\.$organization.$id == organizationID)
@@ -418,11 +404,9 @@ struct OIDCController: RouteCollection {
     // MARK: - Authentication Flow
 
     func initiateOIDCAuth(req: Request) async throws -> Response {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let providerID = req.parameters.get("providerID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
-        }
+        let organizationID = try req.requireUUIDParameter(
+            "organizationID", reason: "Invalid organization or provider ID")
+        let providerID = try req.requireUUIDParameter("providerID", reason: "Invalid organization or provider ID")
 
         // Fetch the OIDC provider
         guard
@@ -479,11 +463,9 @@ struct OIDCController: RouteCollection {
     }
 
     func handleOIDCCallback(req: Request) async throws -> Response {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let providerID = req.parameters.get("providerID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or provider ID")
-        }
+        let organizationID = try req.requireUUIDParameter(
+            "organizationID", reason: "Invalid organization or provider ID")
+        let providerID = try req.requireUUIDParameter("providerID", reason: "Invalid organization or provider ID")
 
         // Extract query parameters
         let code = try req.query.get(String.self, at: "code")

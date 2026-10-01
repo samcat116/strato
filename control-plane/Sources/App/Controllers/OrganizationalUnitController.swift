@@ -35,9 +35,7 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -57,11 +55,8 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -96,9 +91,7 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         let createRequest = try req.content.decodeValidated(CreateOrganizationalUnitRequest.self)
 
@@ -163,11 +156,8 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         let updateRequest = try req.content.decodeValidated(UpdateOrganizationalUnitRequest.self)
 
@@ -232,11 +222,8 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -290,11 +277,8 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         // Verify user has access
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -316,11 +300,8 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         let moveRequest = try req.content.decode(MoveOrganizationalUnitRequest.self)
 
@@ -393,11 +374,8 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         // Verify user has access
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -425,11 +403,8 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let parentOUID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let parentOUID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         let createRequest = try req.content.decodeValidated(CreateOrganizationalUnitRequest.self)
 

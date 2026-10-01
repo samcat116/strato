@@ -33,9 +33,7 @@ struct HierarchyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -56,9 +54,7 @@ struct HierarchyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -121,9 +117,7 @@ struct HierarchyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -161,9 +155,7 @@ struct HierarchyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         guard let query = req.query[String.self, at: "q"] else {
             throw Abort(.badRequest, reason: "Search query parameter 'q' is required")
@@ -239,9 +231,9 @@ struct HierarchyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let entityType = req.parameters.get("entityType"),
-            let entityID = req.parameters.get("entityID", as: UUID.self)
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid parameters")
+        let entityID = try req.requireUUIDParameter("entityID", reason: "Invalid parameters")
+        guard let entityType = req.parameters.get("entityType")
         else {
             throw Abort(.badRequest, reason: "Invalid parameters")
         }

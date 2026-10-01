@@ -82,9 +82,7 @@ struct UserController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
 
         try await req.authorize("user:read", on: IAMNode(type: .user, id: userID))
 
@@ -296,9 +294,7 @@ struct UserController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
 
         try await req.authorize("user:update", on: IAMNode(type: .user, id: userID))
 
@@ -370,9 +366,7 @@ struct UserController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
 
         try await req.authorize("user:delete", on: IAMNode(type: .user, id: userID))
 
