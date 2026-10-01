@@ -765,7 +765,13 @@ condition (`manifestInventoryComplete=false`, `manifestStatusReason`), logged,
 and measured by `strato_agent_observed_inventory_refused{agent}`. Available
 capacity stays zero across heartbeats and reconnects while the condition stands.
 The acceptance baseline is local to the socket-owning replica; registration and
-replica restart require a new baseline. A refused report never spends that
+replica restart require a new baseline. PostgreSQL stores the session generation
+in `agents.inventory_session_id`. Registration and report application take the
+same per-agent session advisory lock, with report reads and transactions using
+its pinned connection. A successor on any replica rotates the generation only
+after an active predecessor report drains; later predecessor reports fail closed
+before updating capacity or inventory. Valkey route changes do not grant inventory
+write authority. Delayed disconnects revoke only their own generation. A refused report never spends that
 baseline. Session replacement and removal share the report-application queue:
 they drain the complete preceding report, including its destructive transactions,
 before resetting the baseline. Reports capture their session when enqueued, so
@@ -777,7 +783,9 @@ or a deliberate bulk drain, an operator may temporarily set
 not override an agent's explicit incomplete-manifest signal. The limit knobs are
 `OBSERVED_INVENTORY_MINIMUM_RESOURCES` (nonnegative) and
 `OBSERVED_INVENTORY_PERCENT_OF_PLACED` (0–100). Compose forwards these variables;
-Helm accepts them through `extraEnv`. No wire or database schema changed.
+Helm accepts them through `extraEnv`. The nullable session-generation migration is reversible; no wire change is needed.
+All socket-serving replicas must run the fencing build before relying on this
+guarantee: older control planes do not participate in its lock protocol.
 
 This guard preserves `agent.absent` finalizers before the reap path can release
 data-volume associations or cascade away VM interfaces/checkpoints. It also runs

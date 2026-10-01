@@ -74,21 +74,48 @@ extension AgentService {
             app.logger.warning("Ignoring observed inventory queued by a superseded registration")
             return
         }
+        do {
+            let report = try envelope.decode(as: ObservedStateReport.self)
+            guard let agentID = UUID(uuidString: report.agentId) else { return }
+            let outcome = try await InventorySessionFence.withLock(
+                agentID: agentID, on: app.db, logger: app.logger
+            ) { db -> ObservedStateApplier.UnrecognizedOutcome? in
+                guard try await InventorySessionFence.current(agentID: agentID, on: db) == inventorySession else {
+                    self.app.logger.warning("Ignoring observed inventory from a superseded replica session")
+                    return nil
+                }
+                return await self.applyFencedObservedStateReport(
+                    envelope, fromAgentKey: agentKey, inventorySession: inventorySession, on: db)
+            }
+            if let outcome {
+                await recordVolumeIOTelemetry(report: report, agentName: Self.displayName(forKey: agentKey))
+                if outcome.authorizedTeardown || outcome.desiredStateChanged {
+                    await syncDesiredState(agentId: report.agentId)
+                }
+            }
+        } catch {
+            app.logger.error("Observed inventory session validation failed; report refused: \(error)")
+        }
+    }
+
+    private func applyFencedObservedStateReport(
+        _ envelope: MessageEnvelope, fromAgentKey agentKey: String, inventorySession: UUID?, on db: any Database
+    ) async -> ObservedStateApplier.UnrecognizedOutcome? {
         let report: ObservedStateReport
         do {
             report = try envelope.decode(as: ObservedStateReport.self)
         } catch {
             app.logger.error("Failed to decode observed-state report: \(error)")
-            return
+            return nil
         }
 
         guard let agentUUID = UUID(uuidString: report.agentId),
-            let agent = try? await Agent.find(agentUUID, on: app.db)
+            let agent = try? await Agent.find(agentUUID, on: db)
         else {
             app.logger.warning(
                 "Observed-state report from unknown agent",
                 metadata: ["strato.agent.claimed.id": .string(report.agentId)])
-            return
+            return nil
         }
         guard agent.identity.key == agentKey else {
             app.logger.warning(
@@ -97,24 +124,24 @@ extension AgentService {
                     "strato.agent.claimed.id": .string(report.agentId),
                     "strato.agent.connection.identity": .string(agentKey),
                 ])
-            return
+            return nil
         }
 
         let instant: ClusterInstant
         do {
-            instant = try await ClusterClock.read(on: app.db)
+            instant = try await ClusterClock.read(on: db)
         } catch {
             app.logger.warning(
                 "Failed to read PostgreSQL time for observed-state report: \(error)",
                 metadata: ["strato.agent.id": .string(report.agentId)])
-            return
+            return nil
         }
 
         var inventoryCounts: [ObservedInventoryGuard.Section: ObservedInventoryGuard.Counts] = [:]
         var inventoryRefusal: String?
         if report.manifestStatus?.inventoryComplete != false {
             do {
-                inventoryCounts = try await ObservedInventoryGuard.counts(for: report, on: app.db)
+                inventoryCounts = try await ObservedInventoryGuard.counts(for: report, on: db)
                 inventoryRefusal = ObservedInventoryGuard(configuration: app.controlPlaneConfiguration).refusal(
                     counts: inventoryCounts, acceptedSections: acceptedInventorySections[agentKey] ?? [])
             } catch {
@@ -132,7 +159,7 @@ extension AgentService {
         }
         guard observedInventorySessions[agentKey] == inventorySession else {
             app.logger.warning("Ignoring observed inventory from a superseded registration")
-            return
+            return nil
         }
         Telemetry.agentObservedInventoryRefused(agentName: agent.name, refused: inventoryRefusal != nil)
         let effectiveManifestStatus =
@@ -167,7 +194,7 @@ extension AgentService {
         }
         if agentChanged {
             do {
-                try await agent.save(on: app.db)
+                try await agent.save(on: db)
             } catch {
                 app.logger.warning(
                     "Failed to persist agent resources from observed-state report: \(error)",
@@ -181,14 +208,14 @@ extension AgentService {
 
         // The guard covers the whole report, before any row deletion, error
         // transition, replica removal, network merge, or reservation release.
-        guard inventoryRefusal == nil else { return }
+        guard inventoryRefusal == nil else { return nil }
 
         // Storage inventory has its own completeness contract and transaction.
         // A malformed or unavailable disk snapshot must not prevent valid VM,
         // sandbox, volume, or network observations in this report from applying.
         if let storageDevices = report.storageDevices {
             do {
-                try await StorageDeviceInventoryReconciler(application: app).apply(
+                try await StorageDeviceInventoryReconciler(database: db).apply(
                     storageDevices,
                     for: agent,
                     receivedAt: instant.date)
@@ -200,7 +227,7 @@ extension AgentService {
         }
 
         do {
-            let outcome = try await app.observedStateApplier.apply(report, at: instant)
+            let outcome = try await app.observedStateApplier.apply(report, at: instant, on: db)
             if report.manifestStatus?.inventoryComplete != false,
                 observedInventorySessions[agentKey] == inventorySession
             {
@@ -213,17 +240,12 @@ extension AgentService {
             for (reason, count) in outcome.heldByReason {
                 Telemetry.workloadClaimsHeld(agentName: agent.name, reason: reason, count: count)
             }
-            await recordVolumeIOTelemetry(report: report, agentName: agent.name)
-            // A newly authorized teardown (STR-98) is worth a sync right away:
-            // until the tombstone reaches the agent it keeps holding — and
-            // re-reporting — a workload nothing describes.
-            if outcome.authorizedTeardown || outcome.desiredStateChanged {
-                await syncDesiredState(agentId: report.agentId)
-            }
+            return outcome
         } catch {
             app.logger.error(
                 "Failed to apply observed-state report: \(error)",
                 metadata: ["strato.agent.id": .string(report.agentId)])
+            return nil
         }
     }
 

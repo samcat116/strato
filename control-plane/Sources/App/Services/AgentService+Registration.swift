@@ -279,7 +279,7 @@ extension AgentService {
         // Attach the UUID to the live socket so local routing (console and
         // exec streams) can resolve it without a database read. No-op when no
         // socket exists (tests).
-        await beginObservedInventorySession(for: agentKey)
+        try await beginObservedInventorySession(for: agentKey)
         app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
 
         // Publish presence to the coordination store so every control-plane

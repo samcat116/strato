@@ -212,7 +212,7 @@ final class AgentManifestQuarantineTests {
             #expect(row.availableMemory == 0)
             #expect(row.availableDisk == 0)
 
-            await app.agentService.beginObservedInventorySession(for: agent.identity.key)
+            try await app.agentService.beginObservedInventorySession(for: agent.identity.key)
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agent.identity.key)
             #expect(try await VM.find(vmID, on: app.db) != nil)
 
@@ -274,7 +274,7 @@ final class AgentManifestQuarantineTests {
             #expect(try await VM.find(observations[0].vmId, on: app.db)?.status == .error)
 
             // Registration resets the baseline even after a healthy session.
-            await app.agentService.beginObservedInventorySession(for: agent.identity.key)
+            try await app.agentService.beginObservedInventorySession(for: agent.identity.key)
             await app.agentService.applyObservedStateReport(
                 try MessageEnvelope(
                     message: self.healthyReport(agentId: agentId, vms: Array(observations.dropFirst(2)))),
@@ -293,7 +293,7 @@ final class AgentManifestQuarantineTests {
             let agentId = try agent.requireID().uuidString
             let key = agent.identity.key
             let service = app.agentService
-            await service.beginObservedInventorySession(for: key)
+            try await service.beginObservedInventorySession(for: key)
             let originalSession = await service.observedInventorySessions[key]
             let owner = try await builder.createUser(
                 username: "raceowner", email: "raceowner@example.com", displayName: "Race Owner", isSystemAdmin: false)
@@ -334,7 +334,7 @@ final class AgentManifestQuarantineTests {
                 try MessageEnvelope(message: oldReport), fromAgentKey: key)
             await gate.waitUntilEntered()
             let previousTail = await service.nextReportTailId
-            let successor = Task { await service.beginObservedInventorySession(for: key) }
+            let successor = Task { try await service.beginObservedInventorySession(for: key) }
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
             while await service.nextReportTailId == previousTail, ContinuousClock.now < deadline { await Task.yield() }
             #expect(await service.nextReportTailId > previousTail)
@@ -345,7 +345,7 @@ final class AgentManifestQuarantineTests {
                 try MessageEnvelope(message: oldReport), fromAgentKey: key)
             await gate.release()
             await oldTask.value
-            await successor.value
+            try await successor.value
             await queuedOldBaseline.value
             #expect(await service.observedInventorySessions[key] != originalSession)
             #expect(try await VMSnapshot.find(snapshots[0].id, on: app.db) == nil)
@@ -357,6 +357,95 @@ final class AgentManifestQuarantineTests {
             let row = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(row.manifestStatusReason?.contains("first authoritative") == true)
             #expect(row.availableCPU == 0)
+        }
+    }
+
+    @Test("Successor replica fences old reports and delayed disconnects")
+    func successorReplicaFencesInventory() async throws {
+        try await withQuarantineApp { app, builder, org, project in
+            let old = app.agentService
+            let successor = AgentService(app: app)
+            do {
+                let agent = try await self.makeAgent(app: app, org: org, name: "replica-fence-agent")
+                let agentID = try agent.requireID()
+                let key = agent.identity.key
+                let vm = try await builder.createVM(name: "replica-held-vm", project: project)
+                vm.hypervisorId = agentID.uuidString
+                vm.setStatus(.running)
+                try await vm.save(on: app.db)
+                try await old.beginObservedInventorySession(for: key)
+                let owner = try await builder.createUser(
+                    username: "replicaowner", email: "replicaowner@example.com", displayName: "Replica Owner",
+                    isSystemAdmin: false)
+                let checkpoint = VMSnapshot(
+                    name: "replica-held-checkpoint", vmID: try vm.requireID(), projectID: try project.requireID(),
+                    environment: vm.environment, agentId: agentID.uuidString, createdByID: try owner.requireID())
+                checkpoint.desiredStatus = .absent
+                checkpoint.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                try await checkpoint.save(on: app.db)
+                let baseline = ObservedStateReport(
+                    agentId: agentID.uuidString,
+                    vms: [ObservedVMState(vmId: try vm.requireID(), status: .running, observedGeneration: 0)],
+                    resources: self.healthyReport(agentId: agentID.uuidString).resources,
+                    snapshots: [
+                        ObservedSnapshotState(
+                            snapshotId: try checkpoint.requireID(), kind: .vmCheckpoint, parentId: try vm.requireID(),
+                            present: true, observedGeneration: 1)
+                    ])
+                await old.applyObservedStateReport(try MessageEnvelope(message: baseline), fromAgentKey: key)
+                let previous = try await InventorySessionFence.current(agentID: agentID, on: app.db)
+
+                // Hold an accepted old report after admission, while the other
+                // replica tries to replace its generation. No shared queue exists.
+                let gate = InventoryReportGate()
+                app.databases.middleware.use(PauseAgentInventorySave(gate: gate))
+                let loss = ObservedStateReport(
+                    agentId: agentID.uuidString, vms: [], resources: baseline.resources, snapshots: [])
+                // A different resource sample forces the post-admission save.
+                let changed = ObservedStateReport(
+                    agentId: agentID.uuidString, vms: baseline.vms,
+                    resources: AgentResources(
+                        totalCPU: 8, availableCPU: 4,
+                        totalMemory: 16_000_000_000, availableMemory: 7_000_000_000,
+                        totalDisk: 100_000_000_000, availableDisk: 40_000_000_000))
+                let active = await old.enqueueObservedStateReport(
+                    try MessageEnvelope(message: changed), fromAgentKey: key)
+                await gate.waitUntilEntered()
+                let replacement = Task { try await successor.beginObservedInventorySession(for: key) }
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while await successor.nextReportTailId == 0, ContinuousClock.now < deadline { await Task.yield() }
+                #expect(await successor.nextReportTailId > 0)
+                #expect(try await InventorySessionFence.current(agentID: agentID, on: app.db) == previous)
+                await gate.release()
+                await active.value
+                try await replacement.value
+                let current = try await InventorySessionFence.current(agentID: agentID, on: app.db)
+                #expect(current != previous)
+                #expect(await old.observedInventorySessions[key] == previous)
+                await successor.applyObservedStateReport(try MessageEnvelope(message: loss), fromAgentKey: key)
+                // Both destructive and healthy old reports are fenced: the
+                // latter must not clear the successor's refusal/capacity clamp.
+                await old.applyObservedStateReport(try MessageEnvelope(message: loss), fromAgentKey: key)
+                await old.applyObservedStateReport(try MessageEnvelope(message: baseline), fromAgentKey: key)
+                let held = try #require(try await VM.find(vm.id, on: app.db))
+                #expect(held.status == .running)
+                let heldCheckpoint = try #require(try await VMSnapshot.find(checkpoint.id, on: app.db))
+                #expect(heldCheckpoint.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+                let row = try #require(try await Agent.find(agentID, on: app.db))
+                #expect(row.manifestStatusReason?.contains("first authoritative") == true)
+                #expect(row.availableCPU == 0)
+                #expect(row.availableMemory == 0)
+                #expect(row.availableDisk == 0)
+                await old.endObservedInventorySession(for: key)
+                #expect(try await InventorySessionFence.current(agentID: agentID, on: app.db) == current)
+                await successor.applyObservedStateReport(try MessageEnvelope(message: baseline), fromAgentKey: key)
+                let recovered = try #require(try await Agent.find(agentID, on: app.db))
+                #expect(recovered.manifestInventoryComplete != false)
+            } catch {
+                await successor.shutdown()
+                throw error
+            }
+            await successor.shutdown()
         }
     }
 

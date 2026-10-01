@@ -109,20 +109,50 @@ struct ObservedInventoryGuard {
 extension AgentService {
     /// Reset per connection. A replica restart also starts with no accepted
     /// baseline; losing coordination must never authorize deletion.
-    func beginObservedInventorySession(for agentKey: String) async {
-        await enqueueInventoryOperation(for: agentKey) { [weak self] in
-            await self?.replaceObservedInventorySession(UUID(), for: agentKey)
-        }.value
+    func beginObservedInventorySession(for agentKey: String) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            enqueueInventoryOperation(for: agentKey) {
+                do {
+                    try await self.rotateObservedInventorySession(for: agentKey)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func rotateObservedInventorySession(for agentKey: String) async throws {
+        guard let id = await agentId(forKey: agentKey), let agentID = UUID(uuidString: id) else {
+            throw Abort(.notFound, reason: "Cannot register inventory session for an unknown agent")
+        }
+        let session = UUID()
+        try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
+            try await InventorySessionFence.replace(session, agentID: agentID, on: db)
+        }
+        observedInventorySessions[agentKey] = session
+        acceptedInventorySections.removeValue(forKey: agentKey)
     }
 
     func endObservedInventorySession(for agentKey: String) async {
-        await enqueueInventoryOperation(for: agentKey) { [weak self] in
-            await self?.replaceObservedInventorySession(nil, for: agentKey)
+        await enqueueInventoryOperation(for: agentKey) {
+            await self.revokeObservedInventorySession(for: agentKey)
         }.value
     }
 
-    private func replaceObservedInventorySession(_ session: UUID?, for agentKey: String) {
-        observedInventorySessions[agentKey] = session
+    private func revokeObservedInventorySession(for agentKey: String) async {
+        let session = observedInventorySessions.removeValue(forKey: agentKey)
         acceptedInventorySections.removeValue(forKey: agentKey)
+        guard let session, let id = await agentId(forKey: agentKey), let agentID = UUID(uuidString: id) else { return }
+        do {
+            try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
+                // A delayed disconnect from an old replica cannot revoke its successor.
+                if try await InventorySessionFence.current(agentID: agentID, on: db) == session {
+                    try await InventorySessionFence.replace(UUID(), agentID: agentID, on: db)
+                }
+            }
+        } catch {
+            app.logger.error("Failed to revoke inventory session: \(error)")
+        }
     }
 }
