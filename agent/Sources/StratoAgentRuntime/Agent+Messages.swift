@@ -134,6 +134,7 @@ extension Agent {
                 // entirely, because misreading silence there destroys the only
                 // copy of user data (STR-148). Snapshots carry the same nil
                 // contract.
+                await verifyMissingInventories(using: message)
                 await reconciler?.apply(message)
                 // Revocations are durable tombstones. Apply them after this
                 // sync's ordinary storage work has been enqueued.
@@ -400,17 +401,23 @@ extension Agent {
 
     /// Fold a manifest read into the agent's view of the host.
     ///
-    /// The three outcomes are three different facts, and the whole point of
+    /// These outcomes are different facts, and the whole point of
     /// STR-138 is that they stay that way: a fresh host has nothing on it, a
     /// loaded manifest names what a previous incarnation was running, and an
     /// unreadable one means the contents are unknown — which must never be
     /// spelled the same way as "empty".
     func applyManifestLoad(_ load: ManifestLoad) async {
         switch load {
+        case .absent:
+            manifestAbsent = true
+            quarantineMissingManifest("is missing; waiting for independent host and control-plane inventory")
+
         case .fresh:
+            manifestAbsent = false
             manifestReadFailure = nil
 
         case .loaded(var entries, let quarantined):
+            manifestAbsent = false
             manifestReadFailure = nil
             sandboxJailUIDRecoveryBlockedReason = nil
             quarantinedWorkloads = quarantined
@@ -465,6 +472,7 @@ extension Agent {
             }
 
         case .unreadable(let failure):
+            manifestAbsent = false
             // The store has already logged this loudly and preserved a copy.
             manifestReadFailure = failure
         }
@@ -665,10 +673,10 @@ extension Agent {
     /// the quarantine without an agent restart.
     ///
     /// Only a successful *read* clears it. A manifest that has since vanished
-    /// reads as `.fresh`, and a missing file is not evidence of an empty host:
+    /// reads as `.absent`, and a missing file is not evidence of an empty host:
     /// somebody deleted it. Accepting that would hand every running guest's
     /// capacity straight back to the scheduler, so deciding this host is empty
-    /// stays a deliberate act — restart the agent.
+    /// requires independent corroboration; restarting alone is not proof.
     func retryManifestLoadIfQuarantined() async {
         guard manifestReadFailure != nil else { return }
         let load = manifestStore.load()

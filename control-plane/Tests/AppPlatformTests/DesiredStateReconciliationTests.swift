@@ -90,6 +90,9 @@ final class DesiredStateReconciliationTests {
             site.$networkControllerAgent.id = agentUUID
             try await site.save(on: app.db)
         }
+        // Establish inventory before placement; subsequent absence is ordinary reconciliation.
+        await app.agentService.applyObservedStateReport(
+            try report(agentId: registeredID, vms: []), fromAgentKey: agentKey(agentName))
         if placeVM {
             vm.hypervisorId = agentUUID.uuidString
             try await vm.save(on: app.db)

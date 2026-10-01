@@ -102,7 +102,7 @@ export function AgentWorkloadSafetyCard({ agent }: AgentWorkloadSafetyCardProps)
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
             <p>
               {blind
-                ? "This node cannot read its workload manifest, so it does not know what it is running. It is advertising no capacity and converging nothing: "
+                ? "This host’s workload inventory is unverified. New placements are blocked: "
                 : "Workload manifest: "}
               {agent.manifestStatusReason}
               {agent.manifestStatusAt

@@ -92,6 +92,9 @@ final class SandboxTests {
             protocolVersion: protocolVersion,
             sandboxCapable: sandboxCapable,
             sandboxNetworkingCapable: sandboxNetworkingCapable)
+        // Establish inventory before placement; subsequent absence is ordinary reconciliation.
+        await app.agentService.applyObservedStateReport(
+            try report(agentId: agentID, sandboxes: []), fromAgentKey: agentKey(agentName))
         if let sandbox {
             sandbox.hypervisorId = agentID
             try await sandbox.save(on: app.db)

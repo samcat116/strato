@@ -107,6 +107,233 @@ final class AgentManifestQuarantineTests {
 
     // MARK: - A blind report confirms nothing
 
+    @Test(
+        "A missing-manifest baseline preserves every placed guest, with or without an agent warning",
+        arguments: [true, false])
+    func missingManifestBaselinePreservesRows(agentDeclaresUnknown: Bool) async throws {
+        try await withQuarantineApp { app, builder, org, project in
+            let agent = try await self.makeAgent(app: app, org: org, name: "missing-manifest-agent")
+            let agentId = try agent.requireID().uuidString
+            var vmIDs: [UUID] = []
+            var sandboxIDs: [UUID] = []
+            for index in 0..<4 {
+                let vm = try await builder.createVM(name: "surviving-vm-\(index)", project: project)
+                vm.hypervisorId = agentId
+                vm.setStatus(.running)
+                if index % 2 == 0 {
+                    vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                    vm.setFixtureDesiredStatus(.absent)
+                }
+                try await vm.save(on: app.db)
+                vmIDs.append(try vm.requireID())
+
+                let sandbox = try await builder.createSandbox(name: "surviving-sandbox-\(index)", project: project)
+                sandbox.hypervisorId = agentId
+                sandbox.setStatus(.running, at: try await ClusterClock.read(on: app.db))
+                sandbox.observedGeneration = 1
+                if index % 2 == 0 {
+                    sandbox.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+                    sandbox.setFixtureDesiredStatus(.absent)
+                }
+                try await sandbox.save(on: app.db)
+                sandboxIDs.append(try sandbox.requireID())
+            }
+            let report = ObservedStateReport(
+                agentId: agentId, vms: [],
+                resources: AgentResources(
+                    totalCPU: 8, availableCPU: 0, totalMemory: 16_000_000_000, availableMemory: 0,
+                    totalDisk: 100_000_000_000, availableDisk: 0),
+                manifestStatus: agentDeclaresUnknown
+                    ? ObservedManifestStatus(
+                        inventoryComplete: false, quarantinedEntries: 0,
+                        reason: "Workload manifest is missing; host inventory is unproven") : nil,
+                volumes: nil, snapshots: nil)
+
+            // Exercise the first-report path, including the persisted condition,
+            // rather than just the workload merge helper.
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: report), fromAgentKey: agent.identity.key)
+
+            for (index, id) in vmIDs.enumerated() {
+                let row = try #require(try await VM.find(id, on: app.db))
+                #expect(row.status == .running)
+                if index % 2 == 0 { #expect(row.finalizers == [ResourceFinalizer.agentAbsent.rawValue]) }
+            }
+            for (index, id) in sandboxIDs.enumerated() {
+                let row = try #require(try await Sandbox.find(id, on: app.db))
+                #expect(row.status == .running)
+                if index % 2 == 0 { #expect(row.finalizers == [ResourceFinalizer.agentAbsent.rawValue]) }
+            }
+            let row = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(row.manifestInventoryComplete == false)
+            #expect(
+                row.manifestStatusReason?.contains(agentDeclaresUnknown ? "missing" : "Control-plane inventory guard")
+                    == true)
+            #expect(row.availableCPU == 0)
+        }
+    }
+
+    @Test(
+        "A refused first report stays refused on retry, heartbeat, and reconnect; an operator can authorize verified loss"
+    )
+    func firstReportRefusalPersists() async throws {
+        try await withQuarantineApp { app, builder, org, project in
+            let agent = try await self.makeAgent(app: app, org: org, name: "first-report-agent")
+            let agentId = try agent.requireID().uuidString
+            let vm = try await builder.createVM(name: "still-running", project: project)
+            let vmID = try vm.requireID()
+            vm.hypervisorId = agentId
+            vm.setStatus(.running)
+            vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+            vm.setFixtureDesiredStatus(.absent)
+            try await vm.save(on: app.db)
+            let owner = try await builder.createUser(
+                username: "guardowner", email: "guardowner@example.com", displayName: "Guard Owner",
+                isSystemAdmin: false)
+            let dataVolume = try await builder.createVolume(
+                name: "attached-data", project: project, vmID: vmID, deviceName: "vdb", attachedAgentID: agentId,
+                createdBy: owner)
+            let network = try await builder.createNetwork(project: project)
+            let nic = try await builder.attachNIC(to: vm, network: network, macAddress: "02:00:00:00:01:28")
+            let envelope = try MessageEnvelope(message: self.healthyReport(agentId: agentId))
+
+            for _ in 0..<2 {
+                await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agent.identity.key)
+                let survivor = try #require(try await VM.find(vmID, on: app.db))
+                #expect(survivor.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+            }
+            let heldVolume = try #require(try await Volume.find(dataVolume.id, on: app.db))
+            #expect(heldVolume.$vm.id == vmID)
+            #expect(try await VMNetworkInterface.find(nic.id, on: app.db) != nil)
+            var row = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(row.manifestInventoryComplete == false)
+            _ = row.updateAvailableResources(self.healthyReport(agentId: agentId).resources)
+            #expect(row.availableCPU == 0)
+            #expect(row.availableMemory == 0)
+            #expect(row.availableDisk == 0)
+
+            await app.agentService.beginObservedInventorySession(for: agent.identity.key)
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agent.identity.key)
+            #expect(try await VM.find(vmID, on: app.db) != nil)
+
+            app.controlPlaneConfiguration = try await ControlPlaneConfiguration.load(
+                environmentVariables: ["OBSERVED_INVENTORY_ALLOW_BULK_LOSS": "true"], for: .testing)
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: self.blindReport(agentId: agentId)), fromAgentKey: agent.identity.key)
+            #expect(try await VM.find(vmID, on: app.db) != nil)
+            await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agent.identity.key)
+            #expect(try await VM.find(vmID, on: app.db) == nil)
+            row = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(row.manifestInventoryComplete == nil)
+            #expect(row.availableCPU == 6)
+        }
+    }
+
+    @Test("Established inventory refuses excessive loss and recovers when the guest list returns")
+    func thresholdAfterBaseline() async throws {
+        try await withQuarantineApp { app, builder, org, project in
+            let agent = try await self.makeAgent(app: app, org: org, name: "threshold-agent")
+            let agentId = try agent.requireID().uuidString
+            var observations: [ObservedVMState] = []
+            for index in 0..<4 {
+                let vm = try await builder.createVM(name: "threshold-vm-\(index)", project: project)
+                vm.hypervisorId = agentId
+                vm.setStatus(.running)
+                try await vm.save(on: app.db)
+                observations.append(ObservedVMState(vmId: try vm.requireID(), status: .running, observedGeneration: 0))
+            }
+            // Pending placements must not dilute a complete loss of the
+            // established host into a percentage below the configured limit.
+            for index in 0..<16 {
+                let pending = try await builder.createVM(name: "pending-vm-\(index)", project: project)
+                pending.hypervisorId = agentId
+                try await pending.save(on: app.db)
+            }
+            let complete = try MessageEnvelope(message: self.healthyReport(agentId: agentId, vms: observations))
+            await app.agentService.applyObservedStateReport(complete, fromAgentKey: agent.identity.key)
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: self.healthyReport(agentId: agentId)), fromAgentKey: agent.identity.key)
+            for observation in observations {
+                #expect(try await VM.find(observation.vmId, on: app.db)?.status == .running)
+            }
+            var row = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(row.manifestStatusReason?.contains("more than 3 resources and 25%") == true)
+            #expect(row.availableCPU == 0)
+
+            await app.agentService.applyObservedStateReport(complete, fromAgentKey: agent.identity.key)
+            row = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(row.manifestStatusReason == nil)
+            #expect(row.availableCPU == 6)
+
+            // A later one-VM disappearance is below the floor and still uses
+            // the existing loss/reconciliation semantics.
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(
+                    message: self.healthyReport(agentId: agentId, vms: Array(observations.dropFirst()))),
+                fromAgentKey: agent.identity.key)
+            #expect(try await VM.find(observations[0].vmId, on: app.db)?.status == .error)
+
+            // Registration resets the baseline even after a healthy session.
+            await app.agentService.beginObservedInventorySession(for: agent.identity.key)
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(
+                    message: self.healthyReport(agentId: agentId, vms: Array(observations.dropFirst(2)))),
+                fromAgentKey: agent.identity.key)
+            #expect(try await VM.find(observations[1].vmId, on: app.db)?.status == .running)
+            row = try #require(try await Agent.find(agent.id, on: app.db))
+            #expect(row.manifestStatusReason?.contains("first authoritative inventory") == true)
+        }
+    }
+
+    @Test("Nil storage lists do not authorize later loss of replicas or checkpoints")
+    func storageSectionsRequireTheirOwnBaseline() async throws {
+        try await withQuarantineApp { app, builder, org, project in
+            let agent = try await self.makeAgent(app: app, org: org, name: "storage-guard-agent")
+            let agentId = try agent.requireID().uuidString
+            let owner = try await builder.createUser(
+                username: "storageowner", email: "storageowner@example.com", displayName: "Storage Owner",
+                isSystemAdmin: false)
+            let vm = try await builder.createVM(name: "checkpoint-parent", project: project)
+            vm.hypervisorId = agentId
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+            let volume = try await builder.createVolume(
+                name: "held-volume", project: project, desiredStatus: .absent,
+                generation: 2, observedGeneration: 1, attachedAgentID: agentId, createdBy: owner)
+            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+            try await volume.save(on: app.db)
+            let replica = VolumeReplica(volumeID: try volume.requireID(), agentId: agentId)
+            try await replica.save(on: app.db)
+            let checkpoint = VMSnapshot(
+                name: "held-checkpoint", vmID: try vm.requireID(), projectID: try project.requireID(),
+                environment: vm.environment, agentId: agentId, createdByID: try owner.requireID())
+            checkpoint.desiredStatus = .absent
+            checkpoint.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+            try await checkpoint.save(on: app.db)
+
+            let baseline = self.healthyReport(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(vmId: try vm.requireID(), status: .running, observedGeneration: 0)
+                ])
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: baseline), fromAgentKey: agent.identity.key)
+            for section in [ObservedInventoryGuard.Section.volumes, .snapshots] {
+                let report = ObservedStateReport(
+                    agentId: agentId, vms: baseline.vms, resources: baseline.resources,
+                    volumes: section == .volumes ? [] : nil, snapshots: section == .snapshots ? [] : nil)
+                await app.agentService.applyObservedStateReport(
+                    try MessageEnvelope(message: report), fromAgentKey: agent.identity.key)
+                let row = try #require(try await Agent.find(agent.id, on: app.db))
+                #expect(row.manifestStatusReason?.contains("first authoritative inventory") == true)
+                #expect(row.manifestStatusReason?.contains(section.rawValue) == true)
+                #expect(try await Volume.find(volume.id, on: app.db) != nil)
+                #expect(try await VolumeReplica.find(replica.id, on: app.db) != nil)
+                #expect(try await VMSnapshot.find(checkpoint.id, on: app.db) != nil)
+            }
+        }
+    }
+
     @Test("A blind report does not confirm a deletion the agent never performed")
     func blindReportDoesNotReapATerminatingVM() async throws {
         try await withQuarantineApp { app, builder, org, project in
@@ -211,6 +438,16 @@ final class AgentManifestQuarantineTests {
             vm.hypervisorId = agentId
             vm.setStatus(.running)
             try await vm.save(on: app.db)
+
+            // Establish a trustworthy baseline before testing ordinary,
+            // below-threshold drift on a later partial-quarantine report.
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(
+                    message: self.healthyReport(
+                        agentId: agentId,
+                        vms: [
+                            ObservedVMState(vmId: vmID, status: .running, observedGeneration: 0)
+                        ])), fromAgentKey: agent.identity.key)
 
             // The partial case: the manifest read fine, but one entry names a
             // backend this agent build has never heard of. The rest of the host

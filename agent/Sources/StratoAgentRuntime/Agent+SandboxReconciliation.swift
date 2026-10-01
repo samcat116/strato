@@ -599,7 +599,7 @@ extension Agent {
             var reason = "Workload manifest at \(failure.path) \(failure.reason)."
             reason +=
                 " This host's workloads are unknown: it is advertising no capacity and converging nothing"
-                + " until the manifest is repaired, or the agent is restarted after removing it."
+                + " until the manifest is restored or an empty host is independently verified."
             if let preserved = failure.preservedCopyPath {
                 reason += " A copy of the unreadable file was preserved at \(preserved)."
             }

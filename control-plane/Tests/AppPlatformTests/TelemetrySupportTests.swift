@@ -8,6 +8,16 @@ import Testing
 @Suite("Telemetry support")
 struct TelemetrySupportTests {
 
+    @Test("inventory refusal gauge distinguishes server refusal and clears on recovery")
+    func inventoryRefusalGauge() throws {
+        let metrics = TestMetrics()
+        Telemetry.agentObservedInventoryRefused(agentName: "guard-agent", refused: true, factory: metrics)
+        let gauge = try metrics.expectGauge("strato_agent_observed_inventory_refused", [("agent", "guard-agent")])
+        #expect(gauge.lastValue == 1)
+        Telemetry.agentObservedInventoryRefused(agentName: "guard-agent", refused: false, factory: metrics)
+        #expect(gauge.lastValue == 0)
+    }
+
     // MARK: - Duration.asSeconds
 
     @Test("whole seconds convert exactly")

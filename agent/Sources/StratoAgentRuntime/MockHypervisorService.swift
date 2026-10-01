@@ -253,6 +253,10 @@ actor MockHypervisorService: HypervisorService {
         return .running
     }
 
+    func bootstrapWorkloadIDs() async -> Set<String>? {
+        Set(vms.keys)
+    }
+
     /// Simulation must model the same fixed QEMU hot-plug reservation as a
     /// real domain. Returning exact membership also lets agent accounting add
     /// only manifest workloads that are actually missing from this mock.

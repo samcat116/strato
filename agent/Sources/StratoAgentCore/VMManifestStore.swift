@@ -404,7 +404,7 @@ public struct ManifestReadFailure: Sendable, Equatable {
     /// succeeded. The original stays where it is.
     public let preservedCopyPath: String?
 
-    init(path: String, reason: String, preservedCopyPath: String?) {
+    public init(path: String, reason: String, preservedCopyPath: String?) {
         self.path = path
         self.reason = reason
         self.preservedCopyPath = preservedCopyPath
@@ -420,9 +420,10 @@ public struct ManifestReadFailure: Sendable, Equatable {
 /// immediately. A caller now has to decide what an unreadable manifest means,
 /// and the only safe answer is to stop advertising and stop converging.
 public enum ManifestLoad: Sendable {
-    /// No manifest: a genuinely fresh host, which is the only case that may be
-    /// read as "nothing is running here".
+    /// The caller has independently verified an empty host.
     case fresh
+    /// No manifest was found. Host contents are unknown until corroborated.
+    case absent
     /// The manifest parsed. `entries` are routable; `quarantined` are
     /// workloads that exist but cannot be acted on.
     case loaded(entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry])
@@ -485,11 +486,11 @@ public struct VMManifestStore {
     /// workload on the host along with it. Only a failure at the top level
     /// (unreadable bytes, truncated or non-object JSON) is `.unreadable` now.
     public func load() -> ManifestLoad {
-        guard FileManager.default.fileExists(atPath: path) else { return .fresh }
-
         let data: Data
         do {
             data = try Data(contentsOf: URL(fileURLWithPath: path))
+        } catch CocoaError.fileReadNoSuchFile {
+            return .absent
         } catch {
             return unreadable("could not be read: \(error)")
         }
@@ -550,10 +551,11 @@ public struct VMManifestStore {
     private func unreadable(_ reason: String) -> ManifestLoad {
         let preserved = preserveUnreadableManifest()
         logger.error(
-            "VM manifest is unreadable; this host's workloads are unknown and it will advertise no capacity until the manifest is repaired or removed",
+            "VM manifest is unreadable; this host's workloads are unknown and it will advertise no capacity until the manifest is restored or an empty host is independently verified",
             metadata: [
                 "path": .string(path),
                 "reason": .string(reason),
+                "inventoryState": "unreadable",
                 "preservedCopy": .string(preserved ?? "none"),
             ])
         return .unreadable(
@@ -565,8 +567,7 @@ public struct VMManifestStore {
     ///
     /// A copy, not a move: the original is what a *later* build — one that
     /// understands whatever this one choked on — needs to find, and moving it
-    /// aside would make the next start read the host as fresh, which is the
-    /// exact confusion this whole change exists to prevent.
+    /// aside would hide the recoverable inventory from the next start.
     ///
     /// Skipped when an identical copy is already there, so an agent that
     /// crash-loops against the same bad file leaves one copy rather than one

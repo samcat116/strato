@@ -742,3 +742,40 @@ deny paths are exercised exactly as in production. Sweeps are `internal` rather 
 `private` specifically so tests can drive a pass directly, and the heartbeat
 interval is injectable. `TestDataBuilder` creates users/orgs/projects/VMs/
 sandboxes; migration up/down coverage lives in `MigrationRoundTripTests`.
+
+### Observed-inventory blast-radius guard (#1428)
+
+The authenticated observed-report ingress verifies inventory against currently
+placed rows before applying any report effects. It does not rely on the agent's
+`manifestStatus` being truthful or present. The first authoritative inventory of
+each connection's workloads, volumes, and snapshots may not confirm destructive
+absence; later reports may not omit more than both the configured resource floor
+(default 3) and percentage of established/terminating placed resources (default
+25%). Only omissions that would remove a finalizer/replica or move an established
+resource to error count; pending creates are not treated as loss and cannot dilute
+the denominator. Nil volume/snapshot sections are no opinion and neither establish
+a baseline nor dilute the denominator.
+
+A refused report changes no workload, volume, snapshot, network, or placement
+reservation state. The reason is persisted in the agent's existing inventory
+condition (`manifestInventoryComplete=false`, `manifestStatusReason`), logged,
+and measured by `strato_agent_observed_inventory_refused{agent}`. Available
+capacity stays zero across heartbeats and reconnects while the condition stands.
+The acceptance baseline is local to the socket-owning replica; registration and
+replica restart require a new baseline. A refused report never spends that
+baseline, and an in-flight report from a previous registration cannot establish
+the new one.
+
+Restoring a complete report clears the condition. For independently verified loss
+or a deliberate bulk drain, an operator may temporarily set
+`OBSERVED_INVENTORY_ALLOW_BULK_LOSS=true`; return it to false afterward. This does
+not override an agent's explicit incomplete-manifest signal. The limit knobs are
+`OBSERVED_INVENTORY_MINIMUM_RESOURCES` (nonnegative) and
+`OBSERVED_INVENTORY_PERCENT_OF_PLACED` (0–100). Compose forwards these variables;
+Helm accepts them through `extraEnv`. No wire or database schema changed.
+
+This guard preserves `agent.absent` finalizers before the reap path can release
+data-volume associations or cascade away VM interfaces/checkpoints. It also runs
+before observed-volume absence can delete replica records. Physical OVN/RBD
+cleanup remains owned by agent convergence, which a missing-manifest agent
+quarantines; no speculative detach or port cleanup is introduced here.

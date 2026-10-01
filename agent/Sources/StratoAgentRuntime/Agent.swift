@@ -159,6 +159,9 @@ actor Agent {
     // that actually succeeds (retried on the heartbeat, so a storage volume
     // that mounted late recovers without a restart).
     var manifestReadFailure: ManifestReadFailure?
+    var manifestAbsent = false
+    var snapshotInventoryAbsent = false
+    var verifyingMissingInventory = false
     // Entries that exist but this build cannot route (an unrecognized
     // hypervisor type after a rollback, an undecodable spec). They keep
     // reserving capacity, block a re-create of their id, and are re-persisted

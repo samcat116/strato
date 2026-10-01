@@ -990,16 +990,41 @@ libvirtd for the domain, Firecracker via its API socket).
 
 ### When the manifest can't be read (STR-138)
 
-The manifest is the agent's only memory of what it is running — nothing scans
-running hypervisor processes or the storage tree — so `load()` returning
+The manifest is the agent's durable memory of what it is running, so `load()` returning
 "nothing" on a read error used to be an assertion that the host was idle.
 Three subsystems act on that immediately: capacity accounting frees the whole
 machine (and `least_loaded` then preferentially fills it), the reconciler plans
 `.create` for guests that are still running, and the observed report's
 full-list semantics confirm deletions that never happened.
 
-So `load()` returns a `ManifestLoad` — `.fresh`, `.loaded`, or `.unreadable` —
-and the caller has to decide:
+`load()` returns `.absent`, `.loaded`, or `.unreadable`. `.fresh` is reserved
+for a caller that independently corroborates emptiness:
+
+- **`.absent`** quarantines the host before registration, just like an unreadable
+  manifest (#1428). Its log telemetry carries `inventoryState=absent`, distinct
+  from `inventoryState=unreadable`, and the condition reason identifies the
+  missing path and any surviving inventory. The baseline report declares `inventoryComplete: false`;
+  neither restarting nor changing `vmStoragePath` proves that guests are gone.
+  Before initialization, an authoritative desired sync must contain no VMs,
+  sandboxes, volumes, snapshots, or tombstones for this host. A live, uncached
+  libvirt enumeration must find no Strato domains (including inactive domains).
+  Without a reachable daemon, empty system libvirt domain configuration/state
+  directories and the absence of QEMU processes can corroborate a Firecracker-only
+  host. Local volume enumeration must succeed and be empty, and the workload tree,
+  Firecracker socket/jail directories, and Linux process inventory must show
+  no surviving workloads. Unknown or failed probes keep quarantine in place.
+  Simulation probes its mock hypervisors and storage instead of host processes.
+  An empty host clears automatically on its first desired sync and persists
+  that verified empty inventory before accepting placements; a late mount or
+  restored manifest is read before trying to bootstrap. Stale artifacts require
+  operator inspection; the agent does not remove them or overwrite a missing
+  manifest while quarantined.
+- A missing **snapshot record file** also starts as unknown: snapshot reporting
+  returns `nil` and snapshot writes/convergence are blocked. It can initialize
+  only with a known workload inventory and a desired sync containing no snapshot
+  rows, including pending deletions. This lets hosts that have never captured a
+  snapshot continue normally while preserving checkpoints whose records vanished.
+  When rows still exist, restore the record file; absence is not a deletion verdict.
 
 - **`.unreadable`** (unreadable bytes, truncated or non-object JSON)
   **quarantines the host.** It advertises zero available CPU/memory/disk so the
@@ -1010,13 +1035,13 @@ and the caller has to decide:
   failed read is what turns a recoverable file into a permanent loss. The store
   also copies the file aside as `<path>.corrupt-<timestamp>` (a copy, not a
   move: a *later* build needs to find the original, and moving it would make
-  the next start read the host as fresh). The condition travels on
+  the next start lose the recoverable bytes). The condition travels on
   `ObservedStateReport.manifestStatus`, which also tells the control plane to
   read no absence from that report, and lands on the agent row for the UI.
   A quarantine clears when a later read succeeds — retried on each heartbeat, so
   a storage volume that mounted late recovers by itself. A manifest that has
-  since *vanished* does not clear it: deciding the host is empty stays a
-  deliberate act (restart the agent).
+  since *vanished* does not clear it. Restarting alone is not proof of emptiness;
+  restore the manifest or investigate the host and its control-plane placements.
 - **One bad entry costs one entry.** Entries decode individually, so an
   unrecognized `hypervisorType` — what an agent rolled back past a new backend
   meets — or a spec this build cannot read **quarantines that entry** while the

@@ -21,6 +21,7 @@ struct ControlPlaneConfigurationEntry: Equatable, Sendable {
 }
 
 enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
+    case observedInventoryAllowBulkLoss = "OBSERVED_INVENTORY_ALLOW_BULK_LOSS"
     case requestLogging = "REQUEST_LOGGING"
     case httpTLSEnabled = "HTTP_TLS_ENABLED"
     case runMigrations = "STRATO_RUN_MIGRATIONS"
@@ -59,7 +60,7 @@ enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
             .auditEnabled, .otelMetricsEnabled, .otelLogsEnabled, .otelTracesEnabled,
             .spireLegacyEnrollments:
             true
-        case .httpTLSEnabled, .auditIncludeReads, .ssfAllowUnverifiedTokens,
+        case .observedInventoryAllowBulkLoss, .httpTLSEnabled, .auditIncludeReads, .ssfAllowUnverifiedTokens,
             .imageS3VirtualHostStyle, .spireEnabled, .spireOrgTrustDomainsEnabled,
             .spiffeJWTSVIDAuthEnabled:
             false
@@ -68,6 +69,8 @@ enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
 }
 
 enum ControlPlaneIntKey: String, CaseIterable, Sendable {
+    case observedInventoryMinimumResources = "OBSERVED_INVENTORY_MINIMUM_RESOURCES"
+    case observedInventoryPercentOfPlaced = "OBSERVED_INVENTORY_PERCENT_OF_PLACED"
     case databasePort = "DATABASE_PORT"
     case databaseStatementTimeoutMS = "DATABASE_STATEMENT_TIMEOUT_MS"
     case databaseMigrationStatementTimeoutMS = "DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS"
@@ -108,6 +111,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         normalStatementTimeout: Int = DatabaseStatementTimeout.defaultMilliseconds
     ) -> Int? {
         switch self {
+        case .observedInventoryMinimumResources: 3
+        case .observedInventoryPercentOfPlaced: 25
         case .databasePort: 5432
         case .databaseStatementTimeoutMS: DatabaseStatementTimeout.defaultMilliseconds
         case .databaseMigrationStatementTimeoutMS: normalStatementTimeout
@@ -144,6 +149,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
 
     var validRange: ClosedRange<Int>? {
         switch self {
+        case .observedInventoryMinimumResources: 0...Int.max
+        case .observedInventoryPercentOfPlaced: 0...100
         case .databasePort, .valkeyPort, .sessionValkeyPort:
             1...65_535
         case .valkeyDatabase, .sessionValkeyDatabase:

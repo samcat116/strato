@@ -626,6 +626,15 @@ enum Telemetry {
         ).record(unreadable ? 1 : 0)
     }
 
+    /// Server-side refusal is distinct from the agent's own manifest warning.
+    static func agentObservedInventoryRefused(
+        agentName: String, refused: Bool, factory: (any MetricsFactory)? = nil
+    ) {
+        recordGauge(
+            label: "strato_agent_observed_inventory_refused", dimensions: [("agent", agentName)],
+            value: refused ? 1 : 0, factory: factory)
+    }
+
     // MARK: - HTTP request layer
 
     /// RED metrics for the whole API surface, emitted once per request by

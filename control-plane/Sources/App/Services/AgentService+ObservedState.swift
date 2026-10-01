@@ -85,15 +85,50 @@ extension AgentService {
             return
         }
 
+        let inventorySession = observedInventorySessions[agentKey]
+        var inventoryCounts: [ObservedInventoryGuard.Section: ObservedInventoryGuard.Counts] = [:]
+        var inventoryRefusal: String?
+        if report.manifestStatus?.inventoryComplete != false {
+            do {
+                inventoryCounts = try await ObservedInventoryGuard.counts(for: report, on: app.db)
+                inventoryRefusal = ObservedInventoryGuard(configuration: app.controlPlaneConfiguration).refusal(
+                    counts: inventoryCounts, acceptedSections: acceptedInventorySections[agentKey] ?? [])
+            } catch {
+                // Failure to assess the blast radius is not permission to apply
+                // it. The next report retries without spending its baseline.
+                app.logger.error(
+                    "Observed inventory validation failed",
+                    metadata: [
+                        "strato.agent.id": .string(report.agentId), "error": .string("\(error)"),
+                    ])
+                inventoryRefusal =
+                    "Control-plane inventory guard could not validate this report; check control-plane logs. "
+                    + "No workload or storage observations were applied; the next report will retry."
+            }
+        }
+        guard observedInventorySessions[agentKey] == inventorySession else {
+            app.logger.warning("Ignoring observed inventory from a superseded registration")
+            return
+        }
+        Telemetry.agentObservedInventoryRefused(agentName: agent.name, refused: inventoryRefusal != nil)
+        let effectiveManifestStatus =
+            inventoryRefusal.map {
+                ObservedManifestStatus(inventoryComplete: false, quarantinedEntries: 0, reason: $0)
+            } ?? report.manifestStatus
+        var agentChanged = applyReportedManifestStatus(effectiveManifestStatus, to: agent, at: instant)
+
         // Reports carry the same resource snapshot as heartbeats; keep the
         // scheduler's view fresh from whichever arrives without re-saving an
         // identical row a second time.
-        var agentChanged = applyPeriodicAgentState(
+        if applyPeriodicAgentState(
             report.resources,
             dependencyObservations: nil,
             hostResourceTelemetry: report.hostResourceTelemetry,
             to: agent,
             at: instant)
+        {
+            agentChanged = true
+        }
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason
         applyReportedUpdateStatus(report.agentUpdateStatus, to: agent)
@@ -104,9 +139,6 @@ extension AgentService {
             agent.lastHeartbeat = instant.date
         }
         if applyReportedTeardownRefusal(report.teardownRefusal, to: agent, at: instant) {
-            agentChanged = true
-        }
-        if applyReportedManifestStatus(report.manifestStatus, to: agent, at: instant) {
             agentChanged = true
         }
         if agentChanged {
@@ -122,6 +154,10 @@ extension AgentService {
         // The report arrived over this process's socket: refresh presence
         // alongside, mirroring the heartbeat path.
         await refreshAgentPresenceIfNeeded(agentKey: agentKey)
+
+        // The guard covers the whole report, before any row deletion, error
+        // transition, replica removal, network merge, or reservation release.
+        guard inventoryRefusal == nil else { return }
 
         // Storage inventory has its own completeness contract and transaction.
         // A malformed or unavailable disk snapshot must not prevent valid VM,
@@ -141,6 +177,11 @@ extension AgentService {
 
         do {
             let outcome = try await app.observedStateApplier.apply(report, at: instant)
+            if report.manifestStatus?.inventoryComplete != false,
+                observedInventorySessions[agentKey] == inventorySession
+            {
+                acceptedInventorySections[agentKey, default: []].formUnion(inventoryCounts.keys)
+            }
             // Level-triggered, and recorded here because this is where the
             // agent's name is: the withheld-teardown counter only fires at the
             // transition, so on its own it can't answer whether a host is
@@ -263,7 +304,7 @@ extension AgentService {
                     || agent.manifestInventoryComplete != nil
             else { return false }
             app.logger.notice(
-                "Agent's workload manifest is healthy again",
+                "Agent workload inventory is healthy again",
                 metadata: ["strato.agent.name": .string(agent.name)])
             agent.manifestStatusReason = nil
             agent.manifestStatusAt = nil
@@ -282,7 +323,7 @@ extension AgentService {
         app.logger.error(
             status.inventoryComplete
                 ? "Agent is holding workloads its build cannot route"
-                : "Agent cannot read its workload manifest; it is quarantined and placing nothing",
+                : "Agent workload inventory is unknown or refused; it is quarantined and placing nothing",
             metadata: [
                 "strato.agent.name": .string(agent.name),
                 "quarantinedEntries": .stringConvertible(status.quarantinedEntries),

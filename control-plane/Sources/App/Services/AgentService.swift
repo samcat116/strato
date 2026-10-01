@@ -52,6 +52,8 @@ actor AgentService {
     /// in `AgentService+ObservedState.swift`.
     var reportTails: [String: (id: UInt64, task: Task<Void, Never>)] = [:]
     var nextReportTailId: UInt64 = 0
+    var observedInventorySessions: [String: UUID] = [:]
+    var acceptedInventorySections: [String: Set<ObservedInventoryGuard.Section>] = [:]
 
     init(app: Application, heartbeatInterval: Duration = .seconds(30)) {
         self.app = app
