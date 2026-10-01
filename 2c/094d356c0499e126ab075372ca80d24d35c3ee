@@ -1,0 +1,23 @@
+helm/strato-control-plane/templates/_helpers.tpl
+  s_d208ea9b1a94af::t_87d045f81f9f5d 353-371
+helm/strato-control-plane/templates/deployment.yaml
+  s_d208ea9b1a94af::t_afd9ab2182b58f 425-427
+helm/strato-control-plane/templates/frontend-deployment.yaml
+  s_d208ea9b1a94af::t_1ac6bf3835cb78 51-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2c094d356c0499e126ab075372ca80d24d35c3ee",
+  "prompts": {},
+  "sessions": {
+    "s_d208ea9b1a94af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0efac-c477-7920-860b-09b0954f77e3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
