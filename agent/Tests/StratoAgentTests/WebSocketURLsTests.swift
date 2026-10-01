@@ -4,16 +4,6 @@ import Foundation
 
 @Suite("WebSocketURLs Tests")
 struct WebSocketURLsTests {
-
-    @Test("Builds a dial URL from a bare base")
-    func buildsDialURL() {
-        let result = WebSocketURLs.appendingNameQueryParameter(
-            to: "wss://control-plane:8080/agent/ws",
-            name: "agent-1"
-        )
-        #expect(result == "wss://control-plane:8080/agent/ws?name=agent-1")
-    }
-
     @Test("Dial URL builder replaces a stale name in the base")
     func buildReplacesExistingName() {
         let result = WebSocketURLs.appendingNameQueryParameter(

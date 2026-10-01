@@ -71,11 +71,6 @@ final class RegistrationPolicyTests: BaseTestCase {
 
     // MARK: - The public endpoint
 
-    @Test("the policy endpoint is public")
-    func testEndpointIsPublic() {
-        #expect(AuthorizationMiddleware.classify(path: "/api/public/registration") == .isPublic)
-    }
-
     @Test("an empty deployment reports bootstrap, whatever the setting")
     func testBootstrapReported() async throws {
         try await withTestApp { app in

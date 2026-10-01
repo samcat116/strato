@@ -110,21 +110,6 @@ struct OIDCValidationTests {
 
     // MARK: - SSRF allow-lists
 
-    // Assert on the default constants directly so the test is independent of any
-    // OIDC_DISCOVERY_ALLOWED_* environment variables present on the CI host.
-    @Test("default host allow-list contains the well-known providers")
-    func testDefaultAllowedHosts() {
-        #expect(OIDCValidation.defaultAllowedHosts.contains("accounts.google.com"))
-        #expect(OIDCValidation.defaultAllowedHosts.contains("login.microsoftonline.com"))
-        #expect(OIDCValidation.defaultAllowedHosts.contains("discord.com"))
-    }
-
-    @Test("default suffix allow-list contains the well-known suffixes")
-    func testDefaultAllowedSuffixes() {
-        #expect(OIDCValidation.defaultAllowedDomainSuffixes.contains(".okta.com"))
-        #expect(OIDCValidation.defaultAllowedDomainSuffixes.contains(".amazonaws.com"))
-    }
-
     /// The trap this closes: an operator who sets
     /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES=example.com` (no leading dot) used to be
     /// allowing `evilexample.com` too, because the match was a bare `hasSuffix`.

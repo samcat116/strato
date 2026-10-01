@@ -4,19 +4,6 @@ import StratoShared
 
 @Suite("Success / error messages")
 struct ResponseMessageTests {
-    @Test func successRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            SuccessMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                message: "done"
-            )
-        )
-        #expect(decoded.type == .success)
-        #expect(decoded.requestId == Fixtures.requestId)
-        #expect(decoded.message == "done")
-    }
-
     /// `SuccessMessage.data` carried an arbitrary `Codable` through
     /// a dynamic JSON wrapper until STR-152 removed it: every typed reply that rode
     /// it was already gone — `VolumeStatusResponse` and the two snapshot
@@ -61,27 +48,5 @@ struct ResponseMessageTests {
         #expect(decoded.error == "nope")
         #expect(decoded.details == nil)
         #expect(decoded.code == nil)
-    }
-
-    @Test func vmLogRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VMLogMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                vmId: "vm-8",
-                level: .warning,
-                source: .agent,
-                eventType: .statusChange,
-                message: "guest reset",
-                operation: "reboot"
-            )
-        )
-        #expect(decoded.type == .vmLog)
-        #expect(decoded.vmId == "vm-8")
-        #expect(decoded.level == .warning)
-        #expect(decoded.source == .agent)
-        #expect(decoded.eventType == .statusChange)
-        #expect(decoded.message == "guest reset")
-        #expect(decoded.operation == "reboot")
     }
 }

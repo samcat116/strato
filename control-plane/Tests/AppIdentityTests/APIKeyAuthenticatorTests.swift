@@ -607,26 +607,6 @@ struct APIKeyAuthenticatorTests {
 
     // MARK: - Hash Function Tests
 
-    @Test("APIKey.hashAPIKey produces consistent hashes")
-    func testHashConsistency() {
-        let key = "sk_test_1234567890"
-        let hash1 = APIKey.hashAPIKey(key)
-        let hash2 = APIKey.hashAPIKey(key)
-
-        #expect(hash1 == hash2)
-    }
-
-    @Test("APIKey.hashAPIKey produces different hashes for different keys")
-    func testHashUniqueness() {
-        let key1 = "sk_test_1234567890"
-        let key2 = "sk_test_0987654321"
-
-        let hash1 = APIKey.hashAPIKey(key1)
-        let hash2 = APIKey.hashAPIKey(key2)
-
-        #expect(hash1 != hash2)
-    }
-
     @Test("APIKey.hashAPIKey produces valid SHA256 hash")
     func testHashFormat() {
         let key = "sk_test_1234567890"

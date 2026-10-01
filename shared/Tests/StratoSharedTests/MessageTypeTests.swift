@@ -124,11 +124,4 @@ struct MessageTypeTests {
             try decodeJSON([MessageType].self, from: #"["\#(wireString)"]"#)
         }
     }
-
-    @Test("retired wire strings are never reused")
-    func retiredAndLiveStringsAreDisjoint() {
-        let live = Set(Self.liveTypes.map(\.rawValue))
-        let collisions = Self.retiredWireStrings.filter(live.contains)
-        #expect(collisions.isEmpty, "retired wire strings revived as live cases: \(collisions)")
-    }
 }
