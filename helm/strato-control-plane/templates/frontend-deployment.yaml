@@ -48,27 +48,8 @@ spec:
               value: {{ .Values.frontend.env.STRATO_API_URL | default (printf "http://%s:%v" (include "strato-control-plane.fullname" .) .Values.service.port) | quote }}
             - name: STRATO_GRAVATAR_ENABLED
               value: {{ .Values.frontend.env.STRATO_GRAVATAR_ENABLED | quote }}
-          {{- if .Values.frontend.livenessProbe.enabled }}
-          livenessProbe:
-            httpGet:
-              path: {{ .Values.frontend.livenessProbe.path | default "/" }}
-              port: http
-            initialDelaySeconds: {{ .Values.frontend.livenessProbe.initialDelaySeconds | default 10 }}
-            periodSeconds: {{ .Values.frontend.livenessProbe.periodSeconds | default 10 }}
-            timeoutSeconds: {{ .Values.frontend.livenessProbe.timeoutSeconds | default 5 }}
-            failureThreshold: {{ .Values.frontend.livenessProbe.failureThreshold | default 3 }}
-          {{- end }}
-          {{- if .Values.frontend.readinessProbe.enabled }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.frontend.readinessProbe.path | default "/" }}
-              port: http
-            initialDelaySeconds: {{ .Values.frontend.readinessProbe.initialDelaySeconds | default 5 }}
-            periodSeconds: {{ .Values.frontend.readinessProbe.periodSeconds | default 5 }}
-            timeoutSeconds: {{ .Values.frontend.readinessProbe.timeoutSeconds | default 5 }}
-            successThreshold: {{ .Values.frontend.readinessProbe.successThreshold | default 1 }}
-            failureThreshold: {{ .Values.frontend.readinessProbe.failureThreshold | default 3 }}
-          {{- end }}
+          {{- include "strato-control-plane.probe" (dict "probe" .Values.frontend.livenessProbe "kind" "liveness" "defaultPath" "/" "defaults" (dict "initialDelaySeconds" 10 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3)) | nindent 10 }}
+          {{- include "strato-control-plane.probe" (dict "probe" .Values.frontend.readinessProbe "kind" "readiness" "defaultPath" "/" "defaults" (dict "initialDelaySeconds" 5 "periodSeconds" 5 "timeoutSeconds" 5 "successThreshold" 1 "failureThreshold" 3)) | nindent 10 }}
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

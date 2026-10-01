@@ -422,36 +422,9 @@ spec:
               exec:
                 command: ["/bin/sleep", "{{ .Values.terminationDrain.seconds | default 15 }}"]
           {{- end }}
-          {{- if .Values.startupProbe.enabled }}
-          startupProbe:
-            httpGet:
-              path: {{ .Values.startupProbe.path | default "/health/live" }}
-              port: http
-            periodSeconds: {{ .Values.startupProbe.periodSeconds | default 5 }}
-            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds | default 5 }}
-            failureThreshold: {{ .Values.startupProbe.failureThreshold | default 60 }}
-          {{- end }}
-          {{- if .Values.livenessProbe.enabled }}
-          livenessProbe:
-            httpGet:
-              path: {{ .Values.livenessProbe.path | default "/health/live" }}
-              port: http
-            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 30 }}
-            periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 10 }}
-            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 5 }}
-            failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
-          {{- end }}
-          {{- if .Values.readinessProbe.enabled }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.readinessProbe.path | default "/health/ready" }}
-              port: http
-            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 5 }}
-            periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 5 }}
-            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 5 }}
-            successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
-            failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
-          {{- end }}
+          {{- include "strato-control-plane.probe" (dict "probe" .Values.startupProbe "kind" "startup" "defaultPath" "/health/live" "defaults" (dict "periodSeconds" 5 "timeoutSeconds" 5 "failureThreshold" 60)) | nindent 10 }}
+          {{- include "strato-control-plane.probe" (dict "probe" .Values.livenessProbe "kind" "liveness" "defaultPath" "/health/live" "defaults" (dict "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 3)) | nindent 10 }}
+          {{- include "strato-control-plane.probe" (dict "probe" .Values.readinessProbe "kind" "readiness" "defaultPath" "/health/ready" "defaults" (dict "initialDelaySeconds" 5 "periodSeconds" 5 "timeoutSeconds" 5 "successThreshold" 1 "failureThreshold" 3)) | nindent 10 }}
           {{- $spireBundle := and .Values.spire.enabled .Values.spire.notifier.k8sbundle.enabled }}
           {{- $workloadApi := and .Values.spire.enabled .Values.spire.controlPlane.workloadApi.enabled }}
           {{- if or .Values.strato.database.tlsCACert $spireBundle $workloadApi }}
