@@ -207,9 +207,7 @@ struct StorageDeviceController: RouteCollection {
     }
 
     func update(req: Request) async throws -> StorageDeviceResponse {
-        guard let deviceID = req.parameters.get("deviceId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid storage device ID")
-        }
+        let deviceID = try req.requireUUIDParameter("deviceId", reason: "Invalid storage device ID")
         let update = try req.content.decodeValidated(UpdateStorageDeviceRequest.self)
         return try await req.db.transaction { transaction in
             guard let sql = transaction as? any SQLDatabase else {

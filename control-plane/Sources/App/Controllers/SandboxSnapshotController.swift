@@ -499,9 +499,7 @@ extension SandboxController {
     /// (the route nests snapshots under their sandbox). Internal because the
     /// mobility handlers in SandboxSnapshotTransferController.swift share it.
     func fetchSnapshot(req: Request, sandbox: Sandbox) async throws -> SandboxSnapshot {
-        guard let snapshotID = req.parameters.get("snapshotID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid snapshot ID")
-        }
+        let snapshotID = try req.requireUUIDParameter("snapshotID", reason: "Invalid snapshot ID")
         guard let snapshot = try await SandboxSnapshot.find(snapshotID, on: req.db),
             snapshot.$sandbox.id == (try sandbox.requireID())
         else {

@@ -148,9 +148,7 @@ struct WorkloadRegistrationController: RouteCollection {
     /// undo the only revocation lever on a delay nobody can predict.
     func delete(req: Request) async throws -> HTTPStatus {
         _ = try await req.requireSystemAdmin()
-        guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid registration ID")
-        }
+        let registrationID = try req.requireUUIDParameter("registrationID", reason: "Invalid registration ID")
         guard let registration = try await WorkloadRegistration.find(registrationID, on: req.db) else {
             throw Abort(.notFound, reason: "Registration not found")
         }
@@ -241,9 +239,7 @@ struct WorkloadRegistrationController: RouteCollection {
 
     private func loadGrantTarget(_ req: Request) async throws -> (Project, WorkloadRegistration) {
         let project = try await req.requireProject()
-        guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid registration ID")
-        }
+        let registrationID = try req.requireUUIDParameter("registrationID", reason: "Invalid registration ID")
         guard let registration = try await WorkloadRegistration.find(registrationID, on: req.db),
             registration.kind == .workload
         else {

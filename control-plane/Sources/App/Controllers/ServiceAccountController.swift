@@ -340,9 +340,7 @@ struct ServiceAccountController: RouteCollection {
         let accountID = try account.requireID()
         try await req.authorize("iam:setPolicy", on: IAMNode(type: .project, id: account.$project.id))
 
-        guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid registration ID")
-        }
+        let registrationID = try req.requireUUIDParameter("registrationID", reason: "Invalid registration ID")
         guard
             let registration = try await WorkloadRegistration.query(on: req.db)
                 .filter(\.$id == registrationID)
@@ -394,9 +392,7 @@ struct ServiceAccountController: RouteCollection {
     }
 
     private func loadAccount(_ req: Request) async throws -> ServiceAccount {
-        guard let accountID = req.parameters.get("serviceAccountID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid service account ID")
-        }
+        let accountID = try req.requireUUIDParameter("serviceAccountID", reason: "Invalid service account ID")
         guard let account = try await ServiceAccount.find(accountID, on: req.db) else {
             throw Abort(.notFound, reason: "Service account not found")
         }

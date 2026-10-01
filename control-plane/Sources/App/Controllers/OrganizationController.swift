@@ -73,9 +73,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         guard let organization = try await Organization.find(organizationID, on: req.db) else {
             throw Abort(.notFound)
@@ -203,9 +201,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         guard let organization = try await Organization.find(organizationID, on: req.db) else {
             throw Abort(.notFound)
@@ -298,9 +294,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         guard let organization = try await Organization.find(organizationID, on: req.db) else {
             throw Abort(.notFound)
@@ -412,9 +406,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Membership check through the Cedar evaluator. System admins may
         // switch to any organization — the same bypass the rest of the API
@@ -434,9 +426,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Membership check through the Cedar evaluator; the member list stays
         // member-visible (`org:read`).
@@ -467,9 +457,7 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Org-admin check through the Cedar evaluator (`org:update`).
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -550,13 +538,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
 
         // Org-admin check through the Cedar evaluator.
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -602,13 +586,9 @@ struct OrganizationController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
 
         // Org-admin check through the Cedar evaluator.
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)

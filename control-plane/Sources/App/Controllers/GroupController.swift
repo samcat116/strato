@@ -32,9 +32,7 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -59,11 +57,8 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or group ID")
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid organization or group ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -86,9 +81,7 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         let createRequest = try req.content.decodeValidated(CreateGroupRequest.self)
 
@@ -122,11 +115,8 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or group ID")
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid organization or group ID")
 
         let updateRequest = try req.content.decodeValidated(UpdateGroupRequest.self)
 
@@ -173,11 +163,8 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or group ID")
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid organization or group ID")
 
         // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -209,11 +196,8 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or group ID")
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid organization or group ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -235,11 +219,8 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or group ID")
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid organization or group ID")
 
         let addRequest = try req.content.decode(AddGroupMemberRequest.self)
 
@@ -280,11 +261,8 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or group ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or group ID")
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid organization or group ID")
 
         let removeRequest = try req.content.decode(RemoveGroupMemberRequest.self)
 
@@ -313,12 +291,10 @@ struct GroupController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let groupID = req.parameters.get("groupID", as: UUID.self),
-            let userID = req.parameters.get("userID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization, group, or user ID")
-        }
+        let organizationID = try req.requireUUIDParameter(
+            "organizationID", reason: "Invalid organization, group, or user ID")
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid organization, group, or user ID")
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid organization, group, or user ID")
 
         // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)

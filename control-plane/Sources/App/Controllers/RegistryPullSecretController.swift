@@ -169,9 +169,7 @@ struct RegistryPullSecretController: RouteCollection {
     }
 
     private func loadSecret(_ req: Request, in project: Project) async throws -> RegistryPullSecret {
-        guard let credentialID = req.parameters.get("credentialID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid credential ID")
-        }
+        let credentialID = try req.requireUUIDParameter("credentialID", reason: "Invalid credential ID")
         guard
             let pullSecret = try await RegistryPullSecret.query(on: req.db)
                 .filter(\.$id == credentialID)

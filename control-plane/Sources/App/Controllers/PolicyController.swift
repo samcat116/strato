@@ -379,9 +379,7 @@ struct PolicyController: RouteCollection {
     }
 
     private func find(_ req: Request) async throws -> IAMPolicy {
-        guard let id = req.parameters.get("policyID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Policy id must be a UUID")
-        }
+        let id = try req.requireUUIDParameter("policyID", reason: "Policy id must be a UUID")
         guard let policy = try await IAMPolicy.find(id, on: req.db) else {
             throw Abort(.notFound, reason: "Policy not found")
         }

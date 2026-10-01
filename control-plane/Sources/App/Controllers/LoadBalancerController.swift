@@ -280,9 +280,7 @@ struct LoadBalancerController: RouteCollection {
     func deleteBackend(req: Request) async throws -> HTTPStatus {
         let loadBalancer = try await find(req, action: "loadbalancer:update")
         let loadBalancerID = try loadBalancer.requireID()
-        guard let backendID = req.parameters.get("backendId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid backend ID")
-        }
+        let backendID = try req.requireUUIDParameter("backendId", reason: "Invalid backend ID")
         guard
             let backend = try await LoadBalancerBackend.query(on: req.db)
                 .filter(\.$id == backendID)
@@ -300,16 +298,12 @@ struct LoadBalancerController: RouteCollection {
     // MARK: - Helpers
 
     private func find(_ req: Request, action: String) async throws -> LoadBalancer {
-        guard let id = req.parameters.get("loadBalancerId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid load balancer ID")
-        }
+        let id = try req.requireUUIDParameter("loadBalancerId", reason: "Invalid load balancer ID")
         return try await req.authorizedLoadBalancer(id, action: action)
     }
 
     private func findListener(_ req: Request, loadBalancerID: UUID) async throws -> LoadBalancerListener {
-        guard let listenerID = req.parameters.get("listenerId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid listener ID")
-        }
+        let listenerID = try req.requireUUIDParameter("listenerId", reason: "Invalid listener ID")
         guard
             let listener = try await LoadBalancerListener.query(on: req.db)
                 .filter(\.$id == listenerID)

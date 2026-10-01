@@ -350,3 +350,22 @@ prometheus.io/port: {{ .port | quote }}
 prometheus.io/path: {{ .path | default "/metrics" | quote }}
 {{- end }}
 {{- end }}
+
+{{/* Configurable HTTP probes shared by the control plane and frontend. */}}
+{{- define "strato-control-plane.probe" -}}
+{{- if .probe.enabled }}
+{{ .kind }}Probe:
+  httpGet:
+    path: {{ .probe.path | default .defaultPath }}
+    port: http
+  {{- if hasKey .defaults "initialDelaySeconds" }}
+  initialDelaySeconds: {{ .probe.initialDelaySeconds | default .defaults.initialDelaySeconds }}
+  {{- end }}
+  periodSeconds: {{ .probe.periodSeconds | default .defaults.periodSeconds }}
+  timeoutSeconds: {{ .probe.timeoutSeconds | default .defaults.timeoutSeconds }}
+  {{- if hasKey .defaults "successThreshold" }}
+  successThreshold: {{ .probe.successThreshold | default .defaults.successThreshold }}
+  {{- end }}
+  failureThreshold: {{ .probe.failureThreshold | default .defaults.failureThreshold }}
+{{- end }}
+{{- end }}

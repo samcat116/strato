@@ -290,9 +290,7 @@ struct SecurityGroupController: RouteCollection {
     func deleteRule(req: Request) async throws -> HTTPStatus {
         let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
         let groupId = try group.requireID()
-        guard let ruleId = req.parameters.get("ruleId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid rule ID")
-        }
+        let ruleId = try req.requireUUIDParameter("ruleId", reason: "Invalid rule ID")
         guard
             let rule = try await SecurityGroupRule.query(on: req.db)
                 .filter(\.$id == ruleId)
@@ -677,9 +675,7 @@ struct SecurityGroupController: RouteCollection {
     }
 
     private func fetchGroupWithAction(req: Request, action: String) async throws -> SecurityGroup {
-        guard let groupId = req.parameters.get("groupId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid security group ID")
-        }
+        let groupId = try req.requireUUIDParameter("groupId", reason: "Invalid security group ID")
         return try await req.authorizedResource(
             groupId, as: SecurityGroup.self, nodeType: .securityGroup, action: action,
             notFoundReason: "Security group not found")

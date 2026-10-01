@@ -167,9 +167,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
+        let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")
@@ -186,9 +184,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
+        let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 
         let updateRequest = try req.content.decodeValidated(UpdateResourceQuotaRequest.self)
 
@@ -340,9 +336,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
+        let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")
@@ -379,9 +373,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -400,9 +392,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
         let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
 
@@ -437,11 +427,8 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         // Verify user has access to organization
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
@@ -469,11 +456,8 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self),
-            let ouID = req.parameters.get("ouID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid organization or folder ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
+        let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
 
         let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
 
@@ -582,9 +566,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let quotaID = req.parameters.get("quotaID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid quota ID")
-        }
+        let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")

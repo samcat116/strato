@@ -1,4 +1,3 @@
-import Crypto
 import Fluent
 import Foundation
 import Vapor
@@ -103,13 +102,7 @@ final class DeviceAuthorization: Model, @unchecked Sendable {
     static let userCodeCharset = "BCDFGHJKLMNPQRSTVWXZ"
 
     static func generateDeviceCode() -> String {
-        let randomBytes = SymmetricKey(size: .bits256)
-        let keyData = randomBytes.withUnsafeBytes { Data($0) }
-        let keyString = keyData.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "")
-            .replacingOccurrences(of: "/", with: "")
-            .replacingOccurrences(of: "=", with: "")
-            .prefix(40)
+        let keyString = SecureToken.generate(length: 40)
         return "dc_\(keyString)"
     }
 
@@ -119,9 +112,7 @@ final class DeviceAuthorization: Model, @unchecked Sendable {
     }
 
     static func hashCode(_ code: String) -> String {
-        let data = Data(code.utf8)
-        let hashed = SHA256.hash(data: data)
-        return hashed.compactMap { String(format: "%02x", $0) }.joined()
+        SecureToken.sha256Hex(code)
     }
 
     /// Uppercases and re-inserts the dash so users can type codes in any of

@@ -38,9 +38,7 @@ struct AuditEventController: RouteCollection {
     }
 
     func listForOrganization(req: Request) async throws -> AuditEventListResponse {
-        guard let organizationID = req.parameters.get("organizationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid organization ID")
-        }
+        let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
         let query = try req.query.decode(ListQuery.self)
         return try await list(query: query, organizationID: organizationID, on: req)

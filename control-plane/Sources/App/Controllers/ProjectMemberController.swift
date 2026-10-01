@@ -236,9 +236,7 @@ struct ProjectMemberController: RouteCollection {
         let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let node = IAMNode(type: .project, id: try project.requireID())
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
         let body = try req.content.decode(UpdateMemberRoleRequest.self)
         let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
 
@@ -268,9 +266,7 @@ struct ProjectMemberController: RouteCollection {
         let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let node = IAMNode(type: .project, id: try project.requireID())
-        guard let userID = req.parameters.get("userID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid user ID")
-        }
+        let userID = try req.requireUUIDParameter("userID", reason: "Invalid user ID")
         try await revokeGrant(principalType: .user, principalID: userID, node: node, req: req)
         return .noContent
     }
@@ -307,9 +303,7 @@ struct ProjectMemberController: RouteCollection {
         let project = try await req.requireProject()
         try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
         let node = IAMNode(type: .project, id: try project.requireID())
-        guard let groupID = req.parameters.get("groupID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid group ID")
-        }
+        let groupID = try req.requireUUIDParameter("groupID", reason: "Invalid group ID")
         try await revokeGrant(principalType: .group, principalID: groupID, node: node, req: req)
         return .noContent
     }

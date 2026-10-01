@@ -200,9 +200,7 @@ struct PasskeyController: RouteCollection {
     }
 
     private func findOwnedCredential(_ req: Request, user: User) async throws -> UserCredential {
-        guard let credentialID = req.parameters.get("credentialID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid passkey ID")
-        }
+        let credentialID = try req.requireUUIDParameter("credentialID", reason: "Invalid passkey ID")
         // Scoped by owner, so another user's passkey is indistinguishable from
         // one that doesn't exist.
         guard

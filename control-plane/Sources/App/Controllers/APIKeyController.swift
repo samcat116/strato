@@ -35,9 +35,7 @@ struct APIKeyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let apiKeyID = req.parameters.get("apiKeyID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid API key ID")
-        }
+        let apiKeyID = try req.requireUUIDParameter("apiKeyID", reason: "Invalid API key ID")
 
         guard
             let apiKey = try await APIKey.query(on: req.db)
@@ -118,9 +116,7 @@ struct APIKeyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let apiKeyID = req.parameters.get("apiKeyID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid API key ID")
-        }
+        let apiKeyID = try req.requireUUIDParameter("apiKeyID", reason: "Invalid API key ID")
 
         guard
             let apiKey = try await APIKey.query(on: req.db)
@@ -158,9 +154,7 @@ struct APIKeyController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let apiKeyID = req.parameters.get("apiKeyID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid API key ID")
-        }
+        let apiKeyID = try req.requireUUIDParameter("apiKeyID", reason: "Invalid API key ID")
 
         guard
             let apiKey = try await APIKey.query(on: req.db)

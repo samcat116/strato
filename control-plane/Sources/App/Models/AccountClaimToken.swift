@@ -1,4 +1,3 @@
-import Crypto
 import Fluent
 import Foundation
 import Vapor
@@ -59,24 +58,16 @@ final class AccountClaimToken: Model, @unchecked Sendable {
         self.$createdBy.id = createdByID
     }
 
-    // MARK: - Token helpers (mirrors SCIMToken)
+    // MARK: - Token helpers
 
     static func generateToken() -> String {
-        let randomBytes = SymmetricKey(size: .bits256)
-        let keyData = randomBytes.withUnsafeBytes { Data($0) }
-        let keyString = keyData.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "")
-            .replacingOccurrences(of: "/", with: "")
-            .replacingOccurrences(of: "=", with: "")
-            .prefix(48)
+        let keyString = SecureToken.generate(length: 48)
 
         return "claim_\(keyString)"
     }
 
     static func hashToken(_ token: String) -> String {
-        let data = Data(token.utf8)
-        let hashed = SHA256.hash(data: data)
-        return hashed.compactMap { String(format: "%02x", $0) }.joined()
+        SecureToken.sha256Hex(token)
     }
 
     static func extractPrefix(_ token: String) -> String {

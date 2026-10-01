@@ -27,9 +27,7 @@ struct OperationController: RouteCollection {
     func show(req: Request) async throws -> OperationResponse {
         let user = try req.auth.require(User.self)
 
-        guard let operationID = req.parameters.get("operationID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid operation ID")
-        }
+        let operationID = try req.requireUUIDParameter("operationID", reason: "Invalid operation ID")
 
         if let execution = try await VMCommandExecution.find(operationID, on: req.db) {
             try await authorizeCommandExecution(execution, for: user, req: req)

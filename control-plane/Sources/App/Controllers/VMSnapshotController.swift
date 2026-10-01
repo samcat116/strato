@@ -272,18 +272,14 @@ extension VMController {
     /// Fetch the :vmID VM and enforce a permission on it. Mirrors
     /// `VMController.fetchVMWithAction`, which is private to that file.
     private func authorizedVM(req: Request, action: String) async throws -> VM {
-        guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid VM ID")
-        }
+        let vmID = try req.requireUUIDParameter("vmID", reason: "Invalid VM ID")
         return try await req.authorizedVM(vmID, action: action)
     }
 
     /// Fetch the :snapshotID checkpoint and confirm it belongs to `vm` (the
     /// route nests checkpoints under their VM).
     private func fetchSnapshot(req: Request, vm: VM) async throws -> VMSnapshot {
-        guard let snapshotID = req.parameters.get("snapshotID", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid snapshot ID")
-        }
+        let snapshotID = try req.requireUUIDParameter("snapshotID", reason: "Invalid snapshot ID")
         guard let snapshot = try await VMSnapshot.find(snapshotID, on: req.db),
             snapshot.$vm.id == (try vm.requireID())
         else {

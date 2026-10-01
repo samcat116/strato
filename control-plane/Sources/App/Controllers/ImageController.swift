@@ -72,11 +72,8 @@ struct ImageController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid project or image ID")
-        }
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project or image ID")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project or image ID")
 
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
@@ -499,11 +496,8 @@ struct ImageController: RouteCollection {
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid project or image ID")
-        }
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project or image ID")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project or image ID")
 
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
@@ -627,11 +621,8 @@ struct ImageController: RouteCollection {
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid project or image ID")
-        }
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project or image ID")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project or image ID")
 
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
@@ -729,9 +720,9 @@ struct ImageController: RouteCollection {
         guard req.auth.has(User.self) else {
             throw Abort(.unauthorized)
         }
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self),
-            let kindString = req.parameters.get("kind")
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project, image, or artifact kind")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project, image, or artifact kind")
+        guard let kindString = req.parameters.get("kind")
         else {
             throw Abort(.badRequest, reason: "Invalid project, image, or artifact kind")
         }
@@ -775,11 +766,8 @@ struct ImageController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid project or image ID")
-        }
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project or image ID")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project or image ID")
 
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
@@ -836,11 +824,8 @@ struct ImageController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid project or image ID")
-        }
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project or image ID")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project or image ID")
 
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
@@ -889,11 +874,8 @@ struct ImageController: RouteCollection {
     // MARK: - Download Image
 
     func download(req: Request) async throws -> Response {
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid project or image ID")
-        }
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project or image ID")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project or image ID")
 
         guard let artifactParam = req.query[String.self, at: "artifact"] else {
             throw Abort(.badRequest, reason: "An artifact query parameter is required")
@@ -1058,11 +1040,8 @@ struct ImageController: RouteCollection {
             throw Abort(.unauthorized)
         }
 
-        guard let projectID = req.parameters.get("projectID", as: UUID.self),
-            let imageID = req.parameters.get("imageID", as: UUID.self)
-        else {
-            throw Abort(.badRequest, reason: "Invalid project or image ID")
-        }
+        let projectID = try req.requireUUIDParameter("projectID", reason: "Invalid project or image ID")
+        let imageID = try req.requireUUIDParameter("imageID", reason: "Invalid project or image ID")
 
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")

@@ -1,4 +1,3 @@
-import Crypto
 import Fluent
 import Foundation
 import Vapor
@@ -106,20 +105,12 @@ final class CLISession: Model, @unchecked Sendable {
     static func generateRefreshToken() -> String { generateToken(prefix: "rt") }
 
     private static func generateToken(prefix: String) -> String {
-        let randomBytes = SymmetricKey(size: .bits256)
-        let keyData = randomBytes.withUnsafeBytes { Data($0) }
-        let keyString = keyData.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "")
-            .replacingOccurrences(of: "/", with: "")
-            .replacingOccurrences(of: "=", with: "")
-            .prefix(32)
+        let keyString = SecureToken.generate(length: 32)
         return "\(prefix)_\(String.randomAlphanumeric(length: 16))_\(keyString)"
     }
 
     static func hashToken(_ token: String) -> String {
-        let data = Data(token.utf8)
-        let hashed = SHA256.hash(data: data)
-        return hashed.compactMap { String(format: "%02x", $0) }.joined()
+        SecureToken.sha256Hex(token)
     }
 
     // MARK: - Validity

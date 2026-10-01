@@ -474,9 +474,7 @@ struct DNSController: RouteCollection {
     func detachNetwork(req: Request) async throws -> HTTPStatus {
         let zone = try await fetchZone(req: req, action: "dns:detach")
         let zoneID = try zone.requireID()
-        guard let networkID = req.parameters.get("networkId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid network ID")
-        }
+        let networkID = try req.requireUUIDParameter("networkId", reason: "Invalid network ID")
         _ = try await Self.authorizedNetwork(req: req, id: networkID, zone: zone)
 
         try await req.db.transaction { db in
@@ -529,9 +527,7 @@ struct DNSController: RouteCollection {
 
     /// The zone's own canonical action check.
     private func fetchZone(req: Request, action: String) async throws -> DNSZone {
-        guard let zoneID = req.parameters.get("zoneId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid DNS zone ID")
-        }
+        let zoneID = try req.requireUUIDParameter("zoneId", reason: "Invalid DNS zone ID")
         guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
             throw Abort(.notFound, reason: "DNS zone not found")
         }
@@ -546,12 +542,8 @@ struct DNSController: RouteCollection {
     /// zone reaches it through the tree, and a binding on the record alone
     /// reaches only that row.
     private func fetchRecord(req: Request, action: String) async throws -> (DNSZone, DNSRecord) {
-        guard let zoneID = req.parameters.get("zoneId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid DNS zone ID")
-        }
-        guard let recordID = req.parameters.get("recordId", as: UUID.self) else {
-            throw Abort(.badRequest, reason: "Invalid DNS record ID")
-        }
+        let zoneID = try req.requireUUIDParameter("zoneId", reason: "Invalid DNS zone ID")
+        let recordID = try req.requireUUIDParameter("recordId", reason: "Invalid DNS record ID")
         guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
             throw Abort(.notFound, reason: "DNS zone not found")
         }
