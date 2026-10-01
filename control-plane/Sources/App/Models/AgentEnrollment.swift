@@ -1,5 +1,4 @@
 import Fluent
-import Crypto
 import Foundation
 import SQLKit
 import Vapor
@@ -121,19 +120,12 @@ final class AgentEnrollment: Model, Content, @unchecked Sendable {
     /// A bootstrap token carries no configuration. It is only a high-entropy
     /// lookup credential whose hash identifies this enrollment.
     static func generateBootstrapToken() -> String {
-        let key = SymmetricKey(size: .bits256)
-        let random = key.withUnsafeBytes { Data($0) }
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        let random = SecureToken.generate(encoding: .urlSafe)
         return "enroll_v1_\(random)"
     }
 
     static func hashBootstrapToken(_ token: String) -> String {
-        SHA256.hash(data: Data(token.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
+        SecureToken.sha256Hex(token)
     }
 
     static func findByBootstrapToken(_ token: String, on db: Database) async throws

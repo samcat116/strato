@@ -1,7 +1,6 @@
 import Fluent
 import Vapor
 import Foundation
-import Crypto
 
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
 /// receive IDs or immutable snapshots and reload their own instance.
@@ -78,22 +77,14 @@ final class APIKey: Model, @unchecked Sendable {
 
     static func generateAPIKey() -> String {
         // Generate a secure random API key: sk_[16 random chars]_[32 random chars]
-        let randomBytes = SymmetricKey(size: .bits256)
-        let keyData = randomBytes.withUnsafeBytes { Data($0) }
-        let keyString = keyData.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "")
-            .replacingOccurrences(of: "/", with: "")
-            .replacingOccurrences(of: "=", with: "")
-            .prefix(32)
+        let keyString = SecureToken.generate(length: 32)
 
         let prefix = String.randomAlphanumeric(length: 16)
         return "sk_\(prefix)_\(keyString)"
     }
 
     static func hashAPIKey(_ key: String) -> String {
-        let data = Data(key.utf8)
-        let hashed = SHA256.hash(data: data)
-        return hashed.compactMap { String(format: "%02x", $0) }.joined()
+        SecureToken.sha256Hex(key)
     }
 
     var isExpired: Bool {

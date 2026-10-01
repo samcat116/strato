@@ -1,7 +1,6 @@
 import Fluent
 import Vapor
 import Foundation
-import Crypto
 
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
 /// receive IDs or immutable snapshots and reload their own instance.
@@ -72,21 +71,13 @@ final class SCIMToken: Model, @unchecked Sendable {
         // Generate a secure random SCIM token: scim_[48 base64 chars]
         // Uses 256 bits of cryptographic randomness, base64 encoded and filtered to 48 alphanumeric chars
         // This provides approximately 285 bits of entropy (48 chars * ~5.95 bits/char for base64 without +/=)
-        let randomBytes = SymmetricKey(size: .bits256)
-        let keyData = randomBytes.withUnsafeBytes { Data($0) }
-        let keyString = keyData.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "")
-            .replacingOccurrences(of: "/", with: "")
-            .replacingOccurrences(of: "=", with: "")
-            .prefix(48)
+        let keyString = SecureToken.generate(length: 48)
 
         return "scim_\(keyString)"
     }
 
     static func hashToken(_ token: String) -> String {
-        let data = Data(token.utf8)
-        let hashed = SHA256.hash(data: data)
-        return hashed.compactMap { String(format: "%02x", $0) }.joined()
+        SecureToken.sha256Hex(token)
     }
 
     static func extractPrefix(_ token: String) -> String {
