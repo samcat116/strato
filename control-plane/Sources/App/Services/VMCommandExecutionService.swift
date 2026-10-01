@@ -1300,111 +1300,102 @@ actor VMCommandExecutionService {
     private func retryClassification(
         id: UUID, agentKey: String, acceptingSweptFailure: Bool
     ) async {
-        var nextDelay = retryDelay
-        while captures[id]?.agentKey == agentKey, !app.didShutdown {
-            try? await Task.sleep(for: nextDelay)
-            guard captures[id]?.agentKey == agentKey, !app.didShutdown else {
+        await retryWithBackoff(
+            while: { captures[id]?.agentKey == agentKey },
+            message: "Could not classify started VM command; retrying",
+            metadata: ["executionId": .string(id.uuidString), "agentKey": .string(agentKey)]
+        ) {
+            guard
+                let execution = try await recordedExecution(
+                    id: id, agentKey: agentKey,
+                    acceptingSweptFailure: acceptingSweptFailure)
+            else {
+                captures.removeValue(forKey: id)
                 return
             }
-            do {
-                guard
-                    let execution = try await recordedExecution(
-                        id: id, agentKey: agentKey,
-                        acceptingSweptFailure: acceptingSweptFailure)
-                else {
-                    captures.removeValue(forKey: id)
-                    return
-                }
-                // The database query suspends this actor. A terminal frame may
-                // have moved the capture into pending completion meanwhile;
-                // never resurrect it after that transition.
-                guard var capture = captures[id], capture.agentKey == agentKey else { return }
-                capture.deadline =
-                    execution.status == .pending
-                    ? execution.deadline
-                    : Date().addingTimeInterval(Self.completionBudget)
-                storeCapture(capture, id: id)
-                return
-            } catch {
-                app.logger.warning(
-                    "Could not classify started VM command; retrying",
-                    metadata: [
-                        "executionId": .string(id.uuidString),
-                        "agentKey": .string(agentKey),
-                        "error": .string(error.localizedDescription),
-                    ])
-                nextDelay = min(nextDelay + nextDelay, .seconds(30))
-            }
+            // The database query suspends this actor. A terminal frame may
+            // have moved the capture into pending completion meanwhile;
+            // never resurrect it after that transition.
+            guard var capture = captures[id], capture.agentKey == agentKey else { return }
+            capture.deadline =
+                execution.status == .pending
+                ? execution.deadline
+                : Date().addingTimeInterval(Self.completionBudget)
+            storeCapture(capture, id: id)
         }
     }
 
     private func retryRunningClassification(id: UUID, agentKey: String) async {
-        var nextDelay = retryDelay
-        while captures[id]?.agentKey == agentKey, !app.didShutdown {
-            try? await Task.sleep(for: nextDelay)
+        await retryWithBackoff(
+            while: { captures[id]?.agentKey == agentKey },
+            message: "Could not classify running recorded VM command; retrying",
+            metadata: ["executionId": .string(id.uuidString), "agentKey": .string(agentKey)]
+        ) {
             guard let candidate = captures[id], candidate.agentKey == agentKey,
                 candidate.authoritativeRevision != nil,
                 !app.didShutdown
             else { return }
-            do {
-                let classification = try await classifyRunningSnapshot(
-                    id: id, agentKey: agentKey, capture: candidate)
-                guard captures[id]?.mutationToken == candidate.mutationToken else {
+            let classification = try await classifyRunningSnapshot(
+                id: id, agentKey: agentKey, capture: candidate)
+            guard captures[id]?.mutationToken == candidate.mutationToken else {
+                return
+            }
+            switch classification {
+            case .unknown:
+                captures.removeValue(forKey: id)
+                await closeRecordedSession(
+                    id: id, agentKey: agentKey,
+                    reason: "recorded command is unknown to the control plane")
+                return
+            case .terminal:
+                captures.removeValue(forKey: id)
+                await closeRecordedSession(
+                    id: id, agentKey: agentKey,
+                    reason: "recorded command is already terminal")
+                return
+            case .pending(let deadline, let acceptsSnapshot):
+                guard acceptsSnapshot else {
+                    captures.removeValue(forKey: id)
                     return
                 }
-                switch classification {
-                case .unknown:
-                    captures.removeValue(forKey: id)
-                    await closeRecordedSession(
-                        id: id, agentKey: agentKey,
-                        reason: "recorded command is unknown to the control plane")
-                    return
-                case .terminal:
-                    captures.removeValue(forKey: id)
-                    await closeRecordedSession(
-                        id: id, agentKey: agentKey,
-                        reason: "recorded command is already terminal")
-                    return
-                case .pending(let deadline, let acceptsSnapshot):
-                    guard acceptsSnapshot else {
-                        captures.removeValue(forKey: id)
-                        return
-                    }
-                    var capture = candidate
-                    capture.deadline = deadline
-                    storeCapture(capture, id: id)
-                    return
-                }
-            } catch {
-                app.logger.warning(
-                    "Could not classify running recorded VM command; retrying",
-                    metadata: [
-                        "executionId": .string(id.uuidString),
-                        "agentKey": .string(agentKey),
-                        "error": .string(error.localizedDescription),
-                    ])
-                nextDelay = min(nextDelay + nextDelay, .seconds(30))
+                var capture = candidate
+                capture.deadline = deadline
+                storeCapture(capture, id: id)
+                return
             }
         }
     }
 
     private func retryCompletion(id: UUID, completion: PendingCompletion) async {
+        await retryWithBackoff(
+            while: { pendingCompletions[id] != nil },
+            message: "Could not persist completed VM command; retrying",
+            metadata: ["executionId": .string(id.uuidString)]
+        ) {
+            _ = try await complete(
+                id: id, capture: completion.capture, exitCode: completion.exitCode)
+            pendingCompletions.removeValue(forKey: id)
+        }
+    }
+
+    /// Keeps retries on this actor so liveness is checked again after every sleep.
+    private func retryWithBackoff(
+        while isLive: () -> Bool,
+        message: Logger.Message,
+        metadata: Logger.Metadata,
+        operation: () async throws -> Void
+    ) async {
         var nextDelay = retryDelay
-        while pendingCompletions[id] != nil, !app.didShutdown {
+        while isLive(), !app.didShutdown {
             try? await Task.sleep(for: nextDelay)
-            guard pendingCompletions[id] != nil, !app.didShutdown else { return }
+            guard isLive(), !app.didShutdown else { return }
             do {
-                _ = try await complete(
-                    id: id, capture: completion.capture, exitCode: completion.exitCode)
-                pendingCompletions.removeValue(forKey: id)
+                try await operation()
                 return
             } catch {
-                app.logger.warning(
-                    "Could not persist completed VM command; retrying",
-                    metadata: [
-                        "executionId": .string(id.uuidString),
-                        "error": .string(error.localizedDescription),
-                    ])
+                var failureMetadata = metadata
+                failureMetadata["error"] = .string(error.localizedDescription)
+                app.logger.warning(message, metadata: failureMetadata)
                 nextDelay = min(nextDelay + nextDelay, .seconds(30))
             }
         }
