@@ -1,6 +1,11 @@
 import Foundation
 import Logging
 import StratoShared
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 
 /// An RBD client driver for a Ceph cluster operated outside Strato.
 ///
@@ -412,7 +417,25 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         try writer.write(Data(renderConfig().utf8), to: configPath, permissions: 0o600)
         try writer.write(Data(configuration.keyring.utf8), to: keyringPath, permissions: 0o600)
 
+        // Per-call destinations will never be reused. Reclaim only interrupted
+        // staging, not published inputs still needed by another pool's reader.
+        let directory = (configPath as NSString).deletingLastPathComponent
+        let descriptor = try OwnedFileCleanup.lockDirectory(directory)
+        defer { _ = close(descriptor) }
+        try OwnedFileCleanup.removeFiles(in: directory, descriptor: descriptor) {
+            Self.isSecretValueFile($0, stagingOnly: true)
+        }
+
         isPrepared = true
+    }
+
+    nonisolated static func isSecretValueFile(_ name: String, stagingOnly: Bool = false) -> Bool {
+        let prefix = "libvirt-secret.value."
+        guard name.hasPrefix(prefix) else { return false }
+        let suffix = String(name.dropFirst(prefix.count))
+        if OwnedFileCleanup.isUUID(suffix) { return !stagingOnly }
+        let components = suffix.components(separatedBy: ".tmp.")
+        return components.count == 2 && components.allSatisfy(OwnedFileCleanup.isUUID)
     }
 
     public func prepareAttachmentForQEMU(_ attachment: DiskAttachment) async throws {
@@ -426,7 +449,9 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             credentialId: configuration.credentialId)
         let directory = (configPath as NSString).deletingLastPathComponent
         let secretXMLPath = "\(directory)/libvirt-secret.xml"
-        let secretValuePath = "\(directory)/libvirt-secret.value"
+        // Per-call ownership also isolates actor reentrancy and different pools
+        // sharing this credential: cleanup cannot remove another virsh input.
+        let secretValuePath = "\(directory)/libvirt-secret.value.\(UUID().uuidString)"
         let writer = DurableFileWriter()
 
         // Libvirt needs only the cephx key value, not the whole keyring. Parse
