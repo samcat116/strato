@@ -686,3 +686,11 @@ sandbox guest v4 surface; sandbox init does not realize VM guest intent. An old
 VM daemon rejects the new request explicitly rather than reporting convergence.
 The same connection first performs the existing v4 ping handshake and every
 reply is checked against that boot nonce.
+
+Item-level failures are explicit: optional `failedItem` contains `section`
+(`packages`, `files`, `services`, or `sysctls`), `identity` (package/service
+name, file path, or sysctl key), and fixed `reason` matching the top-level
+`error`. It names the failed observation/apply/read-back row; other unmet rows
+were not necessarily attempted. Journal, validation, or interrupted-pass errors
+have no failed item. Failed-item identity and reason survive restart in the
+metadata journal.

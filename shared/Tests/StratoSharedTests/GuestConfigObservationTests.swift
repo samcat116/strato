@@ -35,4 +35,22 @@ struct GuestConfigObservationTests {
         let successError = try decode(#"[{"name":"curl","version":"1"}]"#, error: #""failed""#)
         #expect(throws: GuestConfigObservationError.self) { try successError.validate(for: config, generation: 7) }
     }
+
+    @Test func itemFailureIdentifiesOnlyAManagedRowAndMatchesTheFailureReason() throws {
+        let config = GuestConfig(packages: [GuestPackage(name: "curl", state: .present)])
+        for identity in ["curl", "foreign"] {
+            let json = """
+                {"generation":7,"status":"failed","error":"package budget exhausted","failedItem":{"section":"packages","identity":"\(identity)","reason":"package budget exhausted"},"packages":[],"files":[],"services":[],"sysctls":[]}
+                """
+            let observation = try JSONDecoder().decode(GuestConfigObservation.self, from: Data(json.utf8))
+            if identity == "curl" {
+                try observation.validate(for: config, generation: 7)
+            } else {
+                #expect(throws: GuestConfigObservationError.self) {
+                    try observation.validate(for: config, generation: 7)
+                }
+            }
+        }
+    }
+
 }
