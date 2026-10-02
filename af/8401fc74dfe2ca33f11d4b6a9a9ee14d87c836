@@ -1,0 +1,30 @@
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_f5690667012577::t_8b8502c10299e9 97,239
+  s_f5690667012577::t_0d274b17d8abbc 98
+  s_f5690667012577::t_4bfc4e88b52591 240
+  s_f5690667012577::t_21fcabb6f29a42 22,24-35
+agent/Sources/StratoAgentCore/SingleFlight.swift
+  s_f5690667012577::t_ac7a58e6afa6cc 17-23,25-36,44-53,55-58,60,62-70,72,74,76,80-96,99,101-107,110-115
+  s_f5690667012577::t_97c25d172f8f16 97
+  s_f5690667012577::t_2462ffc24f0848 98
+agent/Tests/StratoAgentTests/ImageCacheServiceTests.swift
+  s_f5690667012577::t_9b3334139e4934 156-209
+agent/Tests/StratoAgentTests/SingleFlightTests.swift
+  s_f5690667012577::t_8ac0149127d401 101-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "af8401fc74dfe2ca33f11d4b6a9a9ee14d87c836",
+  "prompts": {},
+  "sessions": {
+    "s_f5690667012577": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "196fc78d-0876-4cb2-85a0-136f7470eb66",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

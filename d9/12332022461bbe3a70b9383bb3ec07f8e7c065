@@ -1,0 +1,35 @@
+control-plane/Sources/App/Controllers/ServiceAccountController.swift
+  s_61ec5df81e3be7::t_c9fdc0b13ba4d8 87,105
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_61ec5df81e3be7::t_1cb52346b78f18 426-427
+  s_61ec5df81e3be7::t_f8be00b2f83164 446-447
+  s_61ec5df81e3be7::t_cf302ca0d8479b 539
+  s_61ec5df81e3be7::t_57bf07790de426 523
+control-plane/Sources/App/Controllers/RegistryPullSecretController.swift
+  s_61ec5df81e3be7::t_c979229b4d01fe 41,53,101,127
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_61ec5df81e3be7::t_fe42317a74e587 114
+  s_61ec5df81e3be7::t_a446a2fd53d4ac 48
+control-plane/Sources/App/Controllers/WorkloadRegistrationController.swift
+  s_61ec5df81e3be7::t_f9a369077bcf5d 176
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_61ec5df81e3be7::t_951b47bf18a5ae 85,152,214,290,335,397
+control-plane/Sources/App/Extensions/Request+RequireProject.swift
+  s_61ec5df81e3be7::t_5775f9a78f5d66 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "d912332022461bbe3a70b9383bb3ec07f8e7c065",
+  "prompts": {},
+  "sessions": {
+    "s_61ec5df81e3be7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebcef710-266d-4006-ab9b-5a0bd5999e38",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

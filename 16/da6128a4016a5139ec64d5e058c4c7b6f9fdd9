@@ -1,0 +1,21 @@
+renovate.json
+  s_0400b986c38e66::t_2851cd0e2b7159 1-52
+.github/workflows/renovate.yml
+  s_0400b986c38e66::t_f28a3756d6e0c1 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "16da6128a4016a5139ec64d5e058c4c7b6f9fdd9",
+  "prompts": {},
+  "sessions": {
+    "s_0400b986c38e66": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5cb9c067-d5f0-4d54-a875-5c5aa6d9ee67",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

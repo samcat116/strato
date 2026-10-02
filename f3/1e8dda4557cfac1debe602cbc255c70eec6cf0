@@ -1,0 +1,55 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_a177ee6ff08121::t_e9bdacd109c441 2471-2472,2477-2481,2490-2491
+  s_a177ee6ff08121::t_a576aceb6289d2 2507-2508,2517,2525-2526
+control-plane/Sources/App/Models/vm.swift
+  s_a177ee6ff08121::t_8b63a746722ad2 264-285
+agent/Sources/StratoAgent/QEMUService.swift
+  s_a177ee6ff08121::t_6f54bdd96421ec 183-193,472
+  s_a177ee6ff08121::t_4c62574739b6f8 518
+  s_a177ee6ff08121::t_ea9c0807b00dcf 453,460-471
+  s_a177ee6ff08121::t_c2855e59010257 473-474
+control-plane/Sources/App/Services/AgentService.swift
+  s_a177ee6ff08121::t_a34155664139ac 1584-1594
+  s_a177ee6ff08121::t_e2b85562c18c96 386
+  s_a177ee6ff08121::t_173d2148ac87ca 776-808,814-815
+  s_a177ee6ff08121::t_d564dce3f609a8 731-734,737-757
+  s_a177ee6ff08121::t_a0147670ee1658 945-950,952,958,961-970
+  s_a177ee6ff08121::t_ff7be4b8b6b187 1011
+  s_a177ee6ff08121::t_964e91c993e177 589-605
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_a177ee6ff08121::t_ac43cdc32a08b9 278-286
+  s_a177ee6ff08121::t_3fb1c8962ae5b9 150-156
+  s_a177ee6ff08121::t_d1c5b166558d29 210-213,215
+  s_a177ee6ff08121::t_aad1ad8148c0c4 137-143
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_a177ee6ff08121::t_889a8fe563221e 487-488,490
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_a177ee6ff08121::t_4e934dcaa3360d 244-245,251-252,260-297
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_a177ee6ff08121::t_21886ada6bff1b 83
+  s_a177ee6ff08121::t_312a35e848351a 64-65
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_a177ee6ff08121::t_f590c0df23b15e 125-131,138-139,146
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a177ee6ff08121::t_f2aa9310652bbc 149-166
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_a177ee6ff08121::t_7e4da5f7ff2b03 302-328
+agent/Package.resolved
+  s_a177ee6ff08121::t_bbada80cb56b93 2,157-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f31e8dda4557cfac1debe602cbc255c70eec6cf0",
+  "prompts": {},
+  "sessions": {
+    "s_a177ee6ff08121": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "28f6c346-2f91-4452-8893-60dd61a33ad0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

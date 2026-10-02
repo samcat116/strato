@@ -1,0 +1,50 @@
+control-plane/Sources/App/Models/Project.swift
+  s_311e4d09212c99::t_8b7e3d92748e56 151-165
+  s_311e4d09212c99::t_be4787151da76a 150
+control-plane/Sources/App/Services/SpiceDBOrgMemberReconciliation.swift
+  s_311e4d09212c99::t_dcf2082571c55a 14-15,19-26,29-30,33
+control-plane/Sources/App/Services/SpiceDBProjectReconciliation.swift
+  s_311e4d09212c99::t_7bdc0f10ff7b96 5-10,12-13,17,20,22,27-28,32-33,35-66,69-70,72-73
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_311e4d09212c99::t_0707bc33163ff0 158-159,170,182,185,187-191
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_311e4d09212c99::t_85b4360932d899 509-510,516-528
+  s_311e4d09212c99::t_3b042c87553111 291-301
+  s_311e4d09212c99::t_1b0b3af2f2a77a 177-178
+  s_311e4d09212c99::t_fed1dfd45617d3 365-368,376-390
+  s_311e4d09212c99::t_c9bd7aacb30ee8 391
+  s_311e4d09212c99::t_bdc75776b60b29 529
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_311e4d09212c99::t_bfbd05dd28f604 12
+  s_311e4d09212c99::t_01c0993996e3ed 649-662
+  s_311e4d09212c99::t_ea50e0de69b066 354-399
+  s_311e4d09212c99::t_0f72d1d64d1fa4 475
+  s_311e4d09212c99::t_92872003200d49 23-32
+control-plane/Tests/AppTests/AuthorizationCheckTests.swift
+  s_311e4d09212c99::t_b278956b05cba9 48-50
+control-plane/Sources/App/configure.swift
+  s_311e4d09212c99::t_86261aa9dc369b 273-277,280
+control-plane/Sources/App/Models/OrganizationalUnit.swift
+  s_311e4d09212c99::t_b875a2b65d6458 69-80
+  s_311e4d09212c99::t_2835fddcc40148 68
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_311e4d09212c99::t_c3517629fbc4e0 756-760,764-765,771-772
+  s_311e4d09212c99::t_15217b3bc18b92 613-615
+  s_311e4d09212c99::t_2fb4cc5671cc7d 660-669,674-675,678,683-684
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "461a6fa24b8ae706aef03f1bd6a2de172d3da94e",
+  "prompts": {},
+  "sessions": {
+    "s_311e4d09212c99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b6dd57a-adf6-4dc0-8fd6-ae1126922c9b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+control-plane/Sources/App/Services/VolumeService.swift
+  s_f509efed25913a::t_e42abea200553a 170-177
+  s_f509efed25913a::t_266a627e44669d 133
+control-plane/Tests/AppTests/VolumeAgentSelectionTests.swift
+  s_f509efed25913a::t_1b5debeec6615b 1-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "083b3f072b4f628f083c55642e685494e53d09f5",
+  "prompts": {},
+  "sessions": {
+    "s_f509efed25913a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6f06d8ca-6d07-4870-a727-dcf255b1ca8e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

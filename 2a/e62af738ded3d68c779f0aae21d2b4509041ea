@@ -1,0 +1,100 @@
+shared/Sources/StratoShared/WireProtocol.swift
+  s_a177ee6ff08121::t_7e6a9a905a399c 47-64
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_a177ee6ff08121::t_75490d87862e6b 1-45,47-142,152-168,170-177,179-186,194-371
+  s_a177ee6ff08121::t_45ed2948eec19f 46
+  s_a177ee6ff08121::t_a5c6190aff62f0 143-151
+  s_a177ee6ff08121::t_e4cb5568de381d 169,178,187-193
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_a177ee6ff08121::t_785791e6da45ca 76-80
+  s_a177ee6ff08121::t_42a329db88a20b 133-136
+control-plane/Sources/App/Models/vm.swift
+  s_a177ee6ff08121::t_aedc3c28c60d62 33-46
+  s_a177ee6ff08121::t_dc23e392a1777f 161-163
+  s_a177ee6ff08121::t_84870d0aa2da89 250-263
+control-plane/Sources/App/Services/AgentService.swift
+  s_a177ee6ff08121::t_50b4db7c9cc88c 437,442,447-454
+  s_a177ee6ff08121::t_2b1de540fc3724 693-694
+  s_a177ee6ff08121::t_fbdf73b5f37eb7 646-692,695-947
+  s_a177ee6ff08121::t_558d6b702f74ab 969
+  s_a177ee6ff08121::t_1d9dfa5504513b 1072
+  s_a177ee6ff08121::t_704475a4410088 1004-1024
+  s_a177ee6ff08121::t_cea97911d70948 168-169
+  s_a177ee6ff08121::t_f3306a4e936805 455
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_a177ee6ff08121::t_4b2450ee306da9 53-56
+  s_a177ee6ff08121::t_c9f5c1ec1cfac1 1-52,57-316
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_a177ee6ff08121::t_f75b955126c85c 1-169
+control-plane/Sources/App/Migrations/AddDesiredStateToVM.swift
+  s_a177ee6ff08121::t_475de67fbdaeeb 1-58
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_a177ee6ff08121::t_87ea0763edc086 1-117
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_a177ee6ff08121::t_4ee27055904f82 1-47
+agent/Sources/StratoAgent/QEMUService.swift
+  s_a177ee6ff08121::t_e9f02d4e9fcc24 28-31
+  s_a177ee6ff08121::t_5b09a96bd753cf 343-346
+  s_a177ee6ff08121::t_28e244681d0570 226
+  s_a177ee6ff08121::t_35e4bde5d10aea 877-887
+  s_a177ee6ff08121::t_39cd68d290dc5c 101-113
+  s_a177ee6ff08121::t_42e865b29e5e5d 62-66,68-80
+  s_a177ee6ff08121::t_44db6d67831c77 192-200,202-203
+  s_a177ee6ff08121::t_ac61b68281d61a 466-516
+control-plane/Sources/App/configure.swift
+  s_a177ee6ff08121::t_c8f3956854b321 222-225
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_a177ee6ff08121::t_34a04299ba37fa 45-46
+  s_a177ee6ff08121::t_4acb5e6d52c9d8 62
+agent/Sources/StratoAgent/Agent.swift
+  s_a177ee6ff08121::t_ff3b92934295d2 96-105
+  s_a177ee6ff08121::t_df2d9493641bf0 630
+  s_a177ee6ff08121::t_638afc5604e197 304-308
+  s_a177ee6ff08121::t_4c7d2621927566 567-573
+  s_a177ee6ff08121::t_77f57f9603b777 926-932
+  s_a177ee6ff08121::t_801392db9bf3a1 2295-2500,2518-2531
+  s_a177ee6ff08121::t_046ab8300d4971 2501-2517
+  s_a177ee6ff08121::t_7c7b38d8bffe7e 1052-1054
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_a177ee6ff08121::t_f8c4d83280393e 29-40
+  s_a177ee6ff08121::t_31988146e8eddf 67-77
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_a177ee6ff08121::t_170f3db4f272a2 1-388
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_a177ee6ff08121::t_73d2a8b5cc83f3 51-54
+agent/Sources/StratoAgent/AdoptedQEMUVM.swift
+  s_a177ee6ff08121::t_5d827b0bae7d5e 1-166
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_a177ee6ff08121::t_7accc7fca0a0ec 484-491
+  s_a177ee6ff08121::t_c627fb3f15b57e 395-400
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a177ee6ff08121::t_570df63d6e969f 53,80-85,88-89,97-110,112
+  s_a177ee6ff08121::t_a04e6afbe3080c 111,872,875-878,880-891
+  s_a177ee6ff08121::t_cf0dfc2bd10064 582,585-591,598
+  s_a177ee6ff08121::t_83469e2b23678b 480-484
+  s_a177ee6ff08121::t_64a31cb2026e0d 747-749,751-762
+  s_a177ee6ff08121::t_9e84934d4ea019 641-654
+  s_a177ee6ff08121::t_a3052719aa4589 832,834-838,840-843,845-858
+  s_a177ee6ff08121::t_0fa486943e7c77 776-778,780-791
+  s_a177ee6ff08121::t_e3b2700cc44e38 113
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_a177ee6ff08121::t_8135978a6880a2 68-75
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_a177ee6ff08121::t_ed9a43b9386f74 98-104,110-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2ae62af738ded3d68c779f0aae21d2b4509041ea",
+  "prompts": {},
+  "sessions": {
+    "s_a177ee6ff08121": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "28f6c346-2f91-4452-8893-60dd61a33ad0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

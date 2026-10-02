@@ -1,0 +1,28 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_fa9e1a346b7184::t_0fbcb445c6d920 127-138,225,236-239,873-877,1563,1565-1608,1612-1615,1631,1633,1691-1733,1736-1737,1739-1745,1753,1757,1767,1770,1786
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_fa9e1a346b7184::t_0fbcb445c6d920 21-30,37-46,59-77,84-85,162,291,299,312-313,344-357,372-374,438-446,450,456-457,506-511,517-518,522-526,542-546,556-560,563-567,590-594,619,621,683,732-735,742-783
+control-plane/Tests/AppTests/AgentWebSocketIntegrationTests.swift
+  s_fa9e1a346b7184::t_0fbcb445c6d920 143-241,476-484,554-575
+  s_fa9e1a346b7184::t_f359a784d2fbe0 576
+control-plane/Tests/AppTests/RegistryPullSecretTests.swift
+  s_fa9e1a346b7184::t_0fbcb445c6d920 476
+shared/Sources/StratoShared/SandboxModels.swift
+  s_fa9e1a346b7184::t_0fbcb445c6d920 122-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "cace1b52778f3534e698122323e7329d61fd055f",
+  "prompts": {},
+  "sessions": {
+    "s_fa9e1a346b7184": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f918f-9dbe-75d1-a558-c6599b409c75",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

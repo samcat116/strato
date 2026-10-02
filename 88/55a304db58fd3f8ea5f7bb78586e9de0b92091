@@ -1,0 +1,24 @@
+agent/Sources/StratoAgentCore/MetadataService/MetadataHTTPServer.swift
+  s_4dc01f536615a1::t_47a8636dbe2263 58
+  s_4dc01f536615a1::t_b58e72587fddfd 42-47
+agent/Sources/StratoAgent/Agent.swift
+  s_4dc01f536615a1::t_6e235f66c3813a 653-657
+agent/Tests/StratoAgentTests/MetadataHTTPServerTests.swift
+  s_4dc01f536615a1::t_500f95dcc7752c 277-285,288
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "8855a304db58fd3f8ea5f7bb78586e9de0b92091",
+  "prompts": {},
+  "sessions": {
+    "s_4dc01f536615a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fa364107-7351-4ab1-b25d-5f9568ef8d95",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+control-plane/Sources/App/Services/BackgroundTaskRegistry.swift
+  s_2364fcdbd44611::t_f2aaf78f6e9ba5 35-53,57,60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2b71828b9d81206b02ce4cbd7dbd017c41cce82f",
+  "prompts": {},
+  "sessions": {
+    "s_2364fcdbd44611": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3d2d0679-cce3-402e-adf2-e32173ea2d05",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_bacc4934dc36f2::t_29a4fce846b772 41
+  s_bacc4934dc36f2::t_b65dd17625984e 73
+  s_bacc4934dc36f2::t_ff7c4acc175b8e 15-21
+  s_bacc4934dc36f2::t_fbc780ef9fb853 191,199-232
+  s_6b79f3234a0fa6::t_ac55b37a806cf0 14
+control-plane/web/src/lib/api/client.ts
+  s_bacc4934dc36f2::t_8052f0385e1bcb 48-49,54-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a4608988249c20f85af8333940e30a8968fbe294",
+  "prompts": {},
+  "sessions": {
+    "s_6b79f3234a0fa6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee0b4a12-ecbf-4742-92d3-87fdc50825fa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_bacc4934dc36f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e34c697f-1bc3-4f01-bdda-c12bd60808cb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

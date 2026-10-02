@@ -1,0 +1,23 @@
+control-plane/Sources/App/Services/StorageDeviceInventoryReconciler.swift
+  s_1dd9ddf4b6d7c1::t_c3a0b282392366 1-175
+control-plane/Sources/App/Services/AgentService.swift
+  s_1dd9ddf4b6d7c1::t_9a6be88f712fd8 2241-2256
+control-plane/Tests/AppPlatformTests/StorageDeviceInventoryReconcilerTests.swift
+  s_1dd9ddf4b6d7c1::t_b1a446fa0d67ae 1-279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ef29fa7241c3b109c4f3089805370e95923f8149",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

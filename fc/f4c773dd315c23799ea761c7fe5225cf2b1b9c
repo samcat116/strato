@@ -1,0 +1,42 @@
+agent/Sources/StratoAgent/SandboxRuntimeProtocol.swift
+  s_a36dd7ef4412d5::t_111aa921cfd14b 128-129
+  s_a36dd7ef4412d5::t_b2ddcf03a44fd9 100-105,109
+control-plane/web/src/components/ui/copy-button.tsx
+  s_a36dd7ef4412d5::t_8d58cb54d5bf7c 1-59
+agent/Sources/StratoAgentCore/SandboxConfigDrive.swift
+  s_a36dd7ef4412d5::t_8d58cb54d5bf7c 169-181
+agent/Sources/StratoAgent/Agent.swift
+  s_a36dd7ef4412d5::t_8d58cb54d5bf7c 3382-3390
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a36dd7ef4412d5::t_cc7ccf7658ac76 220-221
+  s_a36dd7ef4412d5::t_99c600e5e03591 266,913-950
+  s_a36dd7ef4412d5::t_7a5b06ffe5bb7d 813-822
+  s_a36dd7ef4412d5::t_ca34d6c7f2dc21 152-160
+  s_a36dd7ef4412d5::t_6e222066b6748d 258,261-265
+  s_a36dd7ef4412d5::t_3dd87c6dd04284 343-345,348-349
+agent/Tests/StratoAgentTests/SandboxConfigDriveTests.swift
+  s_a36dd7ef4412d5::t_8d58cb54d5bf7c 129-140
+control-plane/web/src/components/oidc-providers/oidc-providers-section.tsx
+  s_a36dd7ef4412d5::t_8d58cb54d5bf7c 24,155-157,185-195
+  s_a36dd7ef4412d5::t_f5ae54aab58f19 196
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_a36dd7ef4412d5::t_8d58cb54d5bf7c 11,206-218
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_a36dd7ef4412d5::t_e53b2bc5d49a6c 251-254,264-265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "fcf4c773dd315c23799ea761c7fe5225cf2b1b9c",
+  "prompts": {},
+  "sessions": {
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

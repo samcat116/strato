@@ -1,0 +1,29 @@
+.github/workflows/main-build.yaml
+  s_593f525657c6ca::t_352bae644693d5 446-449
+  s_593f525657c6ca::t_15e3a90a88f70b 461-463
+  s_593f525657c6ca::t_7f1cdc92fdbe03 63-66,69-73
+  s_593f525657c6ca::t_0d8e7571e9b77b 343-349
+  s_593f525657c6ca::t_dfa37e3280939e 427-445,450-460,464-471
+.github/workflows/build.yaml
+  s_593f525657c6ca::t_90d78968769f07 472-474
+  s_593f525657c6ca::t_f274b8a4a9561b 341-345
+.github/workflows/release.yaml
+  s_593f525657c6ca::t_0c1625b1571fd1 372
+  s_593f525657c6ca::t_23b6388ba9bf39 324-327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "92443f6521ab7c2c8b20a36420626a814af5dd78",
+  "prompts": {},
+  "sessions": {
+    "s_593f525657c6ca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b7528c9-1dff-4829-97d1-7e2fd95f0753",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

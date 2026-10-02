@@ -1,0 +1,106 @@
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_701b6d317ba5a2::t_dc5810da964648 448,450
+  s_701b6d317ba5a2::t_f55c4b6e658be4 528-533,535,538-541
+  s_701b6d317ba5a2::t_3dca1ed8e50b86 491,493
+  s_701b6d317ba5a2::t_579deac767c3f3 355
+  s_701b6d317ba5a2::t_412ba6e11fcfdd 383,387
+  s_701b6d317ba5a2::t_a81d8aadfc447a 406-410,419,421
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDAuthorityStore.swift
+  s_701b6d317ba5a2::t_11bda45ca22a7f 196-199
+  s_701b6d317ba5a2::t_32a22482ac9e56 1-195,200-224
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_701b6d317ba5a2::t_729627127e0128 345
+  s_701b6d317ba5a2::t_895b1260375c5b 274
+  s_701b6d317ba5a2::t_69b631570780a2 207-209,217-226,229-230
+  s_701b6d317ba5a2::t_b33f7918f1b962 324-329,334
+control-plane/Sources/App/Controllers/VMController.swift
+  s_701b6d317ba5a2::t_c77d89f5bf38db 90,165,640,854,910,933,954,972,1014,1035
+  s_701b6d317ba5a2::t_cb406c2b03c1b7 116-119
+  s_701b6d317ba5a2::t_24e40de63596e6 176,639,853,909,932,971,1013,1034
+  s_701b6d317ba5a2::t_1b9b3254b5d9b2 156
+control-plane/Sources/App/Services/SPIFFE/JWTAuthorityJWK.swift
+  s_701b6d317ba5a2::t_df7e5856e3b69a 1-251
+control-plane/Sources/App/Middleware/JWTSVIDAuthenticator.swift
+  s_701b6d317ba5a2::t_1e03599a6df2e4 1-128
+deploy/compose/docker-compose.yml
+  s_701b6d317ba5a2::t_f383405d1ee409 339-347
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDVerification.swift
+  s_701b6d317ba5a2::t_88e4972f3d6f63 1-251
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_701b6d317ba5a2::t_74e577ebe4dde9 63-68
+control-plane/Sources/App/configure.swift
+  s_701b6d317ba5a2::t_d01bc88a13e8df 723-729
+control-plane/Tests/AppTests/JWTSVIDAuthenticationTests.swift
+  s_701b6d317ba5a2::t_ce3ac980691860 1-299,303-305,309,334-492,494-522
+  s_701b6d317ba5a2::t_eb6ed86063240a 493
+  s_701b6d317ba5a2::t_f9fb04302c773c 317-333
+  s_701b6d317ba5a2::t_e240e7752f615d 300-302,306-308,310-316
+agent/Sources/StratoAgentSPIFFE/SPIFFEClient.swift
+  s_701b6d317ba5a2::t_4ce15c9e2a90bc 167-187
+  s_701b6d317ba5a2::t_c52afce1cf08aa 19-44
+docs/deployment/agents.md
+  s_701b6d317ba5a2::t_bf4132e694eab7 414-416
+docs/architecture/iam.md
+  s_701b6d317ba5a2::t_dec60ff115a40e 502-503
+  s_701b6d317ba5a2::t_48aa195fc47e5a 533-577,590-602
+  s_701b6d317ba5a2::t_2d55a6b9651014 578-589
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_701b6d317ba5a2::t_bf87e8e18c1577 111-113
+  s_701b6d317ba5a2::t_15415221a00608 147,153,163,182,529,558,580,602,641,727
+helm/strato-control-plane/templates/deployment.yaml
+  s_701b6d317ba5a2::t_678240920ae963 274-285
+control-plane/Sources/App/IAM/RequestPrincipal.swift
+  s_701b6d317ba5a2::t_0139e1b5f28b1f 1-91
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_701b6d317ba5a2::t_579aff689c5c7a 68-69,73
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_701b6d317ba5a2::t_e40aa4a9c1dd64 157
+  s_701b6d317ba5a2::t_5bb17c08f3d489 79-81
+  s_701b6d317ba5a2::t_4af0e94757738e 134
+agent/Sources/StratoAgentSPIFFE/WorkloadAPIClient.swift
+  s_701b6d317ba5a2::t_046a259128a33d 39-53
+  s_701b6d317ba5a2::t_8e1d91302c0202 6
+  s_701b6d317ba5a2::t_fd281777a387cf 130-137
+  s_701b6d317ba5a2::t_72e85aa62b90b0 120-129,138-181,188-209
+  s_701b6d317ba5a2::t_8c221aef6ed60a 182-187
+  s_701b6d317ba5a2::t_a2f7e02110b245 357-420
+control-plane/Tests/AppTests/IAMAuthorizerTests.swift
+  s_701b6d317ba5a2::t_fe83d8fcb5ac23 65
+control-plane/Sources/App/openapi.yaml
+  s_701b6d317ba5a2::t_5889068292120f 21-23,27-40
+  s_701b6d317ba5a2::t_6b053c989c0243 6960-6962
+  s_701b6d317ba5a2::t_9fc30738910258 41
+helm/strato-control-plane/values.yaml
+  s_701b6d317ba5a2::t_65af47c0fceda7 877-894
+agent/Sources/StratoAgentSPIFFE/JWTSVIDToken.swift
+  s_701b6d317ba5a2::t_cf79df5033a940 1-143
+agent/Tests/StratoAgentTests/JWTSVIDClientTests.swift
+  s_701b6d317ba5a2::t_586486f4af4160 359-363
+  s_701b6d317ba5a2::t_bd5f2fbc78c8a4 316-323
+  s_701b6d317ba5a2::t_c37ecfdd31f422 339-343
+  s_701b6d317ba5a2::t_665e10dc38cd72 1-315,324-338,344-358,364-401
+control-plane/Tests/AppTests/PolicyEndpointTests.swift
+  s_701b6d317ba5a2::t_fd5f976b8a32ba 131-132
+agent/Sources/StratoAgentSPIFFE/SPIFFETypes.swift
+  s_701b6d317ba5a2::t_14ce4d215329f5 296-302
+  s_701b6d317ba5a2::t_55b16dee2e216d 322-327
+  s_701b6d317ba5a2::t_7c5b863cb5b738 115-122,136-138,143-144,150-179,186-229
+agent/Tests/StratoAgentTests/WorkloadAPIClientTests.swift
+  s_701b6d317ba5a2::t_16e077a5c7714f 296-305
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "c63cb00afb57af4d1cc0f9fe51f2cb8fb19ec024",
+  "prompts": {},
+  "sessions": {
+    "s_701b6d317ba5a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "04c87a35-c6c1-4e65-8dbd-ef09f28d0eac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+control-plane/web/src/types/api.ts
+  s_5b300dc4e2e5e1::t_581767ae11afd4 462-463,480,495
+control-plane/web/src/components/oidc-providers/oidc-provider-dialog.tsx
+  s_5b300dc4e2e5e1::t_adfb6d635edb9f 134
+  s_5b300dc4e2e5e1::t_9edaf8b535ee6d 90
+  s_5b300dc4e2e5e1::t_f0edbefc526ff9 343-366
+  s_5b300dc4e2e5e1::t_9753e41f1de381 154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "c930e6f0a0bf1bfe1f54fbedae9c4e9cbbe9d264",
+  "prompts": {},
+  "sessions": {
+    "s_5b300dc4e2e5e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01d2145c-30d5-4f69-b3bd-e6132e9b7ade",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

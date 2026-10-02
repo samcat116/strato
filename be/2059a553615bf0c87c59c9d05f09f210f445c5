@@ -1,0 +1,49 @@
+docs/architecture/agent.md
+  s_6a573940943d81::t_a4db2ef7453d4c 280-287
+  s_6a573940943d81::t_18ebcddb4fb2f9 288-296
+agent/Sources/StratoAgentCore/QGA/QGAObjectFramer.swift
+  s_6a573940943d81::t_edd13d700451c6 12-18,24-33
+  s_6a573940943d81::t_cc78196e1516f5 69,83-86,88-101,104-105,121-124,128,131-133,135-136,140-148
+  s_6a573940943d81::t_613900387ed7a2 34
+  s_6a573940943d81::t_e594395b5e60aa 149
+agent/Tests/StratoAgentTests/QGAObjectFramerTests.swift
+  s_6a573940943d81::t_a03d9954bd368b 80-109,117-144
+  s_6a573940943d81::t_c9b7e5f6f2e981 110-116
+agent/Tests/StratoAgentTests/QGAClientTests.swift
+  s_6a573940943d81::t_8f222c84e6f5ac 357,360
+  s_6a573940943d81::t_4fd52ebb148c21 621
+  s_6a573940943d81::t_24f3d8aa0cc40f 377-379
+  s_6a573940943d81::t_83a1dd3f237a1e 544-620,622-658
+agent/Sources/StratoAgentCore/QGA/GuestCommand.swift
+  s_6a573940943d81::t_222fe905f61e8a 77
+  s_6a573940943d81::t_e5337940bc3915 54-56
+  s_6a573940943d81::t_49c32c8919dd5b 14-21
+  s_6a573940943d81::t_1cad9197433a9e 32,42-48
+  s_6a573940943d81::t_85d128466ad084 69
+  s_6a573940943d81::t_9e9439e7e375c5 49
+agent/Sources/StratoAgentCore/QGA/QGAClient.swift
+  s_6a573940943d81::t_2cd71fcb009f7d 320-323,332
+  s_6a573940943d81::t_4de92c097521f5 273,351-362,372-378,380
+  s_6a573940943d81::t_36563fef8ec428 427-430
+  s_6a573940943d81::t_5d5c677630080b 343-344
+  s_6a573940943d81::t_fbddaf90ffed80 212-218
+  s_6a573940943d81::t_9cfda5219f06d2 234-239,246-249,253-256,262,275-285,289,293,296-303
+  s_6a573940943d81::t_34fccf9c5ad180 264-265,268-272
+  s_6a573940943d81::t_c9c5ba36868094 274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "be2059a553615bf0c87c59c9d05f09f210f445c5",
+  "prompts": {},
+  "sessions": {
+    "s_6a573940943d81": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "695d049b-b3a5-4586-bb16-652adb573efc",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

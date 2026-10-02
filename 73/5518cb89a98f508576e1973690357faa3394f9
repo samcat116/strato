@@ -1,0 +1,51 @@
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_3d8fde8278f186::t_3ad4f162a8b817 52
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_3d8fde8278f186::t_466c31904d7c48 26-32,34-38,40-42
+  s_3d8fde8278f186::t_69a8ca22b56c6e 272-274
+  s_3d8fde8278f186::t_e6cda542c5669b 331-333
+  s_3d8fde8278f186::t_700ffc51c2d610 296-298
+docs/architecture/networking.md
+  s_3d8fde8278f186::t_33749bb5d4939f 252-257
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_3d8fde8278f186::t_2aad8228d9777d 72-75
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_3d8fde8278f186::t_5de4f24d945c65 170,173,176-178
+  s_3d8fde8278f186::t_b32916c334b9e8 119-121,125
+  s_3d8fde8278f186::t_e5e90609ecbdbd 252,254,257
+  s_3d8fde8278f186::t_8ca973fe181d54 194,196-197
+  s_3d8fde8278f186::t_9583efa5815319 270
+  s_3d8fde8278f186::t_a08f6d9ecccdad 35-37,45-51
+  s_3d8fde8278f186::t_9db79205b2e2d8 144
+  s_3d8fde8278f186::t_676c71eea3ca91 17-18,21
+  s_3d8fde8278f186::t_7f6fe33295ffb0 150,153,156
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3d8fde8278f186::t_9abb9b70bca057 207,212
+  s_3d8fde8278f186::t_0239e12f7b495c 179
+  s_3d8fde8278f186::t_52a20f426ad962 625-626,640
+  s_3d8fde8278f186::t_5758a4834fe249 148-153,155
+shared/Sources/StratoShared/VMSpec.swift
+  s_3d8fde8278f186::t_3dfccb6d7c3165 129-132,134-138
+  s_3d8fde8278f186::t_5b3e2264ce6964 162,174
+  s_3d8fde8278f186::t_10341c823192ca 197
+  s_3d8fde8278f186::t_358513e83288b3 187
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_3d8fde8278f186::t_e6844fc9ff0788 70-71,75
+  s_3d8fde8278f186::t_ac3417f8916323 51-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "735518cb89a98f508576e1973690357faa3394f9",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

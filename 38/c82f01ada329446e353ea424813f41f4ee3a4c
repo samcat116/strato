@@ -1,0 +1,94 @@
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_c44fe57920bab1::t_5968dc07d72aca 37,48
+  s_c44fe57920bab1::t_c8a1468ae48b4f 433
+  s_c44fe57920bab1::t_469d1673e5742c 347
+  s_c44fe57920bab1::t_4c274195494670 1-36,38-47,49-346,348-432,434-475
+control-plane/Tests/AppTests/RoleNestingSubsumptionTests.swift
+  s_c44fe57920bab1::t_e71259034e1094 1-80
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_c44fe57920bab1::t_c5c0b98af21d35 235
+  s_c44fe57920bab1::t_f2cb41b99fa734 226-230
+  s_c44fe57920bab1::t_368190e97779fc 270-273
+  s_c44fe57920bab1::t_9c6adf66b218ac 333-371
+  s_c44fe57920bab1::t_4a26921c83cdd3 119-131
+control-plane/Package.swift
+  s_c44fe57920bab1::t_357188ad03a9bc 70
+  s_c44fe57920bab1::t_8c212f80979abc 64-69
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_c44fe57920bab1::t_726c9d933b0bfd 203-205
+  s_c44fe57920bab1::t_32bec5d96f72d0 227-266
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_c44fe57920bab1::t_a094cb15f352a8 349-357
+  s_c44fe57920bab1::t_469d1673e5742c 347
+  s_c44fe57920bab1::t_e265ffbc48306e 334-346,348,358-359,365
+docs/development/local-development.md
+  s_c44fe57920bab1::t_4c49e1060ad58a 54-72
+  s_c44fe57920bab1::t_2bf80c5132e3b9 12-13
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_c44fe57920bab1::t_24e481cc6459f0 170-180
+  s_c44fe57920bab1::t_473d04bc1e4327 270-279
+  s_c44fe57920bab1::t_7d1d10eb8eba6d 121-131
+docs/architecture/iam.md
+  s_c44fe57920bab1::t_4069121b61e231 172,174,176-178,182-184,194-243
+  s_c44fe57920bab1::t_36c7b05613a279 707-709
+  s_c44fe57920bab1::t_f4ca3fb4f315b1 289-291
+  s_c44fe57920bab1::t_a5b4c31d8d0f79 244
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_c44fe57920bab1::t_d41fe3cf6f7dea 242-262
+control-plane/Dockerfile
+  s_c44fe57920bab1::t_0d93f4097c4115 110
+  s_c44fe57920bab1::t_44300efe9f104d 117-124
+control-plane/Sources/App/openapi.yaml
+  s_c44fe57920bab1::t_07953e1b0edb90 2406-2408,3370-3371
+  s_c44fe57920bab1::t_f10f56fd30feb2 10519-10553
+  s_c44fe57920bab1::t_414ba142cf3cef 2385,2425,3354,3388,3426
+  s_c44fe57920bab1::t_87d0d3a7473ee5 4388,4392
+  s_c44fe57920bab1::t_f72709eec5dc96 4431,4435
+  s_c44fe57920bab1::t_c94f49f465ce29 2369-2371,2409-2411,3338-3340,3372-3374,3410-3412
+  s_c44fe57920bab1::t_9a437310fa6f77 6484-6493
+control-plane/Sources/App/IAM/Cedar/GuardrailAnalyzer.swift
+  s_c44fe57920bab1::t_2cd7eb2533d593 178-186
+  s_c44fe57920bab1::t_006f71f47e4ee2 70-80
+  s_c44fe57920bab1::t_8654ffe664edc7 1-21,23,30-69,81-103,128-130,133-134,137-141,143-177,187-196,200-202,206-244
+  s_c44fe57920bab1::t_260be389cf02d8 197-199,203-205
+  s_c44fe57920bab1::t_1a365d8b36a64f 22,24-29
+  s_c44fe57920bab1::t_ac425def55bad0 104-127,131-132,135-136
+  s_c44fe57920bab1::t_469d1673e5742c 142
+scripts/install-cvc5.sh
+  s_c44fe57920bab1::t_93abd57c6bcb0d 1-42
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_c44fe57920bab1::t_bc699112f2580a 205-226
+control-plane/Tests/AppTests/GuardrailEndpointTests.swift
+  s_c44fe57920bab1::t_d68343a9973ec5 91-92
+  s_c44fe57920bab1::t_bbf8d938112e73 27-31
+  s_c44fe57920bab1::t_c61f5f1b5066af 88-89,93,208
+control-plane/Tests/AppTests/GuardrailWriteCheckTests.swift
+  s_c44fe57920bab1::t_731a6b4e68a676 167-169
+  s_c44fe57920bab1::t_5fa84e7bcd6823 1-166,170-391
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_c44fe57920bab1::t_025543f5aa3a9c 185-192
+control-plane/Package.resolved
+  s_c44fe57920bab1::t_439613ffe4db0f 2,261-262
+.github/workflows/build.yaml
+  s_c44fe57920bab1::t_522ba41b030dca 307-309,313,318
+  s_c44fe57920bab1::t_e76557f49612aa 310-312,314-317
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_c44fe57920bab1::t_f078981635aae9 505-516
+  s_c44fe57920bab1::t_8cff1b2430b8d8 379-390
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "38c82f01ada329446e353ea424813f41f4ee3a4c",
+  "prompts": {},
+  "sessions": {
+    "s_c44fe57920bab1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "96147659-e96e-4eb4-b817-e8b6736291dc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,88 @@
+.github/workflows/README.md
+  s_2364fcdbd44611::t_2ec7a91257c0e6 70-71
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 36,39
+control-plane/Tests/AppTests/OrganizationAccessServiceTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 23,27
+control-plane/Tests/AppTests/HierarchyIntegrationTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 33,37
+.github/workflows/build.yaml
+  s_2364fcdbd44611::t_12f390f5893847 131-144,148,183-223,234-274,287-293
+control-plane/Tests/AppTests/HierarchyPathResolverTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 17,20
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 45,49
+control-plane/Tests/AppTests/OrgMemberSpiceDBMirrorTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 59,63
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 57,61
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 51,55
+  s_2364fcdbd44611::t_ba78b023fb269d 166-172
+control-plane/Tests/AppTests/ProjectMemberTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 46,49
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 52,55
+control-plane/Tests/AppTests/HealthControllerTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 20,43,60,83,101,125,150,173,195
+control-plane/Tests/AppTests/AgentServiceLifecycleTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 36,42
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 79,111,135,170,204,237,271,306,341,386,423,445,477,500
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_2364fcdbd44611::t_4faf15671c7154 72-90
+  s_2364fcdbd44611::t_9d9147890c498d 112,116-117
+  s_2364fcdbd44611::t_68347a0b1cdb90 50,54
+control-plane/Tests/AppTests/AuthorizationCheckTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 38,41
+control-plane/Tests/AppTests/OrganizationalUnitTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 45,49
+control-plane/Sources/App/Services/BackgroundTaskRegistry.swift
+  s_2364fcdbd44611::t_4846404bfa6010 1-75
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 244,249
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_2364fcdbd44611::t_c744f40dbea0bb 16-17,19
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 59,63
+control-plane/Tests/AppTests/VolumeAuthorizationTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 55,59
+control-plane/Sources/App/Controllers/VMController.swift
+  s_2364fcdbd44611::t_ce48646bc33d6c 121,129,223,715,784
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 52,55
+control-plane/Tests/AppTests/SecurityHeadersTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 23,49,63,92,107
+control-plane/Package.swift
+  s_2364fcdbd44611::t_ddc0a3e723c5da 78
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 52,56
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_2364fcdbd44611::t_0cd1115165347e 20-22,29-33
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 141,145
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_2364fcdbd44611::t_68347a0b1cdb90 389
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_2364fcdbd44611::t_fcbd748ba6ea4f 3-6,8,10
+  s_2364fcdbd44611::t_1ed8102071792a 35-248,258-259,261-264,267,270-278,280-281,291-292,297-301,303-311
+  s_2364fcdbd44611::t_5d356baac4d0e3 316-317,325,329,332-333,335
+control-plane/Sources/App/configure.swift
+  s_2364fcdbd44611::t_b5bf81b8f59459 24-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "61188bbedcd117ab337ae3943ca3cf70efb926e0",
+  "prompts": {},
+  "sessions": {
+    "s_2364fcdbd44611": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3d2d0679-cce3-402e-adf2-e32173ea2d05",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+shared/Sources/StratoShared/OCIImageReference.swift
+  s_6b5bf147e3675c::t_d370c246784f8d 35,39-49
+  s_6b5bf147e3675c::t_4f5da10110913f 50-51
+shared/Tests/StratoSharedTests/OCIImageReferenceTests.swift
+  s_6b5bf147e3675c::t_19342e5218c66f 84,88-97
+  s_6b5bf147e3675c::t_d8e640dfe49e79 98-99
+control-plane/Sources/App/Services/RegistryClientService.swift
+  s_6b5bf147e3675c::t_839b11f4d6dc6a 169-186
+control-plane/Tests/AppTests/RegistryPullSecretTests.swift
+  s_6b5bf147e3675c::t_7c74c4f9da6728 395-421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "98104ec62b5db62d2685371cf08b13cf1bc84906",
+  "prompts": {},
+  "sessions": {
+    "s_6b5bf147e3675c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d36210c-ff03-491d-a48a-709bcf3690e1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

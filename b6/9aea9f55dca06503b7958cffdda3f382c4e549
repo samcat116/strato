@@ -1,0 +1,28 @@
+control-plane/Tests/AppTests/VolumeStatusTests.swift
+  s_100b14ce039bf6::t_9825d04a81d973 8,13-17
+control-plane/Sources/App/Models/Volume.swift
+  s_100b14ce039bf6::t_733546eff422c5 229-237,239-245
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_100b14ce039bf6::t_df8959402b7963 257-259,265
+control-plane/Sources/App/Services/AgentService.swift
+  s_100b14ce039bf6::t_e9cfc5963ba86f 1130-1186,1192-1216
+  s_100b14ce039bf6::t_1c1aac9483a5ec 1217-1219
+control-plane/Tests/AppTests/VolumeStuckSweepTests.swift
+  s_100b14ce039bf6::t_fbd8484e8827bb 1-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b69aea9f55dca06503b7958cffdda3f382c4e549",
+  "prompts": {},
+  "sessions": {
+    "s_100b14ce039bf6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c0482849-1e5a-4434-a35c-dbf6eea3b100",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

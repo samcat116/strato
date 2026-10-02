@@ -1,0 +1,27 @@
+control-plane/Tests/AppTests/URLSigningServiceArtifactTests.swift
+  s_6be939981236cc::t_016820636f3342 34-37,40-43,46-49,61-64,66-69
+control-plane/Sources/App/Migrations/BackfillImageArtifacts.swift
+  s_6be939981236cc::t_016820636f3342 16-18
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_6be939981236cc::t_016820636f3342 586-587,633-637
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_6be939981236cc::t_016820636f3342 165
+shared/Tests/StratoSharedTests/ImageInfoArtifactTests.swift
+  s_6be939981236cc::t_016820636f3342 45-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d9f0a927c70499037f3752265e6e84faf784d7f9",
+  "prompts": {},
+  "sessions": {
+    "s_6be939981236cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "de13cf51-5a0e-4903-b04f-3adbbf89fe2b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

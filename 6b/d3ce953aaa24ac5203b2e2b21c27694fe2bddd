@@ -1,0 +1,44 @@
+agent/Package.swift
+  s_e8058c4ef41c93::t_d2ca42ad8f336f 35-39
+  s_e8058c4ef41c93::t_7133858858b8db 17-20
+  s_e8058c4ef41c93::t_f67109f4530526 47
+deploy/compose/docker-compose.yml
+  s_e8058c4ef41c93::t_423c52d735ada9 227-230
+deploy/compose/spiffe/envoy.yaml
+  s_e8058c4ef41c93::t_c73038e98684e4 26-38
+shared/Package.swift
+  s_e8058c4ef41c93::t_703744bbdb4914 23-26
+  s_e8058c4ef41c93::t_e8c3062baf1e07 27-29
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_e8058c4ef41c93::t_365797c994a3fa 30-43
+control-plane/Package.resolved
+  s_e8058c4ef41c93::t_8e4300d72d4ee9 2,243-244
+  s_e8058c4ef41c93::t_4dac9c2c443183 351-352
+agent/Package.resolved
+  s_e8058c4ef41c93::t_8e4300d72d4ee9 2,63-64,90-91
+  s_e8058c4ef41c93::t_237f021e2627e6 153-154,180-181,207
+helm/strato-control-plane/values.yaml
+  s_e8058c4ef41c93::t_d1dbd920332022 889-892
+shared/Package.resolved
+  s_e8058c4ef41c93::t_8e4300d72d4ee9 2,27-28
+  s_e8058c4ef41c93::t_e864082576a1f4 63-64,72-73
+control-plane/Package.swift
+  s_e8058c4ef41c93::t_dded0e090d7cd6 61-64
+  s_e8058c4ef41c93::t_aa57a422c9ee35 35-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "6bd3ce953aaa24ac5203b2e2b21c27694fe2bddd",
+  "prompts": {},
+  "sessions": {
+    "s_e8058c4ef41c93": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57e9ab48-2479-4894-b271-c729042fa9b3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

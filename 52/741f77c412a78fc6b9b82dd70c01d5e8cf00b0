@@ -1,0 +1,40 @@
+control-plane/Tests/AppTests/ListCountBatchingTests.swift
+  s_410b83026746bf::t_cc238396713c10 1-398
+control-plane/Sources/App/Extensions/Model+GroupedCounts.swift
+  s_410b83026746bf::t_cc238396713c10 1-81
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_410b83026746bf::t_cc238396713c10 47-52,54-59,61-62,64
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_410b83026746bf::t_cc238396713c10 73-78,485-488,490-493
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_410b83026746bf::t_cc238396713c10 68-73,77-78,81-84
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_410b83026746bf::t_cc238396713c10 47-49,51-52
+control-plane/Sources/App/Models/OrganizationalUnit.swift
+  s_410b83026746bf::t_cc238396713c10 150-152,156
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_410b83026746bf::t_cc238396713c10 133-135
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_410b83026746bf::t_cc238396713c10 51,404,475-491,493,495-527
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_410b83026746bf::t_cc238396713c10 540-541,545-547,551
+control-plane/Tests/AppTests/ListAuthorizationScalingTests.swift
+  s_410b83026746bf::t_d80e815cef1fec 14-25
+  s_410b83026746bf::t_ef5d8a188610ed 66-71,73-76,86,92-113,117-119,132,134,139,146-148,156,159-170,174-176,187,189,194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "52741f77c412a78fc6b9b82dd70c01d5e8cf00b0",
+  "prompts": {},
+  "sessions": {
+    "s_410b83026746bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5486d294-0d5f-42d4-a0f5-7de3e33822f2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

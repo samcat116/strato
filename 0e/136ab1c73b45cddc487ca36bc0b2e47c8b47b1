@@ -1,0 +1,205 @@
+docs/architecture/networking.md
+  s_b46c3107f6ba4b::t_c9a86508901897 832-833
+cli/Sources/StratoCLI/Commands/NetworkCommand.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 101-103,145
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 231
+control-plane/Sources/App/Services/ResolverCapability.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 54-55,58-60
+control-plane/Tests/AppResourceTests/ImageCompatibilityTests.swift
+  s_b46c3107f6ba4b::t_5234e141e689ac 98-128
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 2,5-6,200-284,567-574,579,582-590,592-594,598-604,613-623,625,632,638-642,647-649,654-657,660-664,669-670,675-676,681-684,690,699-700,702,714-716,722-724,727-729,731-733,762-775,777,779,807,819,821-830,832-836,839-841,843,855-864,866,868-872,895-903,905-906,911-914,919-930,932,934-939,941,1013-1014,1021-1093,1112-1116,1119,1121,1123-1127,1130,1132-1147
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 91-93,95-96,98-100
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 98,103-105,110-114,309-310
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 262,266-267
+shared/Sources/StratoShared/InstanceMetadata.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 158,160-161,176,198-200,215
+control-plane/web/src/lib/control-plane-routes.ts
+  s_b46c3107f6ba4b::t_c9a86508901897 1-9
+docs/adr/0005-agent-drives-libvirt-not-qemu.md
+  s_b46c3107f6ba4b::t_c9a86508901897 112-113,149,233-235
+control-plane/Sources/App/Models/FloatingIPPool.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 12-13,36-38,63,100,110,118
+shared/Tests/StratoSharedTests/InstanceMetadataTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 47-48,181,186,204,230-236
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 67-75
+.github/workflows/helm-test.yml
+  s_b46c3107f6ba4b::t_c9a86508901897 11-13,19-21,90-106
+  s_b46c3107f6ba4b::t_58d74a8adf66a6 107
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 34,44,48,52,207,339
+agent/Package.resolved
+  s_b46c3107f6ba4b::t_c9a86508901897 2,103-111,270
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 93-95,101,204
+config.toml.example
+  s_b46c3107f6ba4b::t_c9a86508901897 3-10
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 172-174,176-177,180,231-232,243,257,261,492-495,621,650-651,656-657
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 649,1299-1350
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 30-33
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 233,238-240
+helm/strato-control-plane/templates/credentials-secret.yaml
+  s_b46c3107f6ba4b::t_c9a86508901897 12
+control-plane/web/src/lib/control-plane-route-prefixes.json
+  s_b46c3107f6ba4b::t_c9a86508901897 1-9
+agent/Tests/StratoAgentTests/EdgeNonceReconciliationTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 402,404-405,407-408,422-423
+  s_b46c3107f6ba4b::t_8f658087f33408 424-425
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 147,149-151,192,318,327,445
+agent/Tests/StratoAgentTests/SimulationConfigTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 10,15-19,67-68,83,96-97,107,118-119,127
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 138-139,143-178,188-190,194,196-197,537-548
+  s_b46c3107f6ba4b::t_5253967baafe93 549
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 85,222,225-226,230,234-235,242,245
+agent/Tests/StratoAgentTests/MetadataPersistenceTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 21-22
+control-plane/Sources/App/Controllers/AgentDesiredStateController.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 24
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 55,133-134,234-235,540-542,547,1072,1074,1076
+CLAUDE.md
+  s_b46c3107f6ba4b::t_c9a86508901897 52
+control-plane/web/src/types/api.ts
+  s_b46c3107f6ba4b::t_c9a86508901897 604-607,610-612
+control-plane/web/src/types/openapi.ts
+  s_b46c3107f6ba4b::t_c9a86508901897 3695,6072,6124,6143,6152,6161,7610-7611,7615,7617
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 121-123,201,288-290,297
+control-plane/Sources/App/Migrations/AddExpectedChecksumToImageArtifact.swift
+  s_b46c3107f6ba4b::t_5234e141e689ac 1-20
+agent/Tests/StratoAgentTests/MetadataStoreTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 14-15,49,51-57,60,64-67,71-76,460-461,463-470
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 76-77
+agent/Tests/StratoAgentTests/MetadataResponderTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 25
+control-plane/Sources/App/Controllers/VMController.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 139,160,276,1364-1365,1741,1749,1753-1754,1758
+agent/Tests/StratoAgentTests/ReconciliationTestSupport.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 1-3
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 42-43,45-49,53-54
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 278-292
+control-plane/Sources/App/Migrations/RequireSitePlacement.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 1-169
+control-plane/Sources/App/Services/AgentService.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 287-290,311,378-380,383,398-399,489-493,1934,1941
+agent/Tests/StratoAgentTests/MetadataServerSupervisorTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 276-278
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 71-74
+agent/Tests/StratoAgentTests/MetadataCallerIndexTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 20
+control-plane/Sources/App/Models/Agent.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 83-86,455,457-477,570-571,575,666
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 454,488,898
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 501-521,531
+deploy/compose/docker-compose.yml
+  s_b46c3107f6ba4b::t_c9a86508901897 482-483
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 328,507-508,512
+helm/strato-control-plane/templates/NOTES.txt
+  s_b46c3107f6ba4b::t_c9a86508901897 62,65-69
+control-plane/Sources/App/Models/Image.swift
+  s_b46c3107f6ba4b::t_5234e141e689ac 335-344,346-347
+control-plane/Sources/App/configure.swift
+  s_b46c3107f6ba4b::t_5234e141e689ac 654-657
+  s_b46c3107f6ba4b::t_c9a86508901897 645,928,931-933
+  s_b46c3107f6ba4b::t_aed8d887920807 934
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 486,494,496-498,501
+control-plane/Sources/App/Migrations/DropLegacyAgentCapabilities.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 1-27
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 59,64,77-90,136,140,146,550-551,558,576
+agent/Tests/StratoAgentTests/HypervisorHangResilienceTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 249,251-252,255-262,265-266,271
+control-plane/Sources/App/Migrations/ReplaceAgentHypervisorTypeWithHypervisors.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 18
+helm/strato-control-plane/values.yaml
+  s_b46c3107f6ba4b::t_c9a86508901897 130-131
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_b46c3107f6ba4b::t_c9a86508901897 39-57,260-261,271
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 614-617
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 87-88,90-93,97-99,572,574-575,578-584
+control-plane/Sources/App/openapi.yaml
+  s_b46c3107f6ba4b::t_c9a86508901897 10376,10515,10594,10613,10622,13408-13409,13455-13459,13465
+control-plane/Tests/AppResourceTests/MakeImageArtifactsAuthoritativeTests.swift
+  s_b46c3107f6ba4b::t_5234e141e689ac 82-121
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 58,63,76-89,154,159,165,494,503
+.github/scripts/test-control-plane-route-parity.py
+  s_b46c3107f6ba4b::t_c9a86508901897 1-94
+agent/Package.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 28,81,83
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 390
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 72
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 202-206,213-214,218-221,224,226-230,233,235-236,278,325
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 57,68-72,74,400,430,465,496,523,571,617,662,729
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 161-162,205
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 167,171-172
+agent/Sources/StratoAgent/Agent.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 285-287,290-294,654-655,1250-1251,1310,1321-1322,1346,1364-1366,1467-1468,1470-1471,1602,2317-2332,3537,3540,3543,3545,3556,3565,3573-3574,3580,3584,3800,3802,3808,3812,3814,3825,3858,3860,3883,3886,3889-3890,3892,3905,3910-3911,3917,3923-3924,3926,3935,3952-3953,3955,4531,4563,4570,4578,4582,4600-4601,4607,4610,4625-4626,4632,4647-4648,4650,4653,4667-4668,4675,4692,4696,4701,4703,4709,4715,4718,4726,4729,4764,4766,4769,4782,4786,4789-4790,4795,4800,4805,4808,4812,4814,4816,4822,4824-4826,4829
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 10,19-29,35-36,45,53-54,59,68-69,78,88-89,94,102-103,111-112,120-121,131,146-147,158,175-176,186-187,193,197,207-208,227-228,239,253-254,259,270-271,280-281,290-291,295,304,311-312,319-320,327-328,339,349-350,355,365,367-371,373-374,378,381-424,429-430,438-439,445-446,455-456,463,466,507-519,521-522,534,545-546,559,574-575,584,590-591,606,616-618,622,631,641-642,656-657,664-665,680,698-699,711-712,719-720,732-733,740-741,749,756-757,764,770-771,779-780,786-787,794,804-805,813,822-823,832,841,844-849,854-855,863-864,870-871,880-881,887-888,897-898,906,909,930-932,940,943-945,951-969,971-974,982,987-1130,1148-1149,1168,1176-1177,1187,1200-1201,1206
+control-plane/web/src/middleware.ts
+  s_b46c3107f6ba4b::t_c9a86508901897 3
+shared/Sources/StratoShared/WireProtocol.swift
+  s_b46c3107f6ba4b::t_9176cec2a6a187 14-16
+  s_b46c3107f6ba4b::t_c9a86508901897 3,5-8,10-12,19-20,27-28
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 46
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 165-182
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_b46c3107f6ba4b::t_c9a86508901897 181,186
+docs/deployment/agents.md
+  s_b46c3107f6ba4b::t_c9a86508901897 484-492
+control-plane/web/next.config.ts
+  s_b46c3107f6ba4b::t_c9a86508901897 3,97-100
+docs/architecture/wire-protocol.md
+  s_b46c3107f6ba4b::t_c9a86508901897 52-56,58-62,66-69,75-76,79,86-87,89-90,96-98
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 7,9-10,12-15,18-19,50,60-64
+agent/Tests/StratoAgentTests/MetadataHTTPServerTests.swift
+  s_b46c3107f6ba4b::t_c9a86508901897 36-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0e136ab1c73b45cddc487ca36bc0b2e47c8b47b1",
+  "prompts": {},
+  "sessions": {
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

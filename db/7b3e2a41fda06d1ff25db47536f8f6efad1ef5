@@ -1,0 +1,29 @@
+helm/strato-control-plane/templates/gateway.yaml
+  s_35df01feef8d22::t_8e754dc93f526a 70-71,85-86
+  s_35df01feef8d22::t_b9447ea4f76d14 48-49
+  s_35df01feef8d22::t_400e9a7b50ce70 55-56
+helm/strato-control-plane/templates/gateway-routes.yaml
+  s_35df01feef8d22::t_81dd59652e0078 62-64,66
+  s_35df01feef8d22::t_4714e28f1fee9b 89-91,93
+  s_35df01feef8d22::t_230248a980ac3b 115-117,119
+  s_35df01feef8d22::t_ef26fe08d933ff 18-20
+  s_35df01feef8d22::t_56c58808f89bc5 106-108
+  s_35df01feef8d22::t_81c3f9a9fd558b 80-82
+  s_35df01feef8d22::t_8c39fe75c128ea 50-52,54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "db7b3e2a41fda06d1ff25db47536f8f6efad1ef5",
+  "prompts": {},
+  "sessions": {
+    "s_35df01feef8d22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3eeaf292-8a77-4954-9c53-d625b5f91145",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

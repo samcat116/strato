@@ -1,0 +1,36 @@
+.github/workflows/release.yaml
+  s_4962cc768a1d3c::t_5bd7aabb7df72b 432-434
+  s_4962cc768a1d3c::t_e91896937e4d8e 515-524
+  s_4962cc768a1d3c::t_211172e2d9189c 309-311,317-318
+  s_4962cc768a1d3c::t_3c6aa9692a75bf 353-354
+  s_4962cc768a1d3c::t_8bfae1474bc1fd 377-399,401-402,404-422,424,426,429
+  s_4962cc768a1d3c::t_779975258a3bc7 400
+README.md
+  s_4962cc768a1d3c::t_249d9611920936 5
+skaffold.yaml
+  s_4962cc768a1d3c::t_938308a615f420 75
+.codex/hooks.json
+  s_4962cc768a1d3c::t_7fe8aa7e9fad22 1-14
+.codex/hooks/startup.sh
+  s_4962cc768a1d3c::t_853ca78c84e892 1-76
+.entire/.gitignore
+  s_4962cc768a1d3c::t_d3a7da194211cb 1-4
+.entire/settings.json
+  s_4962cc768a1d3c::t_6c43c56dbc42f8 1-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "aa493ef86a861b5c60c6e7efbcf507f43e9dca07",
+  "prompts": {},
+  "sessions": {
+    "s_4962cc768a1d3c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c7df33e-d2c2-4e6f-a8aa-e6c47004f0d1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+helm/strato-control-plane/templates/spire-agent-configmap.yaml
+  s_d07d11578f97c9::t_71955557cd5c50 61-66
+helm/strato-control-plane/templates/spire-agent-daemonset.yaml
+  s_d07d11578f97c9::t_47e662810a78a9 58-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6de03c516242069eb84efb73d0fc84a96afa0968",
+  "prompts": {},
+  "sessions": {
+    "s_d07d11578f97c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c24c9982-0ae9-44a1-b39d-efc7d0538c89",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

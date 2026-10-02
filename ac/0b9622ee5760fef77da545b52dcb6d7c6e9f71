@@ -1,0 +1,33 @@
+agent/Sources/StratoAgent/Agent+Reconciliation.swift
+  s_01730cdafc8446::t_609bb60d7c7dcc 682,690-698
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_01730cdafc8446::t_609bb60d7c7dcc 88-94,709-710,741,762-786
+  s_e071c331c9a3b5::t_ea32b8264a5b2f 787-789
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_01730cdafc8446::t_609bb60d7c7dcc 129-130,135-138,145-153,489
+  s_e071c331c9a3b5::t_6126737db110f2 490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ac0b9622ee5760fef77da545b52dcb6d7c6e9f71",
+  "prompts": {},
+  "sessions": {
+    "s_01730cdafc8446": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-d8cf-7de3-97c1-67f2dad45e55",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e071c331c9a3b5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05b05-a046-7f73-8666-3ffb6799e96e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

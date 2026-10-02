@@ -1,0 +1,56 @@
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_d682adc55f5ddb::t_86135f79fb3999 38,44,57-64
+  s_d682adc55f5ddb::t_63a03073b41eef 81,86-88
+  s_136f7fbe80cc74::t_1de0d08d45249d 89
+control-plane/Tests/AppTests/ProjectVisibilityTests.swift
+  s_d682adc55f5ddb::t_64c701a0d89f5f 1-39,41-43,45,48-82,85-112,115-134,136-156,159-187,189-227,230-291,293-318
+  s_d682adc55f5ddb::t_7e7fc911f30956 113-114
+  s_d682adc55f5ddb::t_b51c1e16fe8d5a 157-158
+  s_d682adc55f5ddb::t_00f3738be97c9a 292
+  s_d682adc55f5ddb::t_191e777b07fc2a 40,44,46-47
+  s_d682adc55f5ddb::t_5dcf0ac7570217 135
+  s_d682adc55f5ddb::t_8d43fdde560de1 83-84
+  s_d682adc55f5ddb::t_ad9e1df8ec100f 188
+  s_d682adc55f5ddb::t_4f56a2416bb5fb 228-229
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_d682adc55f5ddb::t_00cac9baa51d55 27,33,45-48,63-71,74
+  s_d682adc55f5ddb::t_b2cff137b1e3ae 29-32,49,52-54,60-61
+  s_d682adc55f5ddb::t_2e2b9d32b51e03 56-58
+  s_d682adc55f5ddb::t_e4fdfc9b17474b 62
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_d682adc55f5ddb::t_993249748c64a7 269,277-278,281,289-296,299-303
+docs/architecture/iam.md
+  s_d682adc55f5ddb::t_55157caaed9c87 784-796
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_d682adc55f5ddb::t_8a1cf4b0582620 35,46,54-61,64-67
+control-plane/Sources/App/IAM/ProjectVisibility.swift
+  s_d682adc55f5ddb::t_12309a6ecdbf2a 197-198
+  s_d682adc55f5ddb::t_0ff17bdcd316cf 1-63,71-196,199-213,216-229,234-245
+  s_d682adc55f5ddb::t_980f08a0b5df3d 230-233
+  s_d682adc55f5ddb::t_31e75b1a3e6337 214-215
+  s_d682adc55f5ddb::t_c02e669a980699 64-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "eff79fd7f4ce2f38786fb4bacff5a9bd070e8ef6",
+  "prompts": {},
+  "sessions": {
+    "s_136f7fbe80cc74": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "635ffee6-b39e-43cf-986f-a26be128418e",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d682adc55f5ddb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "756fa976-55a3-4257-9c41-ca911321b00f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,75 @@
+bun.lock
+  s_bd516ccae91710::t_e8abbe49fb6052 1-358
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_0a710a308ff596::t_5c93dec6cbfcaa 1-101
+control-plane/web/src/components/layout/header.tsx
+  s_8df8cc1c42c241::t_7940c7952d159f 7,20
+control-plane/web/src/components/projects/index.ts
+  s_0a710a308ff596::t_ed2fda51f14ddb 1-3
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_8df8cc1c42c241::t_b9832663af7e1b 18,46-48,100
+control-plane/web/src/app/(dashboard)/images/page.tsx
+  s_bd516ccae91710::t_18707f337fa18c 6,10-15,17,36,79-81,87-89
+control-plane/web/src/app/(dashboard)/vms/page.tsx
+  s_bd516ccae91710::t_326b881a00cb18 3,9,16-23,33-35,51-52,56-60
+control-plane/web/src/components/layout/project-switcher.tsx
+  s_bd516ccae91710::t_c33a643ee6a3c9 1-83
+control-plane/web/src/components/layout/sidebar.tsx
+  s_ad42b6fec9d996::t_d983a3b8679cb1 15,131-138
+control-plane/web/src/components/projects/project-form-dialog.tsx
+  s_bd516ccae91710::t_074254571d3deb 1-309
+control-plane/web/src/components/projects/projects-table.tsx
+  s_bd516ccae91710::t_0d7a7bb5e4c95b 1-174
+control-plane/web/src/components/projects/transfer-project-dialog.tsx
+  s_bd516ccae91710::t_c4f857fa80f245 1-155
+control-plane/web/src/lib/api/projects.ts
+  s_bd516ccae91710::t_2a654d4d8ce02b 18-36,56,58-62,66,74-78
+control-plane/web/src/lib/hooks/index.ts
+  s_bd516ccae91710::t_b035372f3509ed 20
+control-plane/web/src/lib/hooks/use-projects.ts
+  s_0a710a308ff596::t_8c5e927014f346 2-7,36-47,52-54,67,69,78-93
+control-plane/web/src/providers/index.tsx
+  s_bd516ccae91710::t_8f9ed22b7e822e 7,15-18,27
+control-plane/web/src/providers/project-provider.tsx
+  s_bd516ccae91710::t_080030692ae1dd 1-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "56eb1c5bf703f8312fd7ffb3fb430cef8bd035d4",
+  "prompts": {},
+  "sessions": {
+    "s_0a710a308ff596": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "76b43862-dc77-4590-b6e1-5338807000d1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_8df8cc1c42c241": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "089fa474-d447-4115-bfee-b4ac320704c1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_ad42b6fec9d996": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-ab7081948f1797a57",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_bd516ccae91710": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44061ba0-985d-4af7-89df-9953978662e0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

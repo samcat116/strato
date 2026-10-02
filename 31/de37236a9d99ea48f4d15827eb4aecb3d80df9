@@ -1,0 +1,76 @@
+control-plane/Sources/App/configure.swift
+  s_4a9d432a686ec2::t_15f29e4cf10ac2 406-409
+control-plane/Sources/App/Controllers/VMController.swift
+  s_4a9d432a686ec2::t_15f29e4cf10ac2 119,742
+  s_4a9d432a686ec2::t_e263a17da0c56a 46-48
+  s_4a9d432a686ec2::t_66d56edb048528 25-45,49-64,1439-1486
+  s_4a9d432a686ec2::t_b53541ecb7c153 1487
+control-plane/web/src/components/vms/vm-metadata-card.tsx
+  s_4a9d432a686ec2::t_e263a17da0c56a 4,26-32,35,38,40-42,44-45,47,155,191-200,202-268,270
+  s_4a9d432a686ec2::t_615db335eb3ef6 1-2,5-25,33-34,36-37,39,43,46,48-141,143,145-154,156-190,269,271-290,306-326
+  s_4a9d432a686ec2::t_aad71def26f891 142,291-305
+  s_4a9d432a686ec2::t_93eca4cee7f90a 3,144,201
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_4a9d432a686ec2::t_aad71def26f891 80-81
+  s_4a9d432a686ec2::t_f40fb021f12bf4 78
+  s_4a9d432a686ec2::t_15f29e4cf10ac2 27-31,82,85
+control-plane/web/src/lib/api/vms.ts
+  s_4a9d432a686ec2::t_c5e8fc50939dfe 8,45-46
+  s_4a9d432a686ec2::t_d237a8e1560c53 47-48
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_4a9d432a686ec2::t_37cb75cbe9fd9e 928-931
+agent/Tests/StratoAgentTests/MetadataStoreTests.swift
+  s_4a9d432a686ec2::t_37cb75cbe9fd9e 136,139-142
+control-plane/web/src/types/api.ts
+  s_4a9d432a686ec2::t_c5e8fc50939dfe 225-228,1192-1195
+  s_4a9d432a686ec2::t_49f98871d1425d 1196-1197
+control-plane/web/src/components/vms/index.ts
+  s_4a9d432a686ec2::t_615db335eb3ef6 9
+control-plane/Tests/AppPlatformTests/VMMutableMetadataTests.swift
+  s_4a9d432a686ec2::t_d13c44d77f70e0 65-67,80,82,109-110,165-166
+  s_4a9d432a686ec2::t_bba59b934a8347 87-104,118
+  s_4a9d432a686ec2::t_5374176afad4ce 1-64,68-79,81,83-86,105-108,111-117,119-164,167-233
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_4a9d432a686ec2::t_15f29e4cf10ac2 256
+control-plane/Tests/AppPlatformTests/AddMutableMetadataToVMTests.swift
+  s_4a9d432a686ec2::t_5374176afad4ce 1-30,33-56
+  s_4a9d432a686ec2::t_bbbec95a651cfa 31-32
+docs/architecture/networking.md
+  s_4a9d432a686ec2::t_37cb75cbe9fd9e 217-223,230
+  s_4a9d432a686ec2::t_aad71def26f891 224-229
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_4a9d432a686ec2::t_615db335eb3ef6 27,355
+  s_4a9d432a686ec2::t_e40f6f0dd8bf3b 356
+control-plane/Sources/App/Models/vm.swift
+  s_4a9d432a686ec2::t_66d56edb048528 703-706,783-784
+  s_4a9d432a686ec2::t_15f29e4cf10ac2 224-229,280-282,286-292,377,402,411-424
+control-plane/Sources/App/openapi.yaml
+  s_4a9d432a686ec2::t_e263a17da0c56a 9192
+  s_4a9d432a686ec2::t_aad71def26f891 417-419,9208
+  s_4a9d432a686ec2::t_dc5dbe882f8784 408-416,420-437,9179-9191,9197-9207,9306-9315
+  s_4a9d432a686ec2::t_f40fb021f12bf4 9193-9196
+control-plane/web/src/types/openapi.ts
+  s_4a9d432a686ec2::t_373e0fb7104346 156-160,5415-5423,5467-5472,9877-9906
+  s_4a9d432a686ec2::t_5d69ffbf10fc24 9907
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_4a9d432a686ec2::t_37cb75cbe9fd9e 23-24,1102-1105
+control-plane/Sources/App/Migrations/AddMutableMetadataToVM.swift
+  s_4a9d432a686ec2::t_15f29e4cf10ac2 1-19,22-30,33-38,41-50
+  s_4a9d432a686ec2::t_bbbec95a651cfa 20-21,31-32,39-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "31de37236a9d99ea48f4d15827eb4aecb3d80df9",
+  "prompts": {},
+  "sessions": {
+    "s_4a9d432a686ec2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9b4d-7820-8fbd-31ef7b1fe416",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

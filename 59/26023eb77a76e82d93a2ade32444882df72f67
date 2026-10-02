@@ -1,0 +1,37 @@
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDAuthorityStore.swift
+  s_701b6d317ba5a2::t_02432e7ac11d52 66-67,76-78
+  s_701b6d317ba5a2::t_212b7dbb668c57 182
+  s_701b6d317ba5a2::t_9d109ac1cb1140 47-58
+  s_701b6d317ba5a2::t_e97dbdd9fffe98 170-180,183-195
+  s_701b6d317ba5a2::t_4151f0b1c9eb91 79
+docs/architecture/iam.md
+  s_701b6d317ba5a2::t_80045826191eb5 545-551
+docs/deployment/agents.md
+  s_701b6d317ba5a2::t_ed0acd463f1882 416
+control-plane/Tests/AppTests/JWTSVIDAuthenticationTests.swift
+  s_701b6d317ba5a2::t_2789aea85b7673 278-279
+  s_701b6d317ba5a2::t_8770054b17008f 489-497,507-517
+  s_701b6d317ba5a2::t_4ec2500e3f953b 247-277,280-281
+  s_701b6d317ba5a2::t_1d1e0b2c620ccc 518,520-527
+  s_701b6d317ba5a2::t_5e8ea64d150307 519
+helm/strato-control-plane/values.yaml
+  s_701b6d317ba5a2::t_17ddd83cc26cd1 898-900
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDVerification.swift
+  s_701b6d317ba5a2::t_3d299148ed4ed5 200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "5926023eb77a76e82d93a2ade32444882df72f67",
+  "prompts": {},
+  "sessions": {
+    "s_701b6d317ba5a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "04c87a35-c6c1-4e65-8dbd-ef09f28d0eac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

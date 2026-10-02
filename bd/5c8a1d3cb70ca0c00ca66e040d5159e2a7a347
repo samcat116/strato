@@ -1,0 +1,46 @@
+control-plane/Sources/App/Middleware/RequestLoggingMiddleware.swift
+  s_077a86d6d40679::t_4cdac78787016e 4,27-31,34-37,68-70,72-74,76-82
+  s_077a86d6d40679::t_7ee73772db2dea 42-44
+  s_077a86d6d40679::t_464e3c19b69012 71,75,83-135
+docs/deployment/logging.md
+  s_077a86d6d40679::t_4cdac78787016e 66,69-73
+  s_077a86d6d40679::t_1d01cf05cf2a89 80-82
+  s_7d1f19f0e9619e::t_5b7bc5c5531f3a 74
+docs/deployment/observability.md
+  s_077a86d6d40679::t_4cdac78787016e 341
+control-plane/Sources/App/configure.swift
+  s_077a86d6d40679::t_4cdac78787016e 83-86,89
+control-plane/Tests/AppPlatformTests/RequestLoggingMiddlewareTests.swift
+  s_077a86d6d40679::t_7ee73772db2dea 19-20,32,40,42
+  s_077a86d6d40679::t_4cdac78787016e 1-17,21-29,31,34-39,41,46-52,54-87
+  s_077a86d6d40679::t_3715b928025121 30,53
+  s_077a86d6d40679::t_c58dbbbdc5d682 33
+  s_077a86d6d40679::t_f444fd5097cb99 43-45
+  s_077a86d6d40679::t_5eed61525bcc81 18
+control-plane/Package.swift
+  s_077a86d6d40679::t_4cdac78787016e 180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "bd5c8a1d3cb70ca0c00ca66e040d5159e2a7a347",
+  "prompts": {},
+  "sessions": {
+    "s_077a86d6d40679": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-7f59-7941-a8a0-7ac6a6126488",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7d1f19f0e9619e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1cb2e549-06ea-4795-b05f-85ff1369a7b6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

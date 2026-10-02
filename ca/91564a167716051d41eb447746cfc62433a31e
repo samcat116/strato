@@ -1,0 +1,19 @@
+control-plane/Tests/AppTests/VolumeAgentSelectionTests.swift
+  s_a655ca3f21107d::t_48d225f8967e6e 49,60,70,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ca91564a167716051d41eb447746cfc62433a31e",
+  "prompts": {},
+  "sessions": {
+    "s_a655ca3f21107d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c1eace1-4f69-4d16-bb69-be6dfb391f28",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

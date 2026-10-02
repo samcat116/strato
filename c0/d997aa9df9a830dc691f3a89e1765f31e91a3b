@@ -1,0 +1,28 @@
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_58ea99da84eeb2::t_c32f14c9a319bc 99-102,112-113
+agent/Tests/StratoAgentTests/SandboxConfigDriveTests.swift
+  s_58ea99da84eeb2::t_7a11d426683994 128-139
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_58ea99da84eeb2::t_7a591291c3abb3 280-282,285-286
+  s_58ea99da84eeb2::t_aa13ce12eb2c75 333-342
+  s_58ea99da84eeb2::t_dd3868dfac2d16 221,427-462
+  s_58ea99da84eeb2::t_7308ddcb236fc3 213,216-220
+agent/Sources/StratoAgentCore/SandboxConfigDrive.swift
+  s_58ea99da84eeb2::t_2145c72423806e 169-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "c0d997aa9df9a830dc691f3a89e1765f31e91a3b",
+  "prompts": {},
+  "sessions": {
+    "s_58ea99da84eeb2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b8981f0-ac67-4dff-a3b7-ec65f8c5f700",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

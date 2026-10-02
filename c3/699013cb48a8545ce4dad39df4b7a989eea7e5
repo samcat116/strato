@@ -1,0 +1,97 @@
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_d208ea9b1a94af::t_13b7f002371134 237-239
+control-plane/Sources/App/Controllers/AuditEventController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 41
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 502
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 87,777
+control-plane/Sources/App/Controllers/WorkloadRegistrationController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 151,242
+control-plane/Sources/App/Extensions/Request+RequireUUIDParameter.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 1-12
+control-plane/Sources/App/Controllers/PolicyController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 382
+control-plane/Sources/App/Controllers/CephStorageController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 634
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 170,187,339,376,395,430-431,459-460,569
+control-plane/Sources/App/Controllers/ServiceAccountController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 343,395
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 30
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 38,119,157
+control-plane/Sources/App/Controllers/PasskeyController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 203
+control-plane/Sources/App/Controllers/OAuthController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 450
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 76,204,297,409,429,460,541,543,589,591
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 283,301,306
+control-plane/Sources/App/Controllers/VMController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 344,488
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 36,57,120,158
+  s_d208ea9b1a94af::t_13b7f002371134 234-236
+control-plane/Sources/App/Controllers/NetworkACLController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 159,208
+control-plane/Sources/App/Controllers/RoleController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 427
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_d208ea9b1a94af::t_650eb1265a1e4d 117-118,138-139,256-257,289-290,407-408,466-467
+  s_d208ea9b1a94af::t_4971cf4382c54c 40,55,119,140,258,291,341,409,468
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 119
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 38,58-59,94,159-160,225-226,280-281,303-304,377-378,406-407
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 568,733,822,969,1086,1164,1368,1414
+control-plane/Sources/App/Controllers/OrganizationalUnitMemberController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 238,286,343,397-398
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 477,530,545-546
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 293,678
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 118,333
+control-plane/Sources/App/Controllers/UserController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 85,297,369
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 275,282
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_d208ea9b1a94af::t_13b7f002371134 723-725
+  s_d208ea9b1a94af::t_4971cf4382c54c 75-76,499-500,624-625,769-770,827-828,877-878,1043-1044
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 1543
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 35,60-61,84,118-119,166-167,199-200,222-223,264-265,296-297
+  s_d208ea9b1a94af::t_650eb1265a1e4d 294-295
+control-plane/Sources/App/Controllers/RegistryPullSecretController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 172
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 239,269,306
+control-plane/Tests/AppResourceTests/RequireUUIDParameterTests.swift
+  s_d208ea9b1a94af::t_56bae5807349bc 1-37
+control-plane/Sources/App/Controllers/StorageDeviceController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 210
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 372
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c3699013cb48a8545ce4dad39df4b7a989eea7e5",
+  "prompts": {},
+  "sessions": {
+    "s_d208ea9b1a94af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0efac-c477-7920-860b-09b0954f77e3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

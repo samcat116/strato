@@ -1,0 +1,20 @@
+.github/workflows/build.yaml
+  s_533413c7c4564b::t_95379139c2f663 151,153,169-178,208-244
+  s_533413c7c4564b::t_5aace4b6454c2f 245-246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7abd0a47f33f6d76e7c7cce80be8002679f63fb7",
+  "prompts": {},
+  "sessions": {
+    "s_533413c7c4564b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "adb76446-5582-4bfa-a681-9b9f70494726",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+agent/Tests/StratoAgentTests/MetadataServerSupervisorTests.swift
+  s_1f8e687c4649c2::t_054b2332fa44f4 332-393
+agent/Sources/StratoAgentCore/MetadataService/MetadataControlProtocol.swift
+  s_1f8e687c4649c2::t_3d85116766ef12 84-88,90-91,102,109-132,134-135,141-143,146,150,152-154,157-169
+  s_1f8e687c4649c2::t_698c393aec1e67 95-100
+  s_1f8e687c4649c2::t_e4471cc996e755 101
+agent/Tests/StratoAgentTests/MetadataIdentityTests.swift
+  s_1f8e687c4649c2::t_054b2332fa44f4 4,273-338
+agent/Sources/StratoAgentCore/MetadataService/GuestIdentityTokenCache.swift
+  s_1f8e687c4649c2::t_3d85116766ef12 49,56-57,72,92,95,98-99,107,109
+  s_1f8e687c4649c2::t_698c393aec1e67 51-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c42ffbea6356621f4877caa516a6434e6363b91c",
+  "prompts": {},
+  "sessions": {
+    "s_1f8e687c4649c2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee38-3cde-7611-a263-54e845a2a3a7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

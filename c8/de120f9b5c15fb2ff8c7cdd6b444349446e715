@@ -1,0 +1,26 @@
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_6f75b09edb6b7f::t_259e6ea0d349ae 2
+  s_6f75b09edb6b7f::t_ed5b3cdda509aa 173-189
+  s_6f75b09edb6b7f::t_8548ca7e7d20a9 204-212,219-247,249
+control-plane/Tests/AppTests/WebhookTests.swift
+  s_6f75b09edb6b7f::t_c84e8cd4a0f900 397-399,403-404
+  s_6f75b09edb6b7f::t_f6b732e9a591fe 380-384
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_6f75b09edb6b7f::t_61e293599becca 164-229
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "c8de120f9b5c15fb2ff8c7cdd6b444349446e715",
+  "prompts": {},
+  "sessions": {
+    "s_6f75b09edb6b7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9df828b1-80f1-4608-8d42-d39bf083238a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

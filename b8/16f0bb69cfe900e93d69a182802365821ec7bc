@@ -1,0 +1,66 @@
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_c42b984fc367ef::t_6178aee05ada9a 81-86,90
+deploy/compose/README.md
+  s_c42b984fc367ef::t_68303aa5a9885b 67-71
+  s_c42b984fc367ef::t_051acff7db1093 37-43
+deploy/compose/docker-compose.yml
+  s_c42b984fc367ef::t_fe82deea9ad328 352-355
+  s_c42b984fc367ef::t_a36fedfc7272c4 12-14
+  s_c42b984fc367ef::t_dcfcb952680bef 297-300
+  s_c42b984fc367ef::t_8674952a29889a 134
+  s_c42b984fc367ef::t_042cb749244efa 123-133,135-162
+  s_c42b984fc367ef::t_1b6457399a92bf 197-201
+  s_c42b984fc367ef::t_31b528b986dccb 413-414
+docs/deployment/agents.md
+  s_c42b984fc367ef::t_7e67ad8083fc32 158-185
+  s_c42b984fc367ef::t_dae5e3bb4a1c4c 28-31
+deploy/compose/prometheus.yml
+  s_c42b984fc367ef::t_22b24a28d052cf 1-14
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_c42b984fc367ef::t_fc31f9221a9e72 106-109,111-112
+deploy/compose/spiffe/envoy.yaml
+  s_c42b984fc367ef::t_fc5bee995e3bbe 67-114,125-132
+  s_c42b984fc367ef::t_5658e18fee9971 190-220
+helm/strato-control-plane/values.yaml
+  s_c42b984fc367ef::t_eea85d03246118 440-443
+deploy/compose/spiffe/bootstrap.sh
+  s_c42b984fc367ef::t_028b947a027d45 39,51-64,66-67
+  s_c42b984fc367ef::t_66abfc8d6fc706 45,65
+  s_c42b984fc367ef::t_0dbe217dc14916 17-20,23
+deploy/agent/install.sh
+  s_c42b984fc367ef::t_2f1ca156ff1099 192
+  s_c42b984fc367ef::t_c801dfae25eaf5 17-23,28,32,36-52,54-55
+  s_c42b984fc367ef::t_766f16cba33379 375-380
+  s_c42b984fc367ef::t_3274d9ca540061 157-158,167-178
+  s_c42b984fc367ef::t_a5f5d3d1a41770 353-356
+  s_c42b984fc367ef::t_3bd5e84ec9dfa1 112-120,131-140
+  s_c42b984fc367ef::t_b4a961c6154d4f 745-756
+  s_c42b984fc367ef::t_94c97d929e160e 69-81,88-95
+  s_c42b984fc367ef::t_2b5b9726fedd5c 467-556,558-579,581-722
+  s_c42b984fc367ef::t_d1f2eed9944115 580
+  s_c42b984fc367ef::t_d65fff1c4bd1a6 798-800
+  s_c42b984fc367ef::t_3e8364a0314000 252-331,333
+  s_c42b984fc367ef::t_823c595368ef38 434-440,442-443,448,450
+  s_c42b984fc367ef::t_db9ab97fde212e 332
+  s_c42b984fc367ef::t_b5f0ebfe14c190 557
+  s_c42b984fc367ef::t_fd777e921bf851 96
+  s_c42b984fc367ef::t_71174afd12966e 141
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_c42b984fc367ef::t_0ee8d3ebaaaa71 131-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b816f0bb69cfe900e93d69a182802365821ec7bc",
+  "prompts": {},
+  "sessions": {
+    "s_c42b984fc367ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "81258273-9fb8-4c9e-a59e-f2bab1dcf840",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

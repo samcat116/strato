@@ -1,0 +1,60 @@
+README.md
+  s_5dbe9ac49d55b0::t_28f1caff68103c 5
+.github/workflows/build.yaml
+  s_5dbe9ac49d55b0::t_28f1caff68103c 111-114,116,143-149,151-165
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 24,50,54,71-73,101,110-115,117-118,126-127,131-132,134-135,140,142-144,161,230,238,245,247,279-281,288,301-303,359
+shared/Sources/StratoShared/VMSpec.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 1-157
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 223-224,251-252,283-284,341-342,366-367,377-378
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 4-5,9-30,41-67,69-77,83,88-92,94-104,125,133,149,156
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 205,212,218
+agent/Sources/StratoAgent/VMManifestStore.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 21,25-35,43,57-86
+  s_5dbe9ac49d55b0::t_7ebc260c9a9022 87
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 11-12,15,17,62-63
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 96-97,99-100,146-147,149
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 1-34
+control-plane/Sources/App/Migrations/FixVMColumnNames.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 45-48,54-55
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 1-428
+agent/Sources/StratoAgent/QEMUService.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 21,25,28,36,64,85-86,94-97,130,132,136,140-145,190-191,194-195,225,228,363,383,412,420,422,429-433,437,439,561-563,566-568,575,578,616-617,754-760,764-773,778,788-789,792-793,796-802,806-817,819,823,826-832,837,839-840,842,860,866,946,951,953,959-960,962-964
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 147
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 1-240
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 27,35
+.github/workflows/release.yaml
+  s_5dbe9ac49d55b0::t_28f1caff68103c 309-311,316-321,356-357,359-360,376-380,386-437,439,441-442,445,448-450,531-540
+agent/Sources/StratoAgent/Agent.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 938
+control-plane/Sources/App/Controllers/VMController.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 302,306,309,316
+control-plane/Sources/App/Services/AgentService.swift
+  s_5dbe9ac49d55b0::t_28f1caff68103c 490,494,521,535
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6eeed672ab5bfa309c01e9938b9eca028422dccd",
+  "prompts": {},
+  "sessions": {
+    "s_5dbe9ac49d55b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "945a6096-544a-43ca-9f90-2f54f5c2d87c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

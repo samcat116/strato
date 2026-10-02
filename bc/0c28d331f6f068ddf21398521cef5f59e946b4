@@ -1,0 +1,21 @@
+agent/Sources/StratoAgentCore/DNSZoneRealization.swift
+  s_0a6f49dab719ee::t_f79184ecd2d268 428-430,453
+agent/Tests/StratoAgentPlatformTests/DNSZoneRealizationTests.swift
+  s_0a6f49dab719ee::t_f79184ecd2d268 342-363
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bc0c28d331f6f068ddf21398521cef5f59e946b4",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

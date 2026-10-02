@@ -1,0 +1,43 @@
+.github/workflows/helm-test.yml
+  s_9ab21835e56a12::t_61664baa6f7ab2 180-208,216
+docs/deployment/agents.md
+  s_9ab21835e56a12::t_7c071dd1e0b685 340,343-372
+helm/strato-control-plane/README.md
+  s_9ab21835e56a12::t_5a41f7c2adea84 177-181
+helm/strato-control-plane/templates/NOTES.txt
+  s_7391c6943770dc::t_0142077bdbc4fc 2-5,68-78
+helm/strato-control-plane/templates/_helpers.tpl
+  s_9ab21835e56a12::t_f7525450698d22 260-308,313-315,339-340
+helm/strato-control-plane/templates/deployment.yaml
+  s_9ab21835e56a12::t_888204ba0cf770 236-245
+helm/strato-control-plane/templates/gateway-routes.yaml
+  s_9ab21835e56a12::t_b0fc61a1d40572 1-99
+helm/strato-control-plane/templates/gateway.yaml
+  s_9ab21835e56a12::t_d38c8e022f8cd8 1-84
+helm/strato-control-plane/values.yaml
+  s_9ab21835e56a12::t_a8c59ea2d4c4ed 118-194,760-765
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "736701d7a9f1e58b61e11983f6c86b0044a201f5",
+  "prompts": {},
+  "sessions": {
+    "s_7391c6943770dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "668055d3-3aae-4452-8e0f-47d1396e2604",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9ab21835e56a12": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87b262e7-3510-4d0a-a9d4-e534891e5dd6",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

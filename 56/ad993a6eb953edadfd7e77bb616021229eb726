@@ -1,0 +1,47 @@
+control-plane/Sources/App/openapi.yaml
+  s_665a3d8fa75374::t_87ea81384c7e7d 424-445
+  s_665a3d8fa75374::t_cefc8418e75cd5 13041-13049
+control-plane/Sources/App/Controllers/VMController.swift
+  s_665a3d8fa75374::t_a82c62264c181c 26-29,82,420-450
+  s_21a889dc5d67dd::t_fa74d82855e932 451
+control-plane/web/src/components/vms/vm-identity-card.tsx
+  s_665a3d8fa75374::t_34b1b49f5725dd 28,40-44,178-180,185-187,201-208
+control-plane/web/src/types/api.ts
+  s_665a3d8fa75374::t_5393737fe62786 354-357
+control-plane/web/src/lib/hooks/use-project-members.ts
+  s_665a3d8fa75374::t_5393737fe62786 27-36,43-53,99,113
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  s_665a3d8fa75374::t_0c2ea960b75430 282-283,285-347
+  s_665a3d8fa75374::t_4f3ad15456bff5 284
+control-plane/web/src/lib/hooks/index.ts
+  s_665a3d8fa75374::t_5393737fe62786 155
+control-plane/web/src/lib/api/project-members.ts
+  s_665a3d8fa75374::t_5393737fe62786 9,23-24
+  s_665a3d8fa75374::t_e328eba0fc6716 25-26
+control-plane/web/src/types/openapi.ts
+  s_665a3d8fa75374::t_557f6243b10dd0 159-181,7456-7459,9955-9981
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "56ad993a6eb953edadfd7e77bb616021229eb726",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_665a3d8fa75374": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2ea-f8b5-75c1-b293-61394c829bf5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+SwiftFirecracker/Tests/SwiftFirecrackerTests/FirecrackerAdoptionTests.swift
+  s_223cf433eba0c9::t_d144006a6726c7 115-153
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_223cf433eba0c9::t_94b697da87c757 720,722-724,728-730
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_223cf433eba0c9::t_94b697da87c757 2850-2852
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5e0caf08663f53808488cc2380a2f831ecd5d597",
+  "prompts": {},
+  "sessions": {
+    "s_223cf433eba0c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05537-204c-7800-825f-35ed5aed5e74",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

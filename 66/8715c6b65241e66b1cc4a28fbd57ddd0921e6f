@@ -1,0 +1,30 @@
+control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
+  s_e71e4568f433f9::t_1cfb6ba9648b04 1-2,6-7,13-53,55-66,68-90
+  s_e71e4568f433f9::t_30a0adeab32a12 54,67
+control-plane/Sources/App/Migrations/FixStorageDeviceUsesArrayType.swift
+  s_e71e4568f433f9::t_aece066e350157 1-13,32-50,56-64,66,77
+  s_e71e4568f433f9::t_c266b3c3df757a 14-31,51-55,65,67-76
+control-plane/Sources/App/Migrations/CreateStorageDevices.swift
+  s_e71e4568f433f9::t_1635a15be1a83a 20
+control-plane/Sources/App/configure.swift
+  s_e71e4568f433f9::t_aece066e350157 433-436
+control-plane/Tests/AppPlatformTests/StorageDevicePersistenceTests.swift
+  s_e71e4568f433f9::t_76923d8861422d 14-29,212-213,225
+  s_e71e4568f433f9::t_aece066e350157 30-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "668715c6b65241e66b1cc4a28fbd57ddd0921e6f",
+  "prompts": {},
+  "sessions": {
+    "s_e71e4568f433f9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae3-99f9-71c3-ae22-ab6d18a5bacb",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

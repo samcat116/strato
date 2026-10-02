@@ -1,0 +1,40 @@
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_21a889dc5d67dd::t_e8d96e1ee776a3 178-184,549-550,565-588,592-604,612-626,654-657
+  s_21a889dc5d67dd::t_7ff53acb70fb7c 589-591
+  s_21a889dc5d67dd::t_9e1cce4636da21 605-611
+  s_21a889dc5d67dd::t_69d3d4a30e12fc 658
+agent/Tests/StratoAgentTests/EC2MetadataRendererTests.swift
+  s_21a889dc5d67dd::t_b55679a47fa847 64-68
+  s_21a889dc5d67dd::t_5e6f09e5475bed 61-63,69-82
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_21a889dc5d67dd::t_9e1cce4636da21 469
+  s_21a889dc5d67dd::t_d14018d98f8321 130-135,148-151,190-192,195-197,336-350
+  s_21a889dc5d67dd::t_bc0d9819fc6b23 351,454-468,470-480
+  s_21a889dc5d67dd::t_7f51b21cfa1c7c 352
+agent/Sources/StratoAgentCore/MetadataService/FirecrackerMMDSInterfacePlan.swift
+  s_21a889dc5d67dd::t_04723820d8e330 9-18
+SwiftFirecracker/Tests/SwiftFirecrackerTests/FirecrackerAdoptionTests.swift
+  s_21a889dc5d67dd::t_7ff53acb70fb7c 113-114
+  s_21a889dc5d67dd::t_5e6f09e5475bed 98-112,115
+SwiftFirecracker/Tests/SwiftFirecrackerTests/JailerOptionsTests.swift
+  s_21a889dc5d67dd::t_7ff53acb70fb7c 98
+  s_21a889dc5d67dd::t_5e6f09e5475bed 85-97,99-100
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Jailer.swift
+  s_21a889dc5d67dd::t_d14018d98f8321 118-121,148-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "32e52ef64ff2920f2f69e8a4dfeabe2baa9bd2d3",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

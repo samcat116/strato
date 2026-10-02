@@ -1,0 +1,37 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_223cf433eba0c9::t_03c5b3bb1ac15d 3016,3154
+  s_223cf433eba0c9::t_8f1ee2aa41d19c 3008-3013,4310-4336,5981,6156
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_223cf433eba0c9::t_8f1ee2aa41d19c 50-56,115,126,137,175,282-284,303,314,647,682,685,696
+  s_223cf433eba0c9::t_03c5b3bb1ac15d 57-62,285-289
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_223cf433eba0c9::t_8f1ee2aa41d19c 240-255,257-258,264-265,270,277,294,425-445,448
+  s_223cf433eba0c9::t_03c5b3bb1ac15d 256,278,447
+  s_b46e1e8521f8aa::t_945f58a0a18952 446,449
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_223cf433eba0c9::t_8f1ee2aa41d19c 329-330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "bf3d4cd5dea65f47317a4d1fa008fd6a31161832",
+  "prompts": {},
+  "sessions": {
+    "s_223cf433eba0c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05537-204c-7800-825f-35ed5aed5e74",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

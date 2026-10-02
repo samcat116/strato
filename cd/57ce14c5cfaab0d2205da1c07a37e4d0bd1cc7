@@ -1,0 +1,22 @@
+control-plane/web/src/components/layout/sidebar.tsx
+  s_6d7644d808c78e::t_591e13c4ede790 47-49,69-85
+control-plane/web/src/components/layout/nav.ts
+  s_6d7644d808c78e::t_f53fe86a1bbb4c 42-47,50-55
+  s_6d7644d808c78e::t_7c879bc63d7968 3,19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "cd57ce14c5cfaab0d2205da1c07a37e4d0bd1cc7",
+  "prompts": {},
+  "sessions": {
+    "s_6d7644d808c78e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c87344ca-2aef-4a04-bdf7-cfe6a60e4b88",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

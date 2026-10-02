@@ -1,0 +1,55 @@
+control-plane/web/src/components/organization-groups/manage-group-members-dialog.tsx
+  s_6f51127af38c38::t_f0213d03c515f3 1-214
+control-plane/web/src/components/organizational-units/ou-form-dialog.tsx
+  s_6f51127af38c38::t_bc245dda7e6ed8 1-2,4-46,75-79,82-106,108-126,136,152-153,164,198-199
+  s_6f51127af38c38::t_aea696279b2ccf 3,47-74,80-81,107,127-135,137-151,154-163,165-197
+control-plane/web/src/lib/api/index.ts
+  s_6f51127af38c38::t_4163deaeb6b413 12-13
+control-plane/web/src/components/organization-groups/groups-section.tsx
+  s_6f51127af38c38::t_3ff6580b8b3249 1-99
+control-plane/web/src/components/organization-groups/index.ts
+  s_6f51127af38c38::t_e18cc120870931 1-4
+control-plane/web/src/components/organizational-units/organizational-units-section.tsx
+  s_6f51127af38c38::t_bac708835f6a27 1-97
+control-plane/web/src/lib/api/groups.ts
+  s_6f51127af38c38::t_b43b19c64d74f8 1-57
+control-plane/web/src/lib/api/organizational-units.ts
+  s_6f51127af38c38::t_259a9ea3b09ad6 1-54
+control-plane/web/src/components/organizational-units/index.ts
+  s_6f51127af38c38::t_62e2dc2e624c37 1-4
+control-plane/web/src/lib/hooks/use-organizational-units.ts
+  s_6f51127af38c38::t_3fe25bf6ccd3ed 1-87
+control-plane/web/src/components/organizational-units/ou-tree.tsx
+  s_6f51127af38c38::t_b54bc360d5dbe2 1-268
+control-plane/web/src/lib/hooks/index.ts
+  s_6f51127af38c38::t_26c11e5f62f5ae 31-48
+control-plane/web/src/types/api.ts
+  s_6f51127af38c38::t_c8cd262d37ea1b 65-128
+control-plane/web/src/components/organization-groups/group-form-dialog.tsx
+  s_6f51127af38c38::t_2fe317ea1588a9 1-2,4-33,59-63,66-89,91-101,111,127-128,139,173-174
+  s_6f51127af38c38::t_e1a62cd8e3909e 3,34-58,64-65,90,102-110,112-126,129-138,140-172
+control-plane/web/src/components/organization-groups/groups-table.tsx
+  s_6f51127af38c38::t_050323bc816462 1-152
+control-plane/web/src/lib/hooks/use-groups.ts
+  s_6f51127af38c38::t_fbdf5c3209ae00 1-112
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_6f51127af38c38::t_2a969f826a0228 16-17
+  s_6f51127af38c38::t_a9a55b600aea19 131-142
+  s_6f51127af38c38::t_72a6312425d530 253-262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dcfa917f375342210ac8a63e0e20e7a6094ef5d9",
+  "prompts": {},
+  "sessions": {
+    "s_6f51127af38c38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "29aed775-6bfa-436f-a92b-a865af431af7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

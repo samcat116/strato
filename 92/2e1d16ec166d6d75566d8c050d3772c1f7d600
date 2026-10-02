@@ -1,0 +1,24 @@
+agent/Tests/StratoAgentTests/OVNBridgeMappingsTests.swift
+  s_432568e4a67b2f::t_a6565e69a11044 77-84
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_432568e4a67b2f::t_d730d5090cec80 1364-1383
+  s_432568e4a67b2f::t_a1cd2078c220f5 1411-1417
+agent/Sources/StratoAgentCore/OVNUplinkConfig.swift
+  s_432568e4a67b2f::t_a2f3f440487e52 74-79,81-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "922e1d16ec166d6d75566d8c050d3772c1f7d600",
+  "prompts": {},
+  "sessions": {
+    "s_432568e4a67b2f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92862862-8751-44e4-828a-ce613f8c57d9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

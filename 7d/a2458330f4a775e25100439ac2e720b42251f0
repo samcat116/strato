@@ -1,0 +1,28 @@
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_e18f25a887909e::t_96747b75ea905b 117-186
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_e18f25a887909e::t_96747b75ea905b 312,389
+  s_e18f25a887909e::t_0f923d96619c9e 733,735,761-779
+control-plane/Sources/App/configure.swift
+  s_e18f25a887909e::t_96747b75ea905b 160-162
+control-plane/Sources/App/Services/SpiceDBProjectReconciliation.swift
+  s_e18f25a887909e::t_96747b75ea905b 1-44
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_e18f25a887909e::t_96747b75ea905b 374-392,395,410-418,460-471,483
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7da2458330f4a775e25100439ac2e720b42251f0",
+  "prompts": {},
+  "sessions": {
+    "s_e18f25a887909e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0ba6adc7-8965-4624-9eac-174b37bb83d7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

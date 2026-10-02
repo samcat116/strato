@@ -1,0 +1,25 @@
+docs/architecture/iam.md
+  s_471b576bcfd22a::t_a241df8e0777ea 3-9,12-15,148-151,534-535,852-853,898-910,942-944,989-992
+docs/.vitepress/config.mts
+  s_471b576bcfd22a::t_a241df8e0777ea 66
+docs/adr/0004-cedar-for-authorization.md
+  s_471b576bcfd22a::t_a241df8e0777ea 1-222
+docs/architecture/overview.md
+  s_471b576bcfd22a::t_a241df8e0777ea 170-172,232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "01b2c6415004b762270fa5efc2c816317ebaf723",
+  "prompts": {},
+  "sessions": {
+    "s_471b576bcfd22a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd4195fa-7b4a-4a3a-8548-4d295c459bac",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

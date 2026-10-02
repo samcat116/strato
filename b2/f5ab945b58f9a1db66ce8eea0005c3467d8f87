@@ -1,0 +1,22 @@
+deploy/compose/nginx.conf
+  s_2d493391de3833::t_c911ffd63635f2 23-33,37-40
+  s_2d493391de3833::t_4cdc812b612e82 41
+control-plane/web/next.config.ts
+  s_2d493391de3833::t_a0d6915dea5127 12-19,23-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b2f5ab945b58f9a1db66ce8eea0005c3467d8f87",
+  "prompts": {},
+  "sessions": {
+    "s_2d493391de3833": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "02826c83-f11c-46e9-92a1-3bea16bd80bd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

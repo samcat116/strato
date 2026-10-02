@@ -1,0 +1,28 @@
+control-plane/Sources/App/Migrations/EnforcePersistedEnumValues.swift
+  s_a7621ce11ab266::t_b88015afe8746e 207,215,221-224
+  s_a7621ce11ab266::t_878ab92407cbca 171
+  s_a7621ce11ab266::t_6bbe2039949e49 189,195-196,199
+  s_a7621ce11ab266::t_b0957c95470c04 57-59
+  s_a7621ce11ab266::t_09c472f9b2c913 269-272,274,278-284,288-292
+control-plane/Sources/App/Migrations/AddSnapshotExportOperationKind.swift
+  s_a7621ce11ab266::t_58351e60c8b59b 9-11
+  s_a7621ce11ab266::t_2b4051ff10666f 6-8
+control-plane/Tests/AppTests/PersistedEnumConstraintTests.swift
+  s_a7621ce11ab266::t_ea6c7ea5da6384 60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "2a41ca128815a92209f50d521cb4ef696d281a82",
+  "prompts": {},
+  "sessions": {
+    "s_a7621ce11ab266": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fe589685-fed9-4479-aa4b-8d8d8fba0d37",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

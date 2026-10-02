@@ -1,0 +1,47 @@
+control-plane/Sources/App/Controllers/RegistryPullSecretController.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1-190
+control-plane/Sources/App/configure.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 108-116
+  s_b1fd57a7028f8c::t_d92b07b89b9abe 386-389
+control-plane/Sources/App/Services/AgentService.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1365-1368,1372-1402,1410-1527
+  s_b1fd57a7028f8c::t_ad2c48e97f2b57 1528-1529
+docs/architecture/sandboxes.md
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 12-16,34-38,72,74-94
+control-plane/Sources/App/Models/RegistryPullSecret.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1-73
+control-plane/Tests/AppTests/RegistryPullSecretTests.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1-671
+shared/Tests/StratoSharedTests/OCIImageReferenceTests.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1-109
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 128,159-169
+control-plane/Sources/App/Migrations/CreateRegistryPullSecret.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1-24
+control-plane/Sources/App/routes.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 26-27
+control-plane/Sources/App/Services/RegistryClientService.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1-339
+shared/Sources/StratoShared/OCIImageReference.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 1-123
+shared/Sources/StratoShared/SandboxModels.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 82-87,89-91,96
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_b1fd57a7028f8c::t_95b7933fa9e2f9 46-47,73-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "e3714578c8c8115f95a4c16f0389551d7ee2f535",
+  "prompts": {},
+  "sessions": {
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

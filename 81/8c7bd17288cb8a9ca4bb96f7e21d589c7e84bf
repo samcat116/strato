@@ -1,0 +1,29 @@
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_b041cfc9c7df01::t_88de6264388427 170-219
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_b041cfc9c7df01::t_8608a1ffa9ffb6 73-123
+control-plane/Sources/App/Migrations/AddIssuerToOIDCProvider.swift
+  s_b041cfc9c7df01::t_7bc4ef02bb801e 32,45-56
+  s_b041cfc9c7df01::t_057fae43d82b17 23-30,33-41
+  s_b041cfc9c7df01::t_1bce54b94edcbb 2
+  s_b041cfc9c7df01::t_e5918bbfaea72a 57
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_b041cfc9c7df01::t_b13e8ac8729aaf 360-361,363
+  s_b041cfc9c7df01::t_a81e1c4f2a49a3 338-339
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "818c7bd17288cb8a9ca4bb96f7e21d589c7e84bf",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

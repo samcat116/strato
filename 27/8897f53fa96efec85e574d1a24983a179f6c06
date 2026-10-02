@@ -1,0 +1,25 @@
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_7bf36251baaeb0::t_4fdaab5b8f2dd9 218-233
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_7bf36251baaeb0::t_a569ea7df63c27 868,874,879,888-889,892,900-902
+control-plane/Sources/App/openapi.yaml
+  s_7bf36251baaeb0::t_967793dda6ea4a 10818
+control-plane/web/src/types/openapi.ts
+  s_7bf36251baaeb0::t_2c712986efd3ff 6278-6279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "278897f53fa96efec85e574d1a24983a179f6c06",
+  "prompts": {},
+  "sessions": {
+    "s_7bf36251baaeb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00653-14e3-7c81-8bae-df58c921d869",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_6bff3384bd5122::t_393fa7dfab3048 336,382
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_6bff3384bd5122::t_c8e27c765c142e 4,30-31,33-36,44-46,51-61,63-68,70-92,95-105,107-109,111-114,116-118,121-126,128-135,137-138,141-153,155-174,178-179,210-217,223-239,242-248,257-348,359,409,525-531
+control-plane/Tests/AppTests/IAMAuthorizerTests.swift
+  s_6bff3384bd5122::t_ac86648408821e 77,79-80,340-390,392-399
+control-plane/Tests/AppTests/IAMBatchDecisionTests.swift
+  s_6bff3384bd5122::t_a7d50dd41f1dfb 309,313-318,350
+control-plane/Tests/AppTests/PolicyEndpointTests.swift
+  s_6bff3384bd5122::t_478a06cb5252f2 137-138
+control-plane/Tests/AppTests/WorkloadPrincipalTests.swift
+  s_6bff3384bd5122::t_415948f65f61b2 160-161
+docs/architecture/iam.md
+  s_6bff3384bd5122::t_e6f964e4e5a208 701-702,742-759,1113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "6d42093baa6d25e6b21dd3062cf62cc1eddfb4e7",
+  "prompts": {},
+  "sessions": {
+    "s_6bff3384bd5122": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f0d0db76-0b4b-4007-a04c-2d3449bb70e1",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

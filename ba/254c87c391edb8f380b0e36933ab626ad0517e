@@ -1,0 +1,62 @@
+deploy/ovn-central/README.md
+  s_ca8d267dfc4cb6::t_fa8f061ab377d0 19-30
+config.toml.example
+  s_ca8d267dfc4cb6::t_722137b2fd27da 127-141
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_ca8d267dfc4cb6::t_65690a9725fb5d 303
+agent/Sources/StratoAgent/Agent.swift
+  s_ca8d267dfc4cb6::t_dc14daecfaa5df 127-128
+  s_ca8d267dfc4cb6::t_f2b4288cf309fc 172
+  s_ca8d267dfc4cb6::t_6973e42431605a 262-263
+  s_ca8d267dfc4cb6::t_b423586a153fe2 893-894
+  s_ca8d267dfc4cb6::t_57d1f4f56f79e2 195
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_ca8d267dfc4cb6::t_4a913427230ea4 271-272,274
+  s_ca8d267dfc4cb6::t_23c081951a9c6b 135-138
+  s_ca8d267dfc4cb6::t_dc63291adaddd8 72-118
+  s_ca8d267dfc4cb6::t_99095676a83d6d 212
+  s_ca8d267dfc4cb6::t_2f90cf49319d82 164
+  s_ca8d267dfc4cb6::t_c3754d95e8592e 402
+  s_ca8d267dfc4cb6::t_7c44c946019be6 189
+  s_ca8d267dfc4cb6::t_359366d3744db0 268-270,273,275-297
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_ca8d267dfc4cb6::t_6a38b483b488c9 89-92
+  s_ca8d267dfc4cb6::t_785b9c9f857de8 34
+  s_ca8d267dfc4cb6::t_5fc0d97b62a8fa 108
+  s_ca8d267dfc4cb6::t_0f77926c9d06b3 240-242
+  s_ca8d267dfc4cb6::t_d51879caad66d4 122
+  s_ca8d267dfc4cb6::t_d809010307592d 171-172
+  s_ca8d267dfc4cb6::t_d19729db862a58 327-339
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_ca8d267dfc4cb6::t_8acea9ccb8f199 107-122
+  s_ca8d267dfc4cb6::t_ce00e828a5302c 51,58
+  s_ca8d267dfc4cb6::t_bf21cdbb5116f7 16-18
+agent/Dockerfile
+  s_ca8d267dfc4cb6::t_2383f3a4c4aa2f 77-79
+docs/guide/getting-started.md
+  s_ca8d267dfc4cb6::t_13b0b5aaafe1ad 20-22
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_ca8d267dfc4cb6::t_35f303b86c7574 130-221
+docs/architecture/networking.md
+  s_ca8d267dfc4cb6::t_26bc6e79d7be31 325-328
+  s_ca8d267dfc4cb6::t_c5d1bc41b97f28 314-318
+  s_ca8d267dfc4cb6::t_1e332b70ebc4d9 361-362
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_ca8d267dfc4cb6::t_f46cb0355460e3 162-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ba254c87c391edb8f380b0e36933ab626ad0517e",
+  "prompts": {},
+  "sessions": {
+    "s_ca8d267dfc4cb6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "55631cf6-1d1b-4b93-bcae-d22e43533684",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

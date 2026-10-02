@@ -1,0 +1,29 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_7ef8d408362904::t_5be85461efae73 58-64,243,248,253,387,874,907,1054-1059,1061-1063,1066,1073
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_eff01bb4fb32a9::t_ec697daf088ff3 3-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d0158840ef4eb49bf8e6fb705fa3d8299c5572e8",
+  "prompts": {},
+  "sessions": {
+    "s_7ef8d408362904": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7d1cffb9-e616-424f-9ef2-db28b1344d4f",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_eff01bb4fb32a9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "25a3c0dd-31e8-4d38-a477-3a6dc6ed251e",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

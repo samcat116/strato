@@ -1,0 +1,24 @@
+control-plane/Tests/AppTests/WebAuthnChallengeTests.swift
+  s_3fc81675261c73::t_1095ef2e62ffb6 1-104
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_3fc81675261c73::t_69b5422210172a 184,191-192
+  s_3fc81675261c73::t_3973fc5124ff33 5
+  s_3fc81675261c73::t_d86eeee3a8bbb6 133-141,166-177,179-183,187-190,193-194,197-213
+  s_3fc81675261c73::t_9eddb84f2340b8 178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a80e32996db2f1d9f6ffdf899133e08ae6096e26",
+  "prompts": {},
+  "sessions": {
+    "s_3fc81675261c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2da2a5b9-ba60-4cb1-bcd8-e6ac29bbf04c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

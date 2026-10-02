@@ -1,0 +1,21 @@
+agent/Sources/StratoAgent/HostResources.swift
+  s_4fdae838d0c2ea::t_26fc8d915d0ade 22
+agent/Sources/StratoAgent/Agent.swift
+  s_4fdae838d0c2ea::t_26fc8d915d0ade 2202-2207,2217,2220,2222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b357bc4ff47c7398c7a5179233dcfb436ba9b47f",
+  "prompts": {},
+  "sessions": {
+    "s_4fdae838d0c2ea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec77-c54c-7c61-a1d3-058bb12398f3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

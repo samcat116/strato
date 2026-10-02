@@ -1,0 +1,20 @@
+agent/Package.resolved
+  s_9150f92df36659::t_2bfc7dc6d741f3 158-165
+  s_9150f92df36659::t_3c30af7e997ca5 157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ace8b2fd246cb3884a216da42019d79d8634a1ee",
+  "prompts": {},
+  "sessions": {
+    "s_9150f92df36659": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a301a83-c674-4612-a470-101cc1be93e1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

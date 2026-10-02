@@ -1,0 +1,21 @@
+docs/deployment/agents.md
+  s_9ab21835e56a12::t_cc612052c4a2a6 365-371
+helm/strato-control-plane/templates/deployment.yaml
+  s_9ab21835e56a12::t_580221fca4d3d6 212-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "b749f9d825475b351e38385840e8cccb84087edf",
+  "prompts": {},
+  "sessions": {
+    "s_9ab21835e56a12": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87b262e7-3510-4d0a-a9d4-e534891e5dd6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

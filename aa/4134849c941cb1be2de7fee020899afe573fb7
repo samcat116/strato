@@ -1,0 +1,24 @@
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_3af79fd703f9fa::t_272a5a46c67c55 171,184-189,659-673
+  s_3af79fd703f9fa::t_46d354f9371003 674-675
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_3af79fd703f9fa::t_272a5a46c67c55 37-49
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_3af79fd703f9fa::t_272a5a46c67c55 253-262,289-301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "aa4134849c941cb1be2de7fee020899afe573fb7",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

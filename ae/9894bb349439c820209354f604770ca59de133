@@ -1,0 +1,37 @@
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_bbadc6e2e9e7af::t_ec42f06ffad7b0 51-55,74-75,77,137-139,141,173-180,215-222
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_bbadc6e2e9e7af::t_efd54532b8aba4 49-55,63-64,72-82,91,94-97,105-119,124-154
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_bbadc6e2e9e7af::t_b5af173623d6e2 27,29-35,207-209,212,214,217,219-225,285-287,518-550
+control-plane/Sources/App/Services/HierarchySearchService.swift
+  s_bbadc6e2e9e7af::t_a93ecd7d588293 9-47,84-88,90-93,96,126-129,132
+control-plane/Sources/App/Services/HierarchySnapshot.swift
+  s_bbadc6e2e9e7af::t_477b30fee1f5b0 59-130
+control-plane/Sources/App/Services/HierarchyTreeBuilder.swift
+  s_bbadc6e2e9e7af::t_b09e7cb48da938 16-26
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_bbadc6e2e9e7af::t_28fa8eab9b3c51 51,404,475-495
+control-plane/Tests/AppTests/HierarchyIntegrationTests.swift
+  s_bbadc6e2e9e7af::t_20fce46f6e9835 246-275
+control-plane/Tests/AppTests/ProjectListVisibilityTests.swift
+  s_bbadc6e2e9e7af::t_61504a86e06be3 1-390
+docs/architecture/iam.md
+  s_bbadc6e2e9e7af::t_367fe0d4fdbdce 906-919,938-940
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "ae9894bb349439c820209354f604770ca59de133",
+  "prompts": {},
+  "sessions": {
+    "s_bbadc6e2e9e7af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c924e89-82e1-4443-a274-c45681fa52ec",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

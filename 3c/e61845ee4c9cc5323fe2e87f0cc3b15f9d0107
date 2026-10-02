@@ -1,0 +1,23 @@
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_3af79fd703f9fa::t_f09af23ea786a4 34-40
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_3af79fd703f9fa::t_f09af23ea786a4 389-393,450-456,458-479
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_3af79fd703f9fa::t_f09af23ea786a4 11-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3ce61845ee4c9cc5323fe2e87f0cc3b15f9d0107",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

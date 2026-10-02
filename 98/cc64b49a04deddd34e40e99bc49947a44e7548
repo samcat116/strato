@@ -1,0 +1,52 @@
+control-plane/Sources/App/routes.swift
+  s_bf31020fa8ebfe::t_83aaec5eb1d093 74-75
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_bf31020fa8ebfe::t_507dca90e2c6c9 85-87,140
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_bf31020fa8ebfe::t_39499ec593dd90 42
+docs/guide/getting-started.md
+  s_bf31020fa8ebfe::t_83aaec5eb1d093 173-174
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_bf31020fa8ebfe::t_2c359ea3e72f00 57,63
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_bf31020fa8ebfe::t_f7ad7dc6623405 16-17
+.github/workflows/main-build.yaml
+  s_bf31020fa8ebfe::t_83aaec5eb1d093 159
+.github/workflows/release.yaml
+  s_bf31020fa8ebfe::t_83aaec5eb1d093 189
+control-plane/Sources/App/Services/AgentService.swift
+  s_bf31020fa8ebfe::t_39499ec593dd90 523
+  s_bf31020fa8ebfe::t_85fb6e385e60b9 3191
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_bf31020fa8ebfe::t_a2094fc1024462 11,18,27-28,33,38,95-96,105,115-116,127,137-138,145,147
+shared/Tests/StratoSharedTests/MessageEnvelopeTests.swift
+  s_bf31020fa8ebfe::t_2c359ea3e72f00 9,11,16-17,20,30-31,40,46
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_bf31020fa8ebfe::t_83aaec5eb1d093 26,31,38
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_bf31020fa8ebfe::t_07a42bee2e29c9 124,127,135,138,191-193,196,210-212,216,330
+shared/Tests/StratoSharedTests/VMMessageTests.swift
+  s_bf31020fa8ebfe::t_bd67f2747e8dbd 4,6,8,14
+control-plane/Sources/App/Middleware/SecurityHeadersMiddleware.swift
+  s_bf31020fa8ebfe::t_83aaec5eb1d093 11,43
+shared/Tests/StratoSharedTests/ResponseMessageTests.swift
+  s_bf31020fa8ebfe::t_2c359ea3e72f00 5
+control-plane/web/bun.lock
+  s_bf31020fa8ebfe::t_ed8b0ffc3a05a4 218,244,988,992
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "98cc64b49a04deddd34e40e99bc49947a44e7548",
+  "prompts": {},
+  "sessions": {
+    "s_bf31020fa8ebfe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7311-f2e7-7270-8251-882a13ca8e59",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

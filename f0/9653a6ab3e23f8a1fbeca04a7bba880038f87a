@@ -1,0 +1,40 @@
+control-plane/web/src/components/security-groups/edit-security-group-dialog.tsx
+  s_071366b7d1e1c2::t_e3334b774a82b9 76,81-83,85-87
+control-plane/web/src/components/security-groups/security-group-table.tsx
+  s_071366b7d1e1c2::t_0643e34d064f0b 152-153
+control-plane/web/src/components/security-groups/security-group-rules-dialog.tsx
+  s_071366b7d1e1c2::t_e571df126d5626 153-161
+  s_071366b7d1e1c2::t_fbee2feb8bc25f 347
+  s_071366b7d1e1c2::t_b0aa4dd2dfce72 331
+  s_071366b7d1e1c2::t_af719e10ec1fac 358
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_071366b7d1e1c2::t_b836690d006a35 23
+  s_071366b7d1e1c2::t_2e2dee25894405 393-396
+  s_071366b7d1e1c2::t_10a0f00a0b12b6 66-69
+  s_071366b7d1e1c2::t_8275a6f2aceb23 421,425-432
+  s_071366b7d1e1c2::t_fcaedee2053f98 433
+control-plane/web/src/types/api.ts
+  s_071366b7d1e1c2::t_4cb440890c0790 1507-1509
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_071366b7d1e1c2::t_6b91a1584b7d15 152-155
+  s_071366b7d1e1c2::t_94abee8d27ddf7 282-289
+control-plane/web/src/app/(dashboard)/security-groups/page.tsx
+  s_071366b7d1e1c2::t_0adc1c47d40955 24-28
+  s_071366b7d1e1c2::t_7516eadad8951e 66-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f09653a6ab3e23f8a1fbeca04a7bba880038f87a",
+  "prompts": {},
+  "sessions": {
+    "s_071366b7d1e1c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c8d2edb-f9f6-4c81-bef3-3d415daceadb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

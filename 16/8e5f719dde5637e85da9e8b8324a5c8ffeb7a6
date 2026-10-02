@@ -1,0 +1,105 @@
+control-plane/Sources/App/configure.swift
+  s_647124dd747362::t_109f55e05c7db0 424-427
+control-plane/Sources/App/Controllers/WebhookSubscriptionController.swift
+  s_647124dd747362::t_51aae91935a626 50,61,89,91
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_647124dd747362::t_d45a7423e40e80 95
+  s_647124dd747362::t_aff0d14def90fc 33
+  s_647124dd747362::t_d54d9d30bd3b52 18-19
+  s_647124dd747362::t_ef5833052ca110 34,63-67,69-72,74-76,92-94,96-135
+  s_647124dd747362::t_8829366481334b 12
+  s_647124dd747362::t_8b67f697c1951e 68,73,77-91
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_647124dd747362::t_a845f0bec10e16 151,172,181
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_647124dd747362::t_a845f0bec10e16 68-69,128,134
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_647124dd747362::t_6acfbe44e9f588 59,134
+control-plane/Sources/App/Controllers/RegistryPullSecretController.swift
+  s_647124dd747362::t_51aae91935a626 22,26,28-35,38-39,43-52,75,91,116,118
+control-plane/Sources/App/Controllers/WorkloadRegistrationController.swift
+  s_647124dd747362::t_dea68848c8f214 26,31-35,110
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_647124dd747362::t_318760cb1bd353 110-111,128-132,135,144-147,227,294
+control-plane/Sources/App/Controllers/RoleController.swift
+  s_647124dd747362::t_318760cb1bd353 77-78,93-97,100-101,105-109,240,281
+control-plane/Sources/App/Models/WebhookSubscription.swift
+  s_647124dd747362::t_51aae91935a626 138-139,143-146,149-150,154-157
+control-plane/Sources/App/Migrations/AddAdministrativeTextLengthConstraints.swift
+  s_647124dd747362::t_109f55e05c7db0 1-105
+control-plane/Sources/App/Controllers/SCIMTokenController.swift
+  s_647124dd747362::t_6acfbe44e9f588 47,132
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_647124dd747362::t_6acfbe44e9f588 61,97
+control-plane/Sources/App/Models/SecurityGroup.swift
+  s_647124dd747362::t_dea68848c8f214 124,161-163
+  s_94b693d0eb6d6a::t_1e225856f64ea2 164
+control-plane/Sources/App/Models/SSFStream.swift
+  s_647124dd747362::t_6acfbe44e9f588 200-201,209-214,217-218,225-230
+control-plane/Tests/AppPlatformTests/ValidatedRequestBodyCoverageTests.swift
+  s_647124dd747362::t_dab341a6331841 44-46,63-66
+  s_647124dd747362::t_082a12c36c03be 1-43,47-62,67-80
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_647124dd747362::t_dea68848c8f214 252
+control-plane/Sources/App/Models/Site.swift
+  s_647124dd747362::t_a845f0bec10e16 242-243,279-283,295,324-327
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_647124dd747362::t_a845f0bec10e16 214,231,245,255
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_647124dd747362::t_0e6530066c0c92 407-522
+  s_647124dd747362::t_82c5ef3f7f6c28 37-47,205-364
+  s_647124dd747362::t_bde6b06ccca955 365
+control-plane/Sources/App/Models/LoadBalancer.swift
+  s_647124dd747362::t_a845f0bec10e16 258-259,264-267,270-271,274-277
+control-plane/Sources/App/Models/APIKey.swift
+  s_647124dd747362::t_6acfbe44e9f588 125-126,152-155,200-201,225-227
+  s_c73d8cff1afa96::t_c71319c817f605 228
+control-plane/Sources/App/Controllers/PolicyController.swift
+  s_647124dd747362::t_318760cb1bd353 72-73,85-89,92-93,97-101,153,200
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_647124dd747362::t_109f55e05c7db0 433-434,455-456,489-491
+control-plane/Sources/App/Controllers/ServiceAccountController.swift
+  s_647124dd747362::t_dea68848c8f214 43-44,46-50,53,55-58,125-126,185
+control-plane/Sources/App/openapi.yaml
+  s_647124dd747362::t_bf75851ed0184d 13233-13234,13237,13244,13347-13348,13384-13385,13389-13390,13398-13399,13403-13404
+  s_647124dd747362::t_493a6f3049e6e8 10783-10784,11016
+  s_647124dd747362::t_c59fec68265892 11670-11671,11710-11711
+  s_647124dd747362::t_afa76910ea8394 14463,14466,14509
+  s_647124dd747362::t_f0cdce9dcaef9f 16375-16376,16414-16415,16811-16812,16815,16824,16842-16843,16846,16851,16968-16969,16988-16989
+control-plane/Sources/App/Models/FloatingIPPool.swift
+  s_647124dd747362::t_a845f0bec10e16 95-96,106-109
+control-plane/Sources/App/Models/SCIMToken.swift
+  s_647124dd747362::t_6acfbe44e9f588 120-121,123-126,171-172,174-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "168e5f719dde5637e85da9e8b8324a5c8ffeb7a6",
+  "prompts": {},
+  "sessions": {
+    "s_647124dd747362": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffd75-c748-7272-8f21-d12e3dee5467",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_94b693d0eb6d6a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f3-149c-7b23-8032-f2fefbae7e6d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_c73d8cff1afa96": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffd73-35f2-7f32-bcbf-7ca5a1a41383",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

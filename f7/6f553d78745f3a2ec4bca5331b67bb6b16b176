@@ -1,0 +1,78 @@
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_75267c98733006::t_0e0130108268eb 2,10-71,77-85
+  s_75267c98733006::t_1dcf7be9c925fc 72-76
+  s_1caa12ce689fe8::t_d31354b6f2c949 86
+agent/Tests/StratoAgentTests/CloudInitMetaDataTests.swift
+  s_75267c98733006::t_0e0130108268eb 2,10-23
+  s_1caa12ce689fe8::t_91b145feae5557 24
+docs/architecture/networking.md
+  s_75267c98733006::t_401358dc2e4b9c 1184-1185,1187-1192
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_75267c98733006::t_2e54146ff5dea5 20
+shared/Sources/StratoShared/InstanceMetadata.swift
+  s_75267c98733006::t_2e54146ff5dea5 270-281,296-299,314-316,338-340
+shared/Tests/StratoSharedTests/InstanceMetadataTests.swift
+  s_75267c98733006::t_82b41c24dd0a93 30-33,110-112,124-126,263,275-277
+agent/Sources/StratoAgentCore/MetadataService/MetadataDocument.swift
+  s_75267c98733006::t_d6cdb6e45f2fcf 4,16-27
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_75267c98733006::t_2e54146ff5dea5 51-52,72-74,109-111,132-135
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_75267c98733006::t_2e54146ff5dea5 201-202
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_75267c98733006::t_d84d7cb24adce2 178-183,322-329,762-797
+  s_d3c90e184e731d::t_a59a324d5b40e9 798
+docs/architecture/agent.md
+  s_75267c98733006::t_401358dc2e4b9c 1308-1315
+shared/Sources/StratoShared/WireProtocol.swift
+  s_75267c98733006::t_2e54146ff5dea5 14-17
+docs/adr/0006-imds-session-auth.md
+  s_75267c98733006::t_401358dc2e4b9c 90-95
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_75267c98733006::t_82b41c24dd0a93 204-205,217-218
+  s_75267c98733006::t_9e1add9ba9270e 206,219
+  s_75267c98733006::t_d6b6260a2ea3f7 50,62-63,122-123,145,150
+agent/Tests/StratoAgentTests/MetadataRouterTests.swift
+  s_75267c98733006::t_82b41c24dd0a93 94,96-97,107
+agent/Tests/StratoAgentTests/MetadataResponderTests.swift
+  s_75267c98733006::t_d55044ac51be8b 25-26,39-40,417-421,430-431,435-437,441-449,452-464
+  s_75267c98733006::t_f1a1b4d991c961 450-451
+  s_75267c98733006::t_c5dd949ce8c8b2 465-466
+agent/Tests/StratoAgentTests/CloudInitUserDataDocumentTests.swift
+  s_75267c98733006::t_0e0130108268eb 2,10-47
+  s_1caa12ce689fe8::t_f354b0267fcc50 48
+agent/Sources/StratoAgentCore/MetadataService/MetadataRouter.swift
+  s_75267c98733006::t_d6cdb6e45f2fcf 141-143,146-148,254-258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f76f553d78745f3a2ec4bca5331b67bb6b16b176",
+  "prompts": {},
+  "sessions": {
+    "s_1caa12ce689fe8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6f-4fa5-7fd0-bf2a-063474d3e1e0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_75267c98733006": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fedf2-124f-7002-b4bb-a09663423b8f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d3c90e184e731d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede4-bec2-7343-aad5-ce620399e429",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

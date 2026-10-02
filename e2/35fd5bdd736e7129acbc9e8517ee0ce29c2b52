@@ -1,0 +1,52 @@
+control-plane/Sources/App/Telemetry/ObservabilityBootstrap.swift
+  s_539a40c6da65a7::t_3df6df4b7978c0 1-2,4-5,8-14,16-18,20-61,64-107,111-130,139,146,148-149,152,155-157,159-160,163-165,168-170,173-193,197-200,203-218
+  s_539a40c6da65a7::t_5c8eff723407c6 108-110
+.claude/settings.json
+  s_539a40c6da65a7::t_f421eee5c7f9c5 7-48,51,56-70,74-89
+control-plane/Package.swift
+  s_539a40c6da65a7::t_0c036267624d93 182
+control-plane/Sources/App/Bootstrap/FoundationBootstrap.swift
+  s_539a40c6da65a7::t_0e3355d5aa6ca0 11,14-25,42
+control-plane/Sources/App/Extensions/Request+LoadBalancerAuthorization.swift
+  s_539a40c6da65a7::t_99b43537e17f6a 10-16
+control-plane/Sources/App/Extensions/Request+ResourceAuthorization.swift
+  s_539a40c6da65a7::t_9e699b9e80d767 1-21
+control-plane/Sources/App/Extensions/Request+SandboxAuthorization.swift
+  s_539a40c6da65a7::t_a9ed07eaba6434 16
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_539a40c6da65a7::t_3aee68a255e0e1 15
+control-plane/Sources/App/Extensions/Request+VolumeAuthorization.swift
+  s_539a40c6da65a7::t_9de2a626bdf9f2 17
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_539a40c6da65a7::t_1e5c44e880d40c 1011-1012
+control-plane/Sources/App/configure.swift
+  s_539a40c6da65a7::t_30c14ad501ab30 9-26
+control-plane/Sources/App/entrypoint.swift
+  s_539a40c6da65a7::t_eb7bd4c90c2ed8 1,10-18,20-23,26,36-39
+control-plane/Tests/AppPlatformTests/ObservabilityBootstrapTests.swift
+  s_539a40c6da65a7::t_beb4273b10532e 1-124
+docs/deployment/logging.md
+  s_539a40c6da65a7::t_8df4de3dd8278f 10-23
+docs/deployment/observability.md
+  s_539a40c6da65a7::t_5fa4affb773f3f 24,33-36,337-340
+helm/strato-control-plane/README.md
+  s_539a40c6da65a7::t_8a8469b69ec980 165-168
+helm/strato-control-plane/values.yaml
+  s_539a40c6da65a7::t_ab8bb3e7d37c69 509-510
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e235fd5bdd736e7129acbc9e8517ee0ce29c2b52",
+  "prompts": {},
+  "sessions": {
+    "s_539a40c6da65a7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a054b0-8ac0-74a0-9d98-faaf8cbd1c05",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

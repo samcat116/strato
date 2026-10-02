@@ -1,0 +1,25 @@
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_9150f92df36659::t_a8e41711e62e66 164,173
+  s_9150f92df36659::t_50f320b2a25e82 1
+agent/Package.swift
+  s_9150f92df36659::t_a70a45cc3ddc24 20
+  s_9150f92df36659::t_9995be6877ee6d 46
+agent/Package.resolved
+  s_9150f92df36659::t_cb4d37330c2ad8 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b08253bd59122498400410b27377454f45e8e6ac",
+  "prompts": {},
+  "sessions": {
+    "s_9150f92df36659": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a301a83-c674-4612-a470-101cc1be93e1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

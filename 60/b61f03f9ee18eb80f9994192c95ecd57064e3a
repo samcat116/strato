@@ -1,0 +1,19 @@
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_03afc6c49f83ec::t_e82820e4220435 155-159,161,163-177,180-187,191-195,199-202,206-211,214-218,221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "60b61f03f9ee18eb80f9994192c95ecd57064e3a",
+  "prompts": {},
+  "sessions": {
+    "s_03afc6c49f83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9e155b85-3544-45f7-a4b9-7235c3ef1d8c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

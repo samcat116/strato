@@ -1,0 +1,73 @@
+docs/architecture/control-plane.md
+  s_2279545463a027::t_5c80bc13896d7b 203-206
+  s_2279545463a027::t_dd26c416ffa51c 210-211,214-215
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_2279545463a027::t_e9e0cfea1d988d 21-23
+docs/development/local-development.md
+  s_2279545463a027::t_a14b6e43cbcaeb 24-40
+  s_2279545463a027::t_81473b14755bf8 67-68
+docs/architecture/iam.md
+  s_2279545463a027::t_5e0d395fc60dd1 442-443
+control-plane/Tests/AppTests/IAMPolicySetVersionTests.swift
+  s_2279545463a027::t_230ee8664485df 55-57
+CLAUDE.md
+  s_2279545463a027::t_b4a9bc4b54da4f 30
+control-plane/Sources/App/Migrations/FixVMColumnNames.swift
+  s_2279545463a027::t_748d12a508bf9d 12-23,25-30,32-33
+control-plane/Tests/AppTests/SCIMFilterTests.swift
+  s_2279545463a027::t_c4092b28adfdf1 12-13
+control-plane/Sources/App/Migrations/AddSCIMExternalIDIndex.swift
+  s_2279545463a027::t_e1373b0414ce81 8-14,18-23
+control-plane/Sources/App/configure.swift
+  s_2279545463a027::t_5325caefb1d183 215-216
+control-plane/Tests/AppTests/IAMAuthorizerTests.swift
+  s_2279545463a027::t_c25a5e237e8214 196
+  s_2279545463a027::t_2361975155be43 213
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_2279545463a027::t_85efc65c65460b 134-135
+  s_2279545463a027::t_33bc2a06e6a28c 104-113
+  s_2279545463a027::t_56aa6fbbbb446a 244-247,250-274
+  s_2279545463a027::t_99819d13865161 98-103,114-119
+  s_2279545463a027::t_70de278eabde6e 14-21,25-28,36
+  s_2279545463a027::t_daeb85c8595273 50,54
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_2279545463a027::t_c5ebcdee61d739 11-13
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_2279545463a027::t_65572344d269e7 7-8
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_2279545463a027::t_35ab26eecd11e8 380
+control-plane/Tests/AppTests/VMInterfaceAddressMigrationTests.swift
+  s_2279545463a027::t_315b32955c629c 80,82
+  s_2279545463a027::t_89fd60a4021280 8-10
+  s_2279545463a027::t_58d6b198fc2509 64
+.github/workflows/build.yaml
+  s_2279545463a027::t_5ef32c5cef0423 307,327,329
+  s_2279545463a027::t_f70d9e77151a8c 245-250,256-257
+  s_2279545463a027::t_a8bb2ac206c9cf 338
+control-plane/Package.resolved
+  s_c44fe57920bab1::t_3ff7714f4c5fb1 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3ab726501ab18ac2d2ebcba38d914a586d1d020a",
+  "prompts": {},
+  "sessions": {
+    "s_2279545463a027": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "790bb16a-595d-4221-a46a-248a05b4670b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_c44fe57920bab1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "96147659-e96e-4eb4-b817-e8b6736291dc",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

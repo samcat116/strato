@@ -1,0 +1,39 @@
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  s_e5ac99cc916fa3::t_628e4316c13a25 297
+  s_e5ac99cc916fa3::t_069cfc5e1cd855 434
+  s_e5ac99cc916fa3::t_228d76bbbf8946 93
+control-plane/Tests/AppPlatformTests/SecurityGroupControllerTests.swift
+  s_e5ac99cc916fa3::t_33d417108f5194 817,925
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_e5ac99cc916fa3::t_d393fc6089b827 1003-1036
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_e5ac99cc916fa3::t_707f4851abd89e 104
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_e5ac99cc916fa3::t_f4f70f79b4d59c 259
+  s_e5ac99cc916fa3::t_f967c35c140794 436
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_e5ac99cc916fa3::t_60ac3791896c2d 95
+  s_e5ac99cc916fa3::t_43fe945af1f591 67
+control-plane/Tests/AppPlatformTests/VMMutableMetadataTests.swift
+  s_e5ac99cc916fa3::t_33d417108f5194 89
+control-plane/Tests/AppPlatformTests/DesiredStateDNSZoneTests.swift
+  s_e5ac99cc916fa3::t_5aff1ee5b65d35 74
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_e5ac99cc916fa3::t_33d417108f5194 280,307,351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "608100792d98679573e26a4f26f562fac79f31c8",
+  "prompts": {},
+  "sessions": {
+    "s_e5ac99cc916fa3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1500b831-541e-4965-9195-470335336b8d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

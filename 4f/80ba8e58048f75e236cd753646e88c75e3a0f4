@@ -1,0 +1,49 @@
+docs/architecture/agent.md
+  s_01730cdafc8446::t_cd140014e568d6 313-315,320-328
+agent/Tests/StratoAgentTests/DomainBootOrderTests.swift
+  s_01730cdafc8446::t_84b6f1e98cd820 41-44,52-53,60,65-104
+  s_01730cdafc8446::t_2f1ad0e1ab94ab 1-40,54-59,61-64,105-106
+  s_01730cdafc8446::t_4e92e79531a293 45-51
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_01730cdafc8446::t_4e92e79531a293 126-127
+  s_01730cdafc8446::t_822c29a7283fd4 75-90,94-125,128-141
+  s_01730cdafc8446::t_2f1ad0e1ab94ab 73-74,91-93,142-143
+docs/adr/0005-agent-drives-libvirt-not-qemu.md
+  s_01730cdafc8446::t_cd140014e568d6 100-103
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_01730cdafc8446::t_47fb87dfda3cff 71-76,695-696
+  s_01730cdafc8446::t_dd9ae8ee6ec3d8 1431-1434,1437,1444,1449-1453,1455-1482,1484-1508,1511,1513-1514
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_01730cdafc8446::t_f33ef0a303c034 570-716,725-726
+  s_01730cdafc8446::t_4e92e79531a293 717-724
+  s_01730cdafc8446::t_bc3e75b2d4a95a 16-18,569,727
+agent/Sources/StratoAgent/Agent.swift
+  s_01730cdafc8446::t_2ca13b1a47cc6d 4969,4985-4986,5020-5022,5026-5028,5037-5039
+  s_01730cdafc8446::t_47fb87dfda3cff 5016-5019
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_01730cdafc8446::t_c0871e849d6efe 142,151
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_01730cdafc8446::t_c0871e849d6efe 232-235,240
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_01730cdafc8446::t_c0871e849d6efe 666
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_01730cdafc8446::t_47fb87dfda3cff 182-183
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_01730cdafc8446::t_47fb87dfda3cff 36-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4f80ba8e58048f75e236cd753646e88c75e3a0f4",
+  "prompts": {},
+  "sessions": {
+    "s_01730cdafc8446": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-d8cf-7de3-97c1-67f2dad45e55",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+control-plane/Tests/AppTests/RoleNestingSubsumptionTests.swift
+  s_c44fe57920bab1::t_27c073e7386948 38-43
+  s_c44fe57920bab1::t_e8b3187beae1be 54,77-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "191e4cedb6b5eb34f3f30b8200724226812ec7ca",
+  "prompts": {},
+  "sessions": {
+    "s_c44fe57920bab1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "96147659-e96e-4eb4-b817-e8b6736291dc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

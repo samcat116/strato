@@ -1,0 +1,133 @@
+.github/workflows/helm-test.yml
+  s_2c6bd12f00837c::t_de2c7e277f3768 158-210
+control-plane/Sources/App/Services/AgentService.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 521-526,528-529,996,1003-1034,2251-2254,2265,2267-2268,2271
+docs/development/code-review.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 317-334,351-359
+  s_2c6bd12f00837c::t_4811dc09607230 360
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 214-288,411-430
+docs/deployment/overview.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 22-27
+helm/strato-control-plane/templates/_helpers.tpl
+  s_2c6bd12f00837c::t_de2c7e277f3768 300-336
+deploy/compose/.env.example
+  s_2c6bd12f00837c::t_de2c7e277f3768 10-12
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 679-681,691-697,702-706,708-709
+control-plane/Sources/App/Services/ValkeyService.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 6-27,45-59,64-66,71-176,203-204,209,211-212,215,218-226,234-246,248-269,275-285,295,298-299,307-308,310,313-318
+docs/architecture/networking.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 442-477
+helm/strato-control-plane/templates/deployment.yaml
+  s_2c6bd12f00837c::t_de2c7e277f3768 359-376
+control-plane/Sources/App/configure.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 108-126,131-132,137-144,146-153,227-230
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 490-499,507-509,511-513
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_2c6bd12f00837c::t_de2c7e277f3768 193-212,391,398,406-433
+control-plane/Sources/App/Services/HierarchyPathResolver.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 8-13,87-126
+  s_2c6bd12f00837c::t_0f0cca223a5f36 127
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 5,8-12,16,19-22,133-139,144-145,216,221,226,238,270-271,275,305,315,323,346,357,697,1012-1027,1030-1047,1052-1057,1059,1062-1066,1069-1071,1079
+control-plane/Sources/App/IAM/QuotaVisibility.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 1-72
+deploy/compose/docker-compose.yml
+  s_2c6bd12f00837c::t_de2c7e277f3768 273-275,279-294
+docs/deployment/health-checks.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 22-25,61-84
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 53-65,107,110,112,116-155,172-174
+helm/strato-control-plane/templates/migration-job.yaml
+  s_2c6bd12f00837c::t_de2c7e277f3768 82-99
+docs/architecture/multi-replica.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 20-34,94-105
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 195-205,211-219,262-263,342
+control-plane/Sources/App/Models/Site.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 86-93,203-211,217-223
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 147,149-153,161,558-568,570-571,573-576
+control-plane/Tests/AppIdentityTests/ValkeySessionDriverTests.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 233-262
+control-plane/Tests/AppPlatformTests/CoordinationServiceTests.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 343,353,361-362,375
+docs/deployment/kubernetes.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 92-117
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 59-68
+helm/strato-control-plane/templates/networkpolicy.yaml
+  s_2c6bd12f00837c::t_de2c7e277f3768 92-102
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 146-150,256,262-264
+  s_2c6bd12f00837c::t_ac4cb8337e9c6e 145
+control-plane/web/src/types/openapi.ts
+  s_2c6bd12f00837c::t_de2c7e277f3768 2650-2653,2750,3261,7392-7395
+docs/architecture/control-plane.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 56-66
+CLAUDE.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 95
+control-plane/Sources/App/Services/HierarchySnapshot.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 86-91,93-95,97-103,147
+control-plane/web/src/types/api.ts
+  s_2c6bd12f00837c::t_de2c7e277f3768 608-615
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 85-103,1123-1409
+  s_2c6bd12f00837c::t_90ce75e1eb112e 1410
+docs/architecture/authorization-edge-audit.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 142-179
+helm/strato-control-plane/values.yaml
+  s_2c6bd12f00837c::t_de2c7e277f3768 736-757
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 22-29,43-48,51-104,121-127,131-132,135-161,171-180,200-273,331,344-417,420,422-423
+  s_2c6bd12f00837c::t_be9fe0eeba5d6f 418-419,421
+control-plane/Tests/AppPlatformTests/SecurityGroupControllerTests.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 455,459-506
+  s_2c6bd12f00837c::t_cde0004d0c683a 456-458
+control-plane/Sources/App/Controllers/VMController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 1021-1028,1032,1034-1040
+control-plane/Sources/App/openapi.yaml
+  s_2c6bd12f00837c::t_de2c7e277f3768 3642-3647,3742-3748,4442-4444,12711-12727
+control-plane/Tests/AppPlatformTests/FloatingIPControllerTests.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 530-592
+docs/deployment/rate-limiting.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 50-53
+helm/strato-control-plane/ci/session-valkey-values.yaml
+  s_2c6bd12f00837c::t_de2c7e277f3768 1-68
+deploy/compose/README.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 74-76
+control-plane/Sources/App/Services/ValkeySessions.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 172-179,183,190-219
+control-plane/Tests/AppIAMTests/HierarchyPathVisibilityTests.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 1-6,8-342
+  s_2c6bd12f00837c::t_801607290739a4 7
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_2c6bd12f00837c::t_de2c7e277f3768 178-191,193
+docs/deployment/observability.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 268-271
+docs/deployment/docker-compose.md
+  s_2c6bd12f00837c::t_de2c7e277f3768 75,101-133
+  s_2c6bd12f00837c::t_42e33c400a3ec4 134
+helm/strato-control-plane/templates/valkey-secret.yaml
+  s_2c6bd12f00837c::t_de2c7e277f3768 12-23
+control-plane/Tests/AppPlatformTests/ValkeyStoreConfigurationTests.swift
+  s_2c6bd12f00837c::t_6f2ab2b51cd4a7 1-198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "d73395a7c47e79f13a62dc307622618faeaa5e50",
+  "prompts": {},
+  "sessions": {
+    "s_2c6bd12f00837c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3f581f91-6e20-4702-b193-65365de48102",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

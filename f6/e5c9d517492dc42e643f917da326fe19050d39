@@ -1,0 +1,23 @@
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_7cb1100217f98a::t_f0722278007e40 669-677,682-683,685-686
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_7cb1100217f98a::t_ea8b49134d86fb 976-1022
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7cb1100217f98a::t_0b39aef10b4196 628-630,634
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "f6e5c9d517492dc42e643f917da326fe19050d39",
+  "prompts": {},
+  "sessions": {
+    "s_7cb1100217f98a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "268f2271-7b73-49ec-a677-911ffbb65707",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

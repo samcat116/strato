@@ -1,0 +1,143 @@
+CONTEXT.md
+  s_c409156beadd2a::t_9e46aa7c23191a 100-115
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_c409156beadd2a::t_b950c1cb1ca88f 54-69
+docs/architecture/iam.md
+  s_c409156beadd2a::t_567ff8098dec2f 72-73
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_c409156beadd2a::t_962c4721eb7686 20-26
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_c409156beadd2a::t_e12cdf9bbfaffd 239-240
+  s_c409156beadd2a::t_8f39e6bff0b993 72
+control-plane/web/src/lib/hooks/use-vms.ts
+  s_c409156beadd2a::t_10f892ea0e12cb 25-33
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_c409156beadd2a::t_02ffa87acac8c1 68-70
+  s_c409156beadd2a::t_a137a8a4b16964 144-148
+control-plane/web/src/components/vms/vm-snapshots-card.tsx
+  s_c409156beadd2a::t_9ce26ec8b2a6f7 1-315
+control-plane/Tests/AppTests/VMSnapshotTests.swift
+  s_c409156beadd2a::t_7abb73969fa5da 86-89
+  s_c409156beadd2a::t_556a4028eeaa84 349
+  s_c409156beadd2a::t_2859bc8a6718d2 355,370-378,381-388
+  s_c409156beadd2a::t_c36144c6ade9a7 1-85,90-231,235,238-348,350-354,356-369,379-380,389-471
+  s_c409156beadd2a::t_b19d7a3ea70113 232-234,237
+  s_c409156beadd2a::t_78e356aeac7b60 236
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_c409156beadd2a::t_31b6a3bc035a5d 139-157
+  s_c409156beadd2a::t_d269c00e98fe93 176-194
+  s_c409156beadd2a::t_361f4b58ba144f 27-47
+agent/Tests/StratoAgentTests/QMPSnapshotClientTests.swift
+  s_c409156beadd2a::t_658897b34ac39c 68,70
+  s_c409156beadd2a::t_9e48b22a26904e 211
+  s_c409156beadd2a::t_a345778cb4abfd 1-67,69,71-210,212-269
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_c409156beadd2a::t_169290020bf5ca 355-361
+agent/Sources/StratoAgent/QEMUService.swift
+  s_c409156beadd2a::t_774e832713c06b 1276-1277
+  s_c409156beadd2a::t_5abb205e5db61f 1130
+  s_c409156beadd2a::t_1507a4a0f20722 1082-1129,1131-1135,1144,1146-1153,1179-1180,1183-1192,1194,1196-1206,1213-1275,1278-1323
+  s_c409156beadd2a::t_515ad2e5ca12ea 330-334
+  s_c409156beadd2a::t_e52e9a3eac3881 1136-1143,1145,1154-1178,1181-1182
+  s_c409156beadd2a::t_e94360cdfe8dcd 1207-1212
+  s_c409156beadd2a::t_d1265d110ea0b2 356-387
+  s_c409156beadd2a::t_a943132f4faed5 1193,1195
+docs/architecture/storage.md
+  s_c409156beadd2a::t_82c0d0112d968d 222-263
+docs/architecture/wire-protocol.md
+  s_c409156beadd2a::t_8d047004c2a1c3 136
+control-plane/Sources/App/openapi.yaml
+  s_c409156beadd2a::t_c277a4f98f13e3 469-544
+  s_c409156beadd2a::t_dafbf8b0425e55 8365-8415
+  s_c409156beadd2a::t_691e308c4af274 111-114
+  s_c409156beadd2a::t_807d74844d754e 7116-7123
+  s_c409156beadd2a::t_6867ca5d10f8d0 13215-13229
+agent/Sources/StratoAgent/Agent.swift
+  s_c409156beadd2a::t_a2e84567fa302b 1282-1288
+  s_c409156beadd2a::t_4ed3ae5d2ef9ca 1280-1281,1289-1290
+  s_c409156beadd2a::t_24d931f3a96a94 1938-1947
+  s_c409156beadd2a::t_ff549e7d11b8a0 2153-2236
+control-plane/web/src/types/api.ts
+  s_c409156beadd2a::t_a4e66893ce8ab6 1082-1111
+shared/Sources/StratoShared/WireProtocol.swift
+  s_c409156beadd2a::t_f0c4fe35f35e6b 512-528
+  s_c409156beadd2a::t_c29f09b208c29c 282-293
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_c409156beadd2a::t_220ae4356f7e1d 61-68
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_c409156beadd2a::t_a2807df4e25769 1-448
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_c409156beadd2a::t_83a13c9ffa9b44 279-285
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_c409156beadd2a::t_907aa4d02e3ecb 18-20
+  s_c409156beadd2a::t_7128e3aa0f22a2 58
+control-plane/Sources/App/IAM/IAMActionTranslation.swift
+  s_c409156beadd2a::t_a6f8e72efe9617 55
+  s_c409156beadd2a::t_b371d50503b758 96
+  s_c409156beadd2a::t_a0d7e63cb4012e 108,115
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_c409156beadd2a::t_1d428c45be9560 347-348
+  s_c409156beadd2a::t_77f709090bcdc9 177-195
+control-plane/Sources/App/Services/VMSnapshotService.swift
+  s_c409156beadd2a::t_aacef7cefd68a1 33-40
+  s_c409156beadd2a::t_a87fcd44924a20 1-22,26-32,41-150
+  s_c409156beadd2a::t_36ca1b9dddfa36 23-25
+shared/Tests/StratoSharedTests/VMSnapshotMessageTests.swift
+  s_c409156beadd2a::t_6ed529b529df8c 1-46,48-91
+  s_c409156beadd2a::t_ba8007e42d6f30 47
+control-plane/Sources/App/Controllers/VMController.swift
+  s_c409156beadd2a::t_96983f97b97e43 86-93
+control-plane/web/src/types/openapi.ts
+  s_c409156beadd2a::t_b86f9b982a7f9c 308-378,5074-5104,7551-7557,8266-8267,8841-8940
+control-plane/web/src/lib/api/vms.ts
+  s_c409156beadd2a::t_70a63fe2f4af1a 12-13
+  s_c409156beadd2a::t_689cd9599a863f 76-103
+control-plane/Tests/AppTests/IAMShadowTranslationTests.swift
+  s_c409156beadd2a::t_6aaeb76f05c809 112-115
+  s_c409156beadd2a::t_b27683a91f52cb 43-48
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_c409156beadd2a::t_58bb70dcdd8ba1 71-81
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_c409156beadd2a::t_b598d5a90a7b91 25
+  s_c409156beadd2a::t_00fd42855c66d8 316-318
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_c409156beadd2a::t_13296fb058b5c6 699-786
+  s_c409156beadd2a::t_fecffa17d8cfe5 205-407
+  s_c409156beadd2a::t_df68d1e28373c7 480-550
+control-plane/Sources/App/configure.swift
+  s_c409156beadd2a::t_0b49f60127510e 524-527
+shared/Sources/StratoShared/VMSnapshotMessages.swift
+  s_c409156beadd2a::t_6d186717246ceb 1-154
+control-plane/Sources/App/Models/VMSnapshot.swift
+  s_c409156beadd2a::t_76db087db003ae 1-167
+control-plane/Sources/App/Migrations/CreateVMSnapshot.swift
+  s_c409156beadd2a::t_bfe9acaa0248cc 1-52
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_c409156beadd2a::t_9fc9c913cdecfe 36
+  s_c409156beadd2a::t_5e308b9ec53823 74
+control-plane/web/src/components/vms/index.ts
+  s_c409156beadd2a::t_d44111b291f666 8
+control-plane/web/src/lib/hooks/index.ts
+  s_c409156beadd2a::t_8cdc0a8ba8887f 1-6
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_c409156beadd2a::t_5f79aebaeeca15 151,156
+  s_c409156beadd2a::t_ff7f0a3cdc9da8 197-225
+docs/api-reference.md
+  s_c409156beadd2a::t_78eba59765c1ce 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "cd67071b4a88be2c46c2e5778ff82f39f2784b0e",
+  "prompts": {},
+  "sessions": {
+    "s_c409156beadd2a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "42deaa62-4341-400e-a5c6-f73181c22cfc",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

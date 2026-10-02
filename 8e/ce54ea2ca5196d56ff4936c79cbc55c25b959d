@@ -1,0 +1,19 @@
+docs/architecture/sandboxes.md
+  s_6c56bfed6d2366::t_92af19e7e24047 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "8ece54ea2ca5196d56ff4936c79cbc55c25b959d",
+  "prompts": {},
+  "sessions": {
+    "s_6c56bfed6d2366": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be9e492d-322d-4051-885c-96be4987cff7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

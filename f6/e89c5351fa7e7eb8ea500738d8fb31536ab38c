@@ -1,0 +1,56 @@
+control-plane/Tests/AppTests/ProjectMemberTests.swift
+  s_23e999cd01a81a::t_4b5fb5e89a192e 176-349
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_23e999cd01a81a::t_f62599cdad4251 521
+  s_23e999cd01a81a::t_400934c1d5eb28 359
+  s_23e999cd01a81a::t_032002f6e533f4 17-21,25-29,31-57
+  s_23e999cd01a81a::t_e34afbcc0fd5d0 131
+control-plane/Tests/AppTests/OrganizationMemberRoleTests.swift
+  s_23e999cd01a81a::t_e63db273454e64 1-212
+control-plane/Sources/App/Models/Organization.swift
+  s_23e999cd01a81a::t_1f0c7b73455136 147-148,150-152
+control-plane/web/src/types/api.ts
+  s_23e999cd01a81a::t_b9545f5dd55cfa 182,184-185,189-190,198-201,210-213
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_23e999cd01a81a::t_4f9ae9109084a8 531-541,554,559-561,566,570-572,576,582,586,597-651
+  s_23e999cd01a81a::t_a0566879c3bcf7 405-411,415,417-419,425-427,434,438
+  s_23e999cd01a81a::t_93b161befc7f5d 420
+  s_23e999cd01a81a::t_66c14cb4510607 351-354,362
+control-plane/web/src/components/project-members/members-table.tsx
+  s_23e999cd01a81a::t_d279a497582375 149
+  s_23e999cd01a81a::t_e3e61bab1f1f0e 168
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_23e999cd01a81a::t_f3a9d5a0d7648b 431
+  s_23e999cd01a81a::t_dc466e2c6be9e1 36-37,39-41,52,54-55
+  s_23e999cd01a81a::t_28d38eb5f7793b 157-159,184-185,190,193,197,207
+  s_23e999cd01a81a::t_87ac96a3e30ad0 327
+  s_23e999cd01a81a::t_0e04204ca51de2 117-123,131-132,141-142
+  s_23e999cd01a81a::t_eaa1e59683ab5e 340-342,368-369,375,380,390
+  s_23e999cd01a81a::t_4a22426eb61a90 449-469
+  s_23e999cd01a81a::t_b1a0cc99d755b4 222-224,247-248,254,258-260,264,273,283
+control-plane/web/src/components/project-members/group-grants-table.tsx
+  s_23e999cd01a81a::t_b13343a4cf97b2 113
+control-plane/web/src/components/organization-members/members-table.tsx
+  s_23e999cd01a81a::t_27949f1f1160ba 151
+  s_23e999cd01a81a::t_a33c63a0c316b9 173
+control-plane/Sources/App/IAM/MemberRoleResolver.swift
+  s_23e999cd01a81a::t_5bf88fb4533d0c 50
+  s_23e999cd01a81a::t_82d3fdaad6d86f 1-49,51-81,84-89,91-161
+  s_23e999cd01a81a::t_240750726cce3e 82-83,90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f6e89c5351fa7e7eb8ea500738d8fb31536ab38c",
+  "prompts": {},
+  "sessions": {
+    "s_23e999cd01a81a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b02c051-da07-4eb7-b48f-5714856b9887",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

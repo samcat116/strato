@@ -1,0 +1,107 @@
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_071366b7d1e1c2::t_02289a2fca07ea 1-498
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_071366b7d1e1c2::t_30141e0e30eecd 89
+control-plane/Sources/App/Services/AgentService.swift
+  s_071366b7d1e1c2::t_aaa43f635e00a1 2356-2450
+  s_071366b7d1e1c2::t_534b5a0e1292ca 1865-1878,1888-1889
+  s_071366b7d1e1c2::t_85eabdab730bcf 2081-2094,2098-2099
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_071366b7d1e1c2::t_e4e64f02ebdf85 446
+control-plane/Sources/App/configure.swift
+  s_071366b7d1e1c2::t_5eae7045642ba1 575-579
+control-plane/Sources/App/Services/NetworkSpecFactory.swift
+  s_071366b7d1e1c2::t_c175cb0083bacd 1
+  s_071366b7d1e1c2::t_bcfc88461e5385 14-19
+  s_071366b7d1e1c2::t_61ae7fa4ba7525 40-41
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_071366b7d1e1c2::t_e88a3c1d167519 82-84,87-88,92-97
+  s_071366b7d1e1c2::t_e8477bb3f965ac 182-184
+  s_071366b7d1e1c2::t_a968d9c92f5d61 154-155
+control-plane/Tests/AppTests/SecurityGroupControllerTests.swift
+  s_071366b7d1e1c2::t_7c9cedf13f3907 1-637
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_071366b7d1e1c2::t_89096c81397760 181-184
+control-plane/Sources/App/Models/SecurityGroup.swift
+  s_071366b7d1e1c2::t_b7aba8f35a45c5 1-26,33-207
+  s_071366b7d1e1c2::t_d18770f46dddfb 27-32
+shared/Tests/StratoSharedTests/SecurityGroupProtocolTests.swift
+  s_071366b7d1e1c2::t_730c752f6b5d78 1-97
+control-plane/Sources/App/IAM/IAMActionTranslation.swift
+  s_071366b7d1e1c2::t_8ce2e11c536199 173-174
+  s_071366b7d1e1c2::t_b10ea80309e308 121,128
+  s_071366b7d1e1c2::t_8b5cbf31bd7c0a 60
+shared/Sources/StratoShared/VMSpec.swift
+  s_071366b7d1e1c2::t_a9c28b0845d04b 340
+  s_071366b7d1e1c2::t_fd1500fe69b04c 269-278,294-295
+  s_071366b7d1e1c2::t_86cf73a21c82f9 311,318
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_071366b7d1e1c2::t_3bb3c302650c3f 78
+  s_071366b7d1e1c2::t_4a70d5fcf1ecf1 222-223
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_071366b7d1e1c2::t_3a88fc1b34da87 1-2,4-156
+  s_071366b7d1e1c2::t_dd15c86ec2633a 3
+control-plane/Sources/App/routes.swift
+  s_071366b7d1e1c2::t_b26a25cefb8373 68
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_071366b7d1e1c2::t_f2190241fd97f0 55
+  s_071366b7d1e1c2::t_cffb11c143c9b1 105
+  s_071366b7d1e1c2::t_371359379d6fc2 131-132
+control-plane/Sources/App/Controllers/VMController.swift
+  s_071366b7d1e1c2::t_1617ae117a37e4 777-794
+  s_071366b7d1e1c2::t_d84277e014dcb0 543-546
+  s_071366b7d1e1c2::t_e640263f297289 405-408
+  s_071366b7d1e1c2::t_a1556ec34ab093 537-542,547-560
+control-plane/Sources/App/openapi.yaml
+  s_071366b7d1e1c2::t_15cea0c01b2f29 1535-1712
+  s_071366b7d1e1c2::t_5e74e1189a2481 7615-7623
+  s_071366b7d1e1c2::t_ec86344ec6a8c4 8549-8677
+  s_071366b7d1e1c2::t_1714f08f7eec23 6835-6850
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_071366b7d1e1c2::t_669623cd24f534 30
+  s_071366b7d1e1c2::t_97625fef12eeb3 67
+shared/Sources/StratoShared/WireProtocol.swift
+  s_071366b7d1e1c2::t_429fef1adc8a3b 444-459
+  s_071366b7d1e1c2::t_b297e141c25171 243-258
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_071366b7d1e1c2::t_03e11fd7b7e935 210-219,229-230,240
+  s_071366b7d1e1c2::t_383e37b5124a91 260-330
+control-plane/Sources/App/Migrations/CreateSecurityGroup.swift
+  s_071366b7d1e1c2::t_dcc85102ee17b6 1-86
+control-plane/Sources/App/Migrations/SeedDefaultSecurityGroups.swift
+  s_071366b7d1e1c2::t_3044e0ed25b30d 1-127
+control-plane/Sources/App/Models/SecurityGroupRule.swift
+  s_071366b7d1e1c2::t_aaff0b4082b87b 1-31,36-37,39-97
+  s_071366b7d1e1c2::t_6232acf9a47976 32-35,38
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_071366b7d1e1c2::t_06ea71e3fad288 115-117
+  s_975ea3cfe0cfd1::t_e3349ddec87d59 114
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_071366b7d1e1c2::t_93d386ac232f8c 653-657
+control-plane/Sources/App/Models/VMInterfaceSecurityGroup.swift
+  s_071366b7d1e1c2::t_19d27d0bbe54c3 1-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "456322af677b8010fd07f3ff46804f8b91b1fb84",
+  "prompts": {},
+  "sessions": {
+    "s_071366b7d1e1c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c8d2edb-f9f6-4c81-bef3-3d415daceadb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_975ea3cfe0cfd1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd91f492-d824-432c-913e-262bb34d33b1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

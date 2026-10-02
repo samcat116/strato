@@ -1,0 +1,19 @@
+agent/Package.resolved
+  s_0b0c2b9bd67cb5::t_3c762bc1596ff5 2,207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "766af50fd5377781489c6bc4ac98506444228f3d",
+  "prompts": {},
+  "sessions": {
+    "s_0b0c2b9bd67cb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0567f44-f1ed-44e8-8ae6-5647dcc96e6a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

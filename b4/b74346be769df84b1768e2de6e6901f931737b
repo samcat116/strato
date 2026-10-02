@@ -1,0 +1,36 @@
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_3ab0be924ef621::t_11ccd541934d44 83-85,88,95-96
+  s_3ab0be924ef621::t_c3a5fce115d5d2 41-43,55-57
+  s_3ab0be924ef621::t_21261015c133a2 316-317
+  s_3ab0be924ef621::t_8f99fa9f0fba58 25-30
+  s_3ab0be924ef621::t_78f7339b5a1f0d 399-401
+  s_3ab0be924ef621::t_72a927f91dbe9f 434-438
+  s_3ab0be924ef621::t_61158413dafc1e 755-758
+control-plane/Tests/AppTests/AgentWebSocketIntegrationTests.swift
+  s_3ab0be924ef621::t_570f96dce46b5c 1
+  s_3ab0be924ef621::t_66f8eb5d4e249a 203,208,211-232
+  s_3ab0be924ef621::t_60cfc4670ecadb 20
+  s_3ab0be924ef621::t_6162142db0f0fd 2-19,21-46,52-105,110-145,147-202,204-207,209-210,233-259,266-281,290,298-317,326,328-401
+  s_3ab0be924ef621::t_cbe5a3af4f42d7 318-325
+  s_3ab0be924ef621::t_6b66792770e42a 47-51
+  s_3ab0be924ef621::t_950b458c68efd4 146
+  s_3ab0be924ef621::t_8bfe461c42524b 106-109
+  s_3ab0be924ef621::t_a72b8b91124f43 327
+  s_3ab0be924ef621::t_826d2667158fe9 260-265,282-289,291-297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b4b74346be769df84b1768e2de6e6901f931737b",
+  "prompts": {},
+  "sessions": {
+    "s_3ab0be924ef621": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8cfd938b-a27e-4a2e-8583-e08aa2355d38",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

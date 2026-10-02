@@ -1,0 +1,21 @@
+.github/workflows/build.yaml
+  s_6663695854309b::t_f17bf9bf8cbe34 238-240,246
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_6663695854309b::t_7d3de966b9d1f0 155-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "1a6dddfff871db7b2ef07dc3ad14560842a7a2c7",
+  "prompts": {},
+  "sessions": {
+    "s_6663695854309b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd14824e-db10-437a-b32d-980ed5cc9f85",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_3d8fde8278f186::t_f3de40fefc4b0f 271-298
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3d8fde8278f186::t_52e65e29f1027b 941-945,948,950,957-958,960-963
+  s_3d8fde8278f186::t_82ca3191f39f32 1027-1042
+  s_3d8fde8278f186::t_12af386a306148 63-78
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_3d8fde8278f186::t_223b98fe1fe291 108-109
+  s_3d8fde8278f186::t_6acd7410ebe8aa 243-247
+  s_3d8fde8278f186::t_be65eb4756128c 357-391
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "95a655c10ffafee0bcc569357c71ae578f7a3906",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

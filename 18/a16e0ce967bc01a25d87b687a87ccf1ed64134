@@ -1,0 +1,41 @@
+control-plane/Sources/App/openapi.yaml
+  s_eaba43f87d51f5::t_67bdf8efe81c87 3644
+  s_eaba43f87d51f5::t_cd5fbfbee1357d 3645-3647
+  s_eaba43f87d51f5::t_2614c2412143af 4442-4444
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_eaba43f87d51f5::t_d4bb60c030cfa1 147,149-153
+  s_eaba43f87d51f5::t_a48882c64f7fa3 558-568,570-571,573-576
+  s_eaba43f87d51f5::t_49ceaea1406433 161
+docs/development/code-review.md
+  s_eaba43f87d51f5::t_db4596afbb8152 328-334
+control-plane/Sources/App/IAM/QuotaVisibility.swift
+  s_eaba43f87d51f5::t_9b12b200227101 1-72
+docs/architecture/authorization-edge-audit.md
+  s_eaba43f87d51f5::t_4e13c217a558da 150-179
+control-plane/Sources/App/Services/HierarchySnapshot.swift
+  s_eaba43f87d51f5::t_ca17bb961eeddf 86-91,93-95,97-103
+  s_eaba43f87d51f5::t_f071d928d16c7b 147
+control-plane/web/src/types/openapi.ts
+  s_eaba43f87d51f5::t_34a9c92e5e68dd 2652,3261
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_eaba43f87d51f5::t_0e17372a24c5d1 146-148,150
+control-plane/Tests/AppTests/HierarchyPathVisibilityTests.swift
+  s_eaba43f87d51f5::t_89c86ba34e5f47 52-55,57
+  s_eaba43f87d51f5::t_814f6918af0dd6 226-227,233-340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "18a16e0ce967bc01a25d87b687a87ccf1ed64134",
+  "prompts": {},
+  "sessions": {
+    "s_eaba43f87d51f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "752b1789-a0cf-475e-93d1-9ea34b7fbb0e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

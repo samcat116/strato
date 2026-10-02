@@ -1,0 +1,25 @@
+control-plane/Sources/App/configure.swift
+  s_59e96616c802df::t_03427533d12cd8 925-931
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_59e96616c802df::t_4f72ac5696a4b6 334-337,355,363
+  s_59e96616c802df::t_03427533d12cd8 345-354,356-362,364-372
+control-plane/Sources/App/Migrations/AddVolumeReplicaAgentIndex.swift
+  s_59e96616c802df::t_4f72ac5696a4b6 9-12,17-18,24
+  s_59e96616c802df::t_03427533d12cd8 1-8,13-16,19-23,25-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2d1698190de9f60a1e1aa4d01ca081aef05cd0e1",
+  "prompts": {},
+  "sessions": {
+    "s_59e96616c802df": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99b-9431-7de1-b7b3-70443ae7a949",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

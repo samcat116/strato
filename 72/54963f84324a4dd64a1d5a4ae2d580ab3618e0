@@ -1,0 +1,42 @@
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_9d0e32f24c133c::t_04c8c5a78d9189 21-23
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_9d0e32f24c133c::t_a3963e1ad678bf 1-41
+control-plane/Sources/App/Controllers/VMController.swift
+  s_9d0e32f24c133c::t_6b7081b0015fb1 357
+  s_9d0e32f24c133c::t_f0748404a1999a 578
+  s_9d0e32f24c133c::t_ed97bcabca7b4c 72
+  s_9d0e32f24c133c::t_1dfe7941972ac7 530
+  s_9d0e32f24c133c::t_6900711853eec0 381
+  s_9d0e32f24c133c::t_0f8ff1c2280912 445
+  s_9d0e32f24c133c::t_ee31e4483667f1 471
+  s_9d0e32f24c133c::t_e1e31063f61530 413
+  s_9d0e32f24c133c::t_20147e300defac 329
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_9d0e32f24c133c::t_614f9f9af8a3ed 381-393,397
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_9d0e32f24c133c::t_61d2f0a01e8b01 1-113
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_9d0e32f24c133c::t_7c60709820e2eb 50
+  s_9d0e32f24c133c::t_13bbe7d1c6adbc 129
+  s_9d0e32f24c133c::t_72e9d2282246c6 28,30-31
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_9d0e32f24c133c::t_57bb30f36e26e5 210-211
+  s_9d0e32f24c133c::t_a0c0086b31fbe4 188-203,205-209,212-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7254963f84324a4dd64a1d5a4ae2d580ab3618e0",
+  "prompts": {},
+  "sessions": {
+    "s_9d0e32f24c133c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "836a2c80-dc6b-4313-a493-cbdc0f242555",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

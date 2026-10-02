@@ -1,0 +1,133 @@
+control-plane/Sources/App/Migrations/CreateSite.swift
+  s_c9833d46e3d894::t_8ec1654193d65b 1-32,37-39,44-54
+  s_c9833d46e3d894::t_9928f62874b5b0 33-36,40-43
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_c9833d46e3d894::t_a0633b4f38cd85 123-124
+  s_c9833d46e3d894::t_5050f3a5e91c4d 177
+  s_c9833d46e3d894::t_36ce99bf992dd8 260,267-268
+  s_c9833d46e3d894::t_556225df98c1db 40-41,56-57,72
+  s_c9833d46e3d894::t_d86628a50b3ad8 146-149,157-158,166
+  s_c9833d46e3d894::t_9f863d9c62610d 394-407
+  s_c9833d46e3d894::t_702f408d6ee56a 413-415,419
+  s_c9833d46e3d894::t_e0500ee0e3048e 202-204
+deploy/ovn-central/docker-compose.yml
+  s_c9833d46e3d894::t_dbd5fcc111cd13 1-19
+control-plane/Sources/App/Models/Site.swift
+  s_c9833d46e3d894::t_183d86d9fb1a84 78-80
+  s_c9833d46e3d894::t_c29dd728b48741 1-77,81-84
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_c9833d46e3d894::t_6f2931d085b665 97-104,111-112,119,125-126,135
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_c9833d46e3d894::t_51f20cee86953e 91-102,114-116
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_c9833d46e3d894::t_c0747c5e1b1e97 442,445-446
+  s_c9833d46e3d894::t_e5743b928c243a 31-34
+  s_c9833d46e3d894::t_15c365e1ab139e 329-330
+  s_c9833d46e3d894::t_0b87f33a4e0d9e 288
+  s_c9833d46e3d894::t_ed9645537e81da 366,368-370
+deploy/ovn-central/README.md
+  s_c9833d46e3d894::t_dea0f61bc175b2 1-66
+agent/Sources/StratoAgent/Agent.swift
+  s_c9833d46e3d894::t_3939c9a4665976 258
+  s_c9833d46e3d894::t_9a9033a81c259c 887-888
+  s_c9833d46e3d894::t_873edd665aeafd 1240-1241
+  s_c9833d46e3d894::t_1556f00488cf37 126
+  s_c9833d46e3d894::t_51681b48517ada 169
+  s_c9833d46e3d894::t_2ed0648f7b665b 191
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_c9833d46e3d894::t_c12693a4fb5943 185-186
+  s_c9833d46e3d894::t_76fe26e158f1d1 141-148
+deploy/ovn-central/entrypoint.sh
+  s_c9833d46e3d894::t_c1112bfc92f718 1-28
+docs/architecture/networking.md
+  s_c9833d46e3d894::t_e4dca0a9751d2c 356-359
+  s_c9833d46e3d894::t_0717bd2ddd4733 278,281-318,321-325
+  s_c9833d46e3d894::t_bc8622ef506040 326
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_c9833d46e3d894::t_dfe92617c4c604 262
+  s_c9833d46e3d894::t_971a628324b9f8 112-113,120
+  s_c9833d46e3d894::t_ac55925500547f 194-196,203,214
+  s_c9833d46e3d894::t_8e417af8cd1b12 279
+  s_c9833d46e3d894::t_947538dc646720 80-87
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_c9833d46e3d894::t_9b38d3d6cb1311 33-34,36
+  s_c9833d46e3d894::t_9823600253ffa8 46
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_c9833d46e3d894::t_35b57083f8d83f 102
+  s_c9833d46e3d894::t_0da4dd3416ec0d 83-87
+  s_c9833d46e3d894::t_fc6621d65cc4ee 115
+  s_c9833d46e3d894::t_13017c78c1b5c6 223-232
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_c9833d46e3d894::t_442bd52f865a34 302
+control-plane/Sources/App/configure.swift
+  s_c9833d46e3d894::t_97bd125e652147 282-285
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_c9833d46e3d894::t_0cb8d2157e0c47 113-122,133-134
+control-plane/Sources/App/routes.swift
+  s_c9833d46e3d894::t_5021b1cbffa718 34-35
+control-plane/Sources/App/Models/Agent.swift
+  s_c9833d46e3d894::t_488ff8fed72cba 223
+  s_c9833d46e3d894::t_f1d76a63188727 65-70
+  s_c9833d46e3d894::t_407a0bf15b11fb 203
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_c9833d46e3d894::t_e32ed8b5612b58 25-30
+  s_c9833d46e3d894::t_c3073ae9bc31e9 47-48,55
+  s_c9833d46e3d894::t_2f4a6bef6f373c 170-172
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_c9833d46e3d894::t_287e70a2081bba 112
+  s_c9833d46e3d894::t_bbd0a05f869adf 81-87
+  s_c9833d46e3d894::t_fcdf4b44463d2e 205-213
+  s_c9833d46e3d894::t_db715ac7b5c2f9 317
+  s_c9833d46e3d894::t_827d76e8b900ec 158
+  s_c9833d46e3d894::t_74358e540f6bb6 136
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_c9833d46e3d894::t_7f11b6695a1ebf 176-187
+  s_c9833d46e3d894::t_7d5317c68af31d 898-909
+  s_c9833d46e3d894::t_81d81c3913ef90 47,53
+  s_c9833d46e3d894::t_91ba6f78b56bf6 1293
+  s_c9833d46e3d894::t_6550a03e030b88 12-15,22-27
+  s_c9833d46e3d894::t_de2b3f26a94cce 103,105
+  s_c9833d46e3d894::t_5cb216453b1e01 28
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_c9833d46e3d894::t_80d11e09f08c47 132,145-159
+  s_c9833d46e3d894::t_b1d4fffe1fa8e0 180
+  s_c9833d46e3d894::t_0695b248bec794 160-161
+agent/Package.resolved
+  s_c9833d46e3d894::t_4d501cabe82078 190
+control-plane/Sources/App/Services/AgentService.swift
+  s_c9833d46e3d894::t_adaf67c34cbeed 176-180
+  s_c9833d46e3d894::t_922eb89b113dc8 181
+  s_c9833d46e3d894::t_fc956be4a2fd43 711-714,716-740
+  s_c9833d46e3d894::t_5f193073944103 1523-1524
+  s_c9833d46e3d894::t_c9f43fed2d73cd 1408-1431
+  s_c9833d46e3d894::t_8dff4a54ce8db4 1358-1361,1368-1369
+  s_c9833d46e3d894::t_71d7c40ee7e9cd 216-219
+  s_c9833d46e3d894::t_4c0b9103cdf479 992-996,998,1013-1070
+control-plane/Tests/AppTests/SiteTests.swift
+  s_c9833d46e3d894::t_922eb89b113dc8 326-327
+  s_c9833d46e3d894::t_07690f49114bba 1-325,328-350
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_c9833d46e3d894::t_a26f57c2d71ab7 114-159
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_c9833d46e3d894::t_bc12ea2653139c 1-173
+deploy/ovn-central/Dockerfile
+  s_c9833d46e3d894::t_c0922fb1fdc010 1-22
+config.toml.example
+  s_c9833d46e3d894::t_d3317126104a9c 107-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "80fb2d3c5c5909d99606d843b69a4c16916d6a85",
+  "prompts": {},
+  "sessions": {
+    "s_c9833d46e3d894": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "faf56adc-acd3-4b91-bf82-59493e689cbb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

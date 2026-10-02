@@ -1,0 +1,48 @@
+.github/workflows/main-build.yaml
+  s_324777dd21f1f5::t_dede1b1eb530f1 277-282,285-286
+control-plane/web/src/components/agents/agent-table.tsx
+  s_324777dd21f1f5::t_4ae089e901bfb6 12
+  s_324777dd21f1f5::t_b8edadd466aa82 79-94
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_324777dd21f1f5::t_e78ae32623bb08 194-206
+control-plane/Sources/App/BuildInfo.swift
+  s_324777dd21f1f5::t_924be7239cb8e6 18-40
+agent/Dockerfile
+  s_324777dd21f1f5::t_89075ecb0d8db4 145-152
+agent/Sources/StratoAgent/Agent.swift
+  s_324777dd21f1f5::t_5cde28e441d582 584
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_324777dd21f1f5::t_c2c5e9fe94b37b 386-408
+control-plane/web/src/types/api.ts
+  s_324777dd21f1f5::t_de6d0a65faf15a 275-278
+agent/Sources/StratoAgent/BuildInfo.swift
+  s_324777dd21f1f5::t_b85cbbd99be9f1 1-29
+.github/workflows/release.yaml
+  s_324777dd21f1f5::t_b7b3e7cf8f95c3 287-290
+  s_324777dd21f1f5::t_ed55c4747480a2 303-304
+  s_324777dd21f1f5::t_c4783d54416b28 533-547
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_324777dd21f1f5::t_58d68ad066f999 11
+agent/Sources/StratoAgent/CompiledBuildInfo.swift
+  s_324777dd21f1f5::t_0c656a90ca4105 1-7,9-10
+  s_324777dd21f1f5::t_5b63f47053c87d 8,11
+control-plane/Sources/App/Models/Agent.swift
+  s_324777dd21f1f5::t_8cbf922941cf7c 273-277
+  s_324777dd21f1f5::t_1bb3af88563350 247-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "bb6f910c454e0cc1e2a5b367482e04d4b2af7dfa",
+  "prompts": {},
+  "sessions": {
+    "s_324777dd21f1f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7a20bc6-1e95-4990-b80f-2ede2a9394da",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

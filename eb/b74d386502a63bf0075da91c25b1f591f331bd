@@ -1,0 +1,22 @@
+.github/workflows/build.yaml
+  s_678a17198c0285::t_b8a6c79dede527 191-230,236-244,257-275,278,282,290,295,303,308,323-328,351-374,387-402,406-423,428-429,433-435,447,459-463
+  s_678a17198c0285::t_5b9a332406b11e 464
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_678a17198c0285::t_b8a6c79dede527 159-165,342,377-385,391
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ebb74d386502a63bf0075da91c25b1f591f331bd",
+  "prompts": {},
+  "sessions": {
+    "s_678a17198c0285": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbf28cde-0dc8-4853-8580-387b35f7703f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

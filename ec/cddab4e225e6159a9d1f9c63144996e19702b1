@@ -1,0 +1,39 @@
+libs/swift-qemu/Sources/SwiftQEMU/QMPClient.swift
+  ce644d635b0c1df6 219,256-259,307-312
+libs/swift-scim/Sources/SwiftSCIM/Authentication/SCIMAuthentication.swift
+  ce644d635b0c1df6 96-97,99,101,154-160
+libs/swift-scim/Sources/SwiftSCIM/Client/SCIMClient+Users.swift
+  ce644d635b0c1df6 87-88
+libs/swift-ssf/Sources/SwiftSSF/Client/SSFHTTPClient.swift
+  ce644d635b0c1df6 11,17,21-28,31,36,38-41,200-205
+libs/swift-scim/Sources/SwiftSCIM/Client/SCIMClient+Groups.swift
+  ce644d635b0c1df6 68-69,135-136,159-160
+libs/swift-ssf/Sources/SwiftSSF/SSFReceiver.swift
+  ce644d635b0c1df6 209-217,267
+libs/swift-scim/Sources/SwiftSCIM/Client/SCIMClient.swift
+  ce644d635b0c1df6 28-31,38,46-49,207,212,219-220,225-229
+libs/swift-qemu/Sources/SwiftQEMU/QEMUProcess.swift
+  ce644d635b0c1df6 132-136
+libs/swift-ssf/Sources/SwiftSSF/Delivery/PushEventDelivery.swift
+  ce644d635b0c1df6 247,249-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "eccddab4e225e6159a9d1f9c63144996e19702b1",
+  "prompts": {
+    "ce644d635b0c1df6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "54c7c595-b213-4439-a64e-ba89dc2d041a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Sam Schmitt",
+      "messages": [],
+      "total_additions": 12537,
+      "total_deletions": 74,
+      "accepted_lines": 12500,
+      "overriden_lines": 0
+    }
+  }
+}

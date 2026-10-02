@@ -1,0 +1,23 @@
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_7051b6d9c6ec87::t_1c45640247ee80 345-371
+agent/Sources/StratoAgentCore/InitialNodeDependencyModules.swift
+  s_7051b6d9c6ec87::t_1c45640247ee80 86-93
+docs/architecture/agent-dependency-management.md
+  s_7051b6d9c6ec87::t_1c45640247ee80 69-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2ce6138a354c01280441f109454e442815bfa331",
+  "prompts": {},
+  "sessions": {
+    "s_7051b6d9c6ec87": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-7a5d-75f2-b785-93842a4bc0e2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

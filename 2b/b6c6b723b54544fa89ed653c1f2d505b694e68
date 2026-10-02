@@ -1,0 +1,113 @@
+control-plane/Sources/App/routes.swift
+  s_a03ccd1eb71a29::t_efe347d0e3d657 80-84
+control-plane/Sources/App/Migrations/CreateServiceAccount.swift
+  s_a03ccd1eb71a29::t_244729fea65894 1-52
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_a03ccd1eb71a29::t_42056cd0f1963c 228
+  s_a03ccd1eb71a29::t_8415285e025bb1 221
+  s_a03ccd1eb71a29::t_725fddc3b030f5 78
+  s_a03ccd1eb71a29::t_6d9f8ba34ad27c 109-111,117-118
+  s_a03ccd1eb71a29::t_93f5c756b2016e 138-145
+  s_a03ccd1eb71a29::t_c6a3b6b46ced72 183
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_a03ccd1eb71a29::t_606b8392e9be39 230-231,240-272
+  s_a03ccd1eb71a29::t_f0598d91faca59 354-362,365
+control-plane/web/src/types/openapi.ts
+  s_a03ccd1eb71a29::t_162e733b2b518e 3084-3296,5712-5777,7060-7063,12514-12901
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_a03ccd1eb71a29::t_812d5d34aae10c 173-178
+control-plane/Sources/App/Models/ServiceAccount.swift
+  s_a03ccd1eb71a29::t_16e576c8fe1015 1-44
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_a03ccd1eb71a29::t_83128b75c9460c 134-137
+  s_a03ccd1eb71a29::t_c6799c0465c7eb 129
+  s_a03ccd1eb71a29::t_72c8ceeb0340a6 23-40
+  s_a03ccd1eb71a29::t_51ede84369f084 64-67
+  s_a03ccd1eb71a29::t_1c6a582199f1ed 104
+  s_a03ccd1eb71a29::t_1599e626f3d2a4 7-15,19-20
+  s_a03ccd1eb71a29::t_5cf1fe26ffaed4 21-22
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_a03ccd1eb71a29::t_c61bdc519403f4 19-21
+  s_a03ccd1eb71a29::t_5ba40ca15b5405 35-37
+  s_a03ccd1eb71a29::t_f26b33df5d752f 105-110
+  s_a03ccd1eb71a29::t_2d2d3f639dae2c 61-73
+control-plane/Tests/AppTests/CedarPolicySetCacheTests.swift
+  s_a03ccd1eb71a29::t_2a80c3686f1d14 157
+control-plane/Sources/App/IAM/IAMActionTranslation.swift
+  s_a03ccd1eb71a29::t_0dbbba257d33a2 63
+control-plane/Tests/AppTests/ServiceAccountAPITests.swift
+  s_a03ccd1eb71a29::t_6c2aad61b2fd05 1-362
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_a03ccd1eb71a29::t_2cd9c42e4943e9 330
+  s_a03ccd1eb71a29::t_aba0693dd7dbf5 301-305
+control-plane/Sources/App/Services/SPIFFE/WorkloadRegistry.swift
+  s_a03ccd1eb71a29::t_cbc348127db499 1-91
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_a03ccd1eb71a29::t_3a1a481f80e2c1 618-620,622
+  s_a03ccd1eb71a29::t_32dd5b087f7008 480-484
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_a03ccd1eb71a29::t_fc9a72fba78155 82
+  s_a03ccd1eb71a29::t_b4707e37afd4bf 43-47,53
+  s_a03ccd1eb71a29::t_6344ac5e1a117c 200-205
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_a03ccd1eb71a29::t_016fe72a61df03 210-211
+  s_a03ccd1eb71a29::t_76b7efccba3890 74,231-245,247-248,253-254
+  s_a03ccd1eb71a29::t_0b8e15f38210c4 246,249-252
+  s_a03ccd1eb71a29::t_b60528f47d9881 60-63,67-73
+  s_a03ccd1eb71a29::t_1aa10c019faa84 139-146,149-164,173
+  s_a03ccd1eb71a29::t_3f8c0a351f89f6 21-22,32-39,42-43,47-49
+control-plane/Sources/App/Controllers/WorkloadRegistrationController.swift
+  s_a03ccd1eb71a29::t_7dbe7b23d3a055 1-195
+control-plane/Sources/App/Controllers/ServiceAccountController.swift
+  s_a03ccd1eb71a29::t_d7f9a19b1703e0 1-395
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_a03ccd1eb71a29::t_53363ab96c67bd 97-100
+control-plane/Sources/App/openapi.yaml
+  s_a03ccd1eb71a29::t_13cd5bc64c0083 4271-4571
+  s_a03ccd1eb71a29::t_2e8ac84124dab5 6247-6262
+  s_a03ccd1eb71a29::t_240edc3d030e8b 129-132
+  s_a03ccd1eb71a29::t_65c2af5dee6d2f 9712-9829
+control-plane/Tests/AppTests/CedarPolicyAssemblyTests.swift
+  s_a03ccd1eb71a29::t_30307689b68a01 158-159
+control-plane/Sources/App/Models/WorkloadRegistration.swift
+  s_a03ccd1eb71a29::t_4dfda565488e2d 1-88
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_a03ccd1eb71a29::t_ade35ef8cffd17 122-125
+control-plane/Sources/App/configure.swift
+  s_a03ccd1eb71a29::t_7c135edd6c20b5 546-550
+docs/architecture/iam.md
+  s_a03ccd1eb71a29::t_a60a2a28624cd6 258-261
+  s_a03ccd1eb71a29::t_b97b4719672882 342-373
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_a03ccd1eb71a29::t_e0fe70c0f1e9b3 68-91,98
+  s_a03ccd1eb71a29::t_59aab7bbdea62d 144
+  s_a03ccd1eb71a29::t_8531f18b1c6ff5 115
+  s_a03ccd1eb71a29::t_b1c0de5b2ca964 197
+control-plane/Tests/AppTests/WorkloadPrincipalTests.swift
+  s_a03ccd1eb71a29::t_d19f74ff9705f9 1-363
+control-plane/Sources/App/IAM/Cedar/RoleDescriptor.swift
+  s_a03ccd1eb71a29::t_81d16fd335c6de 27-28,36-37
+  s_a03ccd1eb71a29::t_3e9a0b1662498f 52-57,62-68
+control-plane/Sources/App/Services/SPIFFE/AgentMTLSAuthenticator.swift
+  s_a03ccd1eb71a29::t_48e0edb44ee94c 1
+  s_a03ccd1eb71a29::t_d64de01e035929 117-119,125-150
+  s_a03ccd1eb71a29::t_9a029c20823fa6 151
+control-plane/Tests/AppTests/EntitySliceLoaderTests.swift
+  s_a03ccd1eb71a29::t_8ea7813bf9a183 428-430
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2bb6c6b723b54544fa89ed653c1f2d505b694e68",
+  "prompts": {},
+  "sessions": {
+    "s_a03ccd1eb71a29": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b8c6fb8b-d4f1-4518-b629-9193811f8296",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

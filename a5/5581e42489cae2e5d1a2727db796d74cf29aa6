@@ -1,0 +1,32 @@
+control-plane/web/src/lib/api/images.ts
+  s_b46c3107f6ba4b::t_bcc8d74f168cac 127
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_b46c3107f6ba4b::t_bcc8d74f168cac 86-90,118,120-124,305-338
+  s_59e96616c802df::t_d5abc595710b70 339
+control-plane/web/src/components/images/image-actions.tsx
+  s_b46c3107f6ba4b::t_bcc8d74f168cac 47-50,71-72,75-79,83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a55581e42489cae2e5d1a2727db796d74cf29aa6",
+  "prompts": {},
+  "sessions": {
+    "s_59e96616c802df": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99b-9431-7de1-b7b3-70443ae7a949",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

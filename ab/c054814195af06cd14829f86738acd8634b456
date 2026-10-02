@@ -1,0 +1,31 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_20a800b1a6731c::t_a49226280d6372 159,285-286,1723-1735
+  s_20a800b1a6731c::t_6b418015db6e6e 281,287
+  s_20a800b1a6731c::t_c97477191db59d 282-284
+  s_20a800b1a6731c::t_9d424aac2c1d28 1736-1737
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_20a800b1a6731c::t_a49226280d6372 738-775
+agent/Sources/StratoAgent/Agent.swift
+  s_20a800b1a6731c::t_a49226280d6372 4599-4610
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_20a800b1a6731c::t_6b418015db6e6e 543-545
+  s_20a800b1a6731c::t_a49226280d6372 572-577,648,650,652,654
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_20a800b1a6731c::t_a49226280d6372 199-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "abc054814195af06cd14829f86738acd8634b456",
+  "prompts": {},
+  "sessions": {
+    "s_20a800b1a6731c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-973d-7190-8574-beee3fbb2d7d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

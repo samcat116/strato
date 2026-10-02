@@ -1,0 +1,21 @@
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_e76fa1ebf4feec::t_47958b94d3fd16 545-549
+control-plane/Sources/App/Services/LokiService.swift
+  s_e76fa1ebf4feec::t_8f676ed850be27 10-11,16,20-24,27,29-33,128-131,196,204-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8e2d39087ca878234b08a422c8fb7e9ddff347cb",
+  "prompts": {},
+  "sessions": {
+    "s_e76fa1ebf4feec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e9c8fb3c-52d6-402c-a605-3722f333f29a",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

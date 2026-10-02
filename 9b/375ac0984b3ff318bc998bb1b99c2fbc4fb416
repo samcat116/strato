@@ -1,0 +1,28 @@
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_c9833d46e3d894::t_6ce2d479ff9312 184-188
+control-plane/Sources/App/Services/AgentService.swift
+  s_c9833d46e3d894::t_f35ae93e2ae53e 752-756,761
+agent/Sources/StratoAgentCore/FailureClassification.swift
+  s_c9833d46e3d894::t_8f0a899b4eec41 16-23,32-41
+  s_c9833d46e3d894::t_9130ae05cfa7fe 42-43
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_c9833d46e3d894::t_ba4a80d2e4ce55 260-285
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_c9833d46e3d894::t_4a88b94729dc42 334-367
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9b375ac0984b3ff318bc998bb1b99c2fbc4fb416",
+  "prompts": {},
+  "sessions": {
+    "s_c9833d46e3d894": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "faf56adc-acd3-4b91-bf82-59493e689cbb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

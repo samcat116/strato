@@ -1,0 +1,100 @@
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_3284517dab6df7::t_55f3623e26995b 12-28,188-191,194,525-526,531-532,535-572,575,578,580,582-584,589-590,593,613,624,627,637-638,661-662,670,673
+control-plane/Sources/App/Migrations/AddWorkloadConvergenceObservability.swift
+  s_3284517dab6df7::t_7b5ef9cc31eede 1-26
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_3284517dab6df7::t_e0d6e69886a85c 116-122
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_3284517dab6df7::t_85a686ed729ee4 239
+  s_3284517dab6df7::t_7b5ef9cc31eede 88-90,102-103,111-112,164-202,238,403-404,435-436
+control-plane/web/src/types/openapi.ts
+  s_3284517dab6df7::t_92be447599d822 5454-5458
+control-plane/web/src/types/api.ts
+  s_3284517dab6df7::t_eb7cfc70a1f783 1194-1199
+control-plane/Sources/App/openapi.yaml
+  s_3284517dab6df7::t_eb7cfc70a1f783 9288-9295
+control-plane/web/src/app/(dashboard)/sandboxes/detail/page.tsx
+  s_3284517dab6df7::t_eb7cfc70a1f783 30,134
+  s_3284517dab6df7::t_3c7a29ce33fda5 135
+control-plane/web/src/components/workloads/convergence-failure-alert.tsx
+  s_3284517dab6df7::t_eb7cfc70a1f783 1-43
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_3284517dab6df7::t_ca90aa514f014c 573,622-640,901,944,992-1007,1079
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_3284517dab6df7::t_eb7cfc70a1f783 29,133
+  s_3284517dab6df7::t_c0c5d45492b692 134
+control-plane/Sources/App/Services/AgentService.swift
+  s_3284517dab6df7::t_e0d6e69886a85c 877-883,1073-1238
+  s_5d7717eeeb4bf1::t_1992be5ab5d5b3 1239
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_3284517dab6df7::t_dd65d98d211600 61-81,88-90
+  s_3284517dab6df7::t_85a686ed729ee4 82-87
+agent/Sources/StratoAgent/Agent.swift
+  s_3284517dab6df7::t_136e7322b28ed2 4346-4348,4353-4354
+control-plane/Sources/App/Models/Sandbox.swift
+  s_3284517dab6df7::t_9eff39d7d25cc7 271
+  s_3284517dab6df7::t_695e42496e93a4 265-267
+  s_3284517dab6df7::t_7b5ef9cc31eede 151-160
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_3284517dab6df7::t_55f3623e26995b 15-31,164-167,170,394,400-401,404-410,413,424,426-428,433-434
+docs/deployment/observability.md
+  s_3284517dab6df7::t_99cebf3eedd6a2 391-402
+  s_3284517dab6df7::t_7d439814053d05 163
+agent/Sources/StratoAgentCore/FailureClassification.swift
+  s_3284517dab6df7::t_014087f2ba5ab5 6-8,25-27
+docs/architecture/control-plane.md
+  s_3284517dab6df7::t_136e7322b28ed2 341
+  s_3284517dab6df7::t_c24ac0cd103974 259-261,295-303,314-322
+  s_3284517dab6df7::t_b6fd6fa40284b8 627-628,644-647,663-666
+  s_3284517dab6df7::t_c3369dcfc0cf04 323
+control-plane/Sources/App/Models/vm.swift
+  s_3284517dab6df7::t_7b5ef9cc31eede 89-98
+  s_3284517dab6df7::t_9eff39d7d25cc7 391
+  s_3284517dab6df7::t_695e42496e93a4 385-387
+docs/api-reference.md
+  s_3284517dab6df7::t_159d50fd7ec2b1 140-144,157-160
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_3284517dab6df7::t_014087f2ba5ab5 590,605-606,640
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_3284517dab6df7::t_014087f2ba5ab5 330,584,621
+  s_3284517dab6df7::t_3c8e363329a133 16,843-853,878-882,900-901,914-916,935-936,943,1395-1399,1401-1429,1541-1546,1548-1553,1565-1571,1580-1581
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_3284517dab6df7::t_bd3ca38161c2bb 375,385,429,466,483,553-555,619,652-688,694-698,700-713,715
+  s_3284517dab6df7::t_1c7d8413b244d0 689-693,699,714
+  s_3284517dab6df7::t_f7108191ea6ccf 716-718
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_3284517dab6df7::t_ce10cbf290e028 327-328,333-338
+  s_3284517dab6df7::t_ca90aa514f014c 332,339
+control-plane/Sources/App/configure.swift
+  s_3284517dab6df7::t_7b5ef9cc31eede 875-878
+docs/architecture/agent.md
+  s_3284517dab6df7::t_020803ae08f823 736-745,750
+  s_3284517dab6df7::t_523da34c62f233 800-802
+control-plane/Tests/AppPlatformTests/SteadyStateDivergenceTests.swift
+  s_3284517dab6df7::t_69e2b2e1121b71 1-72,85-88,90-92
+  s_3284517dab6df7::t_9eff39d7d25cc7 73-84,89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "dea158e4daa7a3f970b52f596a1c67beb95eaa89",
+  "prompts": {},
+  "sessions": {
+    "s_3284517dab6df7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-a9de-7ab2-9f84-e853467c449b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_5d7717eeeb4bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-40ef-7863-978f-c926590eb759",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

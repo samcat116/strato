@@ -1,0 +1,31 @@
+agent/Sources/StratoAgentCore/InitialNodeDependencyModules.swift
+  s_7051b6d9c6ec87::t_6c184d291acad8 87-92,96-97
+shared/Sources/StratoShared/NodeDependency.swift
+  s_7051b6d9c6ec87::t_6c184d291acad8 159,162-165
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_7051b6d9c6ec87::t_b9cac7cf9b6755 323
+  s_7051b6d9c6ec87::t_fc4e6ff4a51afd 309,311-318,321,324-327,360-361
+  s_7051b6d9c6ec87::t_04087799a09ba7 310,319-320,322,328-359
+docs/architecture/agent-dependency-management.md
+  s_7051b6d9c6ec87::t_6c184d291acad8 49-52,69-71
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_7051b6d9c6ec87::t_0c23290ec9e317 91-108
+agent/Sources/StratoAgentCore/NodeDependencyManager.swift
+  s_7051b6d9c6ec87::t_6c184d291acad8 37,41-44,46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "64c88b2acc68d4d73a6f572ab23e7abe80f54b86",
+  "prompts": {},
+  "sessions": {
+    "s_7051b6d9c6ec87": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-7a5d-75f2-b785-93842a4bc0e2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

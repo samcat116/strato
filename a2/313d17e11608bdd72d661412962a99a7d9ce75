@@ -1,0 +1,23 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_1dd9ddf4b6d7c1::t_8f8405363c166d 382-384,486-492,1499,2163-2166,5839-5840
+agent/Sources/StratoAgentCore/BlockDeviceInventory.swift
+  s_1dd9ddf4b6d7c1::t_7797a4ff3ed689 249-266
+agent/Tests/StratoAgentTests/BlockDeviceInventoryTests.swift
+  s_1dd9ddf4b6d7c1::t_1ee9045c45de6f 384-412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a2313d17e11608bdd72d661412962a99a7d9ce75",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

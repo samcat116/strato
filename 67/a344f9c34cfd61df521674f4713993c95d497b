@@ -1,0 +1,20 @@
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_8c1e5f09a9358c::t_f8225c6219aaf8 50-73,84,96
+  s_8c1e5f09a9358c::t_bdeb0c12576377 28-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "67a344f9c34cfd61df521674f4713993c95d497b",
+  "prompts": {},
+  "sessions": {
+    "s_8c1e5f09a9358c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2199962c-7ed0-4955-b63e-26e5b989a4bc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_0d3d4693c3fd25::t_d71e0e7f06e804 167-175,177,183,193,197-202,204,210
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_0d3d4693c3fd25::t_49a60ad0754797 233-238,253
+deploy/agent/install.sh
+  s_0d3d4693c3fd25::t_26f58ba3df18ea 577-580
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "290be379967bd72bca659f9242e1d16d6b6ff535",
+  "prompts": {},
+  "sessions": {
+    "s_0d3d4693c3fd25": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8fc31d5a-67ec-4047-9fe7-da6a7d32829a",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

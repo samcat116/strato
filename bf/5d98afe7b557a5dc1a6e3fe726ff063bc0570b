@@ -1,0 +1,64 @@
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_c77cc87c47551c::t_42c2aed1276c7a 40-53,56-132
+  s_c77cc87c47551c::t_84856435c612b4 133
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_c77cc87c47551c::t_cef57c4cc1e1bd 365,384,402
+  s_c77cc87c47551c::t_18f513b17f0d14 237-251
+  s_c77cc87c47551c::t_0e3ee6c8f704ee 81-85,87
+  s_c77cc87c47551c::t_a2fda9e28f6fe1 142
+  s_c77cc87c47551c::t_7e6d538f99bc43 120
+  s_c77cc87c47551c::t_984c8c582c902a 482
+  s_c77cc87c47551c::t_106dbd96a07950 158-170
+  s_c77cc87c47551c::t_2b5fc9686abd0b 423,442,460
+  s_c77cc87c47551c::t_5030d8b0fad980 509
+control-plane/Sources/App/Migrations/AddRoleMappingsToOIDCProvider.swift
+  s_c77cc87c47551c::t_0e910ea003ca4a 1-18
+control-plane/Sources/App/configure.swift
+  s_c77cc87c47551c::t_45ed41199e6ded 566-569
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_c77cc87c47551c::t_76d4c86a5f0143 613-614,617-618,625
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_c77cc87c47551c::t_fc5c875a30e17b 352-353,356-359,363,369,373
+  s_c77cc87c47551c::t_b0a8c4a3db5cef 295-298,310,321-323
+  s_c77cc87c47551c::t_e8ebefce47d4ba 383-392,398-401,404-446
+  s_c77cc87c47551c::t_1221c9a6757f65 131-134
+  s_c77cc87c47551c::t_ecd387486a2ff6 181,185-188,197,201
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_c77cc87c47551c::t_86efffdbfde554 71-72,92-93
+  s_c77cc87c47551c::t_c5ac60fe0760ec 143
+  s_c77cc87c47551c::t_a7ea1fd1e1e718 167
+  s_c77cc87c47551c::t_40b0d5fa5a53fc 116-138
+  s_c77cc87c47551c::t_54102c3d937613 542-650
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_c77cc87c47551c::t_9eeaefa5b291b6 77
+  s_c77cc87c47551c::t_d4fffa7e12e0b2 208,220
+  s_c77cc87c47551c::t_2863707c3254e0 1066-1069,1074,1078-1082,1084-1090,1105-1124,1143-1146
+  s_c77cc87c47551c::t_09650a44de2aa8 99
+  s_c77cc87c47551c::t_b3ab52af42be07 1147-1148
+control-plane/Sources/App/IAM/MemberRoleResolver.swift
+  s_c77cc87c47551c::t_c9aaa0f97bb294 78-140
+control-plane/Sources/App/openapi.yaml
+  s_c77cc87c47551c::t_0e3375c27d13b3 12271-12276,12279-12282
+  s_c77cc87c47551c::t_bf8b67b479e999 12203-12219
+  s_c77cc87c47551c::t_f2f896f0afa416 5263-5264
+  s_c77cc87c47551c::t_1e74af6cf83202 12338-12341,12344-12345
+  s_c77cc87c47551c::t_77414efdfebc09 12389-12392,12395-12396
+control-plane/web/src/types/openapi.ts
+  s_c77cc87c47551c::t_420061460622f9 3719,6945-6954,6979-6982,7010-7012,7031-7033
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "bf5d98afe7b557a5dc1a6e3fe726ff063bc0570b",
+  "prompts": {},
+  "sessions": {
+    "s_c77cc87c47551c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "29eb9f56-eda9-492c-b9bd-223b682095a3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

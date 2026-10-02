@@ -1,0 +1,20 @@
+agent/Dockerfile
+  s_c1191b4b4f4712::t_3584d9e2f2a20e 15,17
+  s_c1191b4b4f4712::t_65494a76d4102f 27-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "da852ad7339e87c43fa344fd5138540280e226d9",
+  "prompts": {},
+  "sessions": {
+    "s_c1191b4b4f4712": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b6377a07-09a5-4f56-bdba-dd95927e0ee3",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

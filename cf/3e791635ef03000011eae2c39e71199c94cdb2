@@ -1,0 +1,27 @@
+control-plane/Dockerfile
+  s_3da7646d17470c::t_27ada7040d54bb 91-99
+control-plane/web/Dockerfile
+  s_3da7646d17470c::t_bace2ac751004e 25-33
+agent/Dockerfile
+  s_3da7646d17470c::t_0603cf67c1f0f8 92-100
+.github/workflows/main-build.yaml
+  s_3da7646d17470c::t_1469d0921ccb9e 277-279,283-284
+  s_3da7646d17470c::t_6de268814536fa 334,342,350
+  s_3da7646d17470c::t_d6ab7c9d3096cb 187-200,203-205,215,236-249,256-261,267-274,280-282,286-287,289-292,294-310,321-330,332,335-336,338-341,343-344,346-349,351-352
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "cf3e791635ef03000011eae2c39e71199c94cdb2",
+  "prompts": {},
+  "sessions": {
+    "s_3da7646d17470c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f3054b5a-e910-493b-99ba-64998cd33902",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

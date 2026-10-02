@@ -1,0 +1,143 @@
+agent/Sources/StratoAgentCore/MockStorageBackend.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 184-187
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 82,110-131,140,156,176,371-388,401-417,474-523,616-630,632-634,651
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 22,25-31,189
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_aeadc33ad2c139::t_6976b66baf4a95 67
+  s_aeadc33ad2c139::t_23ff85563fe9df 13
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 50-55,100,114
+control-plane/web/src/components/agents/agent-detail-page.tsx
+  s_aeadc33ad2c139::t_ae7d17269ddf28 144,147-150
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 171,184-189,659-673
+  s_aeadc33ad2c139::t_75e1de901da6bf 674-675
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 39-51
+agent/Sources/StratoAgentCore/CephRBDStorageBackend.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 233-239
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 355-371,386-388,390,393-398
+control-plane/Tests/AppResourceTests/ImageValidationServiceTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 106-131
+agent/Tests/StratoAgentRuntimeTests/VolumeMaterializationAdmissionTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1-240
+agent/Tests/StratoAgentStorageTests/FileSystemStorageBackendTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 3,82-86,88,138-156,183-186,198-199,655-677,816-843,890-920
+  s_aeadc33ad2c139::t_c5d97a417d9bc2 921
+control-plane/Tests/AppPlatformTests/AddImageArtifactVirtualSizeTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1-66
+shared/Sources/StratoShared/WireProtocol.swift
+  s_aeadc33ad2c139::t_6976b66baf4a95 17
+  s_aeadc33ad2c139::t_ae7d17269ddf28 16,18-19
+agent/Sources/StratoAgentCore/SnapshotRecordStore.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 36-39,51,59
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 258-267,273,275-276,284-285,293-306
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 4,10,12,15,21-22,28,31-39,79-80,98,100-105,109,114-118,132,165-167,179-181,213,234-242,246-247,257-260,290-299,311-315
+agent/Sources/StratoAgentRuntime/HostResources.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 48-110
+agent/Tests/StratoAgentStorageTests/SnapshotRecordStoreTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 79-99
+control-plane/web/src/types/openapi.ts
+  s_aeadc33ad2c139::t_ae7d17269ddf28 8690-8693,8695-8699
+shared/Tests/StratoSharedTests/SnapshotReconciliationTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 107
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 11-55,166-172,189-263
+  s_aeadc33ad2c139::t_0113fc64251a1e 264
+agent/Sources/StratoAgentCore/StorageBackendRegistry.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 90-93
+agent/Tests/StratoAgentRuntimeTests/HostResourcesTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1-120
+control-plane/Sources/App/openapi.yaml
+  s_aeadc33ad2c139::t_ae7d17269ddf28 15609,15630-15634
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 36,38,74-79,91-92,132-135,244,368,370,382-402,496-497,499-505,576-577,601-605,641-657,738-747
+control-plane/Sources/App/Models/Agent.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 50-53,307,334,339,350-351,454
+docs/architecture/storage.md
+  s_aeadc33ad2c139::t_ae7d17269ddf28 715-720,723-738
+control-plane/Sources/App/Services/ImageValidationService.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 25-27,78-140
+  s_aeadc33ad2c139::t_193dd42e7900d9 141
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 210-217
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 2,181-206,250,252,257,276-277,287,292-320,322,332-338,362-375,377-385,414-430,434-448,1291,1293,1316-1318,1322-1393
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 255-260,284-285,601-607,615-616,623-668,794-800,805-806
+docs/architecture/wire-protocol.md
+  s_aeadc33ad2c139::t_ae7d17269ddf28 54,76-79
+control-plane/Sources/App/Models/Image.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 131-148
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 157-291
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 448-450,463,577-580,599
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1050,1077
+agent/Tests/StratoAgentRuntimeTests/SnapshotCapacityAdmissionTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1-148
+control-plane/web/src/app/(dashboard)/dashboard/page.tsx
+  s_aeadc33ad2c139::t_ae7d17269ddf28 77-78,87,119,233,236
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 24-25,50-51,136-175
+  s_aeadc33ad2c139::t_a19b866c9ca5a6 176
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 312,340-342,346-349,353-354,431-578,588-591,601-602,604-606,613-615
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 446
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 187-197,202-219
+control-plane/Sources/App/Migrations/AddAgentPhysicalFreeDisk.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1-41
+agent/Tests/StratoAgentRuntimeTests/BlockPolicyLifecycleTests.swift
+  s_aeadc33ad2c139::t_ad1158f22adce7 28
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 32,70,91,149
+control-plane/Sources/App/Services/VolumeService.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 25-38,343-345,349-425
+agent/Sources/StratoAgentRuntime/Agent.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 203-206
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 6,26,532-706
+  s_aeadc33ad2c139::t_a2fee4c1f30d71 707
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 60-64,66-75,321-366,568,579,586-634
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 25,28,31,34,37,912,923,925-931
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 79,104-105,167-169,268,280-283,325,327
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 39,61,114,116-120
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 110-117
+control-plane/Tests/AppPlatformTests/AddAgentPhysicalFreeDiskTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1-56
+shared/Tests/StratoSharedTests/AgentAutoUpdateProtocolTests.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 74
+control-plane/Sources/App/Migrations/AddImageArtifactVirtualSize.swift
+  s_aeadc33ad2c139::t_ae7d17269ddf28 1-38
+docs/architecture/scheduler.md
+  s_aeadc33ad2c139::t_ae7d17269ddf28 228-229,248-249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7ce80c26298890ecdbdfc9b901d8958337c5f40e",
+  "prompts": {},
+  "sessions": {
+    "s_aeadc33ad2c139": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-590c-7111-ab67-964d351744c2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

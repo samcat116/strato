@@ -1,0 +1,21 @@
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_a587f81d483352::t_b260e0d3828d51 160,170-177
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_a587f81d483352::t_010d4b3908586a 97-105,109-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "47cf5b9944cf2504f88d4be78aa33583aad09e58",
+  "prompts": {},
+  "sessions": {
+    "s_a587f81d483352": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc6066aa-332b-4561-b79f-cda35143be82",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

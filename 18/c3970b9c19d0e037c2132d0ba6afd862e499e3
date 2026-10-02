@@ -1,0 +1,26 @@
+agent/Package.resolved
+  s_77de6d97300258::t_102ac95140b093 2
+deploy/compose/docker-compose.yml
+  s_77de6d97300258::t_102ac95140b093 379-382
+deploy/compose/tests/compose-config-test.sh
+  s_77de6d97300258::t_54c93a3f26537d 8-17,29,36
+  s_77de6d97300258::t_102ac95140b093 1-7,18-28,30-35,37-43
+sandbox-guest/init/src/identity.rs
+  s_77de6d97300258::t_102ac95140b093 5,19-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "18c3970b9c19d0e037c2132d0ba6afd862e499e3",
+  "prompts": {},
+  "sessions": {
+    "s_77de6d97300258": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0645b-2847-7dd0-8adb-00234891d82d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+deploy/agent/tests/install-sh-test.sh
+  s_006994cc89f4f7::t_0a4d661bbe9175 109-111
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_006994cc89f4f7::t_c658d8a74d4c5e 220,225-237,239-249,251-283,285-288,567-571,652-653
+  s_006994cc89f4f7::t_987d02c121828d 574-601,603-634,636-650
+  s_006994cc89f4f7::t_a3a2de4dc04f2c 110-114,116,1009-1013
+  s_006994cc89f4f7::t_1a1889c2eea0ac 651
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_006994cc89f4f7::t_0a4d661bbe9175 222-262,854-860,863,865
+  s_006994cc89f4f7::t_a7a9fbdebed286 861-862
+  s_006994cc89f4f7::t_e87e2f2721f1ab 864
+deploy/compose/tests/e2e-up-enrollment-test.sh
+  s_006994cc89f4f7::t_0a4d661bbe9175 1-101
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_006994cc89f4f7::t_77ed2dc6c38ff7 153-158
+  s_006994cc89f4f7::t_97166da9352a5b 148-152,164-169,172,174-205
+  s_006994cc89f4f7::t_c658d8a74d4c5e 159-163,170-171,173,206-210
+deploy/compose/e2e-up.sh
+  s_006994cc89f4f7::t_c658d8a74d4c5e 126-137,139-147,149-153,306-318
+  s_006994cc89f4f7::t_a3a2de4dc04f2c 138,148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "03eb56eee56346a4e812a8188e936a23a0d7a4c0",
+  "prompts": {},
+  "sessions": {
+    "s_006994cc89f4f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00d06-57d2-7862-8053-e4feb2cafb1e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,49 @@
+control-plane/Tests/AppTests/VMInterfaceAddressMigrationTests.swift
+  s_eb8d88f42f560f::t_d5f5acffe7f498 1-136
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_eb8d88f42f560f::t_c801a9972a81b0 82-83,91-108
+control-plane/Sources/App/Models/vm.swift
+  s_eb8d88f42f560f::t_7d47636bbb8de1 301-314,319-320,324,333-340
+control-plane/Sources/App/Models/VMNetworkInterface.swift
+  s_eb8d88f42f560f::t_4d2f65701bdbb8 23-26,34,38-41
+  s_eb8d88f42f560f::t_0a396dd7a8b199 42
+control-plane/Sources/App/Services/AgentService.swift
+  s_eb8d88f42f560f::t_eaa03530137796 961
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_eb8d88f42f560f::t_fb1e6547dd88b1 1-96
+control-plane/Sources/App/Migrations/CreateVMInterfaceAddresses.swift
+  s_eb8d88f42f560f::t_fa50e4b809416f 1-167
+control-plane/Sources/App/configure.swift
+  s_eb8d88f42f560f::t_a2c417b1752c68 301-304
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_eb8d88f42f560f::t_806b8c643764db 88-91
+  s_eb8d88f42f560f::t_11ad37dc29e74a 60-63
+  s_eb8d88f42f560f::t_2fe53e01694fe2 185-188
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_eb8d88f42f560f::t_db515a003543c6 57-59,72,80-83
+control-plane/Sources/App/Controllers/VMController.swift
+  s_eb8d88f42f560f::t_4e5a8fd89abc74 589,593-603
+  s_eb8d88f42f560f::t_b11c77c8dd0319 280-282
+  s_eb8d88f42f560f::t_2028218dae05b0 318-320
+  s_eb8d88f42f560f::t_7c60f4092fbf07 604
+control-plane/Sources/App/Services/IPAMService.swift
+  s_eb8d88f42f560f::t_19a5f2bd295f5b 45,47,49
+  s_eb8d88f42f560f::t_7b8f259bee46b4 18
+  s_eb8d88f42f560f::t_99066be4c5dee4 86-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c865c8d9322a916977ba06f5899a5aa3f84d564f",
+  "prompts": {},
+  "sessions": {
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

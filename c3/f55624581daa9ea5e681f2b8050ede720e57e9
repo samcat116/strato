@@ -1,0 +1,33 @@
+agent/Sources/StratoAgentCore/TapInterfaceName.swift
+  s_edcdf2f7e8a401::t_abfa1f3284ac41 1-25
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_edcdf2f7e8a401::t_f8b19081745912 41-43,45
+  s_edcdf2f7e8a401::t_96738a2ad3525c 417-436,439,441-464,466-505,507-513,515,517-527
+  s_edcdf2f7e8a401::t_3ab54e1f2c436a 197,252
+  s_edcdf2f7e8a401::t_0edd0c13440e91 198-200,202-209,211-222,224
+  s_edcdf2f7e8a401::t_0def768056f990 560
+  s_edcdf2f7e8a401::t_7eb0578fdbab2c 235,238-251,253-255
+  s_edcdf2f7e8a401::t_d43e72dc8ea9b9 577-578
+  s_edcdf2f7e8a401::t_3167b1a2326231 389,392-400,408-409
+  s_edcdf2f7e8a401::t_fc89a4f88572ae 4
+  s_edcdf2f7e8a401::t_689af8d62b1b83 335,338-347
+  s_edcdf2f7e8a401::t_3a6e75eec26599 117,121,124-132
+agent/Tests/StratoAgentTests/TapInterfaceNameTests.swift
+  s_edcdf2f7e8a401::t_69d3a69a71005b 1-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c3f55624581daa9ea5e681f2b8050ede720e57e9",
+  "prompts": {},
+  "sessions": {
+    "s_edcdf2f7e8a401": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c8b4d102-f9d2-4620-b91f-fc0ae191ebf9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

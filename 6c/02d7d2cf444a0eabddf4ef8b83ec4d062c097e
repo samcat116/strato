@@ -1,0 +1,86 @@
+control-plane/Sources/App/openapi.yaml
+  s_c0da28fd6c98a8::t_98f224ff4bcad6 101-102
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_c0da28fd6c98a8::t_3f91b5eb78e76c 41-45,52-54,84-86
+CLAUDE.md
+  s_c0da28fd6c98a8::t_e8188d0b1b7c35 54
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_c0da28fd6c98a8::t_d952005c41f215 818,833,927
+  s_c0da28fd6c98a8::t_c5ac25f962133f 817,832,920-922
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_c0da28fd6c98a8::t_3f91b5eb78e76c 399-400
+  s_c0da28fd6c98a8::t_e96c84bf8397cd 119-122,182-184,186-187
+docs/architecture/wire-protocol.md
+  s_c0da28fd6c98a8::t_5387926bd6656e 767-773
+docs/architecture/guest-identity.md
+  s_c0da28fd6c98a8::t_5387926bd6656e 3,9-13,457-462,673-675
+control-plane/Sources/App/routes.swift
+  s_c0da28fd6c98a8::t_98f224ff4bcad6 30
+control-plane/Tests/AppIdentityTests/GuestJWTSVIDMintTests.swift
+  s_c0da28fd6c98a8::t_babf5475c7ba77 168-171,345-348
+  s_c0da28fd6c98a8::t_ba5e91665c4971 1-44,50-51,53-167,172-260,291-299,305-322,333-336,341-344,349-369
+  s_c0da28fd6c98a8::t_5cf2cf842bc788 45-49,52
+  s_c0da28fd6c98a8::t_f3a805a7599dd3 323-332,337-340
+  s_c0da28fd6c98a8::t_d952005c41f215 261-290,300-304
+docs/deployment/agents.md
+  s_c0da28fd6c98a8::t_e8188d0b1b7c35 619-621
+docs/architecture/agent.md
+  s_c0da28fd6c98a8::t_5387926bd6656e 105-109
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_c0da28fd6c98a8::t_c6257543596934 275-281
+control-plane/Sources/App/Services/AuditService.swift
+  s_c0da28fd6c98a8::t_c6257543596934 37-40
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  s_c0da28fd6c98a8::t_98f224ff4bcad6 32
+docs/deployment/iam.md
+  s_c0da28fd6c98a8::t_e8188d0b1b7c35 74-80
+shared/Sources/StratoShared/GuestIdentityMinting.swift
+  s_c0da28fd6c98a8::t_c6257543596934 1-37
+control-plane/Sources/App/Services/SPIFFE/GuestIdentityIssuanceConfig.swift
+  s_c0da28fd6c98a8::t_c6257543596934 1-73
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_c0da28fd6c98a8::t_c6257543596934 79-93
+deploy/compose/docker-compose.yml
+  s_c0da28fd6c98a8::t_e8188d0b1b7c35 375-381
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_c0da28fd6c98a8::t_69f13f8bef6737 193-194,260-261
+  s_c0da28fd6c98a8::t_3f91b5eb78e76c 259
+helm/strato-control-plane/templates/deployment.yaml
+  s_c0da28fd6c98a8::t_e8188d0b1b7c35 288-295
+docs/architecture/iam.md
+  s_c0da28fd6c98a8::t_5387926bd6656e 893-900
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_c0da28fd6c98a8::t_a071910d1f5df4 157-162,184-185
+shared/Tests/StratoSharedTests/GuestIdentityMintingTests.swift
+  s_c0da28fd6c98a8::t_c6257543596934 1-34
+control-plane/Sources/App/Controllers/AgentGuestIdentityController.swift
+  s_c0da28fd6c98a8::t_561a3333bc426f 3,219,326
+  s_c0da28fd6c98a8::t_98f224ff4bcad6 1-2,4-68,72-81,83-101,103-120,122-133,135-147,149-152,156-218,221-243,247-314,317-325,327-359,362-375,378-379,389-390,392-402,405-418,421-437,439-445
+  s_c0da28fd6c98a8::t_69f13f8bef6737 69-71,82,102,121,134,148,155
+  s_c0da28fd6c98a8::t_d59db7a85ca62c 244
+  s_c0da28fd6c98a8::t_a6ee1ee9411b9e 315-316,360-361,376-377,380-388,391,403-404,419-420,438
+  s_c0da28fd6c98a8::t_f3a805a7599dd3 153-154
+  s_c0da28fd6c98a8::t_35469974c8ecee 220,245-246
+control-plane/Sources/App/configure.swift
+  s_c0da28fd6c98a8::t_c6257543596934 932-935
+control-plane/Tests/AppIdentityTests/GuestIdentityIssuanceConfigTests.swift
+  s_c0da28fd6c98a8::t_e96c84bf8397cd 1-52
+helm/strato-control-plane/values.yaml
+  s_c0da28fd6c98a8::t_e8188d0b1b7c35 925-934
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "6c02d7d2cf444a0eabddf4ef8b83ec4d062c097e",
+  "prompts": {},
+  "sessions": {
+    "s_c0da28fd6c98a8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe382-c79c-7c53-b27a-d5f33ec468ed",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

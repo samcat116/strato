@@ -1,0 +1,115 @@
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_678a17198c0285::t_8ff6918882ad27 132-133
+  s_6b0250078518c7::t_3f94295fbeb4e2 73,109-131,134-169,293-377
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_678a17198c0285::t_45751ec7960b92 67-69
+  s_b8cfff041f0853::t_3dd77f7f3ff367 47-52
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_678a17198c0285::t_e20c9334334b83 56
+agent/Tests/StratoAgentTests/QMPProbeClientTests.swift
+  s_678a17198c0285::t_4e061680ed6b86 27-33,35-37,60,101,271-365
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_678a17198c0285::t_e20c9334334b83 55-56
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_678a17198c0285::t_74fd203d85b142 122-157
+docs/architecture/control-plane.md
+  s_678a17198c0285::t_0d5b189ed6545a 138-150
+control-plane/web/src/components/vms/operation-watcher.tsx
+  s_678a17198c0285::t_e20c9334334b83 18
+control-plane/Tests/AppTests/VMResizeTests.swift
+  s_678a17198c0285::t_7c9d12ad217f6d 1-197,201-266
+  s_678a17198c0285::t_c9352d789ee3b2 198-200
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_678a17198c0285::t_e20c9334334b83 55-56
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_678a17198c0285::t_99caf7929f87c3 113,121
+agent/Tests/StratoAgentTests/CloudInitUserDataDocumentTests.swift
+  s_678a17198c0285::t_5ca68264ff12b2 191-194
+  s_678a17198c0285::t_db7e34eb2e089b 33-43,95-106
+  s_678a17198c0285::t_9dd80911c6fd4b 107
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_678a17198c0285::t_5ca9866f6e08e4 400-438
+  s_678a17198c0285::t_eb6d5266f66169 295-299
+  s_678a17198c0285::t_ab207628c9926e 274-281
+  s_678a17198c0285::t_27d4615ae9eeed 196-202
+control-plane/web/src/components/sandboxes/sandbox-status-badge.tsx
+  s_678a17198c0285::t_e20c9334334b83 51
+control-plane/Sources/App/openapi.yaml
+  s_678a17198c0285::t_333d98f37e9578 285-290,305,310-314,6607,6651-6660,6683-6691,6702,6736-6739
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_678a17198c0285::t_9902e0a1ecbcc1 30-48,443-529
+  s_678a17198c0285::t_ee6769c0bc5b15 57-59,83-90,107-110
+docs/architecture/agent.md
+  s_678a17198c0285::t_2eae0b2c38c4b7 212-248,256-257
+docs/architecture/wire-protocol.md
+  s_678a17198c0285::t_5484af8abd33ec 67,86-93
+  s_678a17198c0285::t_8e1d59008b6bf7 94
+control-plane/web/src/types/api.ts
+  s_678a17198c0285::t_947c053b3824bd 125-126,674-675
+agent/Sources/StratoAgent/Agent.swift
+  s_678a17198c0285::t_37d8afb44a03b8 3493-3501,3633-3634,3683-3707,3783
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_678a17198c0285::t_19ca852ebf0292 100-107,123-129
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_678a17198c0285::t_f56e1032e3c328 142-158
+agent/Sources/StratoAgent/QEMUService.swift
+  s_678a17198c0285::t_32382a99843d7a 37-42,243,406,703-865,982-984,1178-1186
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_678a17198c0285::t_4c55deb841f9c1 35-52,72-74,149-152,185-188,352-353,611,624-625,627-670
+control-plane/Sources/App/Controllers/VMController.swift
+  s_678a17198c0285::t_1c7262336f99c0 101-102,123-126,383-387,543-558,601-602,833-848,855-858,871-914,916-972,976
+control-plane/Sources/App/Migrations/EnforcePersistedEnumValues.swift
+  s_678a17198c0285::t_4339f603861e7c 104-105
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_678a17198c0285::t_e2027ee3f17912 311-356
+control-plane/Sources/App/Models/vm.swift
+  s_678a17198c0285::t_7c229b9f06228e 106-112,187,203,252-260,367-369,403
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_678a17198c0285::t_00690fbfff664b 86-108
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_678a17198c0285::t_a9d160376e7a03 117,157
+control-plane/Sources/App/configure.swift
+  s_678a17198c0285::t_1b30a097ff96cb 519-524
+shared/Sources/StratoShared/OperationModels.swift
+  s_678a17198c0285::t_514cd97e1ab6e6 14-17
+shared/Sources/StratoShared/VMSpec.swift
+  s_678a17198c0285::t_2a2a2ed6d34132 20-26,60,74,86-88,97-98
+shared/Sources/StratoShared/WireProtocol.swift
+  s_678a17198c0285::t_ec0c73d0824483 207-219,348-359
+control-plane/Sources/App/Migrations/AddMaxMemoryToVM.swift
+  s_678a17198c0285::t_34137e211e31be 1-31
+control-plane/Sources/App/Migrations/AddResizeOperationKind.swift
+  s_6b0250078518c7::t_53c8fe004ba34b 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "cd55ecfd4d71b8b78c35375170ce0cd0cdec46d2",
+  "prompts": {},
+  "sessions": {
+    "s_678a17198c0285": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbf28cde-0dc8-4853-8580-387b35f7703f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_6b0250078518c7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64f1cd41-77da-4576-9f0d-71f7b1188e44",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b8cfff041f0853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53c13793-5dc7-4e02-a4e1-962d9f381ce1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

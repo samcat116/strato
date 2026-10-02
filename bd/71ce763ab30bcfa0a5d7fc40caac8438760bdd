@@ -1,0 +1,99 @@
+control-plane/Tests/AppIAMTests/ListAuthorizationScalingTests.swift
+  s_59429244fc8aae::t_868773ba82a539 92,102
+control-plane/Sources/App/Migrations/CreateLoadBalancerBackend.swift
+  s_59429244fc8aae::t_fe7ba7c3b5593d 20-27
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_59429244fc8aae::t_4355a2022cb4ee 530,532,534,545
+  s_59429244fc8aae::t_868773ba82a539 495-514
+control-plane/Tests/AppPlatformTests/ListCountBatchingTests.swift
+  s_59429244fc8aae::t_868773ba82a539 173,179
+control-plane/Tests/AppIAMTests/VMAttachTargetDisclosureTests.swift
+  s_59429244fc8aae::t_868773ba82a539 103,139,150-151
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_59429244fc8aae::t_48cd6efcd04ab3 125
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_59429244fc8aae::t_60d915e7286437 154-156,158-161,175-176,193-196,198-200
+  s_59429244fc8aae::t_abb59dffa0da13 64-65,68-69
+  s_59429244fc8aae::t_208273be7bc9af 210,216,552,554
+  s_59429244fc8aae::t_42b5d82d566d98 157,197
+  s_665a3d8fa75374::t_4dc2039be9edb4 201
+control-plane/Tests/AppPlatformTests/ProjectResolutionTests.swift
+  s_59429244fc8aae::t_a3b5cf18ffdf63 36,76,82,141-143,236-238,287-289
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_59429244fc8aae::t_a3b5cf18ffdf63 391
+  s_59429244fc8aae::t_359f0fe5c686c6 384-385,392
+control-plane/Tests/AppPlatformTests/FloatingIPControllerTests.swift
+  s_59429244fc8aae::t_015aca0ddae4a4 262-264,272-274,513
+  s_59429244fc8aae::t_520e2e364926f2 579,626
+  s_59429244fc8aae::t_a429a1c065cbca 123-132,135,157,159,164,172,197-199,205-207,211-213,221-222,227-228,234-235,240-241,518-519,771,776,919-920
+  s_59429244fc8aae::t_61619cbe14ef86 520-524,640-641
+  s_59429244fc8aae::t_ea875c24fac1f6 17-18,61-65,82,88,976-1017
+  s_59429244fc8aae::t_c127c94c2dcc36 19-34,514-515,635-636,1018
+  s_59429244fc8aae::t_d5809de11946b0 1019
+control-plane/Tests/AppPlatformTests/SecurityGroupControllerTests.swift
+  s_59429244fc8aae::t_5c2ba193269591 541
+  s_59429244fc8aae::t_ed592d41ec42b1 166-182,835,943,1195
+  s_59429244fc8aae::t_fcf2910eb19ff1 19-34,110-112,115-116,153-155,158-159,550-551,555-556
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_59429244fc8aae::t_868773ba82a539 89
+  s_59429244fc8aae::t_208273be7bc9af 88,90-91,97-98,230-231,423-424,501-502,527-528
+control-plane/Tests/AppIdentityTests/WorkloadPrincipalTests.swift
+  s_59429244fc8aae::t_208273be7bc9af 249
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_59429244fc8aae::t_abb59dffa0da13 120-121,124
+  s_59429244fc8aae::t_12f0b86842aff6 333
+  s_59429244fc8aae::t_868773ba82a539 48-49,51-52,344-345,378-379,383,407-408,470-471
+  s_59429244fc8aae::t_600b79b98dc56b 18-33,104-105,116-118,126-134,321-324
+  s_59429244fc8aae::t_ea875c24fac1f6 334-335
+  s_59429244fc8aae::t_5f2d9c663340b4 138-154,306,377
+  s_59429244fc8aae::t_0896be18bd4066 430-433
+control-plane/Tests/AppPlatformTests/CreateLoadBalancerBackendMigrationTests.swift
+  s_59429244fc8aae::t_ffaed2e7d34b5f 41-49
+  s_59429244fc8aae::t_fe7ba7c3b5593d 1,4-5,7-13,27-28,36,54-65,68,73-74,76-82
+  s_59429244fc8aae::t_e3e4bfe15822d9 2-3,14-26,29-35,37-40,50-53,66-67,69-72,75
+  s_59429244fc8aae::t_6950af548a5894 6
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_59429244fc8aae::t_f8d4b288bb4f24 220-226
+control-plane/Tests/AppIdentityTests/AgentOrganizationScopeTests.swift
+  s_59429244fc8aae::t_60060da0685446 468-469,528-529,534,554-555,559-561,711-712,722,736-737
+  s_59429244fc8aae::t_eccb19f0320603 131-132,145,166,182-183,187,200-201,217,233-234,242-243
+  s_59429244fc8aae::t_4727e55ce8279a 531-532
+  s_59429244fc8aae::t_ec7798b4c4e496 262-263,289-290
+  s_59429244fc8aae::t_b4d7b99c3387f5 259-261,264-265,270,286-288,291-292,296
+  s_59429244fc8aae::t_d7dffb1aeeff60 87-125
+  s_59429244fc8aae::t_c0ed751796f3ee 206
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_59429244fc8aae::t_a10e432ed20f66 430-438
+  s_59429244fc8aae::t_48cd6efcd04ab3 594
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_59429244fc8aae::t_a3b5cf18ffdf63 17-18,45-49,1332-1412
+  s_59429244fc8aae::t_0df2f275b5b2d5 569-570
+  s_59429244fc8aae::t_e8f94e7301928a 979,983
+control-plane/Tests/AppIAMTests/ResourceBindingCleanupTests.swift
+  s_59429244fc8aae::t_b0a53baeaa0f00 568-573
+  s_59429244fc8aae::t_868773ba82a539 581-582,590-591
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bd71ce763ab30bcfa0a5d7fc40caac8438760bdd",
+  "prompts": {},
+  "sessions": {
+    "s_59429244fc8aae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2c2-af3c-7ee3-b5b0-e61fcf88259f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_665a3d8fa75374": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2ea-f8b5-75c1-b293-61394c829bf5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

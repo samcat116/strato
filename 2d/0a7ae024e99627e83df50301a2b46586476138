@@ -1,0 +1,141 @@
+cli/Package.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-51
+cli/Tests/StratoCLITests/APIClientTests.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-156
+cli/Sources/StratoCLI/Commands/Login.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-116
+cli/Sources/StratoCLICore/Config/CLIConfig.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-127
+cli/Tests/StratoCLITests/DeviceFlowTests.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-106
+cli/Sources/StratoCLI/Commands/ImageCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-97
+cli/Sources/StratoCLICore/API/Models.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-262
+control-plane/web/src/app/(dashboard)/settings/cli-sessions/page.tsx
+  s_a20f1a4582d240::t_508441eddaa23a 1-32
+control-plane/Sources/App/Migrations/CreateDeviceAuthorization.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-26
+control-plane/Sources/App/Controllers/OAuthController.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-464
+cli/Sources/StratoCLICore/Operations/OperationWaiter.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-62
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_a20f1a4582d240::t_508441eddaa23a 72-74,77,100-101,108-113
+  s_a20f1a4582d240::t_0accccafbe334d 114-116
+control-plane/web/src/lib/hooks/index.ts
+  s_a20f1a4582d240::t_508441eddaa23a 51-56
+  s_a20f1a4582d240::t_330eeea66eaa51 50
+control-plane/Sources/App/configure.swift
+  s_a20f1a4582d240::t_508441eddaa23a 507-510
+  s_a20f1a4582d240::t_474f5fb0ff7390 511
+control-plane/web/src/types/api.ts
+  s_a20f1a4582d240::t_508441eddaa23a 1368-1391
+cli/Sources/StratoCLI/Util/Browser.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-26
+control-plane/Sources/App/routes.swift
+  s_a20f1a4582d240::t_508441eddaa23a 19-20
+cli/Tests/StratoCLITests/ConfigStoreTests.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-81
+cli/Sources/StratoCLICore/Auth/OAuthTypes.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-90
+cli/Sources/StratoCLICore/Output/OutputFormat.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-16
+control-plane/web/src/app/(dashboard)/activate/page.tsx
+  s_a20f1a4582d240::t_508441eddaa23a 1-253
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_a20f1a4582d240::t_508441eddaa23a 222-229
+control-plane/web/src/lib/hooks/use-cli-sessions.ts
+  s_a20f1a4582d240::t_508441eddaa23a 1-41
+cli/Sources/StratoCLICore/API/APIClient.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-197
+control-plane/web/src/components/cli-sessions/cli-session-table.tsx
+  s_a20f1a4582d240::t_508441eddaa23a 1-148
+cli/Sources/StratoCLI/GlobalOptions.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-86
+cli/Tests/StratoCLITests/TextTableTests.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-35
+cli/Tests/StratoCLITests/MockTransport.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-58
+cli/Sources/StratoCLI/Commands/VolumeCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-118
+control-plane/web/src/lib/api/oauth.ts
+  s_a20f1a4582d240::t_508441eddaa23a 1-28
+cli/Sources/StratoCLI/Commands/SandboxCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-180
+cli/Sources/StratoCLICore/Output/TextTable.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-38
+.gitignore
+  s_a20f1a4582d240::t_508441eddaa23a 32
+cli/Tests/StratoCLITests/OperationWaiterTests.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-98
+cli/Sources/StratoCLI/Commands/OperationCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-68
+.github/workflows/release.yaml
+  s_a20f1a4582d240::t_508441eddaa23a 567-578,600-604,610-611
+cli/Sources/StratoCLI/Commands/NetworkCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-123
+cli/Package.resolved
+  s_a20f1a4582d240::t_508441eddaa23a 1-33
+control-plane/Tests/AppTests/OAuthDeviceFlowTests.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-567
+cli/Sources/StratoCLI/Commands/ContextCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-142
+control-plane/Sources/App/Migrations/CreateCLISession.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-29
+control-plane/Sources/App/Models/CLISession.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-233
+cli/Sources/StratoCLI/Commands/ProjectCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-244
+cli/Sources/StratoCLICore/API/CLIError.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-32
+cli/Sources/StratoCLICore/API/HTTPTransport.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-76
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-226
+cli/Sources/StratoCLICore/Auth/DeviceFlow.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-95
+control-plane/Sources/App/Middleware/OAuthTokenAuthenticator.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-53
+control-plane/web/src/lib/api/index.ts
+  s_a20f1a4582d240::t_508441eddaa23a 16
+cli/Sources/StratoCLI/Commands/AgentCommand.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-120
+control-plane/web/src/components/layout/nav.ts
+  s_a20f1a4582d240::t_508441eddaa23a 16,79
+cli/Sources/StratoCLI/BuildInfo.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-20
+.github/workflows/build.yaml
+  s_a20f1a4582d240::t_508441eddaa23a 32,61-62,85,105-106,155,179,210-221
+  s_a20f1a4582d240::t_64715bafb53fba 222
+cli/Sources/StratoCLI/Strato.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-28
+cli/Sources/StratoCLICore/Config/CredentialStore.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-76
+control-plane/Sources/App/Models/DeviceAuthorization.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-135
+control-plane/web/src/components/cli-sessions/index.ts
+  s_a20f1a4582d240::t_508441eddaa23a 1
+cli/Sources/StratoCLI/CompiledBuildInfo.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-6
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_a20f1a4582d240::t_508441eddaa23a 17-19,22
+cli/Sources/StratoCLI/OutputHelpers.swift
+  s_a20f1a4582d240::t_508441eddaa23a 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "2d0a7ae024e99627e83df50301a2b46586476138",
+  "prompts": {},
+  "sessions": {
+    "s_a20f1a4582d240": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75b38e8c-d81a-4ac9-bc19-2852bb942d6b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

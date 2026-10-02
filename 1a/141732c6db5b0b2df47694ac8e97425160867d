@@ -1,0 +1,36 @@
+control-plane/web/src/types/openapi.ts
+  s_c29b45d9812e1b::t_6f3a9c326b3ce7 3254,6238-6250
+control-plane/Sources/App/IAM/Cedar/CedarPolicyInspector.swift
+  s_c29b45d9812e1b::t_acab0cdabd141f 106
+  s_c29b45d9812e1b::t_e01e694429ed53 82-84,87-89
+  s_c29b45d9812e1b::t_28992e436bdca4 188-189,191-224,232,236-275
+  s_c29b45d9812e1b::t_68e1d46fd84a3b 62
+control-plane/Sources/App/Controllers/RoleController.swift
+  s_c29b45d9812e1b::t_a7e69faa6b28f1 347
+  s_c29b45d9812e1b::t_5b80038f354fcd 16-19
+  s_c29b45d9812e1b::t_33783f58cad02e 162
+  s_c29b45d9812e1b::t_44289155a3123e 124-156
+control-plane/Sources/App/openapi.yaml
+  s_c29b45d9812e1b::t_5a587a9a725874 4552-4555
+  s_c29b45d9812e1b::t_d97ef06cce44a1 10879-10908
+control-plane/Tests/AppTests/RoleEndpointTests.swift
+  s_c29b45d9812e1b::t_e24b988e1d0b68 306-310
+  s_c29b45d9812e1b::t_ea41e31a7c2e66 269-297
+  s_c29b45d9812e1b::t_0ca7bff2202139 574-582
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1a141732c6db5b0b2df47694ac8e97425160867d",
+  "prompts": {},
+  "sessions": {
+    "s_c29b45d9812e1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d64ce9aa-2e62-43ac-b482-529ba837befc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

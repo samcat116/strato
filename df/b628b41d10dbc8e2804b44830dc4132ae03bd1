@@ -1,0 +1,23 @@
+agent/Package.swift
+  5a5f3496df77f6dc 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "dfb628b41d10dbc8e2804b44830dc4132ae03bd1",
+  "prompts": {
+    "5a5f3496df77f6dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e3b478e5-85d5-454c-9cb0-78bd8120564b",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Sam Schmitt",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

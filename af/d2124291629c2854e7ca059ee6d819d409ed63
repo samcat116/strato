@@ -1,0 +1,27 @@
+control-plane/Sources/App/Extensions/DatabaseQuery+CaseInsensitiveSearch.swift
+  s_2b1748a2171d86::t_789d49b9bb0054 1-51
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_2b1748a2171d86::t_859786073b54b1 363,366,369
+  s_2b1748a2171d86::t_bf98fab19397bd 389,400,402,404
+control-plane/Sources/App/Services/SCIM/GroupSCIMHandler.swift
+  s_2b1748a2171d86::t_ec845b9b5e93ef 512
+  s_2b1748a2171d86::t_786b98730a5618 525,536,538,540
+control-plane/Tests/AppTests/SCIMFilterTests.swift
+  s_2b1748a2171d86::t_540630e63d9ae3 1-216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "afd2124291629c2854e7ca059ee6d819d409ed63",
+  "prompts": {},
+  "sessions": {
+    "s_2b1748a2171d86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b5fc3b8a-9efd-4ebe-9252-821df7b19334",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

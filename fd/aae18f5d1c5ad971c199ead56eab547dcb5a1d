@@ -1,0 +1,19 @@
+README.md
+  s_1ea5260ab64436::t_83b58388e7a8cc 55-57,60-66,69-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "fdaae18f5d1c5ad971c199ead56eab547dcb5a1d",
+  "prompts": {},
+  "sessions": {
+    "s_1ea5260ab64436": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5bcd58b7-e38c-468e-adf5-1c60b592a148",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

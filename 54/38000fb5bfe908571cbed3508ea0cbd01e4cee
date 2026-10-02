@@ -1,0 +1,91 @@
+cli/Sources/StratoCLI/Commands/NetworkCommand.swift
+  s_047e4716c2fa30::t_8eefbaa35fb180 9,91-98,104-105,118-163
+control-plane/web/src/types/openapi.ts
+  s_e1aa2d5a8a2c67::t_ba9b31a3cfd61e 1319-1486,5009-5010,5065-5066,5080-5081,5519-5525,5547-5551,5711-5823,7906-7919,8605-8610,11032-11397
+docs/architecture/overview.md
+  s_047e4716c2fa30::t_640eb012608bad 115-121,237
+CLAUDE.md
+  s_e1aa2d5a8a2c67::t_4dbe50fd0f5d2c 116
+cli/Sources/StratoCLI/Commands/DNSCommand.swift
+  s_e1aa2d5a8a2c67::t_64dfbb67af485c 1-321
+cli/Sources/StratoCLI/Strato.swift
+  s_e1aa2d5a8a2c67::t_876186582ef320 19
+cli/Sources/StratoCLICore/API/Models.swift
+  s_e1aa2d5a8a2c67::t_e29ed7326abc9d 236-239,241-244,250-355
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_e1aa2d5a8a2c67::t_075ec3079886cd 1-540
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_e1aa2d5a8a2c67::t_103855f03962fa 460-492
+control-plane/Sources/App/Controllers/VMController.swift
+  s_e1aa2d5a8a2c67::t_87fc5936b0d24c 192-195,486-514,530-532,659-662,676,682,698-704
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_e1aa2d5a8a2c67::t_5511a24b922d7e 33-34,73-74
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_e1aa2d5a8a2c67::t_dc311149df65ba 79-81,243,245-247
+control-plane/Sources/App/IAM/IAMActionTranslation.swift
+  s_e1aa2d5a8a2c67::t_1a3ef7d915da0b 61-63,129,137,184-185
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_e1aa2d5a8a2c67::t_1e2189636e22f2 372-388
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_e1aa2d5a8a2c67::t_b55339da54188c 65-71,135,168-173
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_e1aa2d5a8a2c67::t_ba6a20984fb78c 100
+control-plane/Sources/App/Migrations/CreateDNSZone.swift
+  s_e1aa2d5a8a2c67::t_be510e0d73d3d6 1-124
+control-plane/Sources/App/Migrations/EnforceDNSRecordEnums.swift
+  s_e1aa2d5a8a2c67::t_4ff6f12df6d418 1-38
+control-plane/Sources/App/Models/DNSName.swift
+  s_e1aa2d5a8a2c67::t_0a19d371bd5b06 1-160
+control-plane/Sources/App/Models/DNSRecord.swift
+  s_e1aa2d5a8a2c67::t_1eeb01e6f01ee4 1-179
+control-plane/Sources/App/Models/DNSZone.swift
+  s_e1aa2d5a8a2c67::t_d8ffdebdbd1231 1-152
+control-plane/Sources/App/Models/DNSZoneNetwork.swift
+  s_e1aa2d5a8a2c67::t_c15431c6fc80cf 1-36
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_e1aa2d5a8a2c67::t_db124b1d97f52a 97-105,272-276,282-283,296-297,316-317,336
+control-plane/Sources/App/Models/vm.swift
+  s_e1aa2d5a8a2c67::t_a99cd20ff3d3f5 47-58,458-461,511
+control-plane/Sources/App/Services/DNSZoneAssembler.swift
+  s_e1aa2d5a8a2c67::t_6b3517eac3b806 1-206
+control-plane/Sources/App/Services/DNSZoneService.swift
+  s_e1aa2d5a8a2c67::t_88969587b958b9 1-291
+control-plane/Sources/App/configure.swift
+  s_e1aa2d5a8a2c67::t_bceb00f8b17bed 666-673
+control-plane/Sources/App/openapi.yaml
+  s_e1aa2d5a8a2c67::t_ca00b49733428d 123-128,1826-2094,7495-7518,8257-8263,8348-8352,8387-8392,9195-9205,9252-9255,9502-9702,13868-13897
+control-plane/Sources/App/routes.swift
+  s_e1aa2d5a8a2c67::t_637f1eb19c88f5 73-76
+control-plane/Tests/AppTests/DNSZoneTests.swift
+  s_e1aa2d5a8a2c67::t_ae4af7789f3d70 1-778
+docs/.vitepress/config.mts
+  s_e1aa2d5a8a2c67::t_d01763e4528178 50
+docs/architecture/dns.md
+  s_e1aa2d5a8a2c67::t_0f3f2210c95d01 1-227
+docs/architecture/networking.md
+  s_e1aa2d5a8a2c67::t_cfc4f1eee5c01d 534-540
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "5438000fb5bfe908571cbed3508ea0cbd01e4cee",
+  "prompts": {},
+  "sessions": {
+    "s_047e4716c2fa30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "845fa67c-21cf-48a2-8006-71a6fdb5691b",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e1aa2d5a8a2c67": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3458cd4e-0792-4b2f-9806-cdf1540a88ea",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

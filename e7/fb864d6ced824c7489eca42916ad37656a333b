@@ -1,0 +1,48 @@
+cli/Package.swift
+  s_9f7fc43caa62d9::t_6951051f805171 14
+control-plane/Tests/AppPlatformTests/LoggingContractTests.swift
+  s_9f7fc43caa62d9::t_6951051f805171 1-115
+agent/Tests/StratoAgentTests/WireMessageLoggingTests.swift
+  s_9f7fc43caa62d9::t_6951051f805171 111-113,226-232,254-256
+control-plane/Sources/App/Middleware/RequestLogMetadataMiddleware.swift
+  s_9f7fc43caa62d9::t_6951051f805171 1,18-20
+SwiftFirecracker/Package.swift
+  s_9f7fc43caa62d9::t_6951051f805171 16
+control-plane/Package.swift
+  s_9f7fc43caa62d9::t_6951051f805171 39,182
+agent/Sources/StratoAgentCore/AgentLogLevel.swift
+  s_9f7fc43caa62d9::t_6951051f805171 73,77-83
+  s_9f7fc43caa62d9::t_49f3c82013f9a0 84-85
+control-plane/Tests/AppPlatformTests/LoggingTestSupport.swift
+  s_9f7fc43caa62d9::t_6951051f805171 1-27
+agent/Tests/StratoAgentTests/AgentLogLevelTests.swift
+  s_9f7fc43caa62d9::t_6951051f805171 1,55-56,63-65,67-73,75,77-81,83-87
+agent/Tests/StratoAgentTests/LoggingTestSupport.swift
+  s_9f7fc43caa62d9::t_6951051f805171 1-18
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_9f7fc43caa62d9::t_6951051f805171 8-9,44-51
+  s_9f7fc43caa62d9::t_3c2c7a63801522 52-53
+control-plane/Sources/App/Middleware/RequestLoggingMiddleware.swift
+  s_9f7fc43caa62d9::t_6951051f805171 4-6,29-33,35,42,44,60-63
+  s_9f7fc43caa62d9::t_2c9bc5ea10cafb 64
+shared/Package.swift
+  s_9f7fc43caa62d9::t_6951051f805171 30,67
+agent/Package.swift
+  s_9f7fc43caa62d9::t_6951051f805171 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e7fb864d6ced824c7489eca42916ad37656a333b",
+  "prompts": {},
+  "sessions": {
+    "s_9f7fc43caa62d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-9574-7791-b770-468d753dc14d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_b041cfc9c7df01::t_01235ce4f67006 50-51,63-64
+  s_b041cfc9c7df01::t_ba84b040bea099 199-205,207,212,214,220-233
+  s_b041cfc9c7df01::t_d21e5a86328573 234-236
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_b041cfc9c7df01::t_e7e5b6044c9df9 91-92,94,96-101,115-118,122,125,128-131,134
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_b041cfc9c7df01::t_7eee187a395ad3 75-76
+  s_b041cfc9c7df01::t_ec5fc8de20610e 255-267,269-271
+  s_b041cfc9c7df01::t_dafb15b50e4c96 33-36,39-54
+  s_b041cfc9c7df01::t_dc9f21b3e3bce8 55
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_b041cfc9c7df01::t_09689fa73e3451 215-230
+deploy/compose/nginx.conf
+  s_b041cfc9c7df01::t_4f2d1a43928d71 39-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "31aac02fa04037d6b0fe5d325338f8f38fa3e461",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

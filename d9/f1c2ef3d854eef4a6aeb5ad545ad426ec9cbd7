@@ -1,0 +1,77 @@
+control-plane/Sources/App/Migrations/AddGuestMemoryStatsToVM.swift
+  s_afc673ff2888ba::t_e23893fb2b3e67 1-35
+control-plane/Sources/App/configure.swift
+  s_d0d9905ef80a1e::t_c3c5884469c997 525-527
+docs/architecture/wire-protocol.md
+  s_afc673ff2888ba::t_e1f4fd151e7ca6 80-84,115
+agent/Sources/StratoAgent/Agent.swift
+  s_d0d9905ef80a1e::t_54bd99211ae0bf 178-180,1631-1636,1648,1653,1656,1658-1659,1661-1662,1667-1671,1673-1674,1678-1679,1682-1686,1688,3856-3860
+agent/Sources/StratoAgent/QEMUService.swift
+  s_afc673ff2888ba::t_32320d8cc3169d 421-424,695-732,1162-1179
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_77e2ae6c34acdc::t_4e39ab99d045fc 1-278
+agent/Tests/StratoAgentTests/QMPProbeClientTests.swift
+  s_77e2ae6c34acdc::t_9e0b0c5b35f7c2 1-261
+control-plane/Sources/App/Models/vm.swift
+  s_77e2ae6c34acdc::t_173007a67d33c0 57-72,357-365,391-401
+control-plane/Sources/App/Services/AgentService.swift
+  s_77e2ae6c34acdc::t_6664c26dbc6db2 2456-2464,2624-2650,2656
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_afc673ff2888ba::t_ae835004e63ab6 735-796
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_afc673ff2888ba::t_80438b7d6dc23a 20,26-36,154-165
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_4bc34e6173732e::t_3e93f1281cb796 173-204
+control-plane/web/src/types/api.ts
+  s_d0d9905ef80a1e::t_2a83448454bdbd 135-144
+docs/architecture/agent.md
+  s_77e2ae6c34acdc::t_46d50c0f008058 191-211
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_77e2ae6c34acdc::t_3f522e8545b979 421-426,435-436,445
+shared/Sources/StratoShared/VMMemoryStats.swift
+  s_d0d9905ef80a1e::t_ae4022480b64cb 1-35
+shared/Sources/StratoShared/WireProtocol.swift
+  s_77e2ae6c34acdc::t_81fa4eae6057f2 199-207
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_77e2ae6c34acdc::t_3027604793f38d 256-297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "d9f1c2ef3d854eef4a6aeb5ad545ad426ec9cbd7",
+  "prompts": {},
+  "sessions": {
+    "s_4bc34e6173732e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-abac2fc6a6a66f08a",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_77e2ae6c34acdc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e68bd147-3af9-4f25-ba14-f193e98cbf10",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_afc673ff2888ba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "730b583c-de53-4726-8f37-424d5f0fdc5d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d0d9905ef80a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2871a9cb-d7d0-4915-a56c-6a824d4c3e63",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

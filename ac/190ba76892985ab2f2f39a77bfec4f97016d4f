@@ -1,0 +1,25 @@
+helm/strato-control-plane/templates/otel-collector-deployment.yaml
+  s_96431c7fcabf3a::t_b44744a3b02c0b 39-41
+  s_96431c7fcabf3a::t_ba3a4282311095 56,64
+helm/strato-control-plane/values.yaml
+  s_96431c7fcabf3a::t_ae6ec9e375d9ae 648-651
+helm/strato-control-plane/templates/otel-collector-configmap.yaml
+  s_96431c7fcabf3a::t_521a7d1ac493fa 11-17
+  s_96431c7fcabf3a::t_98d5de81cc5d33 60-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ac190ba76892985ab2f2f39a77bfec4f97016d4f",
+  "prompts": {},
+  "sessions": {
+    "s_96431c7fcabf3a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "871882d0-dad5-43d9-8f3d-2ec86b679117",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

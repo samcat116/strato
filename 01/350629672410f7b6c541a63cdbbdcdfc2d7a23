@@ -1,0 +1,26 @@
+agent/Sources/StratoAgentCore/NetworkAttachment.swift
+  s_eb8d88f42f560f::t_00d170e1f97517 2-6
+shared/Sources/StratoShared/IPAddressing.swift
+  s_eb8d88f42f560f::t_a558f3dacc9401 1-307
+control-plane/Sources/App/Services/IPAMService.swift
+  s_eb8d88f42f560f::t_52f7fa28608421 101-103,105-106,110,114
+  s_eb8d88f42f560f::t_1460b08547e9b0 3
+shared/Tests/StratoSharedTests/IPAddressingTests.swift
+  s_eb8d88f42f560f::t_3d66c16d14e5f8 1-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "01350629672410f7b6c541a63cdbbdcdfc2d7a23",
+  "prompts": {},
+  "sessions": {
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,166 @@
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_d3c90e184e731d::t_777655d144996f 355-356
+control-plane/Sources/App/Models/StoragePool.swift
+  s_d3c90e184e731d::t_777655d144996f 79-80
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_d3c90e184e731d::t_777655d144996f 581
+control-plane/Sources/App/SchemaMigrator.swift
+  s_d3c90e184e731d::t_777655d144996f 423-424
+control-plane/Sources/App/IAM/Cedar/CedarAuthoredPolicyInspector.swift
+  s_d3c90e184e731d::t_777655d144996f 3,101,120-121,134-135,145-146,152-155,166,187-188,197,208-210,212,222-223,233-235,263-264,267-271
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_d3c90e184e731d::t_777655d144996f 203-223,586,612-624
+  s_d3c90e184e731d::t_29139da3d4d7a4 625
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_d3c90e184e731d::t_777655d144996f 589,604,766,791,836
+control-plane/web/src/types/openapi.ts
+  s_d3c90e184e731d::t_777655d144996f 3032,7038,7518,7531,7564,7583
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_d3c90e184e731d::t_777655d144996f 427
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_d3c90e184e731d::t_777655d144996f 837
+control-plane/Tests/AppIdentityTests/JWTSVIDAuthenticationTests.swift
+  s_d3c90e184e731d::t_777655d144996f 216-243
+docs/adr/0009-current-schema-baseline.md
+  s_d3c90e184e731d::t_777655d144996f 1-89
+control-plane/Tests/AppIAMTests/HierarchyMaintenanceTests.swift
+  s_d3c90e184e731d::t_777655d144996f 286-287,293-300
+control-plane/Sources/App/Models/RoleBinding.swift
+  s_d3c90e184e731d::t_777655d144996f 20,49
+control-plane/Sources/App/configure.swift
+  s_d3c90e184e731d::t_777655d144996f 378-385
+control-plane/Sources/App/IAM/Cedar/CedarPolicyInspector.swift
+  s_d3c90e184e731d::t_777655d144996f 3,94,97-98,114-117,128,155-156,161,165,168-169,180-182,223,225,239,241-242,247-248,254,257-258,262,267-270,274,278-279
+control-plane/Tests/AppPlatformTests/AgentWorkloadClaimEnumConstraintTests.swift
+  s_d3c90e184e731d::t_777655d144996f 13-14,79
+control-plane/Sources/App/Models/Site.swift
+  s_d3c90e184e731d::t_777655d144996f 175
+control-plane/Sources/App/Migrations/BackfillNetworkQuotaAccounting.swift
+  s_d3c90e184e731d::t_777655d144996f 1-25
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_d3c90e184e731d::t_777655d144996f 190-197,223-224,554-579
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_d3c90e184e731d::t_777655d144996f 21
+control-plane/Tests/AppIdentityTests/OIDCTokenVerificationTests.swift
+  s_d3c90e184e731d::t_777655d144996f 72,221-222,263-266
+  s_d3c90e184e731d::t_36e80e71924509 267
+control-plane/Tests/AppIdentityTests/SPIREServiceTests.swift
+  s_d3c90e184e731d::t_777655d144996f 246-268
+control-plane/Sources/App/Services/AgentService.swift
+  s_d3c90e184e731d::t_777655d144996f 1318-1319
+control-plane/Package.swift
+  s_d3c90e184e731d::t_777655d144996f 132-136
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_d3c90e184e731d::t_777655d144996f 101-103,120-123,125-132,134,157,169,271-272
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_d3c90e184e731d::t_777655d144996f 1-231
+control-plane/Sources/App/openapi.yaml
+  s_d3c90e184e731d::t_777655d144996f 4172-4173,12276-12278,13202-13204,13227-13229,13283-13285,13322-13324
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_d3c90e184e731d::t_777655d144996f 50,53-54,65,70-72,75,77,90-93,127-128,166,171,174-175,275-277,281-283,289,301-303,307,309-310,361,364,369,377,386,388,390-393
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDVerification.swift
+  s_d3c90e184e731d::t_777655d144996f 3,80-82,125,132-133,139,141,143,149
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_d3c90e184e731d::t_777655d144996f 1-3762
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_d3c90e184e731d::t_777655d144996f 3,32,36-38
+docs/architecture/networking.md
+  s_d3c90e184e731d::t_777655d144996f 727-728,738-744
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_d3c90e184e731d::t_777655d144996f 14-15
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_d3c90e184e731d::t_d84c30300db49d 44-49,147-151,153,155,183,188,196
+shared/Tests/StratoSharedTests/JSONValueTests.swift
+  s_d3c90e184e731d::t_777655d144996f 1-28
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_d3c90e184e731d::t_777655d144996f 3,15-18,44,52-53,55-56,61
+control-plane/Tests/AppResourceTests/ResourceEventEnumConstraintTests.swift
+  s_d3c90e184e731d::t_777655d144996f 13-14,31,54-55
+control-plane/Tests/AppIdentityTests/OIDCIdentityMappingTests.swift
+  s_d3c90e184e731d::t_777655d144996f 55-60
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_d3c90e184e731d::t_777655d144996f 121-211
+agent/Tests/StratoAgentTests/DelegatedIdentityClientTests.swift
+  s_d3c90e184e731d::t_777655d144996f 480-487
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_d3c90e184e731d::t_777655d144996f 104,113,333
+control-plane/Sources/App/Models/UserSource.swift
+  s_d3c90e184e731d::t_777655d144996f 8
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_d3c90e184e731d::t_777655d144996f 108-109
+agent/Sources/StratoAgentSPIFFE/DelegatedIdentityProbe.swift
+  s_d3c90e184e731d::t_777655d144996f 14-33,285-304
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_d3c90e184e731d::t_777655d144996f 294-295
+control-plane/Tests/AppResourceTests/QuotaUsageAggregatorTests.swift
+  s_d3c90e184e731d::t_777655d144996f 106-107,188-214
+  s_d3c90e184e731d::t_5628c8c4187e15 215-217
+control-plane/Sources/App/Services/HierarchyMaintenanceService.swift
+  s_d3c90e184e731d::t_777655d144996f 80
+control-plane/Tests/AppPlatformTests/SchemaMigratorTests.swift
+  s_d3c90e184e731d::t_777655d144996f 43,243,255,267-268
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_d3c90e184e731d::t_777655d144996f 201-206,294-299,345,679-684
+control-plane/Tests/AppResourceTests/VolumeStuckSweepTests.swift
+  s_d3c90e184e731d::t_777655d144996f 77-78
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_d3c90e184e731d::t_777655d144996f 488-491,496-497,513,515,519,546-564,567-569
+  s_d3c90e184e731d::t_022fea59dafb9b 570
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_d3c90e184e731d::t_36b2d1f1b6b422 902-907
+  s_d3c90e184e731d::t_d84c30300db49d 882-901,908-922
+agent/Tests/StratoAgentTests/OVNChassisBootstrapTests.swift
+  s_d3c90e184e731d::t_777655d144996f 52-53
+control-plane/Sources/App/Services/DesiredStateDigest.swift
+  s_d3c90e184e731d::t_777655d144996f 78,84-85,87-89,97,109,111-115,119-120
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_d3c90e184e731d::t_777655d144996f 6,31-68,87,97-98,100,102-105,268-325,411-412,414-419,494-507,512-521,528-549,561,565-569,582-585,597
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_d3c90e184e731d::t_777655d144996f 808-809
+control-plane/Sources/App/Migrations/CurrentSchemaBaseline.swift
+  s_d3c90e184e731d::t_777655d144996f 1-178
+agent/Sources/StratoAgentCore/MetadataService/MetadataHTTPServer.swift
+  s_d3c90e184e731d::t_777655d144996f 273
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_d3c90e184e731d::t_777655d144996f 213-216,652-653,655,741
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  s_d3c90e184e731d::t_777655d144996f 477-554,694-732
+  s_d3c90e184e731d::t_9809c75776fa89 733
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_d3c90e184e731d::t_777655d144996f 11,53,55
+control-plane/Sources/App/Models/AgentWorkloadClaim.swift
+  s_d3c90e184e731d::t_777655d144996f 33
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_d3c90e184e731d::t_777655d144996f 77-82,424-437,461-470,501-503,532,559
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_d3c90e184e731d::t_777655d144996f 115-123
+agent/Tests/StratoAgentTests/MetadataServerSupervisorTests.swift
+  s_d3c90e184e731d::t_d84c30300db49d 239-240,243-244,255-256,265-266,271,276,279-280
+agent/Sources/StratoAgentCore/MetadataService/MetadataServerProcess.swift
+  s_d3c90e184e731d::t_d84c30300db49d 83-84,109,113-115,195-200
+agent/Sources/StratoAgentCore/OVNChassisBootstrap.swift
+  s_d3c90e184e731d::t_777655d144996f 45-47,199-200
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_d3c90e184e731d::t_777655d144996f 503-504,573-574
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_d3c90e184e731d::t_777655d144996f 111-112
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_d3c90e184e731d::t_777655d144996f 164-216,585-669
+  s_d3c90e184e731d::t_771f78ccf09522 670
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "078fa9510103cc8374ac57f6a49bb59f9dc56f1e",
+  "prompts": {},
+  "sessions": {
+    "s_d3c90e184e731d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede4-bec2-7343-aad5-ce620399e429",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

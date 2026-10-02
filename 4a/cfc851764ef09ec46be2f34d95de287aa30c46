@@ -1,0 +1,29 @@
+control-plane/Sources/App/configure.swift
+  s_b7aa8b7679a04b::t_48d6bce52ffb60 187-189
+control-plane/Sources/App/Migrations/AddVMHotColumnIndexes.swift
+  s_4719a665dab6ff::t_6b42402711583f 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4acfc851764ef09ec46be2f34d95de287aa30c46",
+  "prompts": {},
+  "sessions": {
+    "s_4719a665dab6ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "655f46ce-0548-4459-be90-5448ba9355ec",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b7aa8b7679a04b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b37436d7-1284-4fbc-b3d4-82b79756d7c2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

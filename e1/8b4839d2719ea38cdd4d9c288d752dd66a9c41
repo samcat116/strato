@@ -1,0 +1,26 @@
+control-plane/Sources/App/Migrations/CreateStorageDevices.swift
+  s_1dd9ddf4b6d7c1::t_fc01f7837459f7 1-81
+control-plane/Sources/App/Models/StorageDevice.swift
+  s_1dd9ddf4b6d7c1::t_fc01f7837459f7 1-120
+control-plane/Sources/App/configure.swift
+  s_1dd9ddf4b6d7c1::t_fc01f7837459f7 431-434
+control-plane/Tests/AppPlatformTests/StorageDevicePersistenceTests.swift
+  s_1dd9ddf4b6d7c1::t_6f415347062f75 96
+  s_1dd9ddf4b6d7c1::t_4beb8c228d2673 1-95,97-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e18b4839d2719ea38cdd4d9c288d752dd66a9c41",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

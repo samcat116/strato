@@ -1,0 +1,39 @@
+control-plane/Tests/AppNetworkTests/SecurityGroupControllerTests.swift
+  s_0a6f49dab719ee::t_331022e683c396 176,841-845,853-856
+control-plane/Sources/App/Services/NetworkCarrierAssembler.swift
+  s_0a6f49dab719ee::t_9f2226be7fad7c 346-371
+control-plane/Sources/App/Models/SecurityGroup.swift
+  s_0a6f49dab719ee::t_9f2226be7fad7c 112-115
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_0a6f49dab719ee::t_331022e683c396 680,705
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+Reconciliation.swift
+  s_0a6f49dab719ee::t_e190ad2eff66f6 205,211
+control-plane/Sources/App/Migrations/AddNetworkFabricObservations.swift
+  s_0a6f49dab719ee::t_9f2226be7fad7c 33-36,38-45
+agent/Sources/StratoAgentCore/NetworkACLReconciler.swift
+  s_0a6f49dab719ee::t_e190ad2eff66f6 564,570,572-574,577,586-590,596-607,615-627,630
+agent/Tests/StratoAgentPlatformTests/NetworkReconcilerTests.swift
+  s_0a6f49dab719ee::t_331022e683c396 795-817,904-905,910-912,917-918,943-945,952-954
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_0a6f49dab719ee::t_56cdfa178adfd5 808-819,871-872,883
+control-plane/Sources/App/Services/DesiredStateGenerationWriter.swift
+  s_0a6f49dab719ee::t_9f2226be7fad7c 42-45
+agent/Tests/StratoAgentPlatformTests/NetworkACLReconcilerTests.swift
+  s_0a6f49dab719ee::t_331022e683c396 497,502-527
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c33515093f1025eed78e0e955cb6832ff7e9722e",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

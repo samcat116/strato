@@ -1,0 +1,68 @@
+control-plane/Sources/App/configure.swift
+  s_cf53942f9f2993::t_f3abf8cea17f65 592
+  s_975ea3cfe0cfd1::t_4c55a0c1ef0632 60-71,587-591,687-699
+control-plane/Package.swift
+  s_cf53942f9f2993::t_01bdfc0f7971c7 45-50,119
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_cf53942f9f2993::t_ab281f7e8f9dd2 91-150,219-233,297-301,304-312
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_cf53942f9f2993::t_4a855b30303847 3,98-102,112-146
+control-plane/Sources/App/Middleware/MetricsMiddleware.swift
+  s_cf53942f9f2993::t_a30b99343776e2 1-71
+control-plane/Sources/App/Migrations/AddSiteMetadata.swift
+  s_cf53942f9f2993::t_62c4fbbc22dc60 1-61
+control-plane/Sources/App/Migrations/EnforceSiteStatusEnum.swift
+  s_cf53942f9f2993::t_f95c25ebcf9c83 1-29
+control-plane/Sources/App/Models/Site.swift
+  s_cf53942f9f2993::t_d7a1d48fd24ee7 4-16,44-85,116-121,128-133,193-198,203,209-214,219,229-259,262-270,274-299
+control-plane/Sources/App/Services/AgentService.swift
+  s_cf53942f9f2993::t_1bba48ec42247e 8,1713-1743
+control-plane/Sources/App/Services/IPAMService.swift
+  s_cf53942f9f2993::t_9433a97f913a08 45-53,100-112,167-179
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_cf53942f9f2993::t_29f311d50c2e09 5,423-471,473,475-480
+control-plane/Sources/App/Telemetry/Duration+Seconds.swift
+  s_cf53942f9f2993::t_42ca37d4c2d022 1-12
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_cf53942f9f2993::t_a47785a6a042ff 101-183
+control-plane/Sources/App/openapi.yaml
+  s_cf53942f9f2993::t_25a8eebee11b6a 11225,11235-11259,11279-11291,11314-11336,11341-11343,11352-11374
+control-plane/Tests/AppTests/SiteTests.swift
+  s_cf53942f9f2993::t_f09df4f0fe1989 158-259
+control-plane/Tests/AppTests/TelemetrySupportTests.swift
+  s_cf53942f9f2993::t_9ed8b05b286e8b 1-70
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_cf53942f9f2993::t_b6b018970d98ed 7,19-25,38,41-75,86-91,95-105,111,118-139,155-166,177-190,195-200,245-247,256-348,394-493
+control-plane/web/src/lib/api/sites.ts
+  s_cf53942f9f2993::t_07f96920d0d78c 4,22-28
+control-plane/web/src/types/api.ts
+  s_cf53942f9f2993::t_9baeda28570eb7 572-573,578-583,588,596-616
+control-plane/web/src/types/openapi.ts
+  s_cf53942f9f2993::t_a25bd5630676f7 6357-6375,6387-6388,6390-6394,6403-6413,6415,6420-6430
+docs/deployment/observability.md
+  s_cf53942f9f2993::t_ecec8d10fc0916 1,3-9,11,13,15-16,23-24,27,29-31,92-109,115-116,119-155,170-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "4c7ad6aebe1c7a15cce4b7ac174eeb0ad4b88a0e",
+  "prompts": {},
+  "sessions": {
+    "s_975ea3cfe0cfd1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd91f492-d824-432c-913e-262bb34d33b1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_cf53942f9f2993": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77b18d76-962c-4c62-8810-d6bb6a3e69c5",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

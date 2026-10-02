@@ -1,0 +1,45 @@
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_c9e817d65784af::t_9fc7c09dc27d7b 43-45,69,78-84,167
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerError.swift
+  s_c9e817d65784af::t_c08279a012c92e 77
+agent/Sources/StratoAgent/Agent.swift
+  s_c9e817d65784af::t_0250ec0291a956 126-127,129-131,133-134,258-264,413-415,537-545,549-559,846-980
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_c9e817d65784af::t_adaa01695ee57b 157,183,188-189,202-233,241-246,249-251,253,255-262,264-278,280,282-298,300-322,325-329,439,455-469
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_c9e817d65784af::t_56fff448ae480a 548-550,556-562,637-655
+agent/Sources/StratoAgentCore/FailureClassification.swift
+  s_c9e817d65784af::t_d03ec731df940b 1-34
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_c9e817d65784af::t_d44df9527ac746 129,183,185,190-204,231-232,295,345-346,428-429,467-500
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_c9e817d65784af::t_1b2983769524a4 1-371
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_c9e817d65784af::t_a97c56f8c0db0f 267-275,279-281
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_c9e817d65784af::t_db507e8f94744c 154-157,179-180
+agent/Tests/StratoAgentTests/FailureClassificationTests.swift
+  s_c9e817d65784af::t_1367342ae3a43e 1-36
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_c9e817d65784af::t_c285da8c9efe9d 133-179
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_c9e817d65784af::t_04a91a96d33cb5 1-228
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_c9e817d65784af::t_55b46ccaaf78ae 302-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "39c927e57c491397e4ef320a7a538addf2856d7a",
+  "prompts": {},
+  "sessions": {
+    "s_c9e817d65784af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3ef83cfc-0b5f-4edc-baa1-f588696549c7",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

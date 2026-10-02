@@ -1,0 +1,45 @@
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_a587f81d483352::t_a456bc8eb14450 132-137,145
+control-plane/Tests/AppTests/SPIREServerAPIClientTests.swift
+  s_a587f81d483352::t_8a94cea3b2af72 343-356
+  s_a587f81d483352::t_3cff7cd032487a 6
+  s_a587f81d483352::t_03978cb759c927 193-214
+  s_a587f81d483352::t_29eb7198a1a452 265-274
+  s_2364fcdbd44611::t_e6092e60cf5cfc 341-342
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_a587f81d483352::t_bbbabe4e3cb0e8 96,107-108
+  s_a587f81d483352::t_9534aa362e2458 307,309
+  s_a587f81d483352::t_541d3fb49bafc7 41-45
+  s_a587f81d483352::t_853b85d4e116ba 363-364
+  s_a587f81d483352::t_526501d7c1b3eb 300-306,308,310-312
+  s_a587f81d483352::t_4c0a90ac97fe0d 188-192
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_a587f81d483352::t_7ce65adf77527c 193-197
+  s_a587f81d483352::t_bbf9382be7886f 539-546
+  s_a587f81d483352::t_b0db15894f9515 390-392
+  s_a587f81d483352::t_6458669b42b86d 490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cc4603007846482352f66fe8d38d0eda568ca002",
+  "prompts": {},
+  "sessions": {
+    "s_2364fcdbd44611": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3d2d0679-cce3-402e-adf2-e32173ea2d05",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a587f81d483352": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc6066aa-332b-4561-b79f-cda35143be82",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

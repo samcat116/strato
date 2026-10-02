@@ -1,0 +1,33 @@
+control-plane/Tests/AppPlatformTests/RequestLoggingMiddlewareTests.swift
+  s_077a86d6d40679::t_6ae7ef508d1660 176
+  s_077a86d6d40679::t_a017c8f8a0eb49 10-18,37-42,47-76,86,89-98,102-156,165-175,177-192
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_077a86d6d40679::t_b91582df972752 150,156-157
+control-plane/Sources/App/Middleware/MetricsMiddleware.swift
+  s_077a86d6d40679::t_b91582df972752 30,61-68
+  s_077a86d6d40679::t_a68063d761ab2a 69-70
+control-plane/Sources/App/Middleware/RequestLoggingMiddleware.swift
+  s_077a86d6d40679::t_b91582df972752 28,106-118
+  s_077a86d6d40679::t_6ae7ef508d1660 1
+  s_077a86d6d40679::t_909753967fd0e2 119-120
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_077a86d6d40679::t_b91582df972752 258-264,324,328-329
+docs/deployment/logging.md
+  s_077a86d6d40679::t_e9e9590a560c57 196-197,210-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "bcf180491b306b41c35be353646db463adf42057",
+  "prompts": {},
+  "sessions": {
+    "s_077a86d6d40679": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-7f59-7941-a8a0-7ac6a6126488",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

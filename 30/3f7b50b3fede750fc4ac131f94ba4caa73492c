@@ -1,0 +1,35 @@
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_e1fc0825c223a6::t_41d7e323c95f51 385-388,394
+  s_e1fc0825c223a6::t_180abdf2e82861 318-335,343-345,357-358
+control-plane/Sources/App/Models/WorkloadSizeLimits.swift
+  s_e1fc0825c223a6::t_eccdea57cc4c83 5,8-10,12-13,15-21
+control-plane/Tests/AppTests/WorkloadSizeValidationTests.swift
+  s_e1fc0825c223a6::t_04e1a39848d89c 118,152-167,183,203,220,227-259,272,280-302,318,325-385
+  s_e1fc0825c223a6::t_2a13a7bdde8f17 71-100,110-117
+  s_e1fc0825c223a6::t_6f2877f3f964e8 119
+  s_e1fc0825c223a6::t_dd57c4962cde9a 386
+control-plane/Sources/App/openapi.yaml
+  s_e1fc0825c223a6::t_c1ab4e43939cae 8093,8098
+  s_e1fc0825c223a6::t_ae02ef914f538a 7864,7869,7874,7880,7886
+  s_e1fc0825c223a6::t_d67396b21f37e6 7941,7947
+control-plane/Sources/App/Controllers/VMController.swift
+  s_e1fc0825c223a6::t_b62370cb0e98bc 803-805
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_e1fc0825c223a6::t_379bc282b2987c 319-329,333-339,346-348
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "303f7b50b3fede750fc4ac131f94ba4caa73492c",
+  "prompts": {},
+  "sessions": {
+    "s_e1fc0825c223a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5622fdeb-2da3-478d-9d07-f44406ef9932",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+.gitignore
+  s_d19114a897e73f::t_3f62b3461b33f8 25-28
+  s_d19114a897e73f::t_eb7f12fb823f16 38-44
+SwiftFirecracker/Package.resolved
+  s_d19114a897e73f::t_a0af255e721ec7 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0e886a46fa74249fd293963416a2ae892147add9",
+  "prompts": {},
+  "sessions": {
+    "s_d19114a897e73f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "11c2b25e-4604-4f36-a7ea-c0b38414cdb2",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

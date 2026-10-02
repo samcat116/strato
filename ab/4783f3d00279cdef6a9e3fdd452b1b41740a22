@@ -1,0 +1,125 @@
+control-plane/web/src/lib/api/networks.ts
+  s_3cd6d370aba786::t_7f3bd028085424 51-57
+  s_3cd6d370aba786::t_c4bb59eb556b9e 3,7-8,10,37-50,58-82
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3cd6d370aba786::t_bc599583456e78 1605,1608,1616-1641,3303-3334,3339-3438
+  s_3cd6d370aba786::t_428f149d219dbf 3140,3155-3158,3194-3195,3220-3224
+  s_3cd6d370aba786::t_9fd9fa69056a18 3335-3338
+  s_3cd6d370aba786::t_6c6fef06f82250 3439-3440
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_3cd6d370aba786::t_97552cf192b1ad 259-260,287-291,927-967
+  s_3cd6d370aba786::t_728e7515eada8d 968-969
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_3cd6d370aba786::t_7faab209f1e42e 717-781,1056-1060,1080-1081,1101
+agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift
+  s_3cd6d370aba786::t_f9b2c3c55810f6 716-733,806-809,811
+  s_3cd6d370aba786::t_35284a46b690f3 65-76,84,86-87,104,114,128-129,181-183,267,353,360,403,408,452,481,486,491,496,503,508,518,523,529,534,679
+  s_3cd6d370aba786::t_957f4999fe7f73 677-678,746-750,765,770,772,781-783,785,800,810
+docs/adr/0010-layer-network-acls-with-ovn-tiers.md
+  s_3cd6d370aba786::t_4935233deafc13 1-78,81,84-85,93-130
+  s_3cd6d370aba786::t_a8e1eb834b02fe 79-80,82-83,86-92
+control-plane/Sources/App/Models/NetworkACLRule.swift
+  s_3cd6d370aba786::t_a8a36f02444e87 1-169
+control-plane/web/src/components/networks/network-table.tsx
+  s_3cd6d370aba786::t_689241f75d201e 94
+  s_3cd6d370aba786::t_a5b0c8abe2a8bc 26,34,41,105,183-191
+  s_3cd6d370aba786::t_0f701b375742e9 4,192-194
+control-plane/Sources/App/Migrations/CreateNetworkACLs.swift
+  s_3cd6d370aba786::t_a8a36f02444e87 1-86,94-101,105-114,117-129
+  s_3cd6d370aba786::t_6a7d5d0876e91d 87-93,102-104,115-116
+CONTEXT.md
+  s_3cd6d370aba786::t_871c9a997618cc 332-335,337-348
+  s_3cd6d370aba786::t_e9540f6c6ad77d 336
+agent/Tests/StratoAgentTests/NetworkACLReconcilerTests.swift
+  s_3cd6d370aba786::t_3c69e544844bcb 408-409,414-415
+  s_3cd6d370aba786::t_9496388730352d 322,340-407,410-413,416-435,557-582
+  s_3cd6d370aba786::t_a80109fb90eb4e 169,249,252-253,257-260,262-296,309,311
+  s_3cd6d370aba786::t_e78f865a600b20 36,44,60,66,77,100,104,107,125,129,140,145,170,190,198,206,218,221,238,242,247,251,255,297,308,315,325-327,330-333,336-338,436-437,439-473,476,478-479,482-485,489-490,502,520,525-526,540,583,587,591,595
+  s_3cd6d370aba786::t_c7503e250b480e 1-35,37-43,45-59,61-65,67-76,78-99,101-103,105-106,108-124,126-128,130-139,141-144,146-168,171-189,191-197,199-205,207-217,219-220,222-237,239-241,243-246,248,250,254,256,261,298-307,310,312-314,316-321,323-324,328-329,334-335,339,438,474-475,477,480-481,486-488,491-501,503-519,521-524,527-539,541-556,584-586,588-590,592-594,596
+control-plane/Sources/App/Models/NetworkACL.swift
+  s_3cd6d370aba786::t_a8a36f02444e87 1-74
+control-plane/web/src/components/networks/network-acl-dialog.tsx
+  s_3cd6d370aba786::t_a5b0c8abe2a8bc 37-398,418-643
+  s_3cd6d370aba786::t_209362cb502998 413
+  s_3cd6d370aba786::t_0a8f849836c2a7 1-36,399-412,414-417,644-646
+control-plane/web/src/types/api.ts
+  s_3cd6d370aba786::t_87bf2b8db484e2 2170
+  s_3cd6d370aba786::t_c9d1fcf3c67dfe 2154-2169,2171-2194
+control-plane/web/src/types/openapi.ts
+  s_3cd6d370aba786::t_c2b4de491fd97d 6620-6649
+  s_3cd6d370aba786::t_59a49f5cb5a3fc 1298-1373,6609-6619,6650-6666,10150-10151,12282-12408
+control-plane/Sources/App/configure.swift
+  s_3cd6d370aba786::t_a8a36f02444e87 433-436
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_3cd6d370aba786::t_c38b62ca22b622 20
+agent/Sources/StratoAgentCore/NetworkACLReconciler.swift
+  s_3cd6d370aba786::t_3c69e544844bcb 511-512
+  s_3cd6d370aba786::t_e998ed71ff7d39 65-66,68,75-78,84-85,87-108
+  s_3cd6d370aba786::t_209362cb502998 462-464
+  s_3cd6d370aba786::t_9fd9fa69056a18 466-479
+  s_3cd6d370aba786::t_bc599583456e78 20-64,67,70-74,79-83,86,109,121,127,133,147,158,163,168,178-461,480,483-510,513-543,545,554-555,557-558,560,582,600-601,616-618
+  s_3cd6d370aba786::t_360594ec74b5c0 1-19,69,110-120,122-126,128-132,134-146,148-157,159-162,164-167,169-177,465,481-482,544,546-553,556,559,561-581,583-599,602-615,619
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_3cd6d370aba786::t_a5b0c8abe2a8bc 22-25,81-83,102-108
+  s_3cd6d370aba786::t_2b8c267f3e53c5 13,109-110
+shared/Sources/StratoShared/WireProtocol.swift
+  s_3cd6d370aba786::t_7faab209f1e42e 14-16,23
+control-plane/web/src/components/networks/network-acl-permissions.test.tsx
+  s_3cd6d370aba786::t_4bcff4e11ce993 1-132
+control-plane/Sources/App/Services/NetworkACLService.swift
+  s_3cd6d370aba786::t_8451f0361111df 1-136
+control-plane/Sources/App/Controllers/NetworkACLController.swift
+  s_3cd6d370aba786::t_9170f58efb5818 56-61,79-80,83,87-89,143-149,184-189
+  s_3cd6d370aba786::t_a3ecc645ba0b1d 1-55,62-78,81-82,84-86,90-142,150-183,190-220
+  s_3cd6d370aba786::t_d3b9ad403c2238 221
+control-plane/Sources/App/routes.swift
+  s_3cd6d370aba786::t_38634a5d03cc57 73
+shared/Tests/StratoSharedTests/NetworkACLProtocolTests.swift
+  s_3cd6d370aba786::t_7faab209f1e42e 1-76
+docs/architecture/networking.md
+  s_3cd6d370aba786::t_16bad7a327f042 954-967
+  s_3cd6d370aba786::t_e9540f6c6ad77d 940
+  s_3cd6d370aba786::t_871c9a997618cc 793-798
+  s_3cd6d370aba786::t_4faa9fbd8c4514 36-37,583-585,635-637,650-658,665-666,669-671,700-701,768-771,792,871-872,883-939,941-953,968-980
+control-plane/Sources/App/openapi.yaml
+  s_3cd6d370aba786::t_e9540f6c6ad77d 11452-11509
+  s_3cd6d370aba786::t_7ebed48be75b4e 170,1824-1921,8541-8548,11440-11451,11510-11539
+agent/Tests/StratoAgentTests/SecurityGroupReconcilerTests.swift
+  s_3cd6d370aba786::t_d8274fbad88ea8 88,200,208,280,288,290-295,350,525-556,666,679,699,718,720-729,734,798
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_3cd6d370aba786::t_712d65431beb58 136-137,139
+control-plane/web/src/components/networks/index.ts
+  s_3cd6d370aba786::t_91c8f76b4347ab 4
+control-plane/web/src/lib/hooks/index.ts
+  s_14cd71c8010725::t_94b6ee36ab81dd 170-178
+control-plane/web/src/lib/hooks/use-networks.ts
+  s_14cd71c8010725::t_84029d519e963a 1,3,16-65
+docs/architecture/wire-protocol.md
+  s_3cd6d370aba786::t_5300adeaa318b2 53,105-112
+control-plane/Tests/AppPlatformTests/NetworkACLControllerTests.swift
+  s_14cd71c8010725::t_2934f028a85a06 1-424
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ab4783f3d00279cdef6a9e3fdd452b1b41740a22",
+  "prompts": {},
+  "sessions": {
+    "s_14cd71c8010725": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04f88-bfb7-7ad1-a1e8-14771fb6a857",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_3cd6d370aba786": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0551c-59f6-7911-8455-6ed9f39029b9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

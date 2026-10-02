@@ -1,0 +1,53 @@
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_92f812bcb129e0::t_6f12986e51646f 365-416
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_92f812bcb129e0::t_38834e379abc61 70-72
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_92f812bcb129e0::t_cd73046305db68 276-285
+  s_92f812bcb129e0::t_3d1303f7933983 385-398
+  s_92f812bcb129e0::t_43837f81001d4f 59-73
+docs/architecture/iam.md
+  s_92f812bcb129e0::t_3ccc13f61aa53c 559-586
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_92f812bcb129e0::t_14887228f417cc 93-97,103-110,120-127,136-144
+  s_bbadc6e2e9e7af::t_3fd3952481ad33 145
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_92f812bcb129e0::t_77ac2833d6b5cc 56
+  s_92f812bcb129e0::t_f05c28a84d5381 249
+  s_92f812bcb129e0::t_428bca4ec7c5b7 311
+  s_92f812bcb129e0::t_fa1ee2fa6ae4b2 556-578
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_92f812bcb129e0::t_37cb298b008686 117-143
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_92f812bcb129e0::t_263ec2765ffe94 331-364
+docs/architecture/authorization-edge-audit.md
+  s_92f812bcb129e0::t_f3db67e44d189d 1-181
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_92f812bcb129e0::t_d69271b0afbeef 481-523
+control-plane/Tests/AppTests/IAMShadowTranslationTests.swift
+  s_92f812bcb129e0::t_25f682126adb8f 123-219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "f4e83dd4f7c9b6b73629905d3d013cba420c55b9",
+  "prompts": {},
+  "sessions": {
+    "s_92f812bcb129e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21f7f546-4f40-4919-a39b-d4754cf2ddb2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_bbadc6e2e9e7af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c924e89-82e1-4443-a274-c45681fa52ec",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

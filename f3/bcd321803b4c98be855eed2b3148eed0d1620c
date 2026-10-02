@@ -1,0 +1,39 @@
+control-plane/web/src/components/projects/project-table-model.test.ts
+  s_d17c676e315800::t_d5babebb9156e8 54-58,98-109
+  s_d17c676e315800::t_3a47866e431d15 110-111
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_d17c676e315800::t_0a367f5a412076 553-558,565-566,571-572,577-578
+  s_d17c676e315800::t_daf9ad3893fb5f 87-88,90-103,106-111,121-123,126-127,129,131-133,135-138,141-167,169,172-178,180-187
+  s_d17c676e315800::t_79f6716ed6f57d 112-120,124-125,670-745
+  s_d17c676e315800::t_30fd31a1fb8660 746
+control-plane/web/src/types/openapi.ts
+  s_d17c676e315800::t_8248b46c42ee30 7600,7606-7609
+control-plane/web/src/components/projects/project-table-model.ts
+  s_d17c676e315800::t_94d894472b1edc 6-7,59-61,69,73-75
+control-plane/web/src/components/projects/project-form-dialog.tsx
+  s_d17c676e315800::t_94d894472b1edc 57,146-147,155-159
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  s_d17c676e315800::t_52d7bc8598e459 9-14,705
+  s_d17c676e315800::t_f89e201c0a4575 676-683,685-704,706-707,709-722
+  s_d17c676e315800::t_80e033f616c4cb 684,708
+control-plane/Sources/App/openapi.yaml
+  s_d17c676e315800::t_94d894472b1edc 13396-13400,13412-13419
+control-plane/web/src/components/projects/projects-table.tsx
+  s_d17c676e315800::t_94d894472b1edc 9,131-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f3bcd321803b4c98be855eed2b3148eed0d1620c",
+  "prompts": {},
+  "sessions": {
+    "s_d17c676e315800": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0017c-a188-7ad3-bf6b-06db75de0571",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

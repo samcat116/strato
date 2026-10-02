@@ -1,0 +1,41 @@
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_f8739538da3eff::t_c1dedc0c44dd06 1-121
+config.toml.example
+  s_f8739538da3eff::t_db63eb61e3981f 51-60
+agent/Sources/StratoAgent/QEMUService.swift
+  s_f8739538da3eff::t_7a7b5e28e7c491 934
+  s_f8739538da3eff::t_cf59b7f92e2307 6-9
+  s_f8739538da3eff::t_19f20fd0a0138c 48,55
+  s_f8739538da3eff::t_255488aae32844 828
+  s_f8739538da3eff::t_6433e6e7fd0786 772-774,776-782,784,786-791
+  s_f8739538da3eff::t_0aff664f444df5 20-23
+agent/Sources/StratoAgent/CloudInitProvisioner.swift
+  s_f8739538da3eff::t_1fdc70e8d0490e 1-120
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_f8739538da3eff::t_c3835ffd57cb77 265
+  s_f8739538da3eff::t_1dfc564f09e139 241-251
+  s_f8739538da3eff::t_4d155e161bd8be 293
+agent/Sources/StratoAgent/Agent.swift
+  s_f8739538da3eff::t_334f883b483728 161
+  s_f8739538da3eff::t_912318a9802a69 238
+  s_f8739538da3eff::t_59ee7a94e4af81 142
+  s_f8739538da3eff::t_4f5ae97b409d6c 58
+  s_f8739538da3eff::t_07490f871a6608 114
+  s_f8739538da3eff::t_4dd27481b82696 237,239-241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "afb46e4f9cf72a6ad61234f98d1492e4d0a69b0e",
+  "prompts": {},
+  "sessions": {
+    "s_f8739538da3eff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c2b5e84-d0b5-4010-964f-8e799c4d5958",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

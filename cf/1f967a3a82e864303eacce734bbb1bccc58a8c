@@ -1,0 +1,43 @@
+agent/Sources/StratoAgentCore/QMP/VMCheckpointTargets.swift
+  s_c409156beadd2a::t_950e931e90adaa 1-96,102-139
+  s_c409156beadd2a::t_b7c853db4d8658 97-101
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_c409156beadd2a::t_12c86f0d5a61fe 253-259,261-266
+  s_c409156beadd2a::t_6b25358637b227 352-363
+control-plane/web/src/components/vms/vm-snapshots-card.tsx
+  s_c409156beadd2a::t_e3a10cd6f995c6 215
+  s_c409156beadd2a::t_6e90e033ae0145 283-318
+  s_c409156beadd2a::t_820246d6480a52 101-103,109
+  s_c409156beadd2a::t_218c0fce53bc21 50
+  s_c409156beadd2a::t_cb193db2313015 26-28,31-34
+  s_c409156beadd2a::t_a0c9174ed299f5 282
+agent/Tests/StratoAgentTests/QMPSnapshotClientTests.swift
+  s_c409156beadd2a::t_0a679b426039b1 178-222
+  s_c409156beadd2a::t_c92224001b48a2 26-41,46,49
+docs/architecture/storage.md
+  s_c409156beadd2a::t_b5c42befe3b5fd 261-268,272-282
+  s_c409156beadd2a::t_fd9c39f12a27dc 283
+agent/Sources/StratoAgent/QEMUService.swift
+  s_c409156beadd2a::t_5a3546ab6fc737 1155-1161,1163,1165-1166,1169-1171
+  s_c409156beadd2a::t_061f47cee46cae 1109
+  s_c409156beadd2a::t_1a77f853c312e2 1247-1248,1250-1284,1286,1290-1299,1301,1305-1306,1309,1313-1316
+agent/Tests/StratoAgentTests/VMCheckpointTargetsTests.swift
+  s_c409156beadd2a::t_bd8c78e315fdac 41,44,47,50,103,116,135,150-151,161
+  s_c409156beadd2a::t_e8c2e146e69e18 1-40,42-43,45-46,48-49,51-102,104-115,117-134,136-149,152-160,162-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "cf1f967a3a82e864303eacce734bbb1bccc58a8c",
+  "prompts": {},
+  "sessions": {
+    "s_c409156beadd2a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "42deaa62-4341-400e-a5c6-f73181c22cfc",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

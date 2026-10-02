@@ -1,0 +1,73 @@
+helm/strato-control-plane/templates/spire-entry-bootstrap-job.yaml
+  s_55dbfcc7cf0fa2::t_f0e618289c79bf 1-163
+docs/deployment/kubernetes.md
+  s_55dbfcc7cf0fa2::t_ce53baff58cea8 90-111
+helm/strato-control-plane/values.yaml
+  s_55dbfcc7cf0fa2::t_5caa023d17ee4e 793-804
+  s_55dbfcc7cf0fa2::t_7bdefe992722d3 764-778
+control-plane/Sources/SPIREServerAPI/Generated/proto/workload.proto
+  s_55dbfcc7cf0fa2::t_4c925b1e6404df 1-225
+control-plane/Tests/AppTests/SPIREServerAPIClientMTLSTests.swift
+  s_55dbfcc7cf0fa2::t_930f86ad2812f0 75-77,79
+  s_55dbfcc7cf0fa2::t_b839c9b386978f 1-74,78,80-92,97-167,176,184-342,350-356
+  s_55dbfcc7cf0fa2::t_273e3fe2c045d8 343-349
+  s_55dbfcc7cf0fa2::t_a27571b5b9b2c4 93-96
+  s_55dbfcc7cf0fa2::t_3d9f01738b7d69 168-175,177-183
+control-plane/Package.swift
+  s_55dbfcc7cf0fa2::t_fe300bf098a0d2 15,23,54,97,115,118,135
+  s_55dbfcc7cf0fa2::t_adb1f5eab961a6 69
+control-plane/Sources/SPIREServerAPI/WorkloadAPISVIDSource.swift
+  s_55dbfcc7cf0fa2::t_af6cd06d8dfdf1 1-239
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_55dbfcc7cf0fa2::t_70aa6fe3371e4e 280-283,285-290
+  s_55dbfcc7cf0fa2::t_3015a3f2104be1 249-253,269-270
+  s_55dbfcc7cf0fa2::t_32ae8280633d08 393-398,400
+  s_55dbfcc7cf0fa2::t_2ce7d91ccb488a 718-745
+  s_55dbfcc7cf0fa2::t_21e318fa281230 348
+  s_55dbfcc7cf0fa2::t_8c84ff0ef4dd4d 322-339
+  s_55dbfcc7cf0fa2::t_b7b36c68004ae4 667-668,676
+control-plane/Sources/SPIREServerAPI/Generated/README.md
+  s_55dbfcc7cf0fa2::t_2beeb65aa76976 9-14,17-19
+helm/strato-control-plane/templates/deployment.yaml
+  s_55dbfcc7cf0fa2::t_501cab97c5e38c 248-257,375
+  s_55dbfcc7cf0fa2::t_708981155ec4a1 356-357,369-373
+  s_55dbfcc7cf0fa2::t_b8d1d105532f8c 379,385-388
+  s_55dbfcc7cf0fa2::t_d96273f30adc4f 374
+docs/architecture/control-plane.md
+  s_55dbfcc7cf0fa2::t_a936c9a39937b5 30-35
+docs/deployment/agents.md
+  s_55dbfcc7cf0fa2::t_afda7c6d5041ba 363-364
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_55dbfcc7cf0fa2::t_81568f96d502ce 255,262
+  s_55dbfcc7cf0fa2::t_f40393fbda4220 232-233,236-241
+  s_55dbfcc7cf0fa2::t_757aec881d205b 281-293
+  s_55dbfcc7cf0fa2::t_6a6bdaf8627257 323
+  s_55dbfcc7cf0fa2::t_dd920296daf7a8 374-383,386-387,393
+  s_8dc4e170080759::t_0ea274221e0c28 242
+control-plane/Sources/SPIREServerAPI/Generated/workload.pb.swift
+  s_55dbfcc7cf0fa2::t_b8eb75d1efcee8 1-883
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "8bc2d59b49bb194752e28b3e7b22670b643d006c",
+  "prompts": {},
+  "sessions": {
+    "s_55dbfcc7cf0fa2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53a55717-7f12-4794-ad1b-dfd24f98dd70",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_8dc4e170080759": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ef6b392-4537-49ca-8a57-3b0b16b99c50",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

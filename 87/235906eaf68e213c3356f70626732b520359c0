@@ -1,0 +1,22 @@
+control-plane/Tests/AppTests/SecurityHeadersTests.swift
+  s_2d493391de3833::t_c72f07a8e1033f 41-60
+control-plane/Sources/App/Middleware/SecurityHeadersMiddleware.swift
+  s_2d493391de3833::t_7aeb3e1a311991 14-22
+  s_2d493391de3833::t_9fa0818f15c31f 49-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "87235906eaf68e213c3356f70626732b520359c0",
+  "prompts": {},
+  "sessions": {
+    "s_2d493391de3833": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "02826c83-f11c-46e9-92a1-3bea16bd80bd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+control-plane/Tests/AppTests/ListCountBatchingTests.swift
+  s_5167272097345f::t_9a9a46def7fc0f 192
+  s_5167272097345f::t_aeca26f6e56f5d 142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6bd6111f395bebf27449485a216280b3504323f9",
+  "prompts": {},
+  "sessions": {
+    "s_5167272097345f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bcab2644-b7db-4346-9fa6-b12515572b94",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

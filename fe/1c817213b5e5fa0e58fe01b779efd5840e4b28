@@ -1,0 +1,46 @@
+docs/deployment/docker-compose.md
+  s_3805ddcc2bf4a3::t_97c37c30df3fb6 196
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  s_3805ddcc2bf4a3::t_607e17e6de5427 266,268-270,273,397,399
+  s_3805ddcc2bf4a3::t_4cc8805701ddc6 4-5,241-247,400,415,422,429,436
+  s_3805ddcc2bf4a3::t_9a67ec833e52e4 1,3,6,10-11,14,21-24,26-29,38-47,52-74,76-79,82-85,87-90,93-103,105-121,126-128,132,134,137-240,248-265,267,271-272,274-364,366-396,398,401-414,417-421,423-428,431-435
+  s_3805ddcc2bf4a3::t_25c648e60d339c 416,430
+  s_3805ddcc2bf4a3::t_df6298e3c47e86 7,365
+helm/strato-control-plane/templates/deployment.yaml
+  s_3805ddcc2bf4a3::t_9371c7f1c0c31d 180-182,185-186
+helm/strato-control-plane/values.yaml
+  s_3805ddcc2bf4a3::t_9371c7f1c0c31d 357-360,499-500
+control-plane/Sources/App/SchemaMigrator.swift
+  s_3805ddcc2bf4a3::t_45be18f41b8336 87,98-105,141-147,149-165,168-178,182-215
+  s_3805ddcc2bf4a3::t_5ee5deb9e92e4d 114-123,126
+  s_3805ddcc2bf4a3::t_2fbec7033890c8 216
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  s_3805ddcc2bf4a3::t_5ee5deb9e92e4d 165,196-208,231-232
+  s_3805ddcc2bf4a3::t_2244bdc8b76300 38-60,63,66-68,72,91-96,110-112,133-134,159,164,166-195,209-222,229
+helm/strato-control-plane/templates/migration-job.yaml
+  s_3805ddcc2bf4a3::t_9371c7f1c0c31d 59-60,62-63
+deploy/compose/.env.example
+  s_3805ddcc2bf4a3::t_97c37c30df3fb6 66-68
+control-plane/Sources/App/configure.swift
+  s_3805ddcc2bf4a3::t_5c78985d21d049 324,334-341,351-355,358-361,906-908
+helm/strato-control-plane/README.md
+  s_3805ddcc2bf4a3::t_9371c7f1c0c31d 121-131,151
+deploy/compose/docker-compose.yml
+  s_3805ddcc2bf4a3::t_97c37c30df3fb6 273-275
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fe1c817213b5e5fa0e58fe01b779efd5840e4b28",
+  "prompts": {},
+  "sessions": {
+    "s_3805ddcc2bf4a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-e6d0-7543-9224-3e5f392b4ed8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+control-plane/web/src/components/vms/vm-identity-card.tsx
+  s_665a3d8fa75374::t_0eeab30428f8f9 63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "852a0409a0f08e518dd803c6c1b91a0168cf5561",
+  "prompts": {},
+  "sessions": {
+    "s_665a3d8fa75374": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2ea-f8b5-75c1-b293-61394c829bf5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

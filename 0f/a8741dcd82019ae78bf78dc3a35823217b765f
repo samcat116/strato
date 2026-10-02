@@ -1,0 +1,94 @@
+control-plane/Sources/App/Models/RoleBinding.swift
+  s_060255e25a3ff5::t_13a6f475c29d14 18,50
+control-plane/Sources/App/Models/AgentWorkloadClaim.swift
+  s_060255e25a3ff5::t_3d1605d929291e 31
+control-plane/Sources/App/Migrations/CurrentSchemaBaseline.swift
+  s_060255e25a3ff5::t_2a1ed26fed9a02 1-5,7-11,15-20,22-44,53-56,154-177
+  s_060255e25a3ff5::t_e3906307f1e3bf 6,12-14
+  s_060255e25a3ff5::t_b5d6dafbbf5500 21,45-52,57-153
+control-plane/Sources/App/configure.swift
+  s_060255e25a3ff5::t_26bc3cd95d2035 377-380
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 111-112
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 106-107
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_060255e25a3ff5::t_c5b2b2b05d14f9 11,61,63
+control-plane/Package.swift
+  s_060255e25a3ff5::t_2a1ed26fed9a02 132-136
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 850
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 365
+control-plane/Sources/App/Models/UserSource.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 8
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_060255e25a3ff5::t_309ca01f4026e2 808-809
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_060255e25a3ff5::t_13a6f475c29d14 721,791
+  s_060255e25a3ff5::t_047f1ae654d1b7 746
+control-plane/Sources/App/SchemaMigrator.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 423-424
+control-plane/Tests/AppResourceTests/VolumeStuckSweepTests.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 77-78
+control-plane/Tests/AppResourceTests/ResourceEventEnumConstraintTests.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 13-14,54-55
+  s_060255e25a3ff5::t_f964708fef99a9 31
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 733
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 581
+control-plane/Sources/App/Services/HierarchyMaintenanceService.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 80
+control-plane/Sources/App/Services/AgentService.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 1366-1367
+control-plane/Tests/AppIAMTests/HierarchyMaintenanceTests.swift
+  s_060255e25a3ff5::t_1704bd1525b30f 286-287,293-300
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 209
+docs/architecture/networking.md
+  s_060255e25a3ff5::t_76ea385c6dff52 727-728,738-744
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_060255e25a3ff5::t_c5b2b2b05d14f9 3843-3873
+  s_060255e25a3ff5::t_311c5323380919 1-3842,3874-3875
+docs/adr/0009-current-schema-baseline.md
+  s_060255e25a3ff5::t_13c9949a34c520 72-74
+  s_060255e25a3ff5::t_e3dd85e000ba07 3-4,19,24-28,31,66-67,75-77
+  s_060255e25a3ff5::t_46d989c849386d 1-2,5-18,20-23,29-30,32-65,68-71,78-90
+control-plane/Tests/AppPlatformTests/SchemaMigratorTests.swift
+  s_060255e25a3ff5::t_48c8a9bf4da9c2 43,243,255,267-268
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 21
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 14-15
+control-plane/Sources/App/Models/StoragePool.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 77-78
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 312-313
+control-plane/Tests/AppPlatformTests/AgentWorkloadClaimEnumConstraintTests.swift
+  s_060255e25a3ff5::t_3d1605d929291e 13-14,79
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 505-506,580-581
+control-plane/Sources/App/Models/Site.swift
+  s_060255e25a3ff5::t_047f1ae654d1b7 173
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_060255e25a3ff5::t_c5b2b2b05d14f9 23-28
+  s_060255e25a3ff5::t_13c9949a34c520 12,39-40,122,124,168,171,174
+  s_060255e25a3ff5::t_e74e722d5f2d4e 1-11,13-22,29-38,41-121,123,125-167,169-170,172-173,175-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0fa8741dcd82019ae78bf78dc3a35823217b765f",
+  "prompts": {},
+  "sessions": {
+    "s_060255e25a3ff5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe806-52b1-76f2-b4a4-c6461ebde37a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

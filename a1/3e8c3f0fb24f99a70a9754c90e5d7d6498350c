@@ -1,0 +1,23 @@
+helm/strato-control-plane/values.yaml
+  s_6e604f65066d21::t_d2edf23ca5ecc3 299,309-310
+helm/strato-control-plane/templates/networkpolicy.yaml
+  s_6e604f65066d21::t_a0d59d60957481 66-72
+helm/strato-control-plane/templates/deployment.yaml
+  s_6e604f65066d21::t_0490133df71da7 157,160-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a13e8c3f0fb24f99a70a9754c90e5d7d6498350c",
+  "prompts": {},
+  "sessions": {
+    "s_6e604f65066d21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "935017a0-a2fe-44a4-9dea-ab102b9e7a33",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

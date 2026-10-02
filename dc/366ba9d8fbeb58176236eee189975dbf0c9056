@@ -1,0 +1,90 @@
+control-plane/Sources/App/Migrations/ReplaceVolumeReplicaDatasetPath.swift
+  s_7bf36251baaeb0::t_ff13b843900a60 38-39,72-73
+  s_7bf36251baaeb0::t_0a46c55413734f 1-37,40-55,64-71,74-75
+  s_7bf36251baaeb0::t_73a236501dcf61 56-63
+docs/operations/volume-replica-cutover.md
+  s_7bf36251baaeb0::t_3f53f388112a24 16,33-34,46
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_7bf36251baaeb0::t_0a46c55413734f 1336
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_7bf36251baaeb0::t_de867b7dc28861 870-872
+  s_7bf36251baaeb0::t_36d671421a4d9e 873
+  s_7bf36251baaeb0::t_fb53db856911b7 861,869
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_7bf36251baaeb0::t_36d671421a4d9e 274-276
+  s_7bf36251baaeb0::t_57a1cd5423f265 263,365-366,380-381,397-398,410-411,439-440,533-534,576-577
+  s_7bf36251baaeb0::t_73a236501dcf61 248
+  s_7bf36251baaeb0::t_8dafb4a5bfa88b 282-323
+  s_7bf36251baaeb0::t_fbba201e58d50a 324-330,332-340,342-348
+  s_7bf36251baaeb0::t_6b49558c3e4314 331,341
+control-plane/Sources/App/Services/VolumeService.swift
+  s_7bf36251baaeb0::t_73a236501dcf61 36,112
+  s_7bf36251baaeb0::t_fb53db856911b7 38
+  s_7bf36251baaeb0::t_0a46c55413734f 133,137,139,142,144,146,149-150,152,155,159-161
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_7bf36251baaeb0::t_8ba8119fb0bc96 33-36,42,49-51,54,343-345,374,377-379,397,399,402,422,425,429,447,459
+control-plane/Sources/App/Models/VolumeReplica.swift
+  s_7bf36251baaeb0::t_73a236501dcf61 18-19
+  s_7bf36251baaeb0::t_0a46c55413734f 3,35-38,60,67
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_7bf36251baaeb0::t_36d671421a4d9e 508,516
+control-plane/Sources/App/openapi.yaml
+  s_7bf36251baaeb0::t_59cf534404062f 10814-10816,10819-10820,10827-10881
+  s_7bf36251baaeb0::t_3f53f388112a24 10754
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_7bf36251baaeb0::t_3f53f388112a24 640-642
+docs/architecture/wire-protocol.md
+  s_7bf36251baaeb0::t_4fb1bc41131674 53,88-97,225-227,247-251
+docs/architecture/agent.md
+  s_7bf36251baaeb0::t_3f53f388112a24 808-810
+control-plane/Sources/App/Models/Volume.swift
+  s_7bf36251baaeb0::t_0a46c55413734f 581,588
+docs/architecture/distributed-storage.md
+  s_7bf36251baaeb0::t_4fb1bc41131674 135,142-150,194,205-208
+  s_7bf36251baaeb0::t_0fd828fd440aa4 191-192,364-367,444-447,451
+  s_7bf36251baaeb0::t_fb53db856911b7 137-140
+  s_7bf36251baaeb0::t_37c3f272d30101 136
+  s_7bf36251baaeb0::t_4ab636c0af70c7 141
+control-plane/web/src/types/openapi.ts
+  s_7bf36251baaeb0::t_f100e6ebdaf5bb 6246
+  s_7bf36251baaeb0::t_c7d19f58d59ee5 6278-6279,6285-6306
+agent/Sources/StratoAgent/Agent.swift
+  s_7bf36251baaeb0::t_73a236501dcf61 4013-4014
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_7bf36251baaeb0::t_0a46c55413734f 172,181,193,227,274,313
+  s_7bf36251baaeb0::t_3f53f388112a24 5-8
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_7bf36251baaeb0::t_0a46c55413734f 150,167
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_7bf36251baaeb0::t_57a1cd5423f265 384-385,418-419,445-446
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_7bf36251baaeb0::t_57a1cd5423f265 147-148,217-218,239-240,270-271,325-326,347-348,384-385,422-423
+docs/architecture/storage.md
+  s_7bf36251baaeb0::t_4fb1bc41131674 130,132-142,236-242,776
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_7bf36251baaeb0::t_0a46c55413734f 1945-1948,1968
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_7bf36251baaeb0::t_3f53f388112a24 58-62
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_7bf36251baaeb0::t_73a236501dcf61 41-42,99-103
+docs/operations/vm-boot-volume-cutover.md
+  s_7bf36251baaeb0::t_3f53f388112a24 39,48
+control-plane/Sources/App/configure.swift
+  s_7bf36251baaeb0::t_0a46c55413734f 431-434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dc366ba9d8fbeb58176236eee189975dbf0c9056",
+  "prompts": {},
+  "sessions": {
+    "s_7bf36251baaeb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00653-14e3-7c81-8bae-df58c921d869",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

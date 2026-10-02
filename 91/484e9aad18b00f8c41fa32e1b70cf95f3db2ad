@@ -1,0 +1,23 @@
+helm/strato-control-plane/values.yaml
+  s_db16b30eee15e6::t_ed3fc8ec9a430c 743-751,753
+control-plane/Sources/App/configure.swift
+  s_db16b30eee15e6::t_72699a350ca32e 441-444
+control-plane/Sources/App/Migrations/MigratePendingTokensToEnrollments.swift
+  s_db16b30eee15e6::t_f35ac76f649956 1-127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "91484e9aad18b00f8c41fa32e1b70cf95f3db2ad",
+  "prompts": {},
+  "sessions": {
+    "s_db16b30eee15e6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57e2fd00-5fd9-4c09-b8b2-1248afa3c8a4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

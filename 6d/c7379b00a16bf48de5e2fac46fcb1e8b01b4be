@@ -1,0 +1,30 @@
+helm/strato-control-plane/values.yaml
+  s_f7434472ebe405::t_ed16e8b8363c27 249-252,254
+  s_f7434472ebe405::t_2faf8fe7e38b25 398-400,412-415
+  s_f7434472ebe405::t_588de27885a9ae 267-270,275,283
+helm/strato-control-plane/templates/networkpolicy.yaml
+  s_f7434472ebe405::t_c86f8a507965c8 74-102
+.github/workflows/helm-test.yml
+  s_f7434472ebe405::t_4b16db9665cbbc 157-162
+  s_f7434472ebe405::t_955a2271f18f11 183-208
+helm/strato-control-plane/templates/spicedb-schema-job.yaml
+  s_f7434472ebe405::t_68376f9d9fea05 35
+helm/strato-control-plane/templates/prometheus-configmap.yaml
+  s_f7434472ebe405::t_11cbd23b334a9f 37-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6dc7379b00a16bf48de5e2fac46fcb1e8b01b4be",
+  "prompts": {},
+  "sessions": {
+    "s_f7434472ebe405": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05768f38-36f7-4f4a-b281-20e830e6ac01",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

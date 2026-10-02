@@ -1,0 +1,40 @@
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 1-196
+control-plane/Tests/AppTests/SecurityHeadersTests.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 30,34-43,72-78,83-85
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 822-935
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 339-347
+control-plane/Sources/App/Migrations/AddVMHotColumnIndexes.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 1-31
+control-plane/Sources/App/configure.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 83-99,120-122,126-133,213-214
+  s_b7aa8b7679a04b::t_009574abcfe22f 215
+control-plane/Sources/App/Services/RateLimitService.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 1-178
+docs/.vitepress/config.mts
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 52
+docs/deployment/rate-limiting.md
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 1-74
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 16-19
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_b7aa8b7679a04b::t_eb88c0e3830fb3 1-291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4fb05ae2c52e57a1c1ecdafde5c61d721732b00a",
+  "prompts": {},
+  "sessions": {
+    "s_b7aa8b7679a04b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b37436d7-1284-4fbc-b3d4-82b79756d7c2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

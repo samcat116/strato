@@ -1,0 +1,21 @@
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_6be939981236cc::t_5830be5848793e 97-101,104-108,125-128,135
+control-plane/Sources/App/Services/VolumeService.swift
+  s_6be939981236cc::t_e1eb2237851492 156-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e83ef9e2cfb8a241e0903fb290e5fdb9008f58e9",
+  "prompts": {},
+  "sessions": {
+    "s_6be939981236cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "de13cf51-5a0e-4903-b04f-3adbbf89fe2b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

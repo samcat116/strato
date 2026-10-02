@@ -1,0 +1,33 @@
+control-plane/Sources/App/Models/vm.swift
+  s_6f75b09edb6b7f::t_47c65736f7355e 294-304,307-308,327-330
+control-plane/Sources/App/Models/Sandbox.swift
+  s_c5357d65394504::t_4ee41e654196f8 224-228,231-232,236,255-256
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_c5357d65394504::t_b44fad3e6b833f 551-588
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_c5357d65394504::t_3ea2ffe8b3ce39 166-170,172-175,1265-1301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "a71a7649c3f72cb4a4f594913335fae003dff003",
+  "prompts": {},
+  "sessions": {
+    "s_6f75b09edb6b7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9df828b1-80f1-4608-8d42-d39bf083238a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_c5357d65394504": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89963455-e155-447e-bc92-b28e6d02812c",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_4489372205b9cb::t_c0604cc6b134ed 333-341
+control-plane/Tests/AppTests/SecurityHeadersTests.swift
+  s_4489372205b9cb::t_1e818040e086ef 30,34-43
+  s_4489372205b9cb::t_d22578a05e5675 72-78,83-85
+control-plane/Sources/App/configure.swift
+  s_4489372205b9cb::t_f5c40c1ecc9aca 98-100,104-110
+  s_4489372205b9cb::t_36a00badf3fda8 111
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_4489372205b9cb::t_390dfcfed4247c 16-19
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_4489372205b9cb::t_1555cb4d68a9c7 866
+  s_4489372205b9cb::t_4ad244ff0dddcd 891
+  s_4489372205b9cb::t_1cf8e6fd478ecc 822-865,867-890,892-935
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f0d2c0c73480ca6420b07acaaaeca46b70af7211",
+  "prompts": {},
+  "sessions": {
+    "s_4489372205b9cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67076526-9caa-455f-9aa8-d5ab927c5cd4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_bd516ccae91710::t_f83228c1655249 638-642
+  s_bd516ccae91710::t_a26d832d8d3a9b 613-615,617-618,623-624,626-628,631-637,643,661-685
+  s_bd516ccae91710::t_f71860dc87b389 686
+control-plane/web/src/components/projects/transfer-project-dialog.tsx
+  s_bd516ccae91710::t_937f010446f43b 42-44,46
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_bd516ccae91710::t_d0061fc2159138 401-480
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f4cf57d3fb155d0cf089bfa3a9af31e17b272001",
+  "prompts": {},
+  "sessions": {
+    "s_bd516ccae91710": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44061ba0-985d-4af7-89df-9953978662e0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

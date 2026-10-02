@@ -1,0 +1,43 @@
+control-plane/Sources/App/IAM/PolicySetVersionService.swift
+  s_8dc4e170080759::t_d4c9f13f2d00e7 27-38,41-62,64-67,69-71,74,78
+  s_8dc4e170080759::t_c3a3733eaefcc0 10-11,13
+  s_8dc4e170080759::t_e9f4d8ed667430 63
+control-plane/Sources/App/IAM/RoleRegistrySync.swift
+  s_8dc4e170080759::t_e1ab7f180387e9 10-16,19-32,50-51,73-74,100-103
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_8dc4e170080759::t_15f16ebf284e00 193
+  s_8dc4e170080759::t_804e2d1d641d8d 266
+  s_8dc4e170080759::t_df2c39a0cb6aa4 231,233-234
+docs/architecture/iam.md
+  s_8dc4e170080759::t_fb61fcd8f63d74 153-160
+control-plane/Sources/App/IAM/GuardrailVocabulary.swift
+  s_8dc4e170080759::t_7d257167435a45 185
+  s_8dc4e170080759::t_4284047bd7e639 206,208
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_8dc4e170080759::t_d3ee698daede87 285-290,297-303
+  s_8dc4e170080759::t_fdd97d363826ab 90-107,112-114
+  s_8dc4e170080759::t_f49979d3d48114 68-69,142
+control-plane/Tests/AppTests/IAMPolicySetVersionTests.swift
+  s_8dc4e170080759::t_83157b769ebbed 189-198
+  s_8dc4e170080759::t_c4b29f9ab0a81d 69-117
+control-plane/Tests/AppTests/IAMGuardrailTests.swift
+  s_8dc4e170080759::t_9582bcaa50740d 119-126,128,130,136,146-178
+  s_8dc4e170080759::t_c5750fae019d01 179-180,444-478
+  s_8dc4e170080759::t_9d41ec369c2f6e 181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "f135bb626cedbf3304b6749d1eb0c549d879b0f0",
+  "prompts": {},
+  "sessions": {
+    "s_8dc4e170080759": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ef6b392-4537-49ca-8a57-3b0b16b99c50",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

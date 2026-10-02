@@ -1,0 +1,126 @@
+control-plane/Sources/App/configure.swift
+  s_04668c00218957::t_f21ef6fbf28c25 431-433
+sandbox-guest/init/src/linux/vsock.rs
+  s_04668c00218957::t_4ccc0d1f97ef34 447-451
+  s_04668c00218957::t_3fe686024b52b2 163-164,231-232,235,271-288,379-423,426-428,431-434,436-446,452-465,467-487
+control-plane/Sources/App/Migrations/AddSandboxRestoreLineage.swift
+  s_04668c00218957::t_29e9540f956809 5-7
+  s_04668c00218957::t_f21ef6fbf28c25 1-4,8-28
+control-plane/web/src/app/(dashboard)/sandboxes/detail/page.tsx
+  s_04668c00218957::t_6caca12c048b15 157-160,236-238
+  s_04668c00218957::t_fdd304bcfef8cc 13,24,161-163,234-235,239-243,373-375
+  s_32489a5bc16f1b::t_575af1d897064d 376
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_04668c00218957::t_5608ba0fb8fb29 810-814,819-821,824-826
+  s_04668c00218957::t_c29a674104b41a 387
+  s_04668c00218957::t_05ad51d855143e 385-386,823
+  s_04668c00218957::t_78e9fda3149ffb 417-418,460
+  s_04668c00218957::t_3a317736ce4524 249-252,267-291,300-325,388-389,401,407-412,414,455-457
+  s_04668c00218957::t_ef156dfa3f688e 292-299
+  s_04668c00218957::t_67be2f9e769f1d 815-818,822
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_04668c00218957::t_b0f4c07990cbcd 93-96,103-104,111
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_04668c00218957::t_28015558d92035 352
+  s_04668c00218957::t_0481f268c43acb 64,79,277-280,286-351,353-406
+  s_04668c00218957::t_1894196f6a7e00 65-66,78,281-285
+  s_04668c00218957::t_0ffd63dd842315 407
+sandbox-guest/init/src/logbuf.rs
+  s_04668c00218957::t_4ccc0d1f97ef34 128-137,238-246
+  s_55dbfcc7cf0fa2::t_1d3baca5d4bd6f 247
+shared/Sources/StratoShared/WireProtocol.swift
+  s_04668c00218957::t_b0f4c07990cbcd 141-146,200-205
+  s_04668c00218957::t_c154cb67d7aed3 206-207
+control-plane/web/src/components/sandboxes/sandbox-snapshots-card.tsx
+  s_04668c00218957::t_6caca12c048b15 93-97,102-104,130-133,138-139,153-154
+  s_04668c00218957::t_fdd304bcfef8cc 1-92,98-101,105-129,134-137,140-152,155-176
+control-plane/web/src/components/sandboxes/index.ts
+  s_04668c00218957::t_fdd304bcfef8cc 7
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_04668c00218957::t_67be2f9e769f1d 381-382,411,428
+  s_04668c00218957::t_3e255c80249ce1 383-410,412-427,429-432
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_04668c00218957::t_05ad51d855143e 736-740
+  s_04668c00218957::t_7e3064e7eadb1c 966-967
+  s_04668c00218957::t_e662f94f6a4f1d 298-307,557-572,663-735,741-748,752-815
+  s_04668c00218957::t_7020f1ba1c5f7a 749-751,968
+  s_04668c00218957::t_e71787e7a666c4 816
+shared/Sources/StratoShared/SandboxModels.swift
+  s_04668c00218957::t_b0f4c07990cbcd 5-18,55-57,68-69,80
+sandbox-guest/init/src/protocol.rs
+  s_04668c00218957::t_57c9ff7e036557 348-351
+  s_04668c00218957::t_ef156dfa3f688e 135-137
+  s_04668c00218957::t_ab020836942f2a 141-154,225-227,342-347
+  s_04668c00218957::t_aa606f3dac7a0f 352-353
+control-plane/Sources/App/Services/AgentService.swift
+  s_04668c00218957::t_05ad51d855143e 1849-1852
+  s_04668c00218957::t_c8adc442dd9033 1841-1848,1853,1887,1890-1891,2704,2707-2725,2733-2734,2743
+  s_04668c00218957::t_5ea1bbd212d7c5 1856-1860,1862-1872
+  s_04668c00218957::t_ef156dfa3f688e 2701-2702,2726-2732
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_04668c00218957::t_f4990c860e21c9 23-26
+agent/Tests/StratoAgentTests/SandboxControlProtocolTests.swift
+  s_04668c00218957::t_38f2f61fde77cf 177-180,187-190
+  s_04668c00218957::t_0ac1325413c4d3 173-176,181-186,191-201
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_04668c00218957::t_5608ba0fb8fb29 290-291,293,398-405,472-476
+  s_04668c00218957::t_67be2f9e769f1d 289,292
+  s_04668c00218957::t_e0b9c6170371a8 477
+control-plane/web/src/types/api.ts
+  s_04668c00218957::t_deadb0f7287874 676-677,687-690,703-721
+  s_04668c00218957::t_ea3a8072d0f57c 722-723
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_04668c00218957::t_0a3a67de45b6e1 90-121,153-155,209-230,235-245,335-336,378-379
+  s_04668c00218957::t_7e3064e7eadb1c 71-72
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_04668c00218957::t_0ac1325413c4d3 52-59
+docs/architecture/sandboxes.md
+  s_04668c00218957::t_54b0f42dd69b0d 593-612,616-639,648
+  s_04668c00218957::t_4ccc0d1f97ef34 613-615
+  s_04668c00218957::t_7e3064e7eadb1c 570-571
+  s_04668c00218957::t_67be2f9e769f1d 640-644
+control-plane/web/src/lib/hooks/index.ts
+  s_04668c00218957::t_fdd304bcfef8cc 6
+control-plane/web/src/lib/hooks/use-sandboxes.ts
+  s_04668c00218957::t_deadb0f7287874 25-33
+control-plane/web/src/lib/api/sandboxes.ts
+  s_04668c00218957::t_deadb0f7287874 13,66-67
+  s_04668c00218957::t_2702b97562fed1 68-69
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_04668c00218957::t_0ac1325413c4d3 106-126
+control-plane/Sources/App/Models/Sandbox.swift
+  s_04668c00218957::t_f21ef6fbf28c25 69,72-74,128-129,143,241-244,254-255,280,302
+  s_04668c00218957::t_29e9540f956809 70-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "77812a5860a284627776a422ecbea08be1e4d765",
+  "prompts": {},
+  "sessions": {
+    "s_04668c00218957": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7870-a7d6-7432-b876-995018118ce3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_55dbfcc7cf0fa2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53a55717-7f12-4794-ad1b-dfd24f98dd70",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

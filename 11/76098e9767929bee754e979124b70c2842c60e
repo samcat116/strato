@@ -1,0 +1,32 @@
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_2380b6feb5f57e::t_15472abef394f5 196-202
+agent/Sources/StratoAgent/Agent.swift
+  s_2380b6feb5f57e::t_0a104c87cb38e2 178,182,187
+  s_2380b6feb5f57e::t_1b2dac27541f5c 86-90
+  s_2380b6feb5f57e::t_45f048f764c09d 564,566,570-574
+  s_6b79f3234a0fa6::t_7f4f195cac7b57 575
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1176098e9767929bee754e979124b70c2842c60e",
+  "prompts": {},
+  "sessions": {
+    "s_2380b6feb5f57e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8ff1cb4-c797-4227-a659-a38402502833",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_6b79f3234a0fa6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee0b4a12-ecbf-4742-92d3-87fdc50825fa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

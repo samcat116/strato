@@ -1,0 +1,34 @@
+control-plane/web/src/app/(dashboard)/admin/audit/page.tsx
+  s_f4b43a0666de3e::t_d4b596d3ecf91b 1-291
+control-plane/web/src/components/audit/audit-event-table.tsx
+  s_f4b43a0666de3e::t_3e13e98d094994 1-181
+control-plane/web/src/lib/hooks/use-audit-events.ts
+  s_f4b43a0666de3e::t_1ca6272292a65f 1-22
+control-plane/web/src/types/api.ts
+  s_f4b43a0666de3e::t_5691319928b10e 797-826
+control-plane/web/src/components/layout/nav.ts
+  s_f4b43a0666de3e::t_9d082bc5f75510 56-59
+  s_f4b43a0666de3e::t_426bd8688a778b 15
+control-plane/web/src/lib/hooks/index.ts
+  s_f4b43a0666de3e::t_cb32495e909f5a 92
+control-plane/web/src/lib/api/index.ts
+  s_f4b43a0666de3e::t_42b1efeb518564 21-22
+control-plane/web/src/lib/api/audit-events.ts
+  s_f4b43a0666de3e::t_8683c2d56013b1 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1728902a3437313705c1312eca8b8976400a2a4d",
+  "prompts": {},
+  "sessions": {
+    "s_f4b43a0666de3e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53b45a7a-5da9-4492-b3e8-1caaa0491d8a",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

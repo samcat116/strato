@@ -1,0 +1,97 @@
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_e071c331c9a3b5::t_5b67083fb39856 92
+control-plane/Sources/App/Bootstrap/StartupReconciliation.swift
+  s_e071c331c9a3b5::t_8f5d60832493cf 50-54,67-68
+control-plane/Tests/AppIdentityTests/SecretsEncryptionServiceTests.swift
+  s_e071c331c9a3b5::t_4485d7e6aeb59e 284,328-334
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_e071c331c9a3b5::t_c8de2ea6a2bec5 187,216
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_e071c331c9a3b5::t_9efbbea32d8eeb 415
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_e071c331c9a3b5::t_5b67083fb39856 382
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_e071c331c9a3b5::t_f182fa8c81fbc9 330,336
+  s_e071c331c9a3b5::t_fb8edc4789451c 61,68
+  s_e071c331c9a3b5::t_5b67083fb39856 157,186,188,194,207,328,344
+control-plane/Tests/AppPlatformTests/ResourceFinalizerTests.swift
+  s_e071c331c9a3b5::t_1ed3c5d9ac6634 107,132,307,330
+  s_e071c331c9a3b5::t_5b1f8666e06a2c 104,121-125
+control-plane/Tests/AppResourceTests/QuotaUsageAggregatorTests.swift
+  s_e071c331c9a3b5::t_c8de2ea6a2bec5 51-53,55-58,88-94,99-101,106-108,119-122,125,142
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_e071c331c9a3b5::t_ff2264c4e1118e 423-424
+  s_e071c331c9a3b5::t_c2cc1a26158d97 159-163,283-285
+  s_e071c331c9a3b5::t_6231fbec63bae0 415,425-429,446,455-503
+  s_e071c331c9a3b5::t_b1b184e9a6b97d 504-505
+control-plane/Sources/App/Migrations/AddRunResourceEventMutation.swift
+  s_e071c331c9a3b5::t_c8de2ea6a2bec5 1-33
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  s_e071c331c9a3b5::t_8b61c017fd0371 270-271
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_e071c331c9a3b5::t_02f59ad38b45f8 98-114,244,250,252-255
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  s_e071c331c9a3b5::t_d495eace778838 158
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_e071c331c9a3b5::t_02f59ad38b45f8 190
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_e071c331c9a3b5::t_9efbbea32d8eeb 12,68-75
+  s_e071c331c9a3b5::t_003162f83ddbaa 76-78
+  s_e071c331c9a3b5::t_7deb3f4ab2a60b 79-86
+.github/workflows/main-tests.yaml
+  s_e071c331c9a3b5::t_0cdbfeb4a84154 280,283-284
+  s_e071c331c9a3b5::t_f569ae6f444b0c 285,304
+  s_e071c331c9a3b5::t_c2cc1a26158d97 281,286
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_e071c331c9a3b5::t_0cdbfeb4a84154 370
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_e071c331c9a3b5::t_c8de2ea6a2bec5 439-440,442-445
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_e071c331c9a3b5::t_5b67083fb39856 402,436
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_e071c331c9a3b5::t_3755039ed1bd34 484,1281
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_e071c331c9a3b5::t_c8de2ea6a2bec5 772
+control-plane/Sources/App/Controllers/VMController.swift
+  s_e071c331c9a3b5::t_02f59ad38b45f8 1447
+control-plane/Tests/AppIAMTests/VolumeAuthorizationTests.swift
+  s_e071c331c9a3b5::t_c67acf8af8efb9 69
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_e071c331c9a3b5::t_3755039ed1bd34 493
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_e071c331c9a3b5::t_0cdbfeb4a84154 288-290,797-798
+control-plane/Tests/AppIdentityTests/ServiceAccountAPITests.swift
+  s_e071c331c9a3b5::t_4485d7e6aeb59e 416-431
+control-plane/Tests/AppIAMTests/CrossProjectContainmentTests.swift
+  s_e071c331c9a3b5::t_c67acf8af8efb9 180-181,188
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_e071c331c9a3b5::t_5b67083fb39856 275-276,278-279,283-284,286
+  s_e071c331c9a3b5::t_fb8edc4789451c 273-274,277,280-282,285
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_e071c331c9a3b5::t_02f59ad38b45f8 224
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_e071c331c9a3b5::t_5b67083fb39856 1664-1668,1670
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_e071c331c9a3b5::t_c8de2ea6a2bec5 177-181
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  s_e071c331c9a3b5::t_4c91f975bd08fc 122-126
+  s_e071c331c9a3b5::t_c67acf8af8efb9 58-60,67,71,78
+control-plane/Tests/AppResourceTests/ResourceEventTests.swift
+  s_e071c331c9a3b5::t_fa2076c3ec8cde 237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "187399c39be0654caf1c554a4e41488a23e4c166",
+  "prompts": {},
+  "sessions": {
+    "s_e071c331c9a3b5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05b05-a046-7f73-8666-3ffb6799e96e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

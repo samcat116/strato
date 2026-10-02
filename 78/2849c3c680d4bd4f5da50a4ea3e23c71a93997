@@ -1,0 +1,25 @@
+control-plane/Sources/App/Services/ImageValidationService.swift
+  s_066b55920da146::t_17144f693b5117 146
+  s_066b55920da146::t_20ca356b520abd 180-184,198
+  s_066b55920da146::t_9c44b73e53505c 125-145,147,165
+control-plane/Tests/AppTests/ImageValidationServiceTests.swift
+  s_066b55920da146::t_21c25f1355869d 360-395
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_066b55920da146::t_944e43d8f3a1a3 262-307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "782849c3c680d4bd4f5da50a4ea3e23c71a93997",
+  "prompts": {},
+  "sessions": {
+    "s_066b55920da146": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "66d217b0-a1eb-472b-bddf-6de6ee91db37",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_3d8fde8278f186::t_982a6951896453 271-311
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_3d8fde8278f186::t_74f398e252b342 201
+  s_3d8fde8278f186::t_98dfbe8bbcdb22 222-234
+  s_3d8fde8278f186::t_9c3d5c36107855 352-373
+  s_3d8fde8278f186::t_f147f6d5c527ed 106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0c9866d1c13992b57ae16d454ee946bd5234a283",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

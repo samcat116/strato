@@ -1,0 +1,53 @@
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_21a889dc5d67dd::t_2949b19a9263d9 215,490-493
+  s_21a889dc5d67dd::t_e0e9e3720b5b6c 26-28,210-214,216-223,307,482-489,494-506,508-511
+  s_21a889dc5d67dd::t_5ebbe082f47ba5 507
+  s_4a9d432a686ec2::t_d6d199dc1e295e 512
+agent/Sources/StratoAgentCore/MetadataService/EC2MetadataRenderer.swift
+  s_21a889dc5d67dd::t_5a5ca91c8dfb95 128-141,174-198,204-228,233-256,479-489
+  s_21a889dc5d67dd::t_911374de9c1191 199-203,229-232
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_21a889dc5d67dd::t_302970a99f44f2 94-101,359-360
+docs/architecture/guest-identity.md
+  s_21a889dc5d67dd::t_a06c06b0b1fd8e 419-426
+agent/Sources/StratoAgentCore/MetadataService/FirecrackerMMDSInterfacePlan.swift
+  s_21a889dc5d67dd::t_2949b19a9263d9 1-25
+docs/architecture/networking.md
+  s_21a889dc5d67dd::t_a06c06b0b1fd8e 40-46,209-210
+agent/Tests/StratoAgentTests/NetworkAttachmentTests.swift
+  s_21a889dc5d67dd::t_2949b19a9263d9 2,69-88
+  s_4a9d432a686ec2::t_e3a3f4457d79c6 89-90
+agent/Tests/StratoAgentTests/EC2MetadataRendererTests.swift
+  s_21a889dc5d67dd::t_615d211504ee04 54-55,57-60,196-252
+  s_21a889dc5d67dd::t_e4ab9ed9aa778c 56
+docs/architecture/agent.md
+  s_21a889dc5d67dd::t_a06c06b0b1fd8e 1251-1279
+agent/Sources/StratoAgent/Agent.swift
+  s_21a889dc5d67dd::t_1fd7cc5872cd2e 2668-2672,3770-3777,5895-5926
+  s_21a889dc5d67dd::t_88f0de428fc725 4929-4931
+  s_21a889dc5d67dd::t_19dbf2b31605e8 5927
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b0a7eedd7fc091c3878d51856bb9944ef35461d0",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_4a9d432a686ec2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9b4d-7820-8fbd-31ef7b1fe416",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

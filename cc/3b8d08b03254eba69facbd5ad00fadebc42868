@@ -1,0 +1,32 @@
+control-plane/web/src/app/(dashboard)/dns-zones/page.tsx
+  s_0aba3c58b7f779::t_e9288217db2b5c 1-6,8-393
+  s_0aba3c58b7f779::t_c6ce8195126627 7
+control-plane/web/src/app/(dashboard)/load-balancers/page.tsx
+  s_0aba3c58b7f779::t_e0eb1a98a714e4 5,13-15,17,23-25,33-37,47-60,63,69,78-82,85-89,93-100,102-108,111-115,117-156,159,161-165,167-184,187-214,218-222,224-225,229-265,268-296,298,301-322,325-356
+  s_0aba3c58b7f779::t_c6ce8195126627 7
+control-plane/web/src/components/layout/nav.ts
+  s_0aba3c58b7f779::t_53a056bcbe73a0 22,74-77
+control-plane/web/src/app/(dashboard)/floating-ips/page.tsx
+  s_0aba3c58b7f779::t_e9288217db2b5c 1-6,8-332
+  s_0aba3c58b7f779::t_c6ce8195126627 7
+control-plane/web/src/components/networking/select-field.tsx
+  s_0aba3c58b7f779::t_c6ce8195126627 1-32
+control-plane/web/src/components/layout/nav.test.ts
+  s_0aba3c58b7f779::t_53a056bcbe73a0 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cc3b8d08b03254eba69facbd5ad00fadebc42868",
+  "prompts": {},
+  "sessions": {
+    "s_0aba3c58b7f779": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0009f-5844-7ef1-adf6-0b9feeaf6e4e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

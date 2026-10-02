@@ -1,0 +1,52 @@
+control-plane/Sources/App/Services/VolumeService.swift
+  s_753b8c92d921a6::t_1cf5fa6b1c7df9 416-420
+control-plane/Tests/AppTests/VolumeSnapshotGuardTests.swift
+  s_753b8c92d921a6::t_3f5e7bc3b9150c 1-113
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_753b8c92d921a6::t_8d221293022ec9 629-631,633-639,642
+docs/architecture/agent.md
+  s_753b8c92d921a6::t_47619030f7ee93 251-257
+  s_753b8c92d921a6::t_5a540f8ec8aa33 222-223
+control-plane/Tests/AppTests/VolumeStatusTests.swift
+  s_753b8c92d921a6::t_5c6c171b7944ef 20-32
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_753b8c92d921a6::t_69f3cfddc3d98d 47-59
+control-plane/web/src/components/volumes/volume-actions.tsx
+  s_753b8c92d921a6::t_cce4ec69122db3 85-87
+docs/architecture/wire-protocol.md
+  s_753b8c92d921a6::t_77e19c70e23b19 78-82
+agent/Sources/StratoAgent/QEMUService.swift
+  s_753b8c92d921a6::t_6aa93eed6d4418 681-686
+agent/Sources/StratoAgent/Agent.swift
+  s_753b8c92d921a6::t_23d7b28453901d 3340-3344,3350-3351,3366
+  s_753b8c92d921a6::t_c53e811a6eb698 3314-3336
+  s_753b8c92d921a6::t_0edfef813f5675 3339
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_753b8c92d921a6::t_f15631bc80e5e3 1044-1052
+control-plane/Sources/App/Models/Volume.swift
+  s_753b8c92d921a6::t_bfc9ed36dbb170 231-239,241
+docs/architecture/storage.md
+  s_753b8c92d921a6::t_d4951631652dd3 200-215
+control-plane/web/src/components/volumes/create-snapshot-dialog.tsx
+  s_753b8c92d921a6::t_8b344c554ac095 107-108
+  s_753b8c92d921a6::t_ea1eb3dc22c852 45-46,48
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_753b8c92d921a6::t_c8582a3697b5e9 270-271
+  s_753b8c92d921a6::t_8011e0656ad94a 269,382
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "4401d20b3f6e054234ae6feaec820ade5aec862b",
+  "prompts": {},
+  "sessions": {
+    "s_753b8c92d921a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "52d36f60-b53a-43dc-b193-d462ef1bde61",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

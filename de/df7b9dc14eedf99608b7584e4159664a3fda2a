@@ -1,0 +1,32 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_45f5bd5bc03fe4::t_dc37a7c8a194f3 716-718
+  s_45f5bd5bc03fe4::t_75c14f8ada0135 623-626,667-669
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_45f5bd5bc03fe4::t_e54388c8195b70 246,248,262
+  s_45f5bd5bc03fe4::t_5d3dd56b23c9f0 8-9,230
+  s_45f5bd5bc03fe4::t_43b683997a50c1 34-38,51-52,54,58-60,63-64,130-131,134,136-144,223,245,247,249-261,263,265
+  s_45f5bd5bc03fe4::t_b2bef9246ed41b 264
+  s_45f5bd5bc03fe4::t_dd0be25763c2e9 266
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_45f5bd5bc03fe4::t_75c14f8ada0135 668-670
+control-plane/Tests/AppResourceTests/VMCommandExecutionTests.swift
+  s_45f5bd5bc03fe4::t_75c14f8ada0135 12-24,81-89,91-103,105-120
+  s_45f5bd5bc03fe4::t_99c787e5f5670d 80,90,104
+  s_45f5bd5bc03fe4::t_d42715c94c7122 121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dedf7b9dc14eedf99608b7584e4159664a3fda2a",
+  "prompts": {},
+  "sessions": {
+    "s_45f5bd5bc03fe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdff-9a39-74b3-8ce3-c403f19183b6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

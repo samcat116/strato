@@ -1,0 +1,21 @@
+sandbox-guest/init/src/guest_agent/exec.rs
+  s_bb7e6e545a0e3f::t_25a64e982636f8 17,33-36,227-228,231-235,285-290,449-467
+  s_bb7e6e545a0e3f::t_5063c38519bd2a 229-230
+  s_bb7e6e545a0e3f::t_bb08dd01ed52a5 468
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "000f7f8ffe1599e8ee867249de6540fbdbbeb4c0",
+  "prompts": {},
+  "sessions": {
+    "s_bb7e6e545a0e3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-0ea2-7e01-97ae-80ada0783554",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

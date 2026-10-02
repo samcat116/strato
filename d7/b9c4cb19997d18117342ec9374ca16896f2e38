@@ -1,0 +1,47 @@
+agent/Sources/StratoAgentCore/MetadataService/FirecrackerMMDSInterfacePlan.swift
+  s_21a889dc5d67dd::t_4ea1d47d8ff5ad 22-23,25,34-38
+  s_21a889dc5d67dd::t_9a2bad6acc2c96 26,39
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_21a889dc5d67dd::t_462f64107e853b 29-32,177-180,182,201,291,462-466,479,522,632
+  s_21a889dc5d67dd::t_5b3d9833c7c2ae 492-496
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_21a889dc5d67dd::t_86e5400fd3568e 90-94,514-515,542-543,573-574,599-600,612-645
+  s_21a889dc5d67dd::t_8551b6a93cb3fa 646
+agent/Tests/StratoAgentTests/NetworkAttachmentTests.swift
+  s_21a889dc5d67dd::t_6fd4f5e1d9dc60 82-83,93-94
+  s_21a889dc5d67dd::t_1f79847145ed0b 84-85,95-96
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_21a889dc5d67dd::t_5b3d9833c7c2ae 102-107,382
+  s_21a889dc5d67dd::t_7326c091401aed 383
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_21a889dc5d67dd::t_2d9519df12d09e 534-536
+  s_21a889dc5d67dd::t_0bfe0874597ed2 511-525
+  s_21a889dc5d67dd::t_b12f3930f707e7 526-527
+control-plane/Sources/App/Controllers/VMController.swift
+  s_21a889dc5d67dd::t_2d9519df12d09e 925-929,933
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_21a889dc5d67dd::t_4ea1d47d8ff5ad 70-78,86-87,97,112,152-154,157
+agent/Sources/StratoAgent/Agent.swift
+  s_21a889dc5d67dd::t_5b3d9833c7c2ae 3840-3844
+  s_21a889dc5d67dd::t_9e4c9a1d2fe370 3685-3697,3798-3803,3805-3806,3823-3829,5024-5029,5036-5037,5207,5210-5211,5225,5245-5250
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_21a889dc5d67dd::t_86e5400fd3568e 67-68,80,92,99,106-107,112,129-130,138
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_21a889dc5d67dd::t_4ea1d47d8ff5ad 625-629,706-707,1162-1163,1812-1813,1823-1825,1835,1855-1861
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d7b9c4cb19997d18117342ec9374ca16896f2e38",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

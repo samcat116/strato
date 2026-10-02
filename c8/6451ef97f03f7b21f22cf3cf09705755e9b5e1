@@ -1,0 +1,36 @@
+docs/architecture/agent-updates.md
+  s_b120d599dfc41b::t_b54b8b528eaa39 56-60
+  s_b120d599dfc41b::t_3084a5e3e1145c 123,126-128
+  s_b120d599dfc41b::t_dbac9c448b0390 129
+agent/Tests/StratoAgentTests/AutoUpdateGateTests.swift
+  s_b120d599dfc41b::t_b6e2cffe694644 40,48
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_b120d599dfc41b::t_c6141d81e30256 437-438
+  s_b120d599dfc41b::t_702267be27b762 121-123
+control-plane/Tests/AppTests/AgentAutoUpdateTests.swift
+  s_b120d599dfc41b::t_20f9163e40593e 193
+  s_b120d599dfc41b::t_fe7194e91b1a00 360,365
+shared/Tests/StratoSharedTests/AgentAutoUpdateProtocolTests.swift
+  s_b120d599dfc41b::t_5b00f81b095dd7 58,66
+control-plane/web/src/components/agents/agent-auto-update.tsx
+  s_b120d599dfc41b::t_e4ab911ce3f5cd 69-70
+  s_b120d599dfc41b::t_07f4c440ff30f2 19-20
+agent/Sources/StratoAgentCore/AutoUpdateGate.swift
+  s_b120d599dfc41b::t_688a16ef544d9a 19-23,45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "c86451ef97f03f7b21f22cf3cf09705755e9b5e1",
+  "prompts": {},
+  "sessions": {
+    "s_b120d599dfc41b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a1c557cb-2f28-4262-9548-463cb2d341e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

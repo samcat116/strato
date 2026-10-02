@@ -1,0 +1,35 @@
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_f7e9b5d276516f::t_274bcc1b626f84 145-159,539-553
+control-plane/Sources/App/Extensions/ByteConversion.swift
+  s_f7e9b5d276516f::t_c8dedf81104209 13-25,28-32,34-41
+control-plane/Sources/App/Models/Volume.swift
+  s_e6a198b066af71::t_98bf3bfb5aff82 34-39
+control-plane/Tests/AppTests/ProjectQuotaServiceTests.swift
+  s_f7e9b5d276516f::t_d079d8e44522c2 26-47
+control-plane/Tests/AppTests/VolumeSizeValidationTests.swift
+  s_f7e9b5d276516f::t_0570b43f79a826 1-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5e6a497cde5b9bd807acfa9bd3c91b68f1a118c8",
+  "prompts": {},
+  "sessions": {
+    "s_e6a198b066af71": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b384fbc4-d411-4567-9607-e66254091e42",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_f7e9b5d276516f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4ae766f-bf41-40d3-8e16-0a18033be273",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

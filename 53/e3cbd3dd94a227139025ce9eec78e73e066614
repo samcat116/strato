@@ -1,0 +1,67 @@
+agent/Sources/StratoAgent/QEMUService.swift
+  s_90ec6c6b7bf89b::t_c0f72e92815dc3 378
+  s_90ec6c6b7bf89b::t_4b09c35bcadca9 58-59,61
+  s_90ec6c6b7bf89b::t_338ff56b02088a 539-543,545-548,550,559-560
+  s_90ec6c6b7bf89b::t_f8ae043bd754c9 544,549,551-558
+  s_90ec6c6b7bf89b::t_4c891588b4d712 18-24
+  s_90ec6c6b7bf89b::t_49111f28571a16 234
+  s_90ec6c6b7bf89b::t_2d559be257c25d 48-57,60,62-63
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_90ec6c6b7bf89b::t_f44ded48e1605e 287-298
+control-plane/Sources/App/configure.swift
+  s_90ec6c6b7bf89b::t_00ade79c31d296 112-115
+control-plane/Sources/App/Migrations/AddStatusChangedAtToVM.swift
+  s_90ec6c6b7bf89b::t_6260330b3a8615 1-18
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_90ec6c6b7bf89b::t_5aaf3ce1d0fffb 324-325,330-333
+agent/Sources/StratoAgent/HostResources.swift
+  s_90ec6c6b7bf89b::t_d3a68845e3d93e 1-47
+control-plane/Sources/App/Controllers/VMController.swift
+  s_90ec6c6b7bf89b::t_593b39103937c0 488-490,492-500,507,512-517
+  s_90ec6c6b7bf89b::t_f8c161153d04fa 539-541,544-546,551-556
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_90ec6c6b7bf89b::t_9c4cf12c679726 85-87
+  s_90ec6c6b7bf89b::t_bcb09ec37ff2a5 132-135
+  s_90ec6c6b7bf89b::t_d943095ea6d46d 199
+  s_90ec6c6b7bf89b::t_2974520336f629 229-231
+  s_90ec6c6b7bf89b::t_ebf9f1325c8cdb 278-293
+  s_90ec6c6b7bf89b::t_b4248f40aa6965 197-198
+  s_90ec6c6b7bf89b::t_b9b596e5390026 63-66
+  s_90ec6c6b7bf89b::t_918f26794df71b 124-126,131
+control-plane/Sources/App/Models/vm.swift
+  s_90ec6c6b7bf89b::t_b015e2c98f02c5 28-32
+  s_90ec6c6b7bf89b::t_666119d7d8d46b 221-223,230-239
+shared/Sources/StratoShared/VMModels.swift
+  s_90ec6c6b7bf89b::t_bccbd491211de5 10-37
+agent/Sources/StratoAgent/VMManifestStore.swift
+  s_90ec6c6b7bf89b::t_ab09ad4125ecaa 1-46
+agent/Sources/StratoAgent/Agent.swift
+  s_90ec6c6b7bf89b::t_0514d0deebbfcb 44
+  s_90ec6c6b7bf89b::t_65d03f0746f5ae 430-477
+  s_90ec6c6b7bf89b::t_7e12aaf80b3462 510-545,547-552
+  s_90ec6c6b7bf89b::t_30d7969308033b 242-245
+control-plane/Sources/App/Services/AgentService.swift
+  s_90ec6c6b7bf89b::t_b0a81b5b888c41 652,657-658
+  s_90ec6c6b7bf89b::t_7baa203156f756 703-743
+  s_90ec6c6b7bf89b::t_f0079d06e20d0e 341,344-346
+  s_90ec6c6b7bf89b::t_9350649397eb1c 394-428
+  s_90ec6c6b7bf89b::t_34a9ed9016a5b3 49,52-58,163-165,191-193,217-218,371-373,611,629-630,634,643-651,653-656,663-682,778,791-792
+  s_90ec6c6b7bf89b::t_83f87d3e4b4313 219
+  s_90ec6c6b7bf89b::t_44d7d60c0c239e 268-272,275-330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "53e3cbd3dd94a227139025ce9eec78e73e066614",
+  "prompts": {},
+  "sessions": {
+    "s_90ec6c6b7bf89b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b23fe073-81c5-48a5-8dd8-152378d99f7d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

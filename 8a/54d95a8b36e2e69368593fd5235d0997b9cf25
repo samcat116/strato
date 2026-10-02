@@ -1,0 +1,23 @@
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_8175a76a1576f0::t_f97c3614236da9 302-314
+  s_8175a76a1576f0::t_a24a8e485e07e0 232-235,237,239-242,244-247
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_8175a76a1576f0::t_4a28b2ec86d885 437-466
+  s_8175a76a1576f0::t_efca83c4ca18b7 368-402
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "8a54d95a8b36e2e69368593fd5235d0997b9cf25",
+  "prompts": {},
+  "sessions": {
+    "s_8175a76a1576f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1080cc85-15d2-47f7-a8fa-3e986c31849d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

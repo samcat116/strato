@@ -1,0 +1,47 @@
+agent/Sources/StratoAgentCore/OVNUplinkConfig.swift
+  s_432568e4a67b2f::t_fed1ccfed1e77a 2
+  s_432568e4a67b2f::t_5b5f620a6a2d61 70-80
+  s_432568e4a67b2f::t_c9e41760dccf35 23-32,42-43,50-52,58-59
+docs/architecture/networking.md
+  s_432568e4a67b2f::t_36b751edbfec2a 282-294
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_432568e4a67b2f::t_242801f62fe051 392-398
+  s_432568e4a67b2f::t_bcdba40353de24 327,334
+  s_432568e4a67b2f::t_5454f7d0c4d66b 346-352,355
+config.toml.example
+  s_432568e4a67b2f::t_59f559890fc4fd 221-226,232-233
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_432568e4a67b2f::t_ee854e270cd40e 1725-1727
+  s_432568e4a67b2f::t_9fb882d38c2687 1384-1390,1394-1406
+  s_432568e4a67b2f::t_b03fe5501c00ab 1391-1393
+  s_432568e4a67b2f::t_efea96008a3b8a 1688
+  s_432568e4a67b2f::t_3ebbd52f9e7033 1680-1682,1684,1687,1690,1699,1703,1707
+  s_432568e4a67b2f::t_8f0edb42ce182d 1321-1327,1332-1338,1340
+  s_432568e4a67b2f::t_ed6708fc988793 1361-1372
+  s_432568e4a67b2f::t_8a777bb32cb776 1714-1715
+  s_432568e4a67b2f::t_46ca3dba5e82c3 1328-1331
+  s_432568e4a67b2f::t_7e92f0d563e9da 1679,1683,1685-1686,1689,1691,1693
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_432568e4a67b2f::t_7448e285e5e395 563,568-570,572-577
+agent/Tests/StratoAgentTests/OVNBridgeMappingsTests.swift
+  s_432568e4a67b2f::t_15bd3369da1b4a 56-80
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_432568e4a67b2f::t_4443794714a50f 314-343
+  s_432568e4a67b2f::t_4bb5fe7f1b02e8 132-170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "4396f0765d8a2049f391a4d4642c826f3dbce402",
+  "prompts": {},
+  "sessions": {
+    "s_432568e4a67b2f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92862862-8751-44e4-828a-ce613f8c57d9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

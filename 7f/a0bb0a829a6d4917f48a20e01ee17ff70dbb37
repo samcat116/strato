@@ -1,0 +1,19 @@
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_27fc47c7f5686a::t_fdccc3b0cab2a0 134-141,180-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7fa0bb0a829a6d4917f48a20e01ee17ff70dbb37",
+  "prompts": {},
+  "sessions": {
+    "s_27fc47c7f5686a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be02aa7e-b3f4-4cbe-a98d-f72a1d974afa",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

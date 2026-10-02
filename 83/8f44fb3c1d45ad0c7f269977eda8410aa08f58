@@ -1,0 +1,44 @@
+control-plane/web/src/lib/gravatar.ts
+  s_861e4a5d59ad66::t_394f713d29c971 10-38
+  s_861e4a5d59ad66::t_0ab9bbde368321 1-9,39-57
+deploy/compose/docker-compose.yml
+  s_861e4a5d59ad66::t_e7cabc4dd3254e 419-422
+helm/strato-control-plane/values.yaml
+  s_861e4a5d59ad66::t_dde0cee83369b8 67-71
+control-plane/web/src/middleware.ts
+  s_861e4a5d59ad66::t_7d3b7b1649fd22 48-58
+  s_861e4a5d59ad66::t_be94882c079ad7 3
+helm/strato-control-plane/templates/frontend-deployment.yaml
+  s_861e4a5d59ad66::t_1d8d734c54774f 49-50
+helm/strato-control-plane/README.md
+  s_861e4a5d59ad66::t_731bd1ad9565d1 159
+control-plane/web/src/components/ui/user-avatar.tsx
+  s_861e4a5d59ad66::t_930c55f1743444 36-39
+  s_861e4a5d59ad66::t_d31cd25bab54bb 72
+  s_861e4a5d59ad66::t_399f7cdb81a1a7 29,33,42-43
+  s_861e4a5d59ad66::t_c33b0c0389cc90 30-32
+  s_861e4a5d59ad66::t_854a03def6422d 48
+  s_861e4a5d59ad66::t_41e5226c3d8074 1-4,6-28,34-35,40-41,44-47,49-71,73-77
+  s_861e4a5d59ad66::t_d8c459291da49e 5
+control-plane/web/src/components/layout/sidebar.tsx
+  s_861e4a5d59ad66::t_057a0b8373b062 134
+  s_861e4a5d59ad66::t_3fe92cf5b09165 20
+docs/architecture/frontend.md
+  s_861e4a5d59ad66::t_6485c132a4bf98 125-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "838f44fb3c1d45ad0c7f269977eda8410aa08f58",
+  "prompts": {},
+  "sessions": {
+    "s_861e4a5d59ad66": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bbfa810c-1099-4f5c-b968-d359366dc6a0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

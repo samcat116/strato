@@ -1,0 +1,28 @@
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_8175a76a1576f0::t_04ba16c1d4aca4 40-66
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_8175a76a1576f0::t_250415733105ba 171
+  s_8175a76a1576f0::t_f9d7131d9a9d91 74
+  s_8175a76a1576f0::t_9bc816deaec434 838-840,844,854-861
+  s_8175a76a1576f0::t_b5e56f01fc4f04 862-864
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_8175a76a1576f0::t_ebf9d64b68c5a0 326-355
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_8175a76a1576f0::t_2a9684b4d87bf3 194-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "521ac1b1299df42ee11510a697546d66f1fc3521",
+  "prompts": {},
+  "sessions": {
+    "s_8175a76a1576f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1080cc85-15d2-47f7-a8fa-3e986c31849d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

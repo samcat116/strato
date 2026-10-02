@@ -1,0 +1,48 @@
+shared/Tests/StratoSharedTests/Support/WireTestSupport.swift
+  s_1e3115b4d924a4::t_85fbc2258e170d 4-7,9,13,17
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_1e3115b4d924a4::t_bcb57ec6c6cb3b 186,215,296
+shared/Sources/StratoShared/WireProtocol.swift
+  s_1e3115b4d924a4::t_d5f11c0a70d149 1-46,48-63,68
+  s_1e3115b4d924a4::t_57f1b1913e85ac 47,64-67
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_1e3115b4d924a4::t_e467588b783c7e 90
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_1e3115b4d924a4::t_df87501bf3c578 1-117
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_1e3115b4d924a4::t_5fbcb597c96503 439-440
+  s_1e3115b4d924a4::t_d566ab47c78fa8 212-218,224-225,232
+  s_1e3115b4d924a4::t_20d6abd819da7f 454-455
+  s_1e3115b4d924a4::t_19bf903a846da7 93-98,111-112,125
+  s_1e3115b4d924a4::t_c305f37cd63d4b 1041,1046-1055,1059,1063-1070,1074,1080-1087
+  s_1e3115b4d924a4::t_fd3f5f184a094b 1015-1019,1021,1024-1025,1027,1029,1031-1035
+shared/Tests/StratoSharedTests/EnumDecodingTests.swift
+  s_1e3115b4d924a4::t_88599ba043f1be 88-99
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_1e3115b4d924a4::t_bcb57ec6c6cb3b 221
+control-plane/Sources/App/Services/VolumeService.swift
+  s_1e3115b4d924a4::t_db366db0cec8b2 319
+agent/Sources/StratoAgent/Agent.swift
+  s_1e3115b4d924a4::t_2457c3d85b45cf 544-551
+control-plane/Sources/App/Services/AgentService.swift
+  s_1e3115b4d924a4::t_bcb57ec6c6cb3b 673
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_1e3115b4d924a4::t_bcb57ec6c6cb3b 309,484,496,511
+  s_1e3115b4d924a4::t_6bd5d171216e7d 315-322
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "68b9750f00078b28dc6f461440dbe913178a4da2",
+  "prompts": {},
+  "sessions": {
+    "s_1e3115b4d924a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b2cb9825-9361-476a-9312-16416f950303",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

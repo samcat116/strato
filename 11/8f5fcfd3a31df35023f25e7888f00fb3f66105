@@ -1,0 +1,25 @@
+SwiftFirecracker/Sources/SwiftFirecracker/UnixSocketHTTPClient.swift
+  s_a80ae461e08851::t_6f0a67496e2790 49-51,53-56,58,60,62,66
+SwiftFirecracker/Tests/SwiftFirecrackerTests/UnixSocketPathTests.swift
+  s_a80ae461e08851::t_ca694040039944 1-65
+SwiftFirecracker/Sources/SwiftFirecracker/UnixSocketPath.swift
+  s_a80ae461e08851::t_dd0f1a4a1b5591 1-62
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_a80ae461e08851::t_6fc34d50694908 195-200,202,204-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "118f5fcfd3a31df35023f25e7888f00fb3f66105",
+  "prompts": {},
+  "sessions": {
+    "s_a80ae461e08851": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8acc851f-5517-4c80-8b67-2216544b35d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,72 @@
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_0a6f49dab719ee::t_8f3f605d63c550 1049-1065,1992-1999,2360-2367,3105-3111,3681-3694
+  s_3af79fd703f9fa::t_bfc9f5650dc036 3695-3696
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_0a6f49dab719ee::t_2538f6002db0aa 608
+  s_0a6f49dab719ee::t_f8e3527943984c 755-756,769-780,791-799
+  s_0a6f49dab719ee::t_a1dbc7c767bae7 512-514,598-607,609-663
+  s_0a6f49dab719ee::t_df817b4db6fb42 664-666
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_0a6f49dab719ee::t_2d4e1bc8d7687c 12-13,33-36,66-69
+control-plane/Tests/AppNetworkTests/SecurityGroupControllerTests.swift
+  s_0a6f49dab719ee::t_6cea1041c64ba1 860-865
+  s_0a6f49dab719ee::t_d897cf08120e61 856-858
+  s_0a6f49dab719ee::t_fc6a770eb48904 859
+agent/Tests/StratoAgentPlatformTests/DNSZoneRealizationTests.swift
+  s_0a6f49dab719ee::t_147926aeffd3ea 330,338-357,367,369-373,376,386-388
+  s_3af79fd703f9fa::t_11869082144e8c 389
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+Reconciliation.swift
+  s_0a6f49dab719ee::t_5dabfc560a4c57 152-160
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_0a6f49dab719ee::t_1962ec46bbcc10 541,543-544,548
+  s_0a6f49dab719ee::t_5dabfc560a4c57 594-633
+agent/Sources/StratoAgentCore/DNSZoneRealization.swift
+  s_0a6f49dab719ee::t_5dabfc560a4c57 414,417,420,423-425,447-453,457,459-467,470
+control-plane/Sources/App/Models/SecurityGroupSiteObservation.swift
+  s_0a6f49dab719ee::t_5f0e19ba2d3ce3 2
+  s_0a6f49dab719ee::t_045be9092ead0b 1,3-60
+control-plane/Sources/App/Services/NetworkCarrierAssembler.swift
+  s_0a6f49dab719ee::t_cd0fd0735bbf7f 303-305
+control-plane/Sources/App/Migrations/AddNetworkFabricObservations.swift
+  s_0a6f49dab719ee::t_61277498b9ba96 33-64,66-70,72-88,102-113
+  s_0a6f49dab719ee::t_88d999e79942bb 65,71
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_0a6f49dab719ee::t_61152dfb3427f5 282,309,380,431,449-464
+  s_9d764f706ace50::t_40c47d977b74ed 465
+control-plane/Sources/App/Services/SecurityGroupSiteConvergence.swift
+  s_0a6f49dab719ee::t_045be9092ead0b 1-52,54-60,62-127,134-140,146-153,160-169,181-222,251-252
+  s_0a6f49dab719ee::t_88d999e79942bb 53,61
+  s_0a6f49dab719ee::t_c2025812a20585 128-133,141-145,154-159,170-180,223-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "23daf8f885558317aba155f91c3b3d5ea9db0a4e",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9d764f706ace50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-dda9-7730-90f4-480f55b6b230",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

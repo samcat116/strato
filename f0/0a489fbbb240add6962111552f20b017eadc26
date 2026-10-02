@@ -1,0 +1,45 @@
+control-plane/Sources/App/Migrations/BackfillResolverIndexes.swift
+  s_30972909b9ac81::t_cac8e08937f7e4 35-47,49-58,60-67,69-94,97-100
+control-plane/Sources/App/Services/ResolverAddressAllocator.swift
+  s_30972909b9ac81::t_cac8e08937f7e4 106
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_30972909b9ac81::t_a81dea619adab9 494-495,510-511
+  s_30972909b9ac81::t_cac8e08937f7e4 469-493,496-509,512-515
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_30972909b9ac81::t_cac8e08937f7e4 166-186,393,397-405,432
+control-plane/Sources/App/Services/ResolverCapability.swift
+  s_30972909b9ac81::t_cac8e08937f7e4 53,56,64,66-69,71
+control-plane/Sources/App/Services/DNSZoneService.swift
+  s_30972909b9ac81::t_cac8e08937f7e4 377-380
+CONTEXT.md
+  s_30972909b9ac81::t_92fca51ff93836 352-353
+docs/architecture/dns.md
+  s_30972909b9ac81::t_92fca51ff93836 54-57,61-66
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_30972909b9ac81::t_cac8e08937f7e4 815,839-841,881-917
+  s_839ff8d845c23a::t_8fa3f6cd7e7212 918-920
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f00a489fbbb240add6962111552f20b017eadc26",
+  "prompts": {},
+  "sessions": {
+    "s_30972909b9ac81": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3d1-6290-7c11-be4b-c061b039f47f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_839ff8d845c23a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3d1-2690-7d33-bd4a-e33d7cd8a517",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

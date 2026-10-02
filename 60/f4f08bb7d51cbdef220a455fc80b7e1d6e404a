@@ -1,0 +1,45 @@
+deploy/agent/install.sh
+  s_006994cc89f4f7::t_61e2b354b7236f 135,208,212,216-224,226,243-263,1471-1473
+  s_006994cc89f4f7::t_2e678dd078abef 225
+control-plane/Sources/App/openapi.yaml
+  s_006994cc89f4f7::t_cc9fef8c68d284 5409-5411,5413-5414,8346-8353
+  s_006994cc89f4f7::t_2e678dd078abef 5429-5431
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_006994cc89f4f7::t_cc9fef8c68d284 4,114-115,148-162,164,166,168-171
+  s_006994cc89f4f7::t_df458ed52c311f 163,165,167
+  s_006994cc89f4f7::t_186581c92d8e2d 172-173
+deploy/agent/tests/install-sh-test.sh
+  s_006994cc89f4f7::t_531c1b90465f0d 43-46,132,172,197
+  s_006994cc89f4f7::t_3230a952d13016 97,118-119,130-131,133-142
+control-plane/Sources/App/Services/AgentService.swift
+  s_006994cc89f4f7::t_cc9fef8c68d284 488-492
+docs/deployment/agents.md
+  s_006994cc89f4f7::t_2e678dd078abef 143-147
+  s_006994cc89f4f7::t_cc9fef8c68d284 121-125
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_006994cc89f4f7::t_cc9fef8c68d284 207-211,233-236,251-255
+control-plane/web/src/types/openapi.ts
+  s_006994cc89f4f7::t_99db85c0570314 3783,16615
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_006994cc89f4f7::t_b1804bff071c15 171-172,174-186,188-192,194-201,803,805-812,932-934,950-960,991-1001
+  s_006994cc89f4f7::t_93399db34d96a6 187,193,804
+  s_006994cc89f4f7::t_2e678dd078abef 202-218
+  s_006994cc89f4f7::t_c7a3b2dfc0aad4 170
+  s_006994cc89f4f7::t_461927c21e5e1c 173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "60f4f08bb7d51cbdef220a455fc80b7e1d6e404a",
+  "prompts": {},
+  "sessions": {
+    "s_006994cc89f4f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00d06-57d2-7862-8053-e4feb2cafb1e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

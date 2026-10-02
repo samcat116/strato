@@ -1,0 +1,20 @@
+agent/Package.resolved
+  s_cfe661b849c7e9::t_bf6ba50eef86a3 185-192
+  s_cfe661b849c7e9::t_ceb2ed0f78f832 184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3ba8faec9db73b6c3b9012c6c9405f9d22387af4",
+  "prompts": {},
+  "sessions": {
+    "s_cfe661b849c7e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72a931f5-a31b-47d9-9bf8-f821c524c05e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

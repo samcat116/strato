@@ -1,0 +1,462 @@
+control-plane/Tests/AppTests/HealthControllerTests.swift
+  s_b6065bd4f02189::t_d2674f8345d035 212-213
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_b6065bd4f02189::t_d450cb4fe738d7 209
+  s_b6065bd4f02189::t_d90597b03bb707 235
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_b6065bd4f02189::t_96ee7c90f172d9 54
+  s_b6065bd4f02189::t_ec5f412e1fbd86 1416,1418-1421
+  s_b6065bd4f02189::t_073e594f6c0367 1337,1393,1423,1436,1451,1475,1500,1515
+docs/api-reference.md
+  s_b6065bd4f02189::t_b468e32654124b 33-35
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_b6065bd4f02189::t_baf18d35617f1c 17-18
+control-plane/Sources/App/Models/RoleBinding.swift
+  s_b6065bd4f02189::t_ee294f6159861c 8-10
+control-plane/Tests/AppTests/GuardrailEndpointTests.swift
+  s_b6065bd4f02189::t_58b7d2524c0d93 8
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_b6065bd4f02189::t_02ad21965f9b18 169-171
+  s_b6065bd4f02189::t_6b5145a2c24e99 3-4
+  s_b6065bd4f02189::t_7e5f2104027568 15-16
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_b6065bd4f02189::t_654536bf727b15 17
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_b6065bd4f02189::t_fde1063cd537fc 18
+control-plane/Sources/App/Migrations/MigrateExistingDataToProjects.swift
+  s_b6065bd4f02189::t_b0286a029d7859 27-30
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_b6065bd4f02189::t_917139d9c2c480 52-54
+  s_b6065bd4f02189::t_94e088f4a67a5d 122-123
+  s_b6065bd4f02189::t_e25df479050cec 128,130-132
+  s_b6065bd4f02189::t_959b654268e341 124,164,247-249
+  s_b6065bd4f02189::t_9cdc6620fe28da 6-7,11-15,18,30,33,36-37,41,43
+  s_b6065bd4f02189::t_15ca054045e81b 61,136,140,142,146,330-331,336-338,348,360
+  s_b6065bd4f02189::t_49e8737be3af86 244-246
+  s_b6065bd4f02189::t_ff3ad618283035 211-213
+  s_b6065bd4f02189::t_e2adc3149ec5be 362-365
+  s_b6065bd4f02189::t_8ed563b4c11059 334-335
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_b6065bd4f02189::t_8ebad190290ff8 48
+  s_b6065bd4f02189::t_b4f52ee4f3c3cf 704-705
+  s_b6065bd4f02189::t_3b8057258c7d11 871
+  s_b6065bd4f02189::t_62bf65af4a5997 611-612
+  s_b6065bd4f02189::t_7088f94c15170c 166-167
+  s_b6065bd4f02189::t_8b945bed8ac0ab 855
+  s_b6065bd4f02189::t_07987f7e5333cc 339
+  s_b6065bd4f02189::t_dcc594f70f0eb0 789
+  s_b6065bd4f02189::t_dd04980faafd27 133
+  s_b6065bd4f02189::t_453a4f88eabe83 111
+  s_b6065bd4f02189::t_fab3a3856d311d 292,300-301
+  s_b6065bd4f02189::t_7bf0bd93593419 826
+deploy/compose/README.md
+  s_b6065bd4f02189::t_8f65ff4e9ea553 70-71
+deploy/compose/docker-compose.yml
+  s_b6065bd4f02189::t_134b11ac1934c6 367
+  s_b6065bd4f02189::t_024274d87d9c16 17-18
+control-plane/Sources/App/IAM/RoleBindingBackfill.swift
+  s_b6065bd4f02189::t_4b880a8557a0cf 5-13
+docs/architecture/sandboxes.md
+  s_b6065bd4f02189::t_32ff82780c8b44 355
+  s_b6065bd4f02189::t_59c62c4406a71c 202-206
+  s_b6065bd4f02189::t_d64d8ba4cff003 360-361
+docs/architecture/overview.md
+  s_b6065bd4f02189::t_43eecf32eb6037 143-157,161-186
+  s_b6065bd4f02189::t_699d8468525c10 30
+control-plane/Tests/AppTests/GroupTests.swift
+  s_b6065bd4f02189::t_c306fe2113d6f4 68-69
+control-plane/Sources/App/openapi.yaml
+  s_b6065bd4f02189::t_b7a34cf558e254 25-26
+  s_b6065bd4f02189::t_425848f5330d75 3943-3944
+  s_b6065bd4f02189::t_bf9c3758aa21b8 10597-10600
+  s_b6065bd4f02189::t_4b8adf756d8a7e 131-133
+  s_b6065bd4f02189::t_fa0d6842f50fea 10631
+  s_b6065bd4f02189::t_1b026150ec508e 10297
+  s_b6065bd4f02189::t_a11d0104bd4dff 4265-4270
+  s_b6065bd4f02189::t_a3082bebcb615f 4482-4486
+  s_b6065bd4f02189::t_3c8f0be1e490c9 4455-4457
+control-plane/Sources/App/Models/ProjectMember.swift
+  s_b6065bd4f02189::t_d2b34956c6ebd7 51-52
+  s_b6065bd4f02189::t_e6e4c4551e2b7b 5,14-16
+control-plane/Tests/AppTests/IAMDecisionLogEndpointTests.swift
+  s_b6065bd4f02189::t_525db1e95ee3c6 56-57
+  s_b6065bd4f02189::t_fe51a5459852e2 14-15
+control-plane/Sources/App/IAM/RoleBindingService.swift
+  s_b6065bd4f02189::t_93e921450454a9 5-8
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_b6065bd4f02189::t_3264c4533ddd5f 54
+  s_b6065bd4f02189::t_750a546fcd512e 234-236
+  s_b6065bd4f02189::t_bf92b279252f05 273,275
+  s_b6065bd4f02189::t_ad8b5379e0be2f 124-127
+  s_b6065bd4f02189::t_a337e0e0fbc201 182-184
+  s_b6065bd4f02189::t_fb610af2e2b995 342-343
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_b6065bd4f02189::t_a1ead3ea5c8771 11
+control-plane/Tests/AppTests/HierarchyIntegrationTests.swift
+  s_b6065bd4f02189::t_545e897e575c5d 196
+  s_b6065bd4f02189::t_760deb77de81ab 303
+docs/index.md
+  s_b6065bd4f02189::t_b8267d94d10397 25
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_b6065bd4f02189::t_7fdd060e2ce86a 184-192
+  s_b6065bd4f02189::t_009d96c124dd96 440-446
+  s_b6065bd4f02189::t_41338789f21027 164-165
+  s_b6065bd4f02189::t_1c41a7a20c4661 404-405
+  s_b6065bd4f02189::t_293bdd53c31773 147-148
+  s_b6065bd4f02189::t_94bfda112118da 461-463
+  s_b6065bd4f02189::t_17b77518a61f22 124-126
+  s_b6065bd4f02189::t_ae62841ef54025 143-145,149-160
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  s_b6065bd4f02189::t_76babacf351202 69-70
+  s_b6065bd4f02189::t_b7bbdc29774f36 17-18
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_b6065bd4f02189::t_3442f529e0ba69 13-17
+control-plane/Sources/App/Controllers/RegistryPullSecretController.swift
+  s_b6065bd4f02189::t_04f25de8d6957d 8-9
+control-plane/Sources/App/configure.swift
+  s_b6065bd4f02189::t_383b8742c8ada8 449
+  s_b6065bd4f02189::t_15ca054045e81b 647-648
+  s_b6065bd4f02189::t_2bf0a1dad8db36 643-646
+  s_b6065bd4f02189::t_9e8fb57e70ac39 458
+  s_b6065bd4f02189::t_fa2f7896d08719 556-559
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_b6065bd4f02189::t_64aeee96ccf7e8 38
+  s_b6065bd4f02189::t_de15226bed8e67 32-34,39,48,54,57-58,60
+  s_b6065bd4f02189::t_93bddc980b8c93 128
+control-plane/Sources/App/Services/OrganizationAccessService.swift
+  s_b6065bd4f02189::t_3377fceaef4923 7-10
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_b6065bd4f02189::t_dfec46d895db97 318,325
+  s_b6065bd4f02189::t_83007729b5aad3 365
+  s_b6065bd4f02189::t_75e04cd2058eed 100-101
+  s_b6065bd4f02189::t_dd4764b2a51f4c 263
+control-plane/Sources/App/Middleware/AuditMiddleware.swift
+  s_b6065bd4f02189::t_927883ef4b550b 21
+control-plane/Tests/AppTests/IAMShadowTranslationTests.swift
+  s_b6065bd4f02189::t_c1b70afb5c766b 6,9
+  s_b6065bd4f02189::t_9d27c2b2ae32ef 29
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_b6065bd4f02189::t_60dd0f9123d720 183-192
+docs/architecture/control-plane.md
+  s_b6065bd4f02189::t_ce307aedd4d563 67
+  s_b6065bd4f02189::t_ba95a77916f767 48-50
+  s_b6065bd4f02189::t_d0dd8ab62e45bc 107-114,116-118
+  s_b6065bd4f02189::t_b78cdaf95ddb21 122-126,128
+  s_b6065bd4f02189::t_44cfb9a2b318c3 221-224
+  s_b6065bd4f02189::t_8d01b412dbee04 54-60
+  s_b6065bd4f02189::t_3e7788751304d3 23-24
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_b6065bd4f02189::t_0cb3c6c234bce7 762-764
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_b6065bd4f02189::t_d8cc51e29ea275 383
+control-plane/Sources/App/Middleware/UserSecurityMiddleware.swift
+  s_b6065bd4f02189::t_17f687f4ddb2b7 16
+docs/guide/what-is-strato.md
+  s_b6065bd4f02189::t_7ce1ad19325cf0 38-39
+  s_b6065bd4f02189::t_22a390a9552b27 92
+control-plane/Tests/AppTests/IAMAuthorizerTests.swift
+  s_b6065bd4f02189::t_c22da653e781db 261-262,269-273,278,280,285-286
+  s_b6065bd4f02189::t_213e61d973387a 54
+  s_b6065bd4f02189::t_ded836794e5791 10-14
+  s_b6065bd4f02189::t_f32fb94384125e 105-106
+  s_b6065bd4f02189::t_870646d2fe76a4 116-117,121,132-133
+  s_b6065bd4f02189::t_8c30effa55e55c 23-25
+  s_b6065bd4f02189::t_83343dc17bbe6e 26,205,289,328,352,392,421
+  s_b6065bd4f02189::t_951fa0c8b5cf93 88
+control-plane/Sources/App/Controllers/SCIMController.swift
+  s_b6065bd4f02189::t_47190ec0c30548 232,235
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_b6065bd4f02189::t_8b243d1a6262bd 13
+  s_b6065bd4f02189::t_6c2beed9ff44d1 45
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b6065bd4f02189::t_ebef0b02ac3e8b 49-51,56,74
+  s_b6065bd4f02189::t_64aeee96ccf7e8 55,404
+  s_b6065bd4f02189::t_b1366dc3329b0c 403,405
+  s_b6065bd4f02189::t_c30b3748c3c4c8 284
+  s_b6065bd4f02189::t_5581b8c8f7e395 516
+control-plane/Sources/App/Controllers/UserController.swift
+  s_b6065bd4f02189::t_d8413da59fa93d 196-197
+  s_b6065bd4f02189::t_d4766fbe963b28 135
+  s_b6065bd4f02189::t_ceed41639e3955 441
+  s_b6065bd4f02189::t_c75c6e4ff83470 685
+docs/deployment/docker-compose.md
+  s_b6065bd4f02189::t_2b3761848c6971 124
+  s_b6065bd4f02189::t_4c557d54a3b012 69
+helm/strato-control-plane/templates/spire-db-init-job.yaml
+  s_b6065bd4f02189::t_86d965900b497a 22
+control-plane/Sources/App/IAM/IAMActionTranslation.swift
+  s_b6065bd4f02189::t_b5264c45289184 69
+  s_b6065bd4f02189::t_c435a8a7a7cc29 3,6-12
+  s_b6065bd4f02189::t_ad6c508497ba18 22-24
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_b6065bd4f02189::t_813e8de4e99505 6-12
+docs/development/local-development.md
+  s_b6065bd4f02189::t_89c436f9d594d5 96-97
+  s_b6065bd4f02189::t_cacfa22a8b1f0f 126-128
+.github/workflows/helm-test.yml
+  s_b6065bd4f02189::t_ea673fd0c426c7 106
+helm/strato-control-plane/templates/_helpers.tpl
+  s_b6065bd4f02189::t_e7d68a2c3ef830 88-89
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_b6065bd4f02189::t_20fa7c2ebcf866 30-31,35-37
+  s_b6065bd4f02189::t_0d308c58385aca 63-64,68-70,74-75
+control-plane/Sources/App/IAM/Cedar/SwiftCedarEngine.swift
+  s_b6065bd4f02189::t_4fef7f40a757b1 56-57
+control-plane/Tests/AppTests/IAMRoleBindingTests.swift
+  s_b6065bd4f02189::t_f21d2db031d18c 9-11
+docs/deployment/kubernetes.md
+  s_b6065bd4f02189::t_8026ed6fd3390e 27
+  s_b6065bd4f02189::t_b071515fd903c6 40-42
+  s_b6065bd4f02189::t_0cecc257257aad 18
+  s_b6065bd4f02189::t_0d914651a53b18 5
+control-plane/Sources/App/Controllers/VMController.swift
+  s_b6065bd4f02189::t_eb0d326a18aab1 307
+  s_b6065bd4f02189::t_0f3d44915f0a13 329
+  s_b6065bd4f02189::t_53d873f2eeea01 464
+  s_b6065bd4f02189::t_42128b57804aea 339
+  s_b6065bd4f02189::t_54bfe30370c36e 413
+  s_b6065bd4f02189::t_a5e7657ebab64c 505
+  s_b6065bd4f02189::t_ee8e101f584c7d 733-735
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_b6065bd4f02189::t_f05e509e4a44b7 50-51
+control-plane/Sources/App/Services/SCIM/GroupSCIMHandler.swift
+  s_b6065bd4f02189::t_0b8c4cd6e61a83 306
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_b6065bd4f02189::t_3f25af2a1be3c5 126-127
+  s_b6065bd4f02189::t_ebbd785f4292ef 177-178
+  s_b6065bd4f02189::t_8b164fffb76bce 724,731
+  s_b6065bd4f02189::t_813b24522cedb7 755-764
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_b6065bd4f02189::t_1f30844d065b46 220
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_b6065bd4f02189::t_8e38bfec9031c5 299-300
+  s_b6065bd4f02189::t_1490f30a8c64eb 315
+  s_b6065bd4f02189::t_f60df60e4a3004 283,291
+  s_b6065bd4f02189::t_01ade1c1b8b1ea 422,431-440,447-449,457-459
+  s_b6065bd4f02189::t_8d4af22eaf6c99 390
+  s_b6065bd4f02189::t_721c393fd7fa9a 383
+  s_b6065bd4f02189::t_ad34732373b5d9 95-96
+  s_b6065bd4f02189::t_5f8c8ec1226df7 65-66,72
+  s_b6065bd4f02189::t_7bbad5eb87a8e8 143,166,198,234,258,353,410,465,481
+  s_b6065bd4f02189::t_58b1240f0e1d80 13-14
+  s_b6065bd4f02189::t_4a26d8a4a5c20f 116,118,128-136
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_b6065bd4f02189::t_b29b99f6e162a8 447,458-465,467,473,480
+control-plane/Sources/App/routes.swift
+  s_b6065bd4f02189::t_80867df7706b20 18
+control-plane/Tests/AppTests/SCIMFilterTests.swift
+  s_b6065bd4f02189::t_47679446d30a7a 41
+  s_b6065bd4f02189::t_0ae8b44e5e5cd6 55
+control-plane/Sources/App/Services/VolumeService.swift
+  s_b6065bd4f02189::t_2cd04e2a59a6ff 7
+control-plane/Tests/AppTests/SCIMProvisioningIntegrationTests.swift
+  s_b6065bd4f02189::t_01a16b192b9ee0 51
+  s_b6065bd4f02189::t_76d76129b7bff5 43
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_b6065bd4f02189::t_c6dd8d6ef49090 54
+control-plane/Tests/AppTests/OrganizationAccessServiceTests.swift
+  s_b6065bd4f02189::t_caedb75ca961ed 31
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_b6065bd4f02189::t_0b0abc6b00a2d0 206,208
+  s_b6065bd4f02189::t_fa87608b89a0ae 697
+  s_b6065bd4f02189::t_0a5ae594236984 1008
+  s_b6065bd4f02189::t_2a94d5071bd6c9 274
+  s_b6065bd4f02189::t_82e67d4845da07 74
+  s_b6065bd4f02189::t_28af1cc20f66ed 125
+  s_b6065bd4f02189::t_f459927cc99fe2 482,616,717
+  s_b6065bd4f02189::t_a7d0716d3d1982 819
+  s_b6065bd4f02189::t_332b5002e7c61f 759
+  s_b6065bd4f02189::t_8adc2c2cde6a04 441-442
+  s_b6065bd4f02189::t_3d5ece31889387 839
+  s_b6065bd4f02189::t_b0f450006e0611 779
+  s_b6065bd4f02189::t_62d76ebd29d6a2 466
+  s_b6065bd4f02189::t_6b368b82d3d5ff 922
+  s_b6065bd4f02189::t_cb00799bdf1b68 600
+  s_b6065bd4f02189::t_ce6e8456530102 934
+  s_b6065bd4f02189::t_86cc3be47884b7 988
+  s_b6065bd4f02189::t_b12e70b0078204 285-288
+  s_b6065bd4f02189::t_3c9a233ead1be4 41,55
+  s_b6065bd4f02189::t_3729c9eb7a3d15 96
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_b6065bd4f02189::t_3218518ddce06d 201
+control-plane/Tests/AppTests/AgentUpdateEndpointTests.swift
+  s_b6065bd4f02189::t_51a4f92404739c 230-231
+control-plane/Tests/AppTests/VolumeAuthorizationTests.swift
+  s_b6065bd4f02189::t_700cabe1a4841d 9
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_b6065bd4f02189::t_1bb1e99b870a7b 661
+  s_b6065bd4f02189::t_f706762e42231e 32-34,40,52,59
+  s_b6065bd4f02189::t_745b8dce6652ce 318
+  s_b6065bd4f02189::t_afa17b6f075b95 417
+  s_b6065bd4f02189::t_8fe14592c258e9 683
+  s_b6065bd4f02189::t_64aeee96ccf7e8 39
+  s_b6065bd4f02189::t_0a1119d1338bf8 281
+  s_b6065bd4f02189::t_222f8f5ccf9396 350
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_b6065bd4f02189::t_24b9300ab01711 294,302,309,312-314,316-328
+control-plane/Sources/App/Migrations/CreateRoleBinding.swift
+  s_b6065bd4f02189::t_27e7ad6c22b558 4-5
+helm/strato-control-plane/templates/credentials-secret.yaml
+  s_b6065bd4f02189::t_f863aaf710fb9c 21
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_b6065bd4f02189::t_5f81d3f91a0458 59-60
+control-plane/Tests/AppTests/OrganizationMemberAuthzTests.swift
+  s_b6065bd4f02189::t_c34eb95b4a8a9e 97,99-100
+  s_b6065bd4f02189::t_840e784b826700 53-54,56-57
+  s_b6065bd4f02189::t_1404a96b9511b1 81
+  s_b6065bd4f02189::t_08a8a0d4046b88 8,10-12
+control-plane/Tests/AppTests/SandboxExecTests.swift
+  s_b6065bd4f02189::t_604a83691e7dbe 18-20
+helm/strato-control-plane/values.yaml
+  s_b6065bd4f02189::t_b13ad38ba40ccc 364-366
+  s_b6065bd4f02189::t_f8f11842587699 354
+  s_b6065bd4f02189::t_f702d62db9181a 213
+  s_b6065bd4f02189::t_6691e7faad0f66 437-438
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_b6065bd4f02189::t_4872c1c49a9453 301-303
+  s_b6065bd4f02189::t_a9b8e194d0090d 105-106
+README.md
+  s_b6065bd4f02189::t_30318806c5091b 21
+  s_b6065bd4f02189::t_d7ed7f1c633c2c 35-37
+  s_b6065bd4f02189::t_6c84f83df5a53f 86
+  s_b6065bd4f02189::t_218031b526bc6a 14
+docs/deployment/health-checks.md
+  s_b6065bd4f02189::t_c1299ca8e12b67 57-59
+control-plane/Tests/AppTests/SiteTests.swift
+  s_b6065bd4f02189::t_758a1e98402864 488-489
+  s_b6065bd4f02189::t_ac799d17df6a20 389-391
+control-plane/Sources/App/ReadinessState.swift
+  s_b6065bd4f02189::t_56d811198b934a 14
+control-plane/Sources/App/Services/VolumeNaming.swift
+  s_b6065bd4f02189::t_eef2108bb89551 5
+control-plane/Tests/AppTests/ProjectMemberTests.swift
+  s_b6065bd4f02189::t_27593f0e52d6fc 79-83,86-88,97-105
+  s_b6065bd4f02189::t_58de8718452b99 109-111,114-116,130-136
+  s_b6065bd4f02189::t_7de6ae2455da12 140-142,151-157
+  s_b6065bd4f02189::t_6d565ee38798ee 8,14
+  s_b6065bd4f02189::t_ea2f17845c13bb 178
+  s_b6065bd4f02189::t_2ac655218f4bb5 67-75
+  s_b6065bd4f02189::t_29d5eca925a1da 163
+  s_b6065bd4f02189::t_28a9bba628120e 49-51
+  s_b6065bd4f02189::t_7dbb6d047a1d9f 40
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_b6065bd4f02189::t_8330451e275e9a 17-20
+control-plane/Sources/App/Extensions/Request+Authorization.swift
+  s_b6065bd4f02189::t_c90f57ceb4bb8c 4-9,13
+helm/strato-control-plane/templates/spire-server-configmap.yaml
+  s_b6065bd4f02189::t_d6b4e083e649f3 43
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_b6065bd4f02189::t_c31fb0cae3230b 36
+  s_b6065bd4f02189::t_45f013a33eac70 5-8,10-21
+  s_b6065bd4f02189::t_959b654268e341 77,127,166,188,213,234,243,256,258
+  s_b6065bd4f02189::t_40ca61b89f39fb 173-177
+helm/strato-control-plane/templates/NOTES.txt
+  s_b6065bd4f02189::t_9c0648a6df3cf1 97
+  s_b6065bd4f02189::t_f862a8d4cfb013 45-47
+helm/strato-control-plane/templates/secret.yaml
+  s_b6065bd4f02189::t_1b8a8473edff2b 2-3
+control-plane/Tests/AppTests/RegistryPullSecretTests.swift
+  s_b6065bd4f02189::t_fba13bcd233264 23-25
+docs/architecture/iam.md
+  s_b6065bd4f02189::t_84444b3ef4174d 56,58-60
+  s_b6065bd4f02189::t_20eb01bdab0473 90
+  s_b6065bd4f02189::t_4455ab740a9ac4 170-173
+  s_b6065bd4f02189::t_f5d5104bccc154 672
+  s_b6065bd4f02189::t_9e459f26a0d846 674
+  s_b6065bd4f02189::t_3339c825080305 661-663
+  s_b6065bd4f02189::t_ee601b1572e48d 420-446,452-455,463-473,477,479-486
+  s_b6065bd4f02189::t_af46575f0fe2d0 529-531
+  s_b6065bd4f02189::t_0f510af2e56411 610,614-617
+  s_b6065bd4f02189::t_0ed7d2d1bdb45d 23-24
+  s_b6065bd4f02189::t_90725b618fc738 3-9,11-13,15
+  s_b6065bd4f02189::t_10e529d9eb7e6b 47-48
+  s_b6065bd4f02189::t_614ae3266ded80 295-296
+  s_b6065bd4f02189::t_4c07aeaec0cea5 415-416
+  s_b6065bd4f02189::t_0959e336cdff43 626-628,630-631,634-655
+  s_b6065bd4f02189::t_d2df0024ab6253 393
+  s_b6065bd4f02189::t_8318e20865059d 29-30
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_b6065bd4f02189::t_032fc22bda84af 445-446
+  s_b6065bd4f02189::t_0c2bab428fa2e9 689
+  s_b6065bd4f02189::t_b68894b53a8c6e 704
+  s_b6065bd4f02189::t_ebaef3826d68ac 33
+  s_b6065bd4f02189::t_017d6ccac4b3b3 104
+  s_b6065bd4f02189::t_c81e1e2e48cdad 164-165
+helm/strato-control-plane/README.md
+  s_b6065bd4f02189::t_012850c589beda 69-71
+  s_b6065bd4f02189::t_9bab9e9e774665 262
+  s_b6065bd4f02189::t_a4373d8464dc3f 3
+  s_b6065bd4f02189::t_3b30ed86ed6cf5 48
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_b6065bd4f02189::t_d03d4504282b29 17-19
+  s_b6065bd4f02189::t_50b2948f0b4908 253
+  s_b6065bd4f02189::t_35c35c353dba49 255-264
+  s_b6065bd4f02189::t_b36b800f9db8df 10-11
+  s_b6065bd4f02189::t_3f1acc204af426 254
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_b6065bd4f02189::t_cc756869af08b9 499-501
+  s_b6065bd4f02189::t_85aadc04261c28 315-316
+  s_b6065bd4f02189::t_599a722f90efe3 232
+  s_b6065bd4f02189::t_81b51c69780e6d 191
+  s_b6065bd4f02189::t_230c0bb80ee30d 293-295
+  s_b6065bd4f02189::t_8b18499a05f13e 378-379
+  s_b6065bd4f02189::t_62ed4ed1286811 124-125
+  s_b6065bd4f02189::t_b3a1995c587ed2 464
+  s_b6065bd4f02189::t_653a47167f704b 412
+  s_b6065bd4f02189::t_840cdf588b740e 438
+  s_b6065bd4f02189::t_f4b1705e78099d 345
+  s_b6065bd4f02189::t_9010791a0e264e 250-252
+  s_b6065bd4f02189::t_688f80dc537cfb 84-86
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_b6065bd4f02189::t_bcfd9ef5d1e305 121
+  s_b6065bd4f02189::t_e5318ef935ac3b 5-7,10
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_b6065bd4f02189::t_52225fc43df92e 394-397,405-406
+  s_b6065bd4f02189::t_e7ba0b62672fc0 89,91
+  s_b6065bd4f02189::t_012c29d1f13014 683-695,701,707
+  s_b6065bd4f02189::t_deecd027f514f3 13-15,20,31
+  s_b6065bd4f02189::t_98c013b890844f 723-735
+  s_b6065bd4f02189::t_b98d519136cb4e 105
+  s_b6065bd4f02189::t_3c4a78a53fb1aa 321-322
+  s_b6065bd4f02189::t_65106f1bbefd49 412,414
+  s_b6065bd4f02189::t_62cd989562a3f3 371,373-375
+  s_b6065bd4f02189::t_a20934b354a30f 118,147,165,199,227,270,308,343,489,553,596,676,716,757
+CLAUDE.md
+  s_b6065bd4f02189::t_d595896700bc03 126
+  s_b6065bd4f02189::t_bf827e6a255da8 30
+  s_b6065bd4f02189::t_480bb6050cc8af 128
+  s_b6065bd4f02189::t_35b9e7882b4748 49
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_b6065bd4f02189::t_2f2301fa8d77a6 615-620
+  s_b6065bd4f02189::t_6607e8485d2f35 541
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_b6065bd4f02189::t_792ef626c0594d 174
+  s_b6065bd4f02189::t_192fe4ed0552ca 190
+  s_b6065bd4f02189::t_6b65ed467aa877 199
+  s_b6065bd4f02189::t_0b03e5977169b2 294
+  s_b6065bd4f02189::t_4a5ff965e6d443 36
+  s_b6065bd4f02189::t_95e6f385738ea5 400
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_b6065bd4f02189::t_ef1538304cd354 169
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_b6065bd4f02189::t_ac49f5b48d9ea8 64
+  s_b6065bd4f02189::t_b04a0d7336a9aa 93
+  s_b6065bd4f02189::t_cad7e0cb1b39c1 120
+  s_b6065bd4f02189::t_4f98992a0b8c1b 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "fc2b9bf98c8f8b90116c9fa433a71cc607ae33fb",
+  "prompts": {},
+  "sessions": {
+    "s_b6065bd4f02189": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1fd2a535-f9eb-4133-b2ef-e7ede1587397",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

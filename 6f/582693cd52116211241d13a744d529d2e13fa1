@@ -1,0 +1,21 @@
+control-plane/web/src/app/(auth)/onboarding/page.tsx
+  s_2b82233990b23a::t_7d82364ea30a16 3,17,25-26,29-47
+control-plane/web/src/app/(dashboard)/layout.tsx
+  s_2b82233990b23a::t_412b75d28aeba5 8,17,29-43,51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6f582693cd52116211241d13a744d529d2e13fa1",
+  "prompts": {},
+  "sessions": {
+    "s_2b82233990b23a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89352b98-4bab-4033-bbb5-ac3c6c7c7e47",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

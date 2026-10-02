@@ -1,0 +1,21 @@
+docs/superpowers/plans/2026-08-16-storage-device-inventory.md
+  s_1dd9ddf4b6d7c1::t_21b09922bc2535 157,165,168,191,206,229,312,331,365,391,418
+  s_1dd9ddf4b6d7c1::t_482c1fe788a86f 240,286,293,339,347,352,398,417,422,457,465,488,495
+  s_1dd9ddf4b6d7c1::t_55a75402b3cd16 1-156,158-164,166-167,169-190,192-205,207-228,230-239,241-285,287-292,294-311,313-330,332-338,340-346,348-351,353-364,366-390,392-397,399-416,419-421,423-456,458-464,466-487,489-494,496-508
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8206e04b2d2285c90fb8b67cb863f80a61ce5446",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

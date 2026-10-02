@@ -1,0 +1,54 @@
+.claude/settings.json
+  s_e96ba4ae06c4bf::t_2e772d9cb602fb 7-48,51,56-70,74-89
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_8a06f352de3a8e::t_2d394d362fdd55 147,157
+  s_8a06f352de3a8e::t_aa2e790894ae3f 148-152,158-164
+  s_8a06f352de3a8e::t_644b6acc9d3079 584-585,587-605,608-609
+  s_8a06f352de3a8e::t_5e0f8fd2b428a1 10-24,139-140,168,193
+  s_8a06f352de3a8e::t_229b62d71f6ac8 136-138,141-144,146,153-154,156,165-166,170-189,194-198
+  s_8a06f352de3a8e::t_5e14341f8eb3f0 7,126-135,145,155,167,169,190-192,199-201,570-583
+  s_9f7fc43caa62d9::t_661e93245eeaaf 586,606-607,610-611
+control-plane/Sources/App/Controllers/VMController.swift
+  s_8a06f352de3a8e::t_7ee7c842ba0b9d 715-719,724-730,818-822,825-828,833,911-942,1053-1055,1062,1072,1074-1076
+  s_a08da5d54f9fb3::t_db794b92b04f11 690,1077-1082
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "9f846dcc2bd95d4db525a4464694aa3dca9e9559",
+  "prompts": {},
+  "sessions": {
+    "s_8a06f352de3a8e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a8a-1818-7322-ab99-759b87987b8e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9f7fc43caa62d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a87-9574-7791-b770-468d753dc14d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a08da5d54f9fb3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a8a-79a1-7c71-8a5d-9730134c8301",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

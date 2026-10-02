@@ -1,0 +1,88 @@
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 88-96,143-149,153,169,182-188
+  s_9dc9d51ad41673::t_141377431ede58 189
+control-plane/web/src/types/openapi.ts
+  s_9dc9d51ad41673::t_b59ae3018cae80 1256-1257
+docs/deployment/observability.md
+  s_9dc9d51ad41673::t_f2ac4d5f930b6b 240-249
+  s_9dc9d51ad41673::t_b59ae3018cae80 235-239,277-292
+  s_9dc9d51ad41673::t_7fb93e554f137c 293-300
+  s_9dc9d51ad41673::t_173036cc1bddbb 301
+control-plane/Sources/App/IAM/IAMActionTranslation.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 65
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 199-201
+control-plane/Tests/AppTests/SwiftCedarEngineTests.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 55-61
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 164,178-188
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 61-108
+control-plane/Sources/App/Controllers/UserController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 37-42,44,49-56,60,68,117-121,123,227,235,301,309
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 71-78
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 78-87,181-211,217-221
+control-plane/Sources/App/Models/Agent.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 327-359
+control-plane/Sources/App/openapi.yaml
+  s_9dc9d51ad41673::t_b59ae3018cae80 1720-1724
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 349
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 72-75,85-91
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 103,106-110,112-115,117-118,276-281
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 44-51
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 42-46
+control-plane/Tests/AppTests/CedarSchemaTests.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 59-67
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 379-394
+control-plane/Sources/App/Controllers/WorkloadIdentityController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 23
+control-plane/web/src/lib/hooks/use-users.ts
+  s_9dc9d51ad41673::t_b59ae3018cae80 6-9
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 391
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 17-18,76
+control-plane/Tests/AppTests/CedarPolicyAssemblyTests.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 44-48
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 333,349-359,361-363,458,472-484,486-487,681-684,733-740
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 146-152,234-240,245-255,257-262,266,283-284,286-299,310-321,341-355
+  s_9dc9d51ad41673::t_a0e78e9c98e5af 356
+control-plane/Tests/AppTests/AdminExceptionPathTests.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 1-294
+docs/architecture/iam.md
+  s_9dc9d51ad41673::t_b59ae3018cae80 759-770,772-858,896-898
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 31
+control-plane/Sources/App/IAM/IAMDecisionEngine.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 124
+control-plane/Sources/App/Controllers/AuditEventController.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 31
+control-plane/Tests/AppTests/UserControllerTests.swift
+  s_9dc9d51ad41673::t_b59ae3018cae80 30-35,38,43-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "282e30d89283bff835ed182123cfbd84d2d5100e",
+  "prompts": {},
+  "sessions": {
+    "s_9dc9d51ad41673": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f2c552db-3fd8-43b7-9bf6-92fa3360519c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

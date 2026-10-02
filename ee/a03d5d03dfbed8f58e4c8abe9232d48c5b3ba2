@@ -1,0 +1,161 @@
+control-plane/web/src/components/volumes/resize-volume-dialog.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 67-68
+cli/Sources/StratoCLICore/API/Middlewares.swift
+  s_14cd71c8010725::t_834bf22fad0040 16-19
+  s_14cd71c8010725::t_aca1a94aeeef52 5-15,20-31
+control-plane/web/src/components/volumes/attach-volume-dialog.tsx
+  s_14cd71c8010725::t_917d69d2d26ea3 69,73
+control-plane/web/src/lib/api/sandboxes.ts
+  s_14cd71c8010725::t_460864555a056e 37-40,43-46,49-52,55-58,61-64,73-74,78-80,86-87,90,101-102,105-108
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_14cd71c8010725::t_151fcf5ccf2553 132-165
+  s_14cd71c8010725::t_98dd675f014c9d 117-131
+control-plane/web/src/components/vms/vm-snapshots-card.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 50-53,75-76,93-94
+control-plane/Sources/App/Services/IdempotencyService.swift
+  s_14cd71c8010725::t_f59bbae8628cec 198-209
+  s_14cd71c8010725::t_76f26c6e044b80 11-13
+  s_14cd71c8010725::t_aef4c7106ecf2a 2,4,35-54,56-59,63-87,89-91,93-101,103-105,107-113,178-197,210-261
+  s_14cd71c8010725::t_ca594ae976539d 1,3,5-10,14-34,262-263
+  s_14cd71c8010725::t_98cf2b9c5e9ed0 55,60-62,88,92,102,106,114-177
+control-plane/Sources/App/openapi.yaml
+  s_14cd71c8010725::t_04fe25dd283731 344-345,389-390,460-461,503-504,535-536,562-563,581-582,596-597,612-613,633-634,649-650,755-756,783-784,806-807,864-865,922-923,942-943,958-959,974-975,1076-1077,1102-1103,1122-1123,1142-1143,1500-1501,1556-1557,1578-1579,1611-1612,1627-1628,1672-1673,1717-1718,1744-1745,1788-1789
+  s_14cd71c8010725::t_a615003e349f59 72-77,8409-8420
+control-plane/web/src/lib/api/volumes.ts
+  s_14cd71c8010725::t_460864555a056e 38-41,44-47,52-53,55-57,60-63,68-69,71-73,78-79,83-85,89-94,109-110,113
+control-plane/Sources/App/Models/IdempotencyKey.swift
+  s_14cd71c8010725::t_98cf2b9c5e9ed0 37-38
+  s_14cd71c8010725::t_427c887244e418 1,3-36,39-46,72
+  s_14cd71c8010725::t_9de21333d99837 2
+  s_14cd71c8010725::t_8b4257e3b24524 47-56,58-71
+  s_14cd71c8010725::t_be635099bf3804 57
+cli/Sources/StratoCLICore/API/StratoClient.swift
+  s_14cd71c8010725::t_aca1a94aeeef52 62-66
+control-plane/web/src/components/sandboxes/create-sandbox-dialog.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 120,141
+control-plane/web/src/components/volumes/clone-volume-dialog.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 52,56
+control-plane/web/src/components/volumes/volume-actions.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 73,86
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_14cd71c8010725::t_917d69d2d26ea3 99,107,123-124,141-142
+control-plane/web/src/lib/api/client.test.ts
+  s_14cd71c8010725::t_81419f8c446bb1 1-21
+control-plane/Sources/App/configure.swift
+  s_14cd71c8010725::t_427c887244e418 439-443
+  s_14cd71c8010725::t_dacd49a010beba 309-314
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_14cd71c8010725::t_243561484478ae 117-118,121-122,314
+  s_14cd71c8010725::t_70a63c1a750dd2 311-313,315-344
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  s_14cd71c8010725::t_eb5b3cfb1139f1 75-80,130-164,177-178,181-182,187,191-208
+  s_14cd71c8010725::t_8b983403f049a3 165-176,179-180
+  s_14cd71c8010725::t_da0ecf05506867 183-186,188-190
+  s_14cd71c8010725::t_efc62f72575ea6 210-242
+  s_14cd71c8010725::t_0a2d359c5f0474 209
+control-plane/web/src/components/volumes/create-snapshot-dialog.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 71,75
+control-plane/web/src/types/openapi.ts
+  s_14cd71c8010725::t_eb8e1e5adbfad4 9990-9991,10324-10327,10375-10378,10418-10421,10499-10502,10548-10551,10575-10578,10599-10602,10623-10626,10646-10649,10669-10672,10692-10695,10837-10840,10864-10867,10889-10892,10969-10972,11050-11053,11073-11076,11096-11099,11119-11122,11264-11267,11291-11294,11316-11319,11341-11344,11793-11796,11873-11876,11896-11899,11923-11926,11946-11949,11973-11976,12000-12003,12027-12030,12086-12089
+CONTEXT.md
+  s_14cd71c8010725::t_c7547f73a56752 47-62
+control-plane/web/src/lib/hooks/use-accepted-mutation.test.ts
+  s_14cd71c8010725::t_81419f8c446bb1 1,3-21,26-77
+  s_14cd71c8010725::t_97d6f98b4ad380 2,22-25
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_14cd71c8010725::t_58676d23680f02 107-108
+  s_14cd71c8010725::t_90c22fbc7690a5 149,216-217
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_14cd71c8010725::t_90c22fbc7690a5 92-93
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 104,113
+cli/Tests/StratoCLITests/StratoClientTests.swift
+  s_14cd71c8010725::t_b151ea91db7e6b 2-3,5,38-42,50-70
+  s_14cd71c8010725::t_834bf22fad0040 43-49
+  s_14cd71c8010725::t_4a9147592ca6ce 71-72
+control-plane/web/src/components/vms/vm-volumes-card.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 64-65,84
+control-plane/Sources/App/Controllers/VMController.swift
+  s_14cd71c8010725::t_46b6eb679c21c7 1213,1216-1222
+  s_14cd71c8010725::t_dacd49a010beba 1790
+  s_14cd71c8010725::t_58676d23680f02 920-921
+  s_14cd71c8010725::t_e61ef14f3c057f 1215
+control-plane/Tests/AppPlatformTests/IdempotencyTests.swift
+  s_14cd71c8010725::t_6b3e7c6a1a63b4 1,4-6,8-11,34-54,221-222
+  s_14cd71c8010725::t_8b4257e3b24524 2,7,58-61,63-86,216-220
+  s_14cd71c8010725::t_61b62579075258 3,92,94-102
+  s_14cd71c8010725::t_5e87e0d89c26dc 62
+  s_14cd71c8010725::t_bb1343f829803d 12-33,153-215
+  s_14cd71c8010725::t_bb9153163c8290 87-91,93,103-152
+  s_14cd71c8010725::t_dee801281bf8fe 55-57
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_14cd71c8010725::t_e61ef14f3c057f 645
+  s_14cd71c8010725::t_dacd49a010beba 151
+  s_14cd71c8010725::t_58676d23680f02 564-565
+  s_14cd71c8010725::t_46b6eb679c21c7 643,646-652
+control-plane/web/src/lib/api/vms.ts
+  s_14cd71c8010725::t_460864555a056e 38-39,52-53,55-57,60-62,64,68-70,72,84-85,88-91,94-97,103-106,109-112,115-118,131-132,136-138,144-145,148,154-156,158
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_14cd71c8010725::t_e61ef14f3c057f 254,1035
+  s_14cd71c8010725::t_58676d23680f02 234-235,1014-1015
+  s_14cd71c8010725::t_5032b05384da7a 920-921
+  s_14cd71c8010725::t_90c22fbc7690a5 935,1165-1166
+  s_14cd71c8010725::t_46b6eb679c21c7 1033,1036-1042
+  s_14cd71c8010725::t_412b095553e62a 231-233,236-253,255-266
+control-plane/Sources/App/Services/AgentService.swift
+  s_14cd71c8010725::t_8b4257e3b24524 1010-1027
+control-plane/web/src/lib/api/client.ts
+  s_14cd71c8010725::t_fcaaf5286261c3 17-20,105-110,115,119-124,129,133-138,143,147-156
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 232,268
+control-plane/web/src/components/sandboxes/sandbox-snapshots-card.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 55,59,91-92,119,124
+control-plane/Sources/App/Middleware/IdempotencyMiddleware.swift
+  s_14cd71c8010725::t_aca1a94aeeef52 55
+  s_14cd71c8010725::t_ee1b7820ff214d 19-21
+  s_14cd71c8010725::t_dee801281bf8fe 31
+  s_14cd71c8010725::t_76f26c6e044b80 41
+  s_14cd71c8010725::t_9de21333d99837 26
+  s_14cd71c8010725::t_23b3a72fdb9db1 71-72
+  s_14cd71c8010725::t_dacd49a010beba 1-18,22-25,27-30,32-40,42-54,56-70,73-123
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_14cd71c8010725::t_98cf2b9c5e9ed0 40
+  s_14cd71c8010725::t_e3b3154b935164 26-29,31,35,38,41-47,77,112-116,148,152-156
+  s_14cd71c8010725::t_f368a29efbefe3 16-18,22-24
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_14cd71c8010725::t_58676d23680f02 108-109
+  s_14cd71c8010725::t_90c22fbc7690a5 127,180-181
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 113
+control-plane/web/src/lib/hooks/use-accepted-mutation.ts
+  s_14cd71c8010725::t_fcaaf5286261c3 35
+  s_14cd71c8010725::t_c7c12124f14ffa 1,71,73,76-108,110-112
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_14cd71c8010725::t_a7c5d3918c19b9 54-64
+  s_14cd71c8010725::t_f368a29efbefe3 48-49
+  s_14cd71c8010725::t_98cf2b9c5e9ed0 135,181
+  s_14cd71c8010725::t_aef4c7106ecf2a 179-180,182-187,189,334,339-344
+control-plane/Sources/App/Migrations/CreateIdempotencyKeys.swift
+  s_14cd71c8010725::t_98cf2b9c5e9ed0 17,39
+  s_14cd71c8010725::t_427c887244e418 1-16,18-38,40-64
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 113
+control-plane/web/src/components/volumes/snapshot-table.tsx
+  s_14cd71c8010725::t_c16a370447a9b4 64-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "eea03d5d03dfbed8f58e4c8abe9232d48c5b3ba2",
+  "prompts": {},
+  "sessions": {
+    "s_14cd71c8010725": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04f88-bfb7-7ad1-a1e8-14771fb6a857",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

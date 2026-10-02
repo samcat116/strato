@@ -1,0 +1,34 @@
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerManager.swift
+  s_416dea9622a292::t_9ddcdd4229b779 255-256,272-274
+  s_416dea9622a292::t_cd07987898d0b8 104-156,275
+  s_416dea9622a292::t_9f7776c8b1d13c 276
+SwiftFirecracker/Sources/SwiftFirecracker/Models/MMDS.swift
+  s_416dea9622a292::t_68f791cddbc094 1-45
+SwiftFirecracker/Tests/SwiftFirecrackerTests/SwiftFirecrackerTests.swift
+  s_416dea9622a292::t_05046aba626bca 77-131
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_416dea9622a292::t_89dcb25bc60145 1-9,20-39,43-107,109-124,126-175,177-198,200-263
+  s_416dea9622a292::t_285ba848d95684 10-19
+  s_416dea9622a292::t_fcb275d923ba3d 40-42
+  s_416dea9622a292::t_1457a3560db846 108,125,176,199
+SwiftFirecracker/Tests/SwiftFirecrackerTests/VsockConnectionTests.swift
+  s_416dea9622a292::t_2eebe572483d28 1-242
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Vsock.swift
+  s_416dea9622a292::t_d2146d0c10aa69 1-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "10c923a93bef10508eafc758f8240feda00ab29d",
+  "prompts": {},
+  "sessions": {
+    "s_416dea9622a292": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f9215186-8ec3-4873-8e3b-958996840097",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,76 @@
+docs/deployment/agents.md
+  s_7452c6759c35a5::t_7316e98ab41f93 35-37
+  s_7452c6759c35a5::t_b92ab56f6d50e8 33-34
+  s_7452c6759c35a5::t_e82f13344a8e0e 20
+control-plane/Sources/App/configure.swift
+  s_7452c6759c35a5::t_a3e19c1dcba9e0 503-507
+control-plane/Tests/AppTests/IAMRoleBindingTests.swift
+  s_7452c6759c35a5::t_2d28eddf6640df 226-234
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_7452c6759c35a5::t_7a72f8372ddc97 249,254-255,265-266
+  s_7452c6759c35a5::t_e2b0b852daeed2 70,276-298
+  s_7452c6759c35a5::t_cf3ce876930205 159,166-167
+  s_7452c6759c35a5::t_07f06d1960e497 181,188-189
+  s_7452c6759c35a5::t_15c301ae04905c 53,63-69
+  s_7452c6759c35a5::t_27c0e46f248fc6 89,95-96
+  s_7452c6759c35a5::t_5ab420df0f63fc 225-227,230-231
+  s_7452c6759c35a5::t_a373533756936a 149
+  s_0efe7446473d64::t_b4646a5a399c97 71
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  s_7452c6759c35a5::t_bc6b290ea186a8 118-121
+  s_7452c6759c35a5::t_bdcfe7ba60043e 147
+control-plane/Tests/AppTests/SiteTests.swift
+  s_7452c6759c35a5::t_d19c4829d6ec7f 713-748
+control-plane/Sources/App/openapi.yaml
+  s_7452c6759c35a5::t_298807aafd572f 10872-10874
+  s_7452c6759c35a5::t_c6cf47f7c44499 10851-10853
+  s_7452c6759c35a5::t_d576b90588c1df 3875
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_7452c6759c35a5::t_357f1863d85c4e 278-302
+control-plane/Sources/App/Models/Site.swift
+  s_7452c6759c35a5::t_75bbd299538c9d 91-119
+control-plane/Sources/App/Migrations/BackfillDefaultSites.swift
+  s_7452c6759c35a5::t_01453f388a21f7 1-43
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_7452c6759c35a5::t_51b605256f8bbb 181-186
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_7452c6759c35a5::t_719721b8e2c956 267-273
+  s_7452c6759c35a5::t_2797a057129cac 215-220
+control-plane/web/src/components/agents/create-enrollment-dialog.tsx
+  s_7452c6759c35a5::t_572608294dcba1 52-60
+  s_7452c6759c35a5::t_cf140c8acd9102 111
+  s_7452c6759c35a5::t_c1033f39778cac 218-256
+  s_7452c6759c35a5::t_fb2e2c1b4a3934 16-22,24
+  s_7452c6759c35a5::t_a46e197e54d797 3
+  s_7452c6759c35a5::t_7da55b8081b35a 286
+  s_7452c6759c35a5::t_83bb888f6d6ee6 43-44,47,74-78,85
+  s_7452c6759c35a5::t_a951af23b748b9 217
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_7452c6759c35a5::t_b66ee5925cc046 281,284-288,291,298
+  s_7452c6759c35a5::t_f29af6dc9f86d0 325,328-330,332-333,336
+  s_7452c6759c35a5::t_197856ba4f7650 595,597-598,601-602
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "11dec86f5ec09f074e09d2f3a8b7d4b4e5623488",
+  "prompts": {},
+  "sessions": {
+    "s_0efe7446473d64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4fb56667-508b-4f0b-867b-bfbc05294f05",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7452c6759c35a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be797a21-8b67-4a85-b03e-b10210921335",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

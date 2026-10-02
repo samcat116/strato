@@ -1,0 +1,31 @@
+AGENTS.md
+  27096c0389af6a77 18-22,57-63,153
+control-plane/Dockerfile
+  27096c0389af6a77 26-28,36
+agent/Package.swift
+  27096c0389af6a77 12,17
+control-plane/Package.swift
+  27096c0389af6a77 28
+agent/Dockerfile
+  27096c0389af6a77 18-21,32-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.17",
+  "base_commit_sha": "a6fd984061412058d2056d42c1a2f74f294c38a7",
+  "prompts": {
+    "27096c0389af6a77": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dded155c-9e62-4912-92ef-eff34989d9b2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>",
+      "messages": [],
+      "total_additions": 30,
+      "total_deletions": 20,
+      "accepted_lines": 28,
+      "overriden_lines": 0
+    }
+  }
+}

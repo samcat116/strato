@@ -1,0 +1,32 @@
+.github/workflows/main-build.yaml
+  s_cdb4adf4d83223::t_457be0d78c9f16 245-253,321-322,344-346
+control-plane/web/next.config.ts
+  s_cdb4adf4d83223::t_457be0d78c9f16 1,4-22,29-33
+  s_cdb4adf4d83223::t_7ddad12205aed9 34-35
+control-plane/web/src/lib/version.ts
+  s_cdb4adf4d83223::t_457be0d78c9f16 1-35
+control-plane/web/src/components/layout/sidebar.tsx
+  s_cdb4adf4d83223::t_457be0d78c9f16 21,147-152
+.github/workflows/release.yaml
+  s_cdb4adf4d83223::t_59bc85dd35bec7 272-277,290-293
+deploy/compose/docker-compose.yml
+  s_cdb4adf4d83223::t_457be0d78c9f16 313-318
+control-plane/web/Dockerfile
+  s_cdb4adf4d83223::t_457be0d78c9f16 17-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "c6d801ee7de5e7a7008c6db1b67c6b26bbf83024",
+  "prompts": {},
+  "sessions": {
+    "s_cdb4adf4d83223": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92d7c2a9-28e3-4271-ad02-4a9fbb060b9f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

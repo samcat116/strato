@@ -1,0 +1,31 @@
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_3d8fde8278f186::t_6140a77ad1ada2 176-184
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3d8fde8278f186::t_cd19bef484dc9e 870-874,876,886,892
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_3d8fde8278f186::t_e7e238f040294b 308-314,316-317,320,325
+  s_3d8fde8278f186::t_9b0b63fc955d3d 209-215,221,227-228,234,239
+  s_3d8fde8278f186::t_4537c2798b4f5c 344
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_3d8fde8278f186::t_b908d797698f77 122-123,128-130,135,139,142-181,184,190
+shared/Sources/StratoShared/WireProtocol.swift
+  s_3d8fde8278f186::t_019c86e065cce6 74-85
+agent/Sources/StratoAgent/Agent.swift
+  s_3d8fde8278f186::t_8ba77814c33ef3 1226-1233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6da20a04b87578114e5474544566b74b0c72ab47",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

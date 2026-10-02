@@ -1,0 +1,53 @@
+control-plane/Sources/ControlPlanePostgres/AgentEnrollmentsPersistence.swift
+  s_448db3d02816b9::t_672586d1bcf2f0 203,205-209,237
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_448db3d02816b9::t_eace75a9acfbbb 699-704,720-724
+  s_448db3d02816b9::t_fca6d3379484f7 637-640
+  s_448db3d02816b9::t_34e3cbd83c6c1e 397-400,411
+  s_448db3d02816b9::t_ed037d79e60ca3 585-588,595-596,633-634,642
+control-plane/Sources/App/Services/GuardedHTTPClient.swift
+  s_448db3d02816b9::t_e668aec4ec0327 92-98,101-103,105
+control-plane/Sources/App/IAM/IAMDecisionEngine.swift
+  s_448db3d02816b9::t_ac1c0e2153d76f 92-95
+control-plane/Sources/App/Controllers/VMController.swift
+  s_448db3d02816b9::t_853a08f6608109 1300-1301
+control-plane/Tests/AppPlatformTests/FloatingIPControllerTests.swift
+  s_448db3d02816b9::t_45c0485959ca61 111,503,528,579-581,627-629
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_448db3d02816b9::t_35d83b96ebab40 1048-1049,1118-1119
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_448db3d02816b9::t_b77982c50ea377 246-248
+  s_448db3d02816b9::t_7934c317e6b225 249
+  s_448db3d02816b9::t_4e356cb3f0213a 270-272
+control-plane/Sources/App/Services/AgentService.swift
+  s_448db3d02816b9::t_853a08f6608109 2482-2483,2514,2517,2520
+control-plane/Sources/ControlPlanePostgres/AgentsPersistence.swift
+  s_448db3d02816b9::t_a999f5dc69bb9c 333,343,663-667,670,682-686,689
+control-plane/Sources/ControlPlanePostgres/PostgresStoreContext.swift
+  s_448db3d02816b9::t_35d83b96ebab40 102-119
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_448db3d02816b9::t_a6a6382d3db883 231
+control-plane/Sources/App/IAM/Cedar/CedarPolicySetCache.swift
+  s_448db3d02816b9::t_ac1c0e2153d76f 419-426
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  s_448db3d02816b9::t_e668aec4ec0327 326-329
+control-plane/Sources/ControlPlanePostgres/WorkloadsPersistence.swift
+  s_448db3d02816b9::t_35d83b96ebab40 411-433,444-454
+  s_448db3d02816b9::t_10a750f1552265 455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "2bfb33b85b3ea4ba3f667c383619d115efeeb213",
+  "prompts": {},
+  "sessions": {
+    "s_448db3d02816b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a012d2-ec0b-7830-a605-c46708080eb5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,114 @@
+control-plane/web/src/lib/hooks/index.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 9-11
+  s_006994cc89f4f7::t_42981d190fbc9b 8
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 311-313
+control-plane/Tests/AppPlatformTests/StorageDeviceInventoryReconcilerTests.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-287
+control-plane/Sources/App/configure.swift
+  s_006994cc89f4f7::t_ec617a5098e8c6 435-438
+agent/Tests/StratoAgentTests/FileHashingTests.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-124
+agent/Sources/StratoAgentCore/BlockDeviceInventory.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-376
+shared/Tests/StratoSharedTests/StorageDeviceInventoryTests.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-78
+control-plane/web/src/components/layout/nav.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 84
+control-plane/Sources/App/Services/StorageDeviceInventoryReconciler.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-175
+control-plane/Sources/App/routes.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 52-53
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 685,773,790,924,1034,1117,1305,1350
+control-plane/web/src/components/storage-devices/storage-device-model.test.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 1-66
+control-plane/web/src/types/api.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 3-10
+docs/superpowers/specs/2026-08-16-str-261-file-hashing-design.md
+  s_006994cc89f4f7::t_ed614cb20801e4 1-55
+control-plane/Sources/App/openapi.yaml
+  s_006994cc89f4f7::t_ed614cb20801e4 203-204,5235-5304,14484-14583,16898-16908,16910,16912
+  s_006994cc89f4f7::t_a3428cb9fd3622 16909,16911
+control-plane/Sources/App/IAM/AgentAuthorization.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-17
+control-plane/Sources/App/Migrations/CreateStorageDevices.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-82
+control-plane/Tests/AppPlatformTests/StorageDevicePersistenceTests.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-179
+control-plane/web/src/components/storage-devices/storage-device-inventory.test.tsx
+  s_006994cc89f4f7::t_ed614cb20801e4 1-159
+agent/Sources/StratoAgent/Agent.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 382-384,486-492,1499,2163-2166,5858-5859
+control-plane/Sources/App/Controllers/StorageDeviceController.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-246
+control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-97
+control-plane/web/src/components/storage-devices/storage-device-model.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 1-107
+control-plane/web/src/components/ui/switch.tsx
+  s_006994cc89f4f7::t_ed614cb20801e4 1-34
+control-plane/web/src/lib/api/storage-devices.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 1-24
+control-plane/web/src/lib/hooks/use-storage-devices.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 1-33
+deploy/compose/smoke-test.sh
+  s_006994cc89f4f7::t_ed614cb20801e4 157
+docs/superpowers/specs/2026-08-15-storage-device-inventory-design.md
+  s_006994cc89f4f7::t_ed614cb20801e4 1-515
+control-plane/web/src/types/openapi.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 3681-3723,8163-8204,9285-9291,16433-16498
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 408-410
+docs/superpowers/plans/2026-08-16-storage-device-inventory.md
+  s_006994cc89f4f7::t_ed614cb20801e4 1-508
+agent/Sources/StratoAgentCore/FileHashing.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-26
+shared/Sources/StratoShared/WireProtocol.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 14-15,22
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 20
+control-plane/Sources/App/Services/AgentService.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 2242-2257
+control-plane/web/src/components/layout/nav.test.ts
+  s_006994cc89f4f7::t_ed614cb20801e4 35-45
+control-plane/web/src/components/storage-devices/storage-device-inventory.tsx
+  s_006994cc89f4f7::t_ed614cb20801e4 1-234
+docs/architecture/wire-protocol.md
+  s_006994cc89f4f7::t_ed614cb20801e4 53,98-103
+  s_006994cc89f4f7::t_a2645e511c0c5e 104
+agent/Tests/StratoAgentTests/BlockDeviceInventoryTests.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-455
+control-plane/Sources/App/Models/StorageDevice.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-118
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1610-1614,1629-1630,1645
+control-plane/web/src/app/(dashboard)/storage/devices/page.tsx
+  s_006994cc89f4f7::t_ed614cb20801e4 1-45
+shared/Sources/StratoShared/StorageDeviceInventory.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 1-96
+agent/Sources/StratoAgentCore/OCI/OCIRegistryClient.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 537-539
+.agents/skills/e2e/SKILL.md
+  s_006994cc89f4f7::t_ed614cb20801e4 1-101
+agent/Sources/StratoAgentCore/SnapshotArtifactTransfer.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 140-142
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_006994cc89f4f7::t_ed614cb20801e4 124,133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "33ea4397dd854e61dbc00f183914950a6cc02f9b",
+  "prompts": {},
+  "sessions": {
+    "s_006994cc89f4f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00d06-57d2-7862-8053-e4feb2cafb1e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

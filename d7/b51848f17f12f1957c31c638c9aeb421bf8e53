@@ -1,0 +1,57 @@
+docs/deployment/agents.md
+  s_223cf433eba0c9::t_c1d4e303b4dee5 32-34
+  s_223cf433eba0c9::t_08ff7909123307 30-31
+  s_b46e1e8521f8aa::t_f95f7d7b98e097 35
+agent/Tests/StratoAgentTests/SandboxJailUIDAllocatorTests.swift
+  s_223cf433eba0c9::t_ca13dea05ee678 82-103
+agent/Sources/StratoAgentCore/SandboxJailUIDAllocator.swift
+  s_223cf433eba0c9::t_ca13dea05ee678 44-65
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_223cf433eba0c9::t_ca13dea05ee678 533-534
+  s_223cf433eba0c9::t_c1d4e303b4dee5 31,94-101,151-152,206,229,382-385,419-421,526-532,535-538
+  s_b46e1e8521f8aa::t_0a4d605150c7e0 539
+docs/architecture/sandboxes.md
+  s_223cf433eba0c9::t_08ff7909123307 145-146
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_223cf433eba0c9::t_c1d4e303b4dee5 14-19,210-230
+  s_a794bdb6881990::t_29bd89d5a29ec4 231
+agent/Sources/StratoAgent/Agent.swift
+  s_223cf433eba0c9::t_c1d4e303b4dee5 1826-1835,1842,1869
+  s_223cf433eba0c9::t_ca13dea05ee678 5966-5967
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_223cf433eba0c9::t_ca13dea05ee678 36,68-70,296-297,330,351-352,410
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_a794bdb6881990::t_b601eac5af6c34 598-618
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "d7b51848f17f12f1957c31c638c9aeb421bf8e53",
+  "prompts": {},
+  "sessions": {
+    "s_223cf433eba0c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05537-204c-7800-825f-35ed5aed5e74",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a794bdb6881990": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0597d-f390-7ac3-b450-7fccc3a566ae",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

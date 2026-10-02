@@ -1,0 +1,40 @@
+control-plane/web/src/app/(dashboard)/settings/api-keys/page.tsx
+  s_81a009b9149e79::t_60741ed5920b44 1-49
+control-plane/web/src/lib/hooks/use-api-keys.ts
+  s_81a009b9149e79::t_f83035e9fae03d 1-32
+control-plane/web/src/components/layout/sidebar.tsx
+  s_81a009b9149e79::t_33d489a5ceb93c 118
+  s_81a009b9149e79::t_78460a9c929773 186-191
+control-plane/web/src/types/api.ts
+  s_81a009b9149e79::t_356736b337e182 150-163
+control-plane/web/src/lib/hooks/index.ts
+  s_81a009b9149e79::t_f8ea593b136b79 23
+control-plane/web/src/lib/api/api-keys.ts
+  s_81a009b9149e79::t_063b4b49de04dd 1-22
+control-plane/web/src/components/api-keys/api-key-table.tsx
+  s_81a009b9149e79::t_eb216eccecb830 1-168
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_81a009b9149e79::t_c00d692563471c 7
+control-plane/web/src/components/api-keys/create-api-key-dialog.tsx
+  s_81a009b9149e79::t_279dfd94f40751 1-261
+control-plane/web/src/lib/api/index.ts
+  s_81a009b9149e79::t_3b669d641f59da 11
+control-plane/web/src/components/api-keys/index.ts
+  s_81a009b9149e79::t_6024fac78a801e 1-2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "63ab25e0927c00765403070b7d9fc1beb57178d6",
+  "prompts": {},
+  "sessions": {
+    "s_81a009b9149e79": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "340e637c-4b9c-495c-881d-1662fa813bb1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

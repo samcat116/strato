@@ -1,0 +1,20 @@
+agent/Tests/StratoAgentTests/ProcessRunnerTests.swift
+  s_0c6effbba5e0dd::t_240f12cc36aab2 179-186,189
+  s_0c6effbba5e0dd::t_fa9fe10602b07d 9-10,91-97,111,116-122,136,141-147,163-178,187-188,190-204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4341e71cfc5ac38a10d139f7f5947b0a7a36555a",
+  "prompts": {},
+  "sessions": {
+    "s_0c6effbba5e0dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-4725-7652-93e2-5776d532b9fc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

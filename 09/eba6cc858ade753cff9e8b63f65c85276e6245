@@ -1,0 +1,59 @@
+CLAUDE.md
+  s_b1fd57a7028f8c::t_7a2d3e5a6ed915 88,90
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_a920201f7c1034::t_eadb752e8f6f8f 4,185-214
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_a920201f7c1034::t_790f50663e4dfc 37-41
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_a920201f7c1034::t_3347d2bcca85e9 1-578
+control-plane/Sources/App/Extensions/Request+SandboxAuthorization.swift
+  s_a920201f7c1034::t_46184a5a9f3ddd 1-23
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_a920201f7c1034::t_44156d5fcc9b4d 65-69,75-100,110,113,125,135,159,167
+control-plane/Sources/App/Migrations/CreateSandbox.swift
+  s_a920201f7c1034::t_d752b15111527e 1-56
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_a920201f7c1034::t_6fb4a781c3afb5 12,20-21,48-60,124-127,205-207,211-212,222-223
+control-plane/Sources/App/Models/Sandbox.swift
+  s_a920201f7c1034::t_2d93f7e901c2aa 1-265
+control-plane/Sources/App/Services/AgentService.swift
+  s_a920201f7c1034::t_61f98e5624e092 880-881,929-959,989-1009,1341-1358,1360-1361,1521-1524,1526-1527,1557-1577,1725-1857,1930-1989,2696-2707
+control-plane/Sources/App/configure.swift
+  s_a920201f7c1034::t_0e034d79fee0e3 373-376
+control-plane/Sources/App/routes.swift
+  s_a920201f7c1034::t_bd71ad706b2faf 13-14
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_a920201f7c1034::t_79559841b57503 1-578
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_a920201f7c1034::t_9365b94ece8b5b 514-531
+docs/architecture/overview.md
+  s_a920201f7c1034::t_3ce72ee0530925 93
+docs/architecture/sandboxes.md
+  s_b1fd57a7028f8c::t_2ccd2cbf652ffc 11-14,99-118
+spicedb/schema.zed
+  s_a920201f7c1034::t_3da3f17f12f8eb 4,185-214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "09eba6cc858ade753cff9e8b63f65c85276e6245",
+  "prompts": {},
+  "sessions": {
+    "s_a920201f7c1034": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e474b736-80eb-41cc-aeb3-ac5e04e1363a",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

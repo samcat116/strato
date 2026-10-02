@@ -1,0 +1,35 @@
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_0c6effbba5e0dd::t_882daa40cf96ee 94-96
+  s_0c6effbba5e0dd::t_f45d8953a9e052 2,92-93,97-133
+  s_0c6effbba5e0dd::t_7718b6bdb6b946 134-135
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_0c6effbba5e0dd::t_7f0a449553d855 129-130,134-135,143-146,251-255,260
+  s_0c6effbba5e0dd::t_388af33ac531df 127-128,131-133,136,182-183,250,292
+agent/Tests/StratoAgentTests/ProcessRunnerTests.swift
+  s_0c6effbba5e0dd::t_29baa1172ab89f 11-13
+  s_0c6effbba5e0dd::t_c024b09af555e1 10
+  s_0c6effbba5e0dd::t_ca1fcc04f34e40 6,16,87-90,92-96,99-100,102-107,109-113,116-117,119-124,126-128,130-132,136,138-139,147,149-161
+  s_0c6effbba5e0dd::t_998eb1213df565 15
+  s_0c6effbba5e0dd::t_388af33ac531df 9,14,91,97-98,101,108,114-115,118,125,133-135,137,140-146,148
+  s_0c6effbba5e0dd::t_af5b8727974bf6 129
+  s_0c6effbba5e0dd::t_480c8b245de5c6 86
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_0c6effbba5e0dd::t_998eb1213df565 420-421,424-517
+  s_0c6effbba5e0dd::t_f65cc4be62f3bb 422-423
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "43cfd31381c5e9e6d920a89b695ec528e4442d06",
+  "prompts": {},
+  "sessions": {
+    "s_0c6effbba5e0dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-4725-7652-93e2-5776d532b9fc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+docs/agents/triage-labels.md
+  s_29bccb6c6f55c0::t_aada169c4ea7d0 1-15
+docs/agents/issue-tracker.md
+  s_29bccb6c6f55c0::t_0c850436388a31 1-45
+docs/agents/domain.md
+  s_29bccb6c6f55c0::t_910b5ad39b2baf 1-51
+CLAUDE.md
+  s_29bccb6c6f55c0::t_e57d732a9950aa 155-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5c4db402c69bb6d6004f5cac055d1e6725c93a5d",
+  "prompts": {},
+  "sessions": {
+    "s_29bccb6c6f55c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2fab1e14-677d-4f0c-8b38-2894f7340274",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,38 @@
+agent/Tests/StratoAgentTests/UEFIVarstoreTests.swift
+  s_4dc01f536615a1::t_000d3cc33284d4 272
+  s_4dc01f536615a1::t_7f86e941c570b9 133-135,140-185
+  s_4dc01f536615a1::t_cfc20abd1e510c 18-20,25-27,31-32,38-41,49-54
+  s_4dc01f536615a1::t_d91544d688ad96 186
+agent/Tests/StratoAgentTests/FirmwareResolverTests.swift
+  s_4dc01f536615a1::t_41c719af94a98a 236-245,251,256,258-261,277
+  s_4dc01f536615a1::t_ef59ff4e194e55 246-250,252-255,257,262-276
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_4dc01f536615a1::t_c63386ffb772e6 32-37
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_4dc01f536615a1::t_cc16c64917ffc7 1854
+agent/Sources/StratoAgentCore/FirmwareResolver.swift
+  s_4dc01f536615a1::t_fad185d57b4f3a 123
+  s_4dc01f536615a1::t_c6bfe2aa51849f 155-165,176,184-186,192
+  s_4dc01f536615a1::t_7f534fe3cc30e0 219-221
+agent/Sources/StratoAgentCore/UEFIVarstore.swift
+  s_4dc01f536615a1::t_aca025e10de30b 133-172
+  s_4dc01f536615a1::t_59a7e07b0a8aeb 10-12,18
+  s_4dc01f536615a1::t_e514da480cd276 57
+  s_4dc01f536615a1::t_164df3d76cf426 85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "cfb6bfd5697717ea8cca02f8243cbf98d4dd884a",
+  "prompts": {},
+  "sessions": {
+    "s_4dc01f536615a1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fa364107-7351-4ab1-b25d-5f9568ef8d95",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+control-plane/Tests/AppTests/WorkloadIdentityControllerTests.swift
+  s_a9a9290d19ffe0::t_10a38f38463a6b 288-340
+  s_a9a9290d19ffe0::t_1ba60aba9f1cab 278-279,281
+control-plane/Sources/App/Controllers/WorkloadIdentityController.swift
+  s_a9a9290d19ffe0::t_daf37aeb4a9364 91-108,111,117-118
+  s_a9a9290d19ffe0::t_ed1027ec9f479a 159-169
+  s_a9a9290d19ffe0::t_0a0156bb39dbb1 306-311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "87383c8486a271c0023995f27bbc476a8e4d0d49",
+  "prompts": {},
+  "sessions": {
+    "s_a9a9290d19ffe0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e0c267c-ad5e-48e4-a95b-a988b7014764",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

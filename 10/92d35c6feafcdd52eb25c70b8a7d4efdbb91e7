@@ -1,0 +1,98 @@
+control-plane/Sources/App/Extensions/Application+LazyService.swift
+  s_7294ccc317eeac::t_90a46579c3537a 55-57
+  s_7294ccc317eeac::t_625d8160825404 47
+  s_7294ccc317eeac::t_e2670dbb50a583 4-18,21-34,36-46,49-54,69
+  s_7294ccc317eeac::t_c71d6f450bceb1 19-20
+control-plane/Sources/App/Services/ValkeyService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 108-109
+  s_7294ccc317eeac::t_73abb98484108b 66,72
+control-plane/Sources/App/Services/RegistryClientService.swift
+  s_7294ccc317eeac::t_73abb98484108b 351
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_7294ccc317eeac::t_73abb98484108b 212
+control-plane/Tests/AppTests/AgentUpdateArtifactsTests.swift
+  s_7294ccc317eeac::t_e9be534b428fcc 180-183,188-202
+  s_7294ccc317eeac::t_184b80855f5f14 184-187
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_7294ccc317eeac::t_73abb98484108b 338
+control-plane/Sources/App/Services/DecoyKeyService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 92
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_7294ccc317eeac::t_73abb98484108b 357
+control-plane/Sources/App/Services/ProxyClientIP.swift
+  s_7294ccc317eeac::t_73abb98484108b 76
+control-plane/Sources/App/Services/ImageObjectStore.swift
+  s_7294ccc317eeac::t_f61ca27891c638 159
+control-plane/Sources/App/ReadinessState.swift
+  s_7294ccc317eeac::t_6e54c876b17e7c 69,75-76,78
+control-plane/Tests/AppTests/ApplicationStorageWriteTests.swift
+  s_7294ccc317eeac::t_a44c5bb8053f7f 1-8,11-13,17-19,24-25,38-39,55-56,59-61,64-65,79-80,82-84
+  s_7294ccc317eeac::t_f2bb7f0bfcad68 9-10
+  s_7294ccc317eeac::t_f81cb7d258e5ca 14-16,20-23,26-37,40-54,57-58,62-63,66-78,81
+control-plane/Sources/App/IAM/RoleStore.swift
+  s_7294ccc317eeac::t_f61ca27891c638 277
+control-plane/Sources/App/Services/AgentService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 2439,2452
+control-plane/Sources/App/configure.swift
+  s_7294ccc317eeac::t_43229007954f44 156-158,161-166
+  s_7294ccc317eeac::t_e8d2450e96f8ae 159-160
+control-plane/Sources/App/Services/LokiService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 286
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_7294ccc317eeac::t_f61ca27891c638 475
+control-plane/Sources/App/Services/VolumeService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 615
+control-plane/Sources/App/BuildInfo.swift
+  s_7294ccc317eeac::t_f61ca27891c638 99
+control-plane/Sources/App/IAM/Cedar/GuardrailAnalyzer.swift
+  s_7294ccc317eeac::t_f61ca27891c638 206
+control-plane/Sources/App/Services/SandboxLogIngestor.swift
+  s_7294ccc317eeac::t_f61ca27891c638 156
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_7294ccc317eeac::t_f61ca27891c638 349
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_7294ccc317eeac::t_73abb98484108b 359
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_7294ccc317eeac::t_73abb98484108b 678
+control-plane/Sources/App/Services/AgentUpdateArtifacts.swift
+  s_7294ccc317eeac::t_5e74b91ee309e9 63-82,87-93,99-102,106-108
+  s_7294ccc317eeac::t_949f5b4e4f8b15 36-44
+  s_7294ccc317eeac::t_f61ca27891c638 111
+  s_7294ccc317eeac::t_9439c19e5eb784 83-86
+control-plane/Sources/App/Services/AuditService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 432
+control-plane/Sources/App/Services/BackgroundTaskRegistry.swift
+  s_7294ccc317eeac::t_f61ca27891c638 88
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_7294ccc317eeac::t_5a777758f3dd80 405-411
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 827
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 514
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_7294ccc317eeac::t_f61ca27891c638 705
+control-plane/Sources/App/Services/SandboxExecSessionManager.swift
+  s_7294ccc317eeac::t_f61ca27891c638 511
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_7294ccc317eeac::t_6817fe3a5689fd 788-789,791
+control-plane/Sources/App/OpenAPI/GeneratedAPIRegistration.swift
+  s_7294ccc317eeac::t_f61ca27891c638 35
+control-plane/Sources/App/Services/SPIFFE/SPIREIssuanceMetrics.swift
+  s_7294ccc317eeac::t_73abb98484108b 249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1092d35c6feafcdd52eb25c70b8a7d4efdbb91e7",
+  "prompts": {},
+  "sessions": {
+    "s_7294ccc317eeac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b665dc95-e5ec-4364-b42b-afc8356a5bf7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

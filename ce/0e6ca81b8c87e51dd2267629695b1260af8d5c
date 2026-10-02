@@ -1,0 +1,19 @@
+control-plane/web/src/components/vms/vm-table.tsx
+  s_16171f36e7ba93::t_22e15d5a634d64 81-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ce0e6ca81b8c87e51dd2267629695b1260af8d5c",
+  "prompts": {},
+  "sessions": {
+    "s_16171f36e7ba93": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "13b523e2-2ceb-424d-acb8-60f93824213c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

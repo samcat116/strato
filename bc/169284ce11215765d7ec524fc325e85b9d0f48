@@ -1,0 +1,112 @@
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_45f5bd5bc03fe4::t_b81c4925aa11e1 347-349
+control-plane/Sources/App/configure.swift
+  s_45f5bd5bc03fe4::t_652b7892769a9e 428-430
+control-plane/Sources/App/Services/AgentService.swift
+  s_45f5bd5bc03fe4::t_78eeca8462064d 905-907
+  s_45f5bd5bc03fe4::t_3802e84c248f82 627-628,670-671,716-717
+  s_45f5bd5bc03fe4::t_568ded8d7d6863 2111
+  s_45f5bd5bc03fe4::t_b129a8c4dc7c69 688-694,713-714
+  s_45f5bd5bc03fe4::t_82967a30691dbb 631,672-673,676
+  s_45f5bd5bc03fe4::t_51639e266eeb67 719,2107-2110
+  s_45f5bd5bc03fe4::t_1d4fb71ef47b36 1155
+  s_45f5bd5bc03fe4::t_f42496387fa6e6 2112-2113
+shared/Sources/StratoShared/GuestExecMessages.swift
+  s_45f5bd5bc03fe4::t_ca884ad9aaa70d 135-137,144,150,158,162
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_45f5bd5bc03fe4::t_6d531a7aee6cd0 471-476,481-487,492-499,503-508
+  s_45f5bd5bc03fe4::t_ac6b86204f989b 674-678,681-684
+  s_45f5bd5bc03fe4::t_24b0c2650a7ad1 45-48,85-86,98-99,150-151,245-257,260
+shared/Tests/StratoSharedTests/GuestExecMessageTests.swift
+  s_45f5bd5bc03fe4::t_d47e79e0081bd6 66,69
+shared/Sources/StratoShared/OperationModels.swift
+  s_45f5bd5bc03fe4::t_037a8d2e7ad3c4 39-41
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_45f5bd5bc03fe4::t_ca884ad9aaa70d 20
+control-plane/Sources/App/openapi.yaml
+  s_45f5bd5bc03fe4::t_ccf96d9ef6cc54 8761-8766
+  s_45f5bd5bc03fe4::t_98113939ac429e 668-698,9026-9061,9088
+  s_45f5bd5bc03fe4::t_110daf0fd01ca2 8991-8995
+control-plane/Sources/App/Models/VMCommandExecution.swift
+  s_45f5bd5bc03fe4::t_652b7892769a9e 1-56
+control-plane/web/src/types/openapi.ts
+  s_45f5bd5bc03fe4::t_455f614f4dd424 5336
+  s_45f5bd5bc03fe4::t_04c00ea3c3ef6e 409-431,5357-5370,5381,9506-9514,10327-10359
+control-plane/Tests/AppPlatformTests/ReplicaMessageBridgeTests.swift
+  s_45f5bd5bc03fe4::t_f1bd5c02c1c127 12-16
+  s_45f5bd5bc03fe4::t_1f3bf9f92ba0f6 28-29,39,50,53,60-61,82-83,86-87
+  s_45f5bd5bc03fe4::t_e0b38409c3f8c6 58-59,62-81,84-85,88-89
+control-plane/Tests/AppResourceTests/OperationResponseContractTests.swift
+  s_45f5bd5bc03fe4::t_c6395b3d1f8180 34-51
+control-plane/Sources/App/Migrations/CreateVMCommandExecutions.swift
+  s_45f5bd5bc03fe4::t_3802e84c248f82 43-45
+  s_45f5bd5bc03fe4::t_652b7892769a9e 1-21,24-42,46-53
+  s_45f5bd5bc03fe4::t_e9f0a2f9ab24ea 22-23
+control-plane/Tests/AppResourceTests/VMCommandExecutionTests.swift
+  s_45f5bd5bc03fe4::t_bcaf967c1be15b 82-91,96-101
+  s_45f5bd5bc03fe4::t_ddfa0b7968e8ca 1-28,32,44-67,71,75-81,102
+  s_45f5bd5bc03fe4::t_e9f0a2f9ab24ea 29-31,33-43,68-70,72-74,92-95
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_45f5bd5bc03fe4::t_e9f0a2f9ab24ea 188-190,216-218
+  s_45f5bd5bc03fe4::t_f1bd5c02c1c127 198
+  s_45f5bd5bc03fe4::t_603bcf4f586954 144-147
+  s_45f5bd5bc03fe4::t_b129a8c4dc7c69 11-13,27,35-39,46-48
+  s_45f5bd5bc03fe4::t_423dd6d783ba13 15-19,58-64,96-143,148-187,191-197,199-215,219-238,277-286
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_45f5bd5bc03fe4::t_e9f0a2f9ab24ea 213-217
+  s_45f5bd5bc03fe4::t_6eec35eda3fe41 202-207,209-212,218-222,362,371-386
+  s_45f5bd5bc03fe4::t_e684a5c7682373 387,563-616
+  s_45f5bd5bc03fe4::t_ab86a2e2038724 208
+  s_45f5bd5bc03fe4::t_b129a8c4dc7c69 623-626
+  s_45f5bd5bc03fe4::t_d6f58135e3412b 86-94
+  s_45f5bd5bc03fe4::t_49713454d9f451 388
+control-plane/Sources/App/Services/OperationFacade.swift
+  s_45f5bd5bc03fe4::t_f4a24031c8fc0b 385-396,408,411-412,414-416
+  s_45f5bd5bc03fe4::t_110daf0fd01ca2 363-366,427-429
+  s_45f5bd5bc03fe4::t_037a8d2e7ad3c4 91,125,152,172,186,204,440,450-451,462,465-470
+  s_45f5bd5bc03fe4::t_3802e84c248f82 397,400-403,409-410
+  s_45f5bd5bc03fe4::t_e9f0a2f9ab24ea 398-399,404-407
+  s_45f5bd5bc03fe4::t_c43c194d0e2e02 471
+agent/Sources/StratoAgent/Agent.swift
+  s_45f5bd5bc03fe4::t_ca884ad9aaa70d 3658-3660
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_45f5bd5bc03fe4::t_d47e79e0081bd6 150-151
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_45f5bd5bc03fe4::t_bcaf967c1be15b 122-131,138-149,154-158
+  s_45f5bd5bc03fe4::t_a233ae8d236693 1-15,17-44,46-47,52,58-72,74,78-121,150-153,159-160,184-187,192-203,209-262
+  s_45f5bd5bc03fe4::t_3802e84c248f82 161-183,271-275
+  s_45f5bd5bc03fe4::t_2498fc1387821f 263-266,269-270,276-293
+  s_45f5bd5bc03fe4::t_603bcf4f586954 45,48-51,75-77,204,208
+  s_45f5bd5bc03fe4::t_0e92bb732da7d2 16,73,188-191
+  s_45f5bd5bc03fe4::t_e9f0a2f9ab24ea 53-57,132-137,205-207,267-268
+shared/Sources/StratoShared/WireProtocol.swift
+  s_45f5bd5bc03fe4::t_ca884ad9aaa70d 14-17,20
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_45f5bd5bc03fe4::t_110daf0fd01ca2 7-11
+  s_45f5bd5bc03fe4::t_2498fc1387821f 34-41
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_45f5bd5bc03fe4::t_72b284459f51d6 333-368,370-384
+  s_45f5bd5bc03fe4::t_64d5bc03980950 369
+control-plane/Sources/App/Controllers/VMController.swift
+  s_45f5bd5bc03fe4::t_009a79eeb7b20f 65-76,100-102,182-184,1826-1888
+  s_45f5bd5bc03fe4::t_e9f0a2f9ab24ea 91-93
+  s_45f5bd5bc03fe4::t_d5dfe46e21a382 77-84,89-90,94-99
+  s_45f5bd5bc03fe4::t_84dbb9ad286f64 85-88
+  s_45f5bd5bc03fe4::t_5cdc980d8f0ed2 1889
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bc169284ce11215765d7ec524fc325e85b9d0f48",
+  "prompts": {},
+  "sessions": {
+    "s_45f5bd5bc03fe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdff-9a39-74b3-8ce3-c403f19183b6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

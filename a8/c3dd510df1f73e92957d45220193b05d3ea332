@@ -1,0 +1,45 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_7754dde20e33f2::t_51eac9439637f5 870-876
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_486b1e97177752::t_7fa3d9da458a67 159-173,598,609-626
+agent/Sources/StratoAgentSPIFFE/SPIFFEWebSocketConnect.swift
+  s_486b1e97177752::t_3ffc55ed99325d 76-99,157,165-166,173-176,250-259
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_705e121911b57e::t_29a5a0c76d24de 217-248
+agent/Tests/StratoAgentTests/SPIFFEWebSocketPinningTests.swift
+  s_705e121911b57e::t_905555e08d4cba 107-122,187-190,195-230,232,235,238,240-252,299-309
+deploy/agent/install.sh
+  s_705e121911b57e::t_9b1b884996d82c 92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a8c3dd510df1f73e92957d45220193b05d3ea332",
+  "prompts": {},
+  "sessions": {
+    "s_486b1e97177752": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "98e898e9-d980-4617-a72e-e308ef33fb2d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_705e121911b57e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "169d3792-0c79-43ff-99f4-e09430f4fdbb",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7754dde20e33f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c70d8b4-a724-446c-ad9a-e40cc0a7f2af",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

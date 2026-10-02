@@ -1,0 +1,40 @@
+docs/architecture/authorization-edge-audit.md
+  s_92f812bcb129e0::t_538b28f447f4c3 132-133
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_92f812bcb129e0::t_981eff9bc1a7d4 120-121,123-136,140-154,157-170,173-183
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_92f812bcb129e0::t_254d065f1bd275 367,378-383
+  s_92f812bcb129e0::t_476765ddacf81f 421-433
+  s_eaba43f87d51f5::t_1f165a367ef1fe 384
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_92f812bcb129e0::t_a4fe90fb30dcd5 135-139
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_92f812bcb129e0::t_0f280b477a26e1 567-574,579-580,589,591-592
+  s_92f812bcb129e0::t_feb91ee975a1c7 581-588
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_92f812bcb129e0::t_caabf520d0b08f 506-508,510-512
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "f2062d9803fa65720944804c04b9939b64ea329d",
+  "prompts": {},
+  "sessions": {
+    "s_92f812bcb129e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21f7f546-4f40-4919-a39b-d4754cf2ddb2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_eaba43f87d51f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "752b1789-a0cf-475e-93d1-9ea34b7fbb0e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

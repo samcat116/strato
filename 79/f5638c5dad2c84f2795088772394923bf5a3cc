@@ -1,0 +1,75 @@
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_e300b0a73c2a9f::t_71c5b307ae81e6 427-447
+agent/Sources/StratoAgentCore/MetadataService/MetadataRouter.swift
+  s_e300b0a73c2a9f::t_1032b77c9b9480 162,343,348-352
+  s_e300b0a73c2a9f::t_8f39bcaa47fd32 159-161,189-203,239-241,334-342,344-347,354-355
+  s_e300b0a73c2a9f::t_736ce9e62b262b 353
+  s_e300b0a73c2a9f::t_bbda8e31e61908 356
+docs/architecture/wire-protocol.md
+  s_e300b0a73c2a9f::t_d3018d9a4658d3 75-78,430-435
+agent/Tests/StratoAgentTests/MetadataResponderTests.swift
+  s_e300b0a73c2a9f::t_1032b77c9b9480 121-126
+  s_e300b0a73c2a9f::t_e631aa3718ecdb 27,42,90-120,127-149
+  s_e300b0a73c2a9f::t_2e5721396d34a5 150
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_e300b0a73c2a9f::t_1965e65e9124c4 47-48,96
+  s_e300b0a73c2a9f::t_b3ea6b9c22d54b 57,98,162-165,168,174,184-192,202-204,916-925
+  s_e300b0a73c2a9f::t_7c30a4844dbf76 926
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_e300b0a73c2a9f::t_97caf06054aade 91-95
+agent/Tests/StratoAgentTests/MetadataRouterTests.swift
+  s_e300b0a73c2a9f::t_1032b77c9b9480 98
+  s_e300b0a73c2a9f::t_1965e65e9124c4 90-97,100-114
+  s_e300b0a73c2a9f::t_9670e1544604d9 99
+shared/Sources/StratoShared/InstanceMetadata.swift
+  s_e300b0a73c2a9f::t_e6bef063388f72 32-37
+  s_e300b0a73c2a9f::t_97caf06054aade 131-144,192,207,233
+shared/Tests/StratoSharedTests/InstanceMetadataTests.swift
+  s_e300b0a73c2a9f::t_1965e65e9124c4 51,84,203
+docs/architecture/agent.md
+  s_e300b0a73c2a9f::t_d3018d9a4658d3 546-551,1282,1284,1294-1301,1343-1347
+  s_e300b0a73c2a9f::t_e6bef063388f72 1285-1286
+control-plane/Sources/App/Migrations/AddMetadataSourceToVM.swift
+  s_e300b0a73c2a9f::t_97caf06054aade 17-25,38
+docs/adr/0006-imds-session-auth.md
+  s_e300b0a73c2a9f::t_d3018d9a4658d3 11,13-16,43,45-65,104-108,114-116
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_e300b0a73c2a9f::t_b3ea6b9c22d54b 631
+agent/Tests/StratoAgentTests/CloudInitMetaDataTests.swift
+  s_e300b0a73c2a9f::t_1965e65e9124c4 12,23,26,28,36,38,45-48,50,54-64
+  s_e300b0a73c2a9f::t_bc6d5df996acb1 65-66
+control-plane/Sources/App/openapi.yaml
+  s_e300b0a73c2a9f::t_d3018d9a4658d3 9087-9088
+control-plane/web/src/types/openapi.ts
+  s_e300b0a73c2a9f::t_ae48ecf8e1a917 5381
+control-plane/Sources/App/Models/vm.swift
+  s_e300b0a73c2a9f::t_97caf06054aade 165-170,353-354,385
+docs/architecture/networking.md
+  s_e300b0a73c2a9f::t_d3018d9a4658d3 1188-1194
+agent/Sources/StratoAgentCore/MetadataService/MetadataResponder.swift
+  s_e300b0a73c2a9f::t_42b01eb95e8e3f 174-175,278-292
+  s_e300b0a73c2a9f::t_1032b77c9b9480 176
+  s_e300b0a73c2a9f::t_8f39bcaa47fd32 168-173,177-184,209-212,218
+  s_e300b0a73c2a9f::t_4766ba6e53e5bb 293
+agent/Sources/StratoAgentCore/MetadataService/MetadataHTTPServer.swift
+  s_e300b0a73c2a9f::t_8f39bcaa47fd32 356-359,364
+control-plane/Tests/AppPlatformTests/AddMetadataSourceToVMTests.swift
+  s_e300b0a73c2a9f::t_e631aa3718ecdb 22,24,34-42
+  s_e300b0a73c2a9f::t_2f1d64fed4f046 43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "79f5638c5dad2c84f2795088772394923bf5a3cc",
+  "prompts": {},
+  "sessions": {
+    "s_e300b0a73c2a9f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-7353-7161-b6ab-b306d13023e4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,75 @@
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_b750c5261ab20d::t_f0357762e253e2 58-62
+  s_b750c5261ab20d::t_43e93922462da9 204
+control-plane/Sources/App/Migrations/CreateIAMDecisionLog.swift
+  s_b750c5261ab20d::t_b6c0c7e271d3b4 1-55
+control-plane/Sources/App/routes.swift
+  s_b750c5261ab20d::t_17400676c43480 16-17
+control-plane/Tests/AppTests/IAMShadowEvaluatorTests.swift
+  s_b750c5261ab20d::t_ba80a58913061b 1-272
+control-plane/Sources/App/configure.swift
+  s_b750c5261ab20d::t_86ebadb4a00a97 466-469
+  s_b750c5261ab20d::t_08c3b32b85387e 639-642
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_b750c5261ab20d::t_27d6455c6e9a75 116,119-123
+  s_b750c5261ab20d::t_381f5189591fd3 44-50
+  s_b750c5261ab20d::t_c2d9ff94bd049c 73-79
+  s_b750c5261ab20d::t_90a7863ea4d451 142
+  s_b750c5261ab20d::t_cf270e9cb50495 57-63
+  s_b750c5261ab20d::t_1329480e5d3bd6 88-97,100
+  s_b750c5261ab20d::t_d70bc47565cc1f 229,231,238,243
+  s_b750c5261ab20d::t_4be811e39a05b4 12-24,29-34,37-38
+control-plane/Sources/App/IAM/Cedar/SwiftCedarEngine.swift
+  s_b750c5261ab20d::t_b6de710c813dc8 1-95
+control-plane/Sources/App/IAM/IAMShadowEvaluator.swift
+  s_b750c5261ab20d::t_c7a34b41dd4f2f 1-370
+control-plane/Tests/AppTests/CedarPolicySetCacheTests.swift
+  s_b750c5261ab20d::t_381ef94f191b36 42-44
+  s_b750c5261ab20d::t_9a550c7947997a 148-155,157,159
+control-plane/Package.swift
+  s_b750c5261ab20d::t_16f215cba33aa1 62-64
+  s_b750c5261ab20d::t_bb00ef2a445fe0 111
+control-plane/Tests/AppTests/SwiftCedarEngineTests.swift
+  s_b750c5261ab20d::t_4a8ee3e290d9fc 1-274
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_b750c5261ab20d::t_9b2dfb655cdfb8 1-150
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_b750c5261ab20d::t_68b54e1727114b 945-949,951-961
+docs/architecture/iam.md
+  s_b750c5261ab20d::t_d7cfcc8fbc13a1 485,489-491
+  s_b750c5261ab20d::t_32c68fa05a15d2 368-379
+  s_b750c5261ab20d::t_d669dc6bcf69d0 389-390
+  s_b750c5261ab20d::t_94d50d85d45e8d 417-458
+control-plane/Sources/App/IAM/ShadowTranslation.swift
+  s_b750c5261ab20d::t_68c8924bf44fed 1-81,84-86,88-145
+  s_b750c5261ab20d::t_bb1c797a848015 82-83,87
+control-plane/Tests/AppTests/IAMShadowTranslationTests.swift
+  s_b750c5261ab20d::t_069a98c6761df7 1-80,83-109,111-116,118-121,128-130
+  s_b750c5261ab20d::t_64a484ec92b8f1 81-82
+  s_b750c5261ab20d::t_c8d824a062d7b6 110,117,122-123,125-126
+  s_b750c5261ab20d::t_0078787ad10c44 124,127
+control-plane/Sources/App/IAM/Cedar/CedarPolicySetCache.swift
+  s_b750c5261ab20d::t_acc1663de5d930 91
+  s_b750c5261ab20d::t_d5d00f9823eab9 156-158
+  s_b750c5261ab20d::t_6a5cb9293f5304 16-19,23,26-51,53,55-67
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_b750c5261ab20d::t_d94fb2a87ec6e7 1-114
+control-plane/Package.resolved
+  s_b750c5261ab20d::t_d5ed6d2c375673 2,256-264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "ce537bf1861e193d841c0af67f60ef5e7dfa527b",
+  "prompts": {},
+  "sessions": {
+    "s_b750c5261ab20d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "594f7524-6a1f-4f58-bec5-8749ddc0d17a",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

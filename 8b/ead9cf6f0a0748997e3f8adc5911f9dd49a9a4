@@ -1,0 +1,29 @@
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_eb8d88f42f560f::t_8d66f57b858618 181-196,199-201,213-216,227-230
+control-plane/Sources/App/Services/AgentService.swift
+  s_eb8d88f42f560f::t_41036fd7b6a6c4 1053-1056
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_eb8d88f42f560f::t_6c4e927e831656 64-67
+  s_eb8d88f42f560f::t_7b9c4abab89a0a 93-96,102,106,115-118
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_eb8d88f42f560f::t_771c2e8bc70a22 1140-1142,1144-1146
+  s_eb8d88f42f560f::t_c56e7e5a515013 1116-1139,1143,1147-1163
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_eb8d88f42f560f::t_788720f646d307 282-285
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8bead9cf6f0a0748997e3f8adc5911f9dd49a9a4",
+  "prompts": {},
+  "sessions": {
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

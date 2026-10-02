@@ -1,0 +1,22 @@
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_256b817512560e::t_a80b7fe26fbad5 1560-1568
+  s_256b817512560e::t_5aee1896eb3e2f 1573-1576,1579-1583
+  s_256b817512560e::t_41d069a815deb7 1482-1486,1492-1493
+  s_256b817512560e::t_2068650899a939 1494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "107f1767edbdc5103d21d3057a23a9d671097aab",
+  "prompts": {},
+  "sessions": {
+    "s_256b817512560e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cc585-7b1b-4f68-b28b-4af0753f6ba2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

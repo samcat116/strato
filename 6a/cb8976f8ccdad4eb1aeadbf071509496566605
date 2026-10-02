@@ -1,0 +1,53 @@
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_3d0d0406378f6e::t_aa7d59d3ca060f 169-174
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_3d0d0406378f6e::t_1155de4741dbc4 80-81
+  s_3d0d0406378f6e::t_69cd17ffea8fd2 22,30-31
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_3d0d0406378f6e::t_d64d6426dc7966 720-724
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_3d0d0406378f6e::t_f654b818b196ed 339-341
+  s_3d0d0406378f6e::t_7c4a9c01234c4b 320-322
+control-plane/Sources/App/Extensions/Request+SandboxAuthorization.swift
+  s_3d0d0406378f6e::t_707d2820d95a1a 5-6,8
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_3d0d0406378f6e::t_c8b079dd404966 5-6,8-10
+docs/architecture/iam.md
+  s_3d0d0406378f6e::t_a9bf6268ed4830 487-503
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_3d0d0406378f6e::t_882def2a2c5d03 43-46,49-50
+  s_3d0d0406378f6e::t_bb2636932449f6 65-66
+  s_3d0d0406378f6e::t_c066062d3430f1 285-292
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_3d0d0406378f6e::t_befe3631093bd4 63
+  s_3d0d0406378f6e::t_85d284d455249a 48-49
+  s_3d0d0406378f6e::t_3d3dacb426fee9 32-33
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_3d0d0406378f6e::t_d667879f5abb0d 235-240
+  s_3d0d0406378f6e::t_c2e6ec3229f267 213
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_3d0d0406378f6e::t_b7ec2a30c7df9b 471,473-480
+  s_3d0d0406378f6e::t_55f066fccfda04 50-53
+  s_3d0d0406378f6e::t_64cf7dae3588f1 81-82,86-90
+  s_3d0d0406378f6e::t_2c698c12a1445d 32-34
+  s_3d0d0406378f6e::t_e07b3fa9c1cf58 297-300
+  s_3d0d0406378f6e::t_511c4009ebdfd0 348-356
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_3d0d0406378f6e::t_da317a506ddce4 405-411,413-414
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6acb8976f8ccdad4eb1aeadbf071509496566605",
+  "prompts": {},
+  "sessions": {
+    "s_3d0d0406378f6e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5c95fe36-c22a-417c-9853-36b051d8396c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

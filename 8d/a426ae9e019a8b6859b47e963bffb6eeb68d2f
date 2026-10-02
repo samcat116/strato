@@ -1,0 +1,19 @@
+deploy/compose/spiffe/envoy.yaml
+  s_9b3d2f364467f5::t_8cb5c6f774f77f 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "8da426ae9e019a8b6859b47e963bffb6eeb68d2f",
+  "prompts": {},
+  "sessions": {
+    "s_9b3d2f364467f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "be51a189-2c89-4b5f-9c55-99a6780ad35b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

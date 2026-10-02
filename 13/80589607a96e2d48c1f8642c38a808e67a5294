@@ -1,0 +1,118 @@
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_29c73f0503496f::t_8bd416485d73f2 20
+control-plane/Sources/App/Services/QuotaUsageService.swift
+  s_29c73f0503496f::t_215b8360a15695 22-23,32-33,42-43
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_29c73f0503496f::t_6b04d5a252a3f4 644-646,653-656
+  s_29c73f0503496f::t_ffcd6f51645879 657-658
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_29c73f0503496f::t_839cbbec569fb4 87-95,125,152-153,230-234,453-462,496-504,536,568-569,597-598,627,638,650,683-684,694-695,704-705,730,766
+  s_29c73f0503496f::t_a6e63198e7898c 741-755
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_29c73f0503496f::t_8016460f31a0d1 82-85,96-97
+agent/Sources/StratoAgent/NetworkServiceMacOS.swift
+  s_29c73f0503496f::t_8016460f31a0d1 13,80-109
+  s_29c73f0503496f::t_16d84b3c5a934a 110
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_29c73f0503496f::t_a35c3ea5516265 367-371
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_29c73f0503496f::t_07aa75908746fc 51
+  s_29c73f0503496f::t_0e8f882a298c18 55,66-67,78,80-81,179-180,295,309-311,318-319
+control-plane/Sources/App/Migrations/AddLoadBalancerCountToResourceQuota.swift
+  s_29c73f0503496f::t_6b04d5a252a3f4 3
+  s_29c73f0503496f::t_edbeefee1ae0f8 1-2,4-29
+control-plane/Sources/App/Migrations/CreateLoadBalancerBackend.swift
+  s_29c73f0503496f::t_edbeefee1ae0f8 1-26
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_29c73f0503496f::t_3281bb13ef50ba 78,249
+control-plane/Sources/App/Migrations/CreateLoadBalancerListener.swift
+  s_29c73f0503496f::t_edbeefee1ae0f8 1-21
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_29c73f0503496f::t_9f3b6b5b76c59b 201-203,206,305-314,358,692-694,697,715
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_29c73f0503496f::t_41b057046b844d 562-564,575
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_29c73f0503496f::t_bdab41cd71fa69 285-302,314,341-346,533-546,637
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_29c73f0503496f::t_3281bb13ef50ba 32,73
+control-plane/Sources/App/IAM/ResourceBindingCleanup.swift
+  s_29c73f0503496f::t_a35c3ea5516265 43,199-202
+  s_8e6198b3225c36::t_d20ea562cdb4d5 203
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_29c73f0503496f::t_6b04d5a252a3f4 304,337-340,408-410,419,437-452,458,467,476,487-489,563,573,577,580,585,619-697,819-825,828
+  s_29c73f0503496f::t_b062ac3302778f 826-827
+control-plane/Sources/App/Migrations/CreateLoadBalancer.swift
+  s_29c73f0503496f::t_edbeefee1ae0f8 1-58
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_29c73f0503496f::t_970121c40ccf64 244-248,274-275,1323-1331,1333-1363,1373-1378,1381-1405,1407,1409,1451-1463
+  s_29c73f0503496f::t_544c09d5831194 1332,1364-1372,1379-1380
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_29c73f0503496f::t_d341af98e41867 1-439
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_29c73f0503496f::t_eb651e060b6807 91-97,284-325
+  s_d3c90e184e731d::t_36e3b7aaddd87b 326-327
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_29c73f0503496f::t_66e1572be601e1 647-656,661-664
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_29c73f0503496f::t_293309bf7a9957 105,115,336-339
+control-plane/Sources/App/Models/FloatingIP.swift
+  s_29c73f0503496f::t_88920604639038 37-42,60,68,86,89-90,102,109-113,121-122,124
+control-plane/Sources/App/Extensions/Request+LoadBalancerAuthorization.swift
+  s_29c73f0503496f::t_b34dc11ecb84e4 1-16
+control-plane/Sources/App/configure.swift
+  s_29c73f0503496f::t_edbeefee1ae0f8 383-389
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_29c73f0503496f::t_3281bb13ef50ba 79,127,156,206,239
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_29c73f0503496f::t_621983434720f7 737,740,742-744,752-776,780-785,788-793,795-853,987-989,1008-1009,1028
+  s_29c73f0503496f::t_544c09d5831194 777-779,786-787,794
+  s_29c73f0503496f::t_8bd416485d73f2 1490-1545,1606-1608,1622-1623,1637
+shared/Sources/StratoShared/WireProtocol.swift
+  s_29c73f0503496f::t_8bd416485d73f2 14-17
+control-plane/Sources/App/Models/LoadBalancer.swift
+  s_29c73f0503496f::t_0fd17d49f19322 1-358
+control-plane/Sources/App/Services/IPAMService.swift
+  s_29c73f0503496f::t_1ae0780bc9bcc8 115-123
+agent/Sources/StratoAgentCore/LoadBalancerReconciler.swift
+  s_29c73f0503496f::t_e8f06703baf36f 1-155
+control-plane/Sources/App/routes.swift
+  s_29c73f0503496f::t_761398b5c14bce 74
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_29c73f0503496f::t_8016460f31a0d1 66,1357,1409-1411,1465-1466
+  s_29c73f0503496f::t_65dcce72c08121 1467,3110-3341
+  s_29c73f0503496f::t_aca0d6f4ae1780 1468
+agent/Sources/StratoAgent/Agent.swift
+  s_29c73f0503496f::t_8016460f31a0d1 5331-5332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1380589607a96e2d48c1f8642c38a808e67a5294",
+  "prompts": {},
+  "sessions": {
+    "s_29c73f0503496f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee44-e04e-77c1-8bb6-33ca2ed727bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_8e6198b3225c36": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee38-a767-7500-9527-952209efbc80",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d3c90e184e731d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede4-bec2-7343-aad5-ce620399e429",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

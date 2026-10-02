@@ -1,0 +1,19 @@
+helm/strato-control-plane/templates/spire-server-service.yaml
+  s_a9a9290d19ffe0::t_302a61dfa5118a 25-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "277a557ed1f7b47850605bda9d9572037b8b9e6a",
+  "prompts": {},
+  "sessions": {
+    "s_a9a9290d19ffe0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e0c267c-ad5e-48e4-a95b-a988b7014764",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

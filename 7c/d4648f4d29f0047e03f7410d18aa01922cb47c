@@ -1,0 +1,89 @@
+config.toml.example
+  s_f2a69f41c8a787::t_02dad41f3c7964 77-82
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_f2a69f41c8a787::t_6ce0359feeb0af 116-120,382
+  s_20a800b1a6731c::t_d211946b7b4ddd 383
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_f2a69f41c8a787::t_4c01fbdc82d073 42-45,706-709,858-860
+  s_f2a69f41c8a787::t_26746502afee2b 447-449,474-475,479-480
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_f2a69f41c8a787::t_c0a5e2da38f442 311-347
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_f2a69f41c8a787::t_d06b8994bae64c 68-70,82-83,95,294-305
+  s_f2a69f41c8a787::t_24f4cf43699719 306
+agent/Sources/StratoAgent/Agent.swift
+  s_f2a69f41c8a787::t_9a574ee0df9cf2 3873-3910,3941-3962,3977-3989,4574-4587,4668-4686
+  s_f2a69f41c8a787::t_7f0c52c8e53ef4 2180-2182,2200,2221,2230-2232,2239-2240,2243-2244,2252-2253,2262-2276,2310-2313,2322-2329
+  s_f2a69f41c8a787::t_a1597fac1762c7 339-345,417,453,683-684
+  s_f2a69f41c8a787::t_3f7559e4058818 2201,2211-2220,2229
+  s_f2a69f41c8a787::t_27b0b63614c6b5 2222
+control-plane/Sources/App/Controllers/VMController.swift
+  s_f2a69f41c8a787::t_f6235253bf2efa 1052-1055
+  s_f2a69f41c8a787::t_3f6310fbc45589 914-915,959-960,1014-1051,1056-1063
+  s_f2a69f41c8a787::t_ffa60838c9d2a3 1064-1065
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_f2a69f41c8a787::t_9601540b9dd851 252-254,370-376,407,455,501,627-631,946
+control-plane/Sources/App/configure.swift
+  s_f2a69f41c8a787::t_4c01fbdc82d073 135-137
+agent/Sources/StratoAgentCore/SandboxJail.swift
+  s_f2a69f41c8a787::t_d06b8994bae64c 241
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_f2a69f41c8a787::t_d2281cd8975738 156-158
+  s_f2a69f41c8a787::t_c0a5e2da38f442 1-155,159-193
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_f2a69f41c8a787::t_c38cca3ea189d7 798-807
+  s_f2a69f41c8a787::t_d2281cd8975738 101-102,107-108
+agent/Sources/StratoAgentCore/DomainMemoryTuning.swift
+  s_f2a69f41c8a787::t_d06b8994bae64c 1-29,32,34-48
+  s_f2a69f41c8a787::t_45ced3347cfd67 30-31
+  s_f2a69f41c8a787::t_9601540b9dd851 33
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_f2a69f41c8a787::t_bc1fd98046b426 221-222,283
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_f2a69f41c8a787::t_8403f463e1a196 123-124,186-187,197-198,202-205,643-647,741-770,1019,1460,1465-1471,1474,1479,1482,1489,1491-1492,1494-1500
+  s_f2a69f41c8a787::t_f015e52e56cad2 1012
+  s_f2a69f41c8a787::t_b5e4764135ec0b 1013-1018,1461-1464,1472-1473,1480-1481,1490,1493
+  s_f2a69f41c8a787::t_046e30a565b258 771-772,1501-1502
+docs/deployment/agents.md
+  s_f2a69f41c8a787::t_02dad41f3c7964 492-499
+docs/architecture/multi-replica.md
+  s_f2a69f41c8a787::t_4c01fbdc82d073 31-36,133-138,162-165
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_f2a69f41c8a787::t_76dbcef92094cf 134-143,145-156
+  s_f2a69f41c8a787::t_73a6bad2456511 22,102,116,144
+  s_f2a69f41c8a787::t_d06b8994bae64c 1-6,8-21,23-101,103-115,117-133,157-180
+  s_f2a69f41c8a787::t_9601540b9dd851 7
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_f2a69f41c8a787::t_b7589bce873c12 25-26,66-67,156-216,218-261
+  s_f2a69f41c8a787::t_6fd6fd1edc9546 217
+  s_f2a69f41c8a787::t_535024172a2112 262
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_f2a69f41c8a787::t_b0dd3b4b2695d9 458-484
+agent/Sources/StratoAgentCore/HostMemoryController.swift
+  s_f2a69f41c8a787::t_7b24757bd9fd15 29
+  s_f2a69f41c8a787::t_d06b8994bae64c 1-28,30-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7cd4648f4d29f0047e03f7410d18aa01922cb47c",
+  "prompts": {},
+  "sessions": {
+    "s_20a800b1a6731c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-973d-7190-8574-beee3fbb2d7d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_f2a69f41c8a787": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-e995-7761-b686-9931cfb9a2a2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

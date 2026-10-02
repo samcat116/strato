@@ -1,0 +1,21 @@
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_917722d9dc8b03::t_217a22aa977644 155-162,165-204
+agent/Tests/StratoAgentTests/ProcessRunnerTests.swift
+  s_917722d9dc8b03::t_02f13f3c2fa6f8 1-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "41c1edb398a8ffb64acfce40ccc851e6101f573b",
+  "prompts": {},
+  "sessions": {
+    "s_917722d9dc8b03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba6494eb-385e-44b3-9ae2-38b6b35c5860",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

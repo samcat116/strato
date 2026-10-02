@@ -1,0 +1,33 @@
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_d67c324c6e1ac6::t_caf02f97279d28 212-215,220
+  s_d67c324c6e1ac6::t_2c2b9295ce9f12 203-211,216-219,221-280
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_d67c324c6e1ac6::t_2c2b9295ce9f12 629-632,636
+  s_94b693d0eb6d6a::t_e9fc89a459f159 637
+control-plane/Sources/App/Services/AgentService.swift
+  s_d67c324c6e1ac6::t_2c2b9295ce9f12 39-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "49dda45519ec72ce5668966c1a87c6844a0d9221",
+  "prompts": {},
+  "sessions": {
+    "s_94b693d0eb6d6a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f3-149c-7b23-8032-f2fefbae7e6d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d67c324c6e1ac6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f4-f585-7181-8147-316937d752f7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

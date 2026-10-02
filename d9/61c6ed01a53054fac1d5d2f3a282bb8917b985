@@ -1,0 +1,53 @@
+docs/architecture/control-plane.md
+  s_667066d346d7b5::t_43e154a38932a4 239-245,272-277
+deploy/compose/vcpu-shrink-test.sh
+  s_667066d346d7b5::t_95be3899a8e3ed 2,7-8,131-135,137,182-188,203
+docs/development/e2e-testing.md
+  s_667066d346d7b5::t_43e154a38932a4 137-144
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_667066d346d7b5::t_cad792091c9d29 1875-1878
+  s_667066d346d7b5::t_e51092a47b1ea8 1894
+  s_667066d346d7b5::t_c9d150b89ef15f 232-235,1859-1864,1866-1873,1893,1896-1903,1911-1918,1923
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_667066d346d7b5::t_4855ba1fb057a0 1535-1537
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_667066d346d7b5::t_4855ba1fb057a0 21-23,69-70
+docs/architecture/agent.md
+  s_667066d346d7b5::t_43e154a38932a4 716-720,733-737,761-765
+docs/deployment/agents.md
+  s_667066d346d7b5::t_43e154a38932a4 527-529
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_667066d346d7b5::t_cad792091c9d29 1082-1101
+  s_667066d346d7b5::t_c9d150b89ef15f 1102-1114
+  s_667066d346d7b5::t_848c41e56852a6 1064-1081
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_667066d346d7b5::t_96d27858de5c9a 11-14,74
+  s_667066d346d7b5::t_cad792091c9d29 130-131,154-156
+  s_667066d346d7b5::t_43e154a38932a4 139-143
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_667066d346d7b5::t_c9d150b89ef15f 212-216
+  s_667066d346d7b5::t_4855ba1fb057a0 106-112
+agent/Sources/StratoAgent/Agent.swift
+  s_667066d346d7b5::t_c9d150b89ef15f 4957-4959
+  s_667066d346d7b5::t_4855ba1fb057a0 4991-5008,5011-5013
+control-plane/Sources/App/Controllers/VMController.swift
+  s_667066d346d7b5::t_cad792091c9d29 1357-1359,1396-1398
+  s_667066d346d7b5::t_bb14f300d85700 1370,1374
+  s_667066d346d7b5::t_d8a366c6f0b0e7 1402-1404
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d961c6ed01a53054fac1d5d2f3a282bb8917b985",
+  "prompts": {},
+  "sessions": {
+    "s_667066d346d7b5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36c-7885-7203-ad81-b267467e0462",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

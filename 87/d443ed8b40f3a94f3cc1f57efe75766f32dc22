@@ -1,0 +1,23 @@
+control-plane/web/src/components/layout/nav.ts
+  s_773b2bac998a38::t_4c94d2564de31c 52-55
+helm/strato-control-plane/templates/ingress.yaml
+  s_773b2bac998a38::t_96177f6e5af3f3 106-108
+deploy/compose/nginx.conf
+  s_773b2bac998a38::t_ddb11950ad24b6 73-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "87d443ed8b40f3a94f3cc1f57efe75766f32dc22",
+  "prompts": {},
+  "sessions": {
+    "s_773b2bac998a38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a47c269c-451b-4592-b739-9b000ad38934",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

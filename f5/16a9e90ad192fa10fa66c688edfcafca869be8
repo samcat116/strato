@@ -1,0 +1,85 @@
+control-plane/Sources/App/Models/Image.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 4,49-59,114,130,154,178,234-267,276,281-302,308,313-330,342,352-355,369,379-380
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 15,33,41,59-69,85,89,96-110,112-116,120-121,125-128,130,135,146-149
+  s_a177ee6ff08121::t_0c6c4c63c07785 150-151
+control-plane/web/src/components/images/upload-image-dialog.tsx
+  s_a177ee6ff08121::t_91fbabdac496ef 19-21,35,50,105,133,203-220,324-339
+  s_a177ee6ff08121::t_55f7f7816f59cc 340-341
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 327-328,435-450
+control-plane/web/src/components/images/image-table.tsx
+  s_a177ee6ff08121::t_91fbabdac496ef 54-57,98-117
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 49-50,52-63,110,112-119
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 220,223-269,272,276-279
+control-plane/web/src/components/images/edit-image-dialog.tsx
+  s_a177ee6ff08121::t_91fbabdac496ef 18,21,47-49,76,152-168
+  s_a177ee6ff08121::t_31cc57b3891a0d 169-170
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 156-157,163-165,180
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 118,122,129-145
+  s_a177ee6ff08121::t_1d8ea4b9fac39d 146
+control-plane/Sources/App/Migrations/AddArchitectureToImage.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-19
+shared/Tests/StratoSharedTests/ImageInfoArtifactTests.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-62
+control-plane/Sources/App/Migrations/CreateImageArtifact.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-26
+shared/Sources/StratoShared/ArtifactKind.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-39
+control-plane/Tests/AppTests/BackfillImageArtifactsTests.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-47
+control-plane/web/src/types/api.ts
+  s_a177ee6ff08121::t_91fbabdac496ef 347-358,368,378-379,389,399
+control-plane/Tests/AppTests/VMSpecBuilderImageInfoTests.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-84
+control-plane/Sources/App/configure.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 214-218
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 105,111-223,374-377,387,400-401
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 5,55,78-79,178,258,290-296,336,347-362,435-437,526-537,563-564,582,586-587,607,612-614,629-648,705
+control-plane/Sources/App/Services/AgentService.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 980,1028-1030
+control-plane/Tests/AppTests/URLSigningServiceArtifactTests.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-71
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-101
+control-plane/Sources/App/Services/VolumeService.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 156-159
+control-plane/Sources/App/Services/URLSigningService.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 6,31-32,44-45,51-55,75-76,90-91,98-103,110-111,113-116
+control-plane/Tests/AppTests/ImageCompatibilityTests.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-99
+agent/Sources/StratoAgent/QEMUService.swift
+  s_a177ee6ff08121::t_6ca031a0527470 111-112
+control-plane/Sources/App/Migrations/BackfillImageArtifacts.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 1-43
+agent/Sources/StratoAgent/Agent.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 298
+control-plane/web/src/lib/api/images.ts
+  s_a177ee6ff08121::t_91fbabdac496ef 36-38
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 233-236,244-246,251-252
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_a177ee6ff08121::t_91fbabdac496ef 293-335,345-349,358-360,369-388
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f516a9e90ad192fa10fa66c688edfcafca869be8",
+  "prompts": {},
+  "sessions": {
+    "s_a177ee6ff08121": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "28f6c346-2f91-4452-8893-60dd61a33ad0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+.github/workflows/README.md
+  s_3783100b98d1b5::t_9334fdcd7a3c7a 66-71,73-86
+.github/workflows/build.yaml
+  s_3783100b98d1b5::t_fa2ec0fe89eadd 139-145
+  s_3783100b98d1b5::t_296e815a7b333c 166-169
+  s_3783100b98d1b5::t_1e20451e4b122b 211-215
+.github/workflows/main-build.yaml
+  s_3783100b98d1b5::t_aa243a27859753 26-30,41-44,46-47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e5907dd2293cefd5ed3fe1fb38a40825ad9af39b",
+  "prompts": {},
+  "sessions": {
+    "s_3783100b98d1b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b05595c-3b5f-4cfc-b734-2d2daa1f9a52",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

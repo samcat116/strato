@@ -1,0 +1,35 @@
+control-plane/Sources/App/Services/RateLimitService.swift
+  s_38d36eb1b7f7b5::t_f84c1fec8636b9 1-178
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_38d36eb1b7f7b5::t_1307a0aaed2c26 1-25,28-138,155-196
+  s_38d36eb1b7f7b5::t_1307dd89999813 26-27
+  s_38d36eb1b7f7b5::t_047fdb59293991 139-154
+control-plane/Sources/App/configure.swift
+  s_38d36eb1b7f7b5::t_bf0e6a7c33a425 83-99
+docs/deployment/rate-limiting.md
+  s_38d36eb1b7f7b5::t_467423f43ba910 1-74
+docs/.vitepress/config.mts
+  s_38d36eb1b7f7b5::t_d166ad5f752e14 52
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_38d36eb1b7f7b5::t_15a6e2991ec3e3 158-160,163
+  s_38d36eb1b7f7b5::t_e2ff32e537a2ad 101
+  s_38d36eb1b7f7b5::t_8ec53a916b95bb 132-145
+  s_38d36eb1b7f7b5::t_4b4c66f4b04e1c 161-162,165
+  s_38d36eb1b7f7b5::t_ed61405c94db37 1-100,102-131,146-157,164,166-291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3a086289e8e9ee107801a06b5e0f638fd6596720",
+  "prompts": {},
+  "sessions": {
+    "s_38d36eb1b7f7b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b4ea8666-3716-4780-b678-ad8a5b319169",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

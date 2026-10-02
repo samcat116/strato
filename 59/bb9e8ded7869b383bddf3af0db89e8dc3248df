@@ -1,0 +1,38 @@
+SwiftFirecracker/Tests/SwiftFirecrackerTests/JailerOptionsTests.swift
+  s_37fd36f806ccf7::t_a29407d1628ddf 53-66
+agent/Tests/StratoAgentTests/AgentHardeningTests.swift
+  s_37fd36f806ccf7::t_0974d4468c6783 48-100,105-115
+  s_37fd36f806ccf7::t_5b1fee5cd61986 101-104
+agent/Sources/StratoAgentCore/OCI/OCIRegistryClient.swift
+  s_37fd36f806ccf7::t_472277ce8aa57c 215-230
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Jailer.swift
+  s_37fd36f806ccf7::t_420a5daa1e3172 35-46,55-56,65
+  s_37fd36f806ccf7::t_06f013ca7d44d3 126-128
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_37fd36f806ccf7::t_d1d42f679e9e05 181-187
+  s_37fd36f806ccf7::t_e0fa9aa1b1b787 143-147,149-154
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_37fd36f806ccf7::t_150e56a3f431ed 296-301,305-306
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_37fd36f806ccf7::t_341d45249f526d 367,499
+  s_37fd36f806ccf7::t_555a2740ba9a8f 359-366,368-371
+  s_37fd36f806ccf7::t_1235958556b47b 161-165,172-174,189-206,209-210
+  s_37fd36f806ccf7::t_fb1d33ed5be9c5 498,500-504
+  s_37fd36f806ccf7::t_1a84be84be6ecb 123-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "59bb9e8ded7869b383bddf3af0db89e8dc3248df",
+  "prompts": {},
+  "sessions": {
+    "s_37fd36f806ccf7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "442e411d-c3c2-470f-9708-a92092a886ba",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

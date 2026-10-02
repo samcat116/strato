@@ -1,0 +1,59 @@
+control-plane/Sources/App/IAM/ProjectVisibility.swift
+  s_1034a0a26ad83b::t_c528775969afb0 221,223-230,234-235
+  s_1034a0a26ad83b::t_b2bc26042c1874 1-220,222,231-233,236-245
+control-plane/Sources/App/Services/AgentService.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 1016,1019,1023,1052,1056,1088-1094,1096-1097,1148-1155,1264-1267,1271
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 35,46,54-61,64-67
+control-plane/Sources/App/Extensions/QueryBuilder+Age.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 1-35
+control-plane/Tests/AppTests/VolumeStuckSweepTests.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 160-176
+docs/architecture/iam.md
+  s_1034a0a26ad83b::t_b2bc26042c1874 784-796
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 27,29-33,45-49,52-54,56-58,60-71,74
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 59-79
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 269,277-278,281,289-296,299-303
+control-plane/Tests/AppTests/ProjectVisibilityTests.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 1-318
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_1034a0a26ad83b::t_9b0c0fdb185813 119,122-141
+  s_1034a0a26ad83b::t_22e2dedfd0a0d6 166-168
+  s_1034a0a26ad83b::t_35dae3dcff72df 207-223
+control-plane/Sources/App/configure.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 635-639
+control-plane/Tests/AppTests/SandboxExpiryTests.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 2,270-295
+  s_1034a0a26ad83b::t_98af6486565703 296
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 38,44,57-64,81,86-88
+  s_1034a0a26ad83b::t_0194626f75003f 89
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 4,229-277
+  s_1034a0a26ad83b::t_6617690f50332a 278
+control-plane/Tests/AppTests/VMListScalingTests.swift
+  s_1034a0a26ad83b::t_d7fd9fdf265fc2 40,55,61-74,77-80,82-85,87-93,95-96
+  s_1034a0a26ad83b::t_b2bc26042c1874 1-9,17,24-39,41-54,56-60,75-76,81,86,94,97-165
+  s_1034a0a26ad83b::t_1b708599dfd7c0 10-16,18-23
+control-plane/Sources/App/Migrations/AddHotPathIndexes.swift
+  s_1034a0a26ad83b::t_b2bc26042c1874 1-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "78534b38d8f504a38efdd5726d359c92d6a182a1",
+  "prompts": {},
+  "sessions": {
+    "s_1034a0a26ad83b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5cc8d49e-cab6-4fad-9c6c-a4e1c8569c7e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

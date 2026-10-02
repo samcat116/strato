@@ -1,0 +1,19 @@
+CLAUDE.md
+  s_fb198f1fd249f5::t_5816c77ce12857 20-28,34-63,66,78-145,148-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8b1f86a9f29ccc7f97ea741a40cb32a11f096700",
+  "prompts": {},
+  "sessions": {
+    "s_fb198f1fd249f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbbe997c-f7e3-47bf-aeab-10b56faacd95",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

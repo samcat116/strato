@@ -1,0 +1,23 @@
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_2e3e1c39ed2053::t_0383b7a98eb87b 450-454
+control-plane/Sources/App/Services/AgentLogIngestor.swift
+  s_2e3e1c39ed2053::t_12f0e5de46f934 5-29,38-40,43-47,50,52,55-56,59,64,109,119-124,127,129,137,141-142,147,156-158,166-169,192-212
+control-plane/Tests/AppTests/AgentLogIngestorTests.swift
+  s_2e3e1c39ed2053::t_a68d6e0f5e87a0 9,16-17,129-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1b35dc08d910b6d6a7a4af6ba2fd790bc1fd5ad8",
+  "prompts": {},
+  "sessions": {
+    "s_2e3e1c39ed2053": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "477d5b5e-f65e-4f34-ad6a-e26462246b3b",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

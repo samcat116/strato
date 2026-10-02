@@ -1,0 +1,21 @@
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_3f1881f14348a3::t_778f5ff12acb4d 628-631,657
+control-plane/web/src/types/openapi.ts
+  s_3f1881f14348a3::t_d9c808e2bf8c68 6283
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4410ed0cf0a8769fc6a56e8e774ffef2e6be2eba",
+  "prompts": {},
+  "sessions": {
+    "s_3f1881f14348a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ab-eeb4-7802-827b-507e89588001",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

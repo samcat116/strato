@@ -1,0 +1,21 @@
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_b041cfc9c7df01::t_b3dacd87638313 170-181
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_b041cfc9c7df01::t_a9e85f73dfc57a 54-60,62-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "accd9a5c4e98f45d1d241ff6d85d223b233605e4",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

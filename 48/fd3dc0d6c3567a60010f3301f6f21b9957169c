@@ -1,0 +1,34 @@
+helm/strato-control-plane/templates/NOTES.txt
+  s_bf31020fa8ebfe::t_c4b0510fb5fb0f 11-13,17,23,26-27
+control-plane/web/src/middleware.ts
+  s_bf31020fa8ebfe::t_c4b0510fb5fb0f 4-17,30-39
+  s_bf31020fa8ebfe::t_51694dcf511e4c 27-29
+agent/Sources/StratoAgent/Agent.swift
+  s_bf31020fa8ebfe::t_c4b0510fb5fb0f 974-984
+shared/Sources/StratoShared/WireProtocol.swift
+  s_bf31020fa8ebfe::t_c4b0510fb5fb0f 129-134
+helm/strato-control-plane/README.md
+  s_bf31020fa8ebfe::t_51694dcf511e4c 156-158
+helm/strato-control-plane/values.yaml
+  s_bf31020fa8ebfe::t_c4b0510fb5fb0f 62-65
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_bf31020fa8ebfe::t_c4b0510fb5fb0f 214
+helm/strato-control-plane/templates/frontend-deployment.yaml
+  s_bf31020fa8ebfe::t_c4b0510fb5fb0f 47-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "48fd3dc0d6c3567a60010f3301f6f21b9957169c",
+  "prompts": {},
+  "sessions": {
+    "s_bf31020fa8ebfe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7311-f2e7-7270-8251-882a13ca8e59",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_3d8fde8278f186::t_c5f12c046400fd 208-236
+  s_3d8fde8278f186::t_042ca75309091c 302-319,322-324,326-328,333-334,337-338,341-342,345-346,349-350
+  s_3d8fde8278f186::t_b58546665d55b6 404-407
+  s_3d8fde8278f186::t_9ce000562f2bc2 448
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3d8fde8278f186::t_ef9bbdfcf96808 16-22
+  s_3d8fde8278f186::t_14dc5470993ab9 867-889,891-892
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_3d8fde8278f186::t_3fd13a7b3d6318 122-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ad5474aa8b8f4ce79c8c83d070e80f80f2ae778c",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,43 @@
+.github/workflows/README.md
+  s_38d36eb1b7f7b5::t_eaf9588668b548 10-12,55-64
+agent/Dockerfile
+  s_38d36eb1b7f7b5::t_eaf9588668b548 15,17,27-31
+.github/workflows/build.yaml
+  s_38d36eb1b7f7b5::t_eaf9588668b548 33,36-38,61-62,65-70,109,133-149,157,161,165,177,190-203,228-307
+CLAUDE.md
+  s_38d36eb1b7f7b5::t_eaf9588668b548 5-17,51-57,83-91
+  s_38d36eb1b7f7b5::t_c07d3eab11e5db 92
+control-plane/Sources/App/Models/APIKey.swift
+  s_38d36eb1b7f7b5::t_eaf9588668b548 102-116,121-152
+  s_38d36eb1b7f7b5::t_a2e69783658b87 153
+control-plane/Sources/App/configure.swift
+  s_38d36eb1b7f7b5::t_eaf9588668b548 100-103
+  s_38d36eb1b7f7b5::t_b2523f7cf02855 104
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_38d36eb1b7f7b5::t_eaf9588668b548 77-107
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_38d36eb1b7f7b5::t_eaf9588668b548 23-29,39,363-501
+  s_38d36eb1b7f7b5::t_7e1115382ab17d 502
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_38d36eb1b7f7b5::t_eaf9588668b548 65,135
+.claude/commands/pr-comments.md
+  s_38d36eb1b7f7b5::t_595766984e6cf1 1-24
+.claude/settings.json
+  s_38d36eb1b7f7b5::t_16c31a9cd167a1 2-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1f02561ac0808c7b64aed8c5baef80971d4488c9",
+  "prompts": {},
+  "sessions": {
+    "s_38d36eb1b7f7b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b4ea8666-3716-4780-b678-ad8a5b319169",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

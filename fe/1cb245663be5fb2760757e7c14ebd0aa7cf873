@@ -1,0 +1,36 @@
+.github/workflows/release.yaml
+  s_6d6331e16b55bf::t_39b0ebf94cd2a6 937-941,944-945,948-949,955-956
+  s_6d6331e16b55bf::t_babd2bd86695fd 942-943,946-947
+.github/scripts/smoke-test-homebrew-formula.sh
+  s_6d6331e16b55bf::t_9233b77d87232d 74-77
+  s_6d6331e16b55bf::t_e75821e100a55f 1-42,53-73,78-79
+  s_6d6331e16b55bf::t_64959ac20b8d0a 43-52
+.github/workflows/build.yaml
+  s_6d6331e16b55bf::t_b813eda6990bdd 180
+  s_6d6331e16b55bf::t_ddb03f73ed273d 104-112
+  s_6d6331e16b55bf::t_c2e911d7a21512 194-195,202-203
+  s_6d6331e16b55bf::t_f8877587237659 265-266,268-271,274-275,277,279-280
+  s_6d6331e16b55bf::t_f7db39cf1fdb7e 234-264,267,272-273,276,278,281-311
+  s_6d6331e16b55bf::t_3dcd1726024db7 46
+.github/scripts/verify-homebrew-assets.sh
+  s_6d6331e16b55bf::t_c58e546c454ae0 1-66
+.github/scripts/push-homebrew-formula.sh
+  s_6d6331e16b55bf::t_2d9c5a82e316d5 22-26
+  s_6d6331e16b55bf::t_98bbfe3c3930df 45-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fe1cb245663be5fb2760757e7c14ebd0aa7cf873",
+  "prompts": {},
+  "sessions": {
+    "s_6d6331e16b55bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2998387f-093b-453f-8d7f-363e22757238",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,84 @@
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/federationrelationship.proto
+  s_a9a9290d19ffe0::t_c0aa771bf1d8e4 1-59
+control-plane/web/src/components/workload-identity/rail-cards.tsx
+  s_a9a9290d19ffe0::t_0977c23622b5e6 97-101
+  s_a9a9290d19ffe0::t_eae8e8cc2168b3 152-154
+control-plane/Tests/AppTests/SPIREServerAPIClientTests.swift
+  s_a9a9290d19ffe0::t_a7e9183f503e51 326-329,334,337-340
+  s_a9a9290d19ffe0::t_0e2f13f0737edc 263
+  s_a9a9290d19ffe0::t_a10671fd6b52aa 215-257,262,264,267-269
+  s_a9a9290d19ffe0::t_95f200eee89169 504-516,518-522
+  s_a9a9290d19ffe0::t_070dfbc7cdca1d 322-325,330-333,335-336,341-345
+  s_a9a9290d19ffe0::t_99e7590b1521f0 517
+  s_a9a9290d19ffe0::t_f4eb7db8afcba5 258-261,265-266
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_a9a9290d19ffe0::t_78a3ff0003c198 191-231
+  s_a9a9290d19ffe0::t_798f15c5b0f245 341-345
+  s_a9a9290d19ffe0::t_651e658fa179f7 507-511,513-532
+  s_a9a9290d19ffe0::t_6d5bf02bc47935 561-591
+  s_a9a9290d19ffe0::t_7d66eea265833f 54-59
+  s_a9a9290d19ffe0::t_caf6c0aba55868 512
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_bundle.pb.swift
+  s_a9a9290d19ffe0::t_33ac815c48c600 1-376
+control-plane/Sources/SPIREServerAPI/Generated/README.md
+  s_a9a9290d19ffe0::t_c472530515ae9a 5-7,11-13
+helm/strato-control-plane/templates/spire-server-service.yaml
+  s_a9a9290d19ffe0::t_43e9f565379d7c 20-25
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/bundle.proto
+  s_a9a9290d19ffe0::t_c0aa771bf1d8e4 1-79
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_a9a9290d19ffe0::t_283802a0912164 728-734
+  s_a9a9290d19ffe0::t_0ea930503ce1fc 651-652,659-664
+control-plane/Sources/App/configure.swift
+  s_a9a9290d19ffe0::t_5195b2b4f3f22b 582-585
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_federationrelationship.pb.swift
+  s_a9a9290d19ffe0::t_4a3f1349afd55a 1-311
+helm/strato-control-plane/templates/spire-server-statefulset.yaml
+  s_a9a9290d19ffe0::t_58765de9917846 52-56
+control-plane/web/src/types/api.ts
+  s_a9a9290d19ffe0::t_5a03ec2e6de2a6 1263-1266,1273-1274
+deploy/compose/docker-compose.yml
+  s_a9a9290d19ffe0::t_b911188e615269 383-388
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_server_trustdomain_v1_trustdomain.pb.swift
+  s_a9a9290d19ffe0::t_12f295cfbca816 1-792
+helm/strato-control-plane/templates/spire-server-configmap.yaml
+  s_a9a9290d19ffe0::t_42223fb0926e07 89-100
+control-plane/Sources/App/Services/SPIFFE/SPIREIssuanceMetrics.swift
+  s_a9a9290d19ffe0::t_5b29895358c96a 1-242
+helm/strato-control-plane/templates/prometheus-configmap.yaml
+  s_a9a9290d19ffe0::t_7e0bc4bfcf31b6 37-45
+deploy/compose/prometheus.yml
+  s_a9a9290d19ffe0::t_87a9a30ca0acd0 15-22
+deploy/compose/spiffe/spire-server.conf
+  s_a9a9290d19ffe0::t_119fab11b4add4 43-54
+control-plane/Sources/App/Controllers/WorkloadIdentityController.swift
+  s_a9a9290d19ffe0::t_22aa740824eb6f 93-94
+  s_a9a9290d19ffe0::t_e79ca3425cd5b7 304-305
+  s_a9a9290d19ffe0::t_bc2355b3a990ad 278-282,294-303
+  s_a9a9290d19ffe0::t_a5515780339598 83-92,95-129,138
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/server/trustdomain/v1/trustdomain.proto
+  s_a9a9290d19ffe0::t_c0aa771bf1d8e4 1-154
+helm/strato-control-plane/templates/deployment.yaml
+  s_a9a9290d19ffe0::t_c1d42ab86dae58 236-244
+control-plane/Tests/AppTests/WorkloadIdentityControllerTests.swift
+  s_a9a9290d19ffe0::t_5ca692ad7a64b4 182-201
+  s_a9a9290d19ffe0::t_9bbc004d13f740 232-278,282,286-339
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_a9a9290d19ffe0::t_760037463db480 56-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "bbbff96d70a2d9683f677ef1a6fccd8e8429db68",
+  "prompts": {},
+  "sessions": {
+    "s_a9a9290d19ffe0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e0c267c-ad5e-48e4-a95b-a988b7014764",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}

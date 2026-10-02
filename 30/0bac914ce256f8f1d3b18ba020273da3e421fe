@@ -1,0 +1,22 @@
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_fdeafd7a7f36f2::t_d5f65e174f67b4 37-45
+  s_fdeafd7a7f36f2::t_d0c5ea7d098cb4 50-52
+control-plane/Tests/AppTests/SiteTests.swift
+  s_fdeafd7a7f36f2::t_a2bec819702482 1012-1045
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "300bac914ce256f8f1d3b18ba020273da3e421fe",
+  "prompts": {},
+  "sessions": {
+    "s_fdeafd7a7f36f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4000576b-8b38-462c-92a6-643a0100d402",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

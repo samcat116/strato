@@ -1,0 +1,24 @@
+control-plane/web/src/types/openapi.ts
+  s_94b693d0eb6d6a::t_5b9d05a6231aee 5430-5431
+control-plane/Sources/App/openapi.yaml
+  s_94b693d0eb6d6a::t_280fad5e8024fd 9165-9168
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_94b693d0eb6d6a::t_280fad5e8024fd 135-136,151,230-231,597,610-614,724-728
+  s_94b693d0eb6d6a::t_fc859451d2bf1a 600-602
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8a034e78e09d2f32cbfb261725c6d7dd7d727483",
+  "prompts": {},
+  "sessions": {
+    "s_94b693d0eb6d6a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f3-149c-7b23-8032-f2fefbae7e6d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_7294ccc317eeac::t_fe3163fdc40fe7 138-141,152-155,157-158,160-164,166-168,170-171,173-175,235-237,262-263,295,297,300,306
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_513633e4ede0df::t_65ee8e1ff5a8a2 30-52,67-72,80-105,109,112-120,125-163,170-179,182,190,193,195,197,200,202,205,207,210-211,214-217,220-221,224-225,228,231,234-237,240-242,244,248-249,252-253,256-257,260-261,264-265,268-269
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_7294ccc317eeac::t_c9fc284209c252 112
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_513633e4ede0df::t_9fca7e1e23330f 337-338,342-344
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_513633e4ede0df::t_4106400865f84c 77,88,106-112,120,130-136,144,148-149,157-167,179,188,226,256,288,319,365
+control-plane/Sources/App/IAM/IAMDecisionEngine.swift
+  s_513633e4ede0df::t_c966703a1069b6 122,125-126
+control-plane/Sources/App/IAM/IAMRequestCache.swift
+  s_513633e4ede0df::t_885d57f3dd8038 1-153
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_513633e4ede0df::t_e33923f78762e4 340
+control-plane/Tests/AppTests/EntitySliceLoaderTests.swift
+  s_513633e4ede0df::t_19ede402efc52d 149-207
+control-plane/Tests/AppTests/IAMAuthorizerTests.swift
+  s_513633e4ede0df::t_745c900d9b2419 61-62,71,168-227
+docs/architecture/iam.md
+  s_513633e4ede0df::t_31663c8fb05ee9 960-993
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "008fce5e75d65d3a722a9d68ca6883c55b943ff7",
+  "prompts": {},
+  "sessions": {
+    "s_513633e4ede0df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "25b835ef-a29f-412a-88b4-267939071470",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7294ccc317eeac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b665dc95-e5ec-4364-b42b-afc8356a5bf7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

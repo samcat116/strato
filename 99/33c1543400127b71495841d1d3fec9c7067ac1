@@ -1,0 +1,22 @@
+agent/Sources/StratoAgentCore/CustomLogHandler.swift
+  s_0ee0b75318265e::t_eab4018fcbaff5 34-35
+  s_0ee0b75318265e::t_057428db8a3998 36-50,63
+agent/Tests/StratoAgentTests/CustomLogHandlerTests.swift
+  s_0ee0b75318265e::t_6acf4d9c7348de 3-4,10-11,14-20,22,25-26,28-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9933c1543400127b71495841d1d3fec9c7067ac1",
+  "prompts": {},
+  "sessions": {
+    "s_0ee0b75318265e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "88a2a715-af74-4f75-a689-4b6141a74c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

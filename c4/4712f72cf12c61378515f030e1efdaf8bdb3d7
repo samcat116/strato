@@ -1,0 +1,19 @@
+control-plane/Tests/AppPlatformTests/ValkeyStoreConfigurationTests.swift
+  s_4a9d432a686ec2::t_76892290b6a350 168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c44712f72cf12c61378515f030e1efdaf8bdb3d7",
+  "prompts": {},
+  "sessions": {
+    "s_4a9d432a686ec2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9b4d-7820-8fbd-31ef7b1fe416",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

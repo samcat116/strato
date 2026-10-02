@@ -1,0 +1,23 @@
+control-plane/Sources/App/Models/APIKey.swift
+  s_ce634bf306b2d6::t_b36c37e9114d74 139-142,208-211
+control-plane/Sources/App/Controllers/OAuthController.swift
+  s_ce634bf306b2d6::t_b36c37e9114d74 76
+control-plane/Sources/App/Extensions/Decoder+RejectLegacyField.swift
+  s_ce634bf306b2d6::t_b36c37e9114d74 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2573ac4f55dfd20da796b5d8b1ab724b0ced3b1d",
+  "prompts": {},
+  "sessions": {
+    "s_ce634bf306b2d6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00134-aeb1-7b52-8c04-e2f0f1d14891",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

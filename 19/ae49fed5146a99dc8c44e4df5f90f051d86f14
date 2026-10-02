@@ -1,0 +1,124 @@
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_96cbd44874abe4::t_9395d3e0434ccc 146-148,165
+agent/Tests/StratoAgentTests/SandboxRuntimeProbeTests.swift
+  s_96cbd44874abe4::t_8e70d7954912ed 179-180,185,187,190-191,198,200
+  s_96cbd44874abe4::t_fc3335097438b8 29,33-34,36,54-56,58,64-67,69,242-244,246
+shared/Sources/StratoShared/SandboxGuestControlProtocol.swift
+  s_96cbd44874abe4::t_7b58e1cbd5c8e5 1-4
+agent/Sources/StratoAgentCore/SandboxRuntimeProbe.swift
+  s_96cbd44874abe4::t_fc3335097438b8 13-15,154-156
+  s_96cbd44874abe4::t_7b58e1cbd5c8e5 89-91,136-144,148-149,159,161
+shared/Sources/StratoShared/SnapshotReconciliation.swift
+  s_96cbd44874abe4::t_9395d3e0434ccc 252-253
+agent/Tests/StratoAgentTests/SandboxGuestImageTests.swift
+  s_96cbd44874abe4::t_f51468dcec173d 101-102
+  s_96cbd44874abe4::t_49c8d75898b1b3 29,32,88,99-100,103-105,108-112,117,147,161
+  s_96cbd44874abe4::t_89604b41d14d94 125-141
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_96cbd44874abe4::t_ce9e1f84628127 530,547,560-561
+docs/deployment/sandbox-guest-cutover.md
+  s_96cbd44874abe4::t_fe5b1100f433ce 1-16,18-32,34-38,40-94,99-130
+  s_96cbd44874abe4::t_7ccb5a62e9cc58 95-98
+  s_96cbd44874abe4::t_938cb772061bce 17,33,39
+sandbox-guest/init/src/config.rs
+  s_96cbd44874abe4::t_51d5a05f041b75 31-33,229-230,290,608-614
+  s_96cbd44874abe4::t_fcac49d05639fc 214-215,233-237,293-295,615-618,620-621
+  s_58c4057dd3a900::t_d15186d110cf57 231-232
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_96cbd44874abe4::t_c47539abe1cc88 345-346,351-354
+docs/architecture/guest-identity.md
+  s_96cbd44874abe4::t_938cb772061bce 308,310-312
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_96cbd44874abe4::t_9395d3e0434ccc 288
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_96cbd44874abe4::t_49c8d75898b1b3 22-24
+agent/Sources/StratoAgentCore/SandboxGuestImage.swift
+  s_96cbd44874abe4::t_fc3335097438b8 14-16,55,74-75,107,109,114-121,169,216-219
+  s_96cbd44874abe4::t_7b58e1cbd5c8e5 40,72,94,159,183-185,200-202
+  s_58c4057dd3a900::t_3c3c10db1e888d 220-221
+control-plane/Sources/App/Services/AgentService.swift
+  s_96cbd44874abe4::t_c47539abe1cc88 2432-2433,2436-2439
+agent/scripts/sandbox-guest-cutover-preflight.sh
+  s_96cbd44874abe4::t_fe5b1100f433ce 1-50,53-59,62-65,72-148
+  s_96cbd44874abe4::t_74664de3c3f074 51-52,60-61,66-71
+sandbox-guest/README.md
+  s_96cbd44874abe4::t_738d0851635e3e 22-23,25-28
+  s_96cbd44874abe4::t_9ab9f2ccc8da6f 95-100
+docs/architecture/sandboxes.md
+  s_96cbd44874abe4::t_938cb772061bce 236,239-241,254-256,264-267,680-684,839-842,880-882
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_96cbd44874abe4::t_f51468dcec173d 1423-1426,1526-1528,1621-1622
+  s_96cbd44874abe4::t_eb1f0a8dac54d0 1413,1415-1422,1427-1434
+  s_96cbd44874abe4::t_86812e4207040a 156-158,1193-1196,1239-1243,1249,1513-1516,1525,1529-1534,1613,1615-1616,1619-1620,1624-1626,1628-1635,2292-2298,3147,3161,3165-3174
+  s_96cbd44874abe4::t_ea9eaa1f7037df 1773-1780
+  s_96cbd44874abe4::t_7ca0db39f83645 1244-1248,1250
+  s_96cbd44874abe4::t_be478bc5d949b6 1781
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_96cbd44874abe4::t_c47539abe1cc88 247-251,311-319,421-425,482-486
+  s_64ad39a6aebb27::t_6e1399349e6ad1 487-488
+agent/Sources/StratoAgentCore/SandboxConfigDrive.swift
+  s_96cbd44874abe4::t_7b58e1cbd5c8e5 14-16,81,378-386,406-420
+  s_96cbd44874abe4::t_fcac49d05639fc 360-362
+  s_58c4057dd3a900::t_98d683e427dd9f 421-422
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_96cbd44874abe4::t_9395d3e0434ccc 80
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_96cbd44874abe4::t_0fb505e22e25e9 953
+  s_96cbd44874abe4::t_ce9e1f84628127 354,418,497,524,554-583,601
+agent/Tests/StratoAgentTests/GuestControlProtocolTests.swift
+  s_96cbd44874abe4::t_4db6d79bb830de 295,297-298,301,304,325-339
+  s_96cbd44874abe4::t_4442bcbe099aa8 2
+  s_96cbd44874abe4::t_89604b41d14d94 306-307
+  s_1caa12ce689fe8::t_5cf3f19410b622 340-341
+agent/Tests/StratoAgentTests/SandboxConfigDriveTests.swift
+  s_96cbd44874abe4::t_fcac49d05639fc 275-283,296
+  s_96cbd44874abe4::t_6b6be08589e13d 288-290
+  s_96cbd44874abe4::t_9ab9f2ccc8da6f 246-247
+  s_96cbd44874abe4::t_49c8d75898b1b3 40,116,255,260-264,284-287,291-295
+  s_58c4057dd3a900::t_2c9d034caddd4b 297
+agent/Sources/StratoAgentCore/GuestControlProtocol.swift
+  s_96cbd44874abe4::t_b4e36ce316d9c2 216,477-478,504,531-532,539-540,630-636,708-713,718-720,746-749,776-783
+agent/Tests/StratoAgentTests/GuestControlProtocolHardeningTests.swift
+  s_96cbd44874abe4::t_4b421500ccbec5 2
+  s_96cbd44874abe4::t_4db6d79bb830de 90-96,98,379-380,404
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "19ae49fed5146a99dc8c44e4df5f90f051d86f14",
+  "prompts": {},
+  "sessions": {
+    "s_1caa12ce689fe8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6f-4fa5-7fd0-bf2a-063474d3e1e0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_58c4057dd3a900": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6b-85b0-7410-82a5-ad8aa805057e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_64ad39a6aebb27": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6b-5f9d-7830-8770-78c3e0922e59",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_96cbd44874abe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6c-108e-7333-ae23-7a439b43213b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

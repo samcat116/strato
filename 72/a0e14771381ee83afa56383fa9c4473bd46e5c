@@ -1,0 +1,45 @@
+deploy/compose/nginx.conf
+  s_5c64fcbeddd3f4::t_3da075bbac74b1 14-22,33
+  s_5c64fcbeddd3f4::t_77f916bb90e891 52-57
+agent/Sources/StratoAgent/Agent.swift
+  s_5c64fcbeddd3f4::t_27c844611ab2b4 89-92
+  s_5c64fcbeddd3f4::t_9920de8b9ba19e 497-507
+  s_5c64fcbeddd3f4::t_9461bcf049ade8 11-12,14-16,26-27
+  s_5c64fcbeddd3f4::t_3e3513f5d28a21 268-274,285
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_5c64fcbeddd3f4::t_0acf68f234a1f2 166-179
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_5c64fcbeddd3f4::t_e1fdc97df2cf6b 362-374,379-380,386
+control-plane/Tests/AppTests/AgentControllerTests.swift
+  s_5c64fcbeddd3f4::t_5e989776b2da16 1-32
+agent/Sources/StratoAgentCore/AgentState.swift
+  s_5c64fcbeddd3f4::t_298e983da7c7a2 125-134,143-165
+  s_5c64fcbeddd3f4::t_7e38505f76e0c6 166
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_5c64fcbeddd3f4::t_5e004cbd92f772 241-244,251
+  s_5c64fcbeddd3f4::t_4a41cfc9b21e4b 332-358
+  s_5c64fcbeddd3f4::t_7e541a07d0ec09 477,479
+agent/Tests/StratoAgentTests/AgentStateTests.swift
+  s_5c64fcbeddd3f4::t_a74a6f6bbe19eb 98-127
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_5c64fcbeddd3f4::t_bbbd84cd3591fb 52,59-71
+  s_5c64fcbeddd3f4::t_17b9e7e10c17a8 72-73
+docs/deployment/agents.md
+  s_5c64fcbeddd3f4::t_810bf42327f0d2 43-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "72a0e14771381ee83afa56383fa9c4473bd46e5c",
+  "prompts": {},
+  "sessions": {
+    "s_5c64fcbeddd3f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "044bae8b-0eca-462e-9009-d461ab5e285b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

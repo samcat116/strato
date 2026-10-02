@@ -1,0 +1,31 @@
+control-plane/Sources/App/openapi.yaml
+  s_e300b0a73c2a9f::t_7e18b4090338bf 9087-9089
+docs/architecture/agent.md
+  s_e300b0a73c2a9f::t_3456c2361df4d0 558-562
+control-plane/web/src/types/openapi.ts
+  s_e300b0a73c2a9f::t_4e132fd72c5aaf 5381
+control-plane/Sources/App/Controllers/VMController.swift
+  s_e300b0a73c2a9f::t_7e18b4090338bf 649-656,673-674,825-835
+  s_e300b0a73c2a9f::t_65882fe2326404 836-837
+  s_e300b0a73c2a9f::t_c2b4416573f3af 838-839
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_e300b0a73c2a9f::t_7e18b4090338bf 29,47,318-360,367-401
+  s_e300b0a73c2a9f::t_3456c2361df4d0 361-366
+  s_e300b0a73c2a9f::t_0c399dc3358a2c 402
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0eab622075a88a9708f8c50b5473367925b505b8",
+  "prompts": {},
+  "sessions": {
+    "s_e300b0a73c2a9f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-7353-7161-b6ab-b306d13023e4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

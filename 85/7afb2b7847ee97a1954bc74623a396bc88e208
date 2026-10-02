@@ -1,0 +1,144 @@
+.gitignore
+  s_6b0250078518c7::t_322eb94af4bf23 33
+control-plane/Sources/App/OpenAPI/GeneratedAPIRegistration.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-46
+control-plane/web/src/types/api.ts
+  s_6b0250078518c7::t_322eb94af4bf23 125-126,699-700
+control-plane/Sources/App/OpenAPI/ProjectSchemaMapping.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-90
+control-plane/web/src/lib/api/projects.ts
+  s_6b0250078518c7::t_322eb94af4bf23 4,6-10,12-16,18-20,34-35
+control-plane/Tests/AppTests/OpenAPISpecDriftTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 94-99,103,133,135-167,169-171,173,182-244
+  s_6b0250078518c7::t_bed3e31e342d2c 245
+clients/swift/Package.resolved
+  s_6b0250078518c7::t_322eb94af4bf23 1-78
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 113,121
+clients/swift/Tests/StratoAPIClientTests/StratoAPIClientTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-94
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_6b0250078518c7::t_322eb94af4bf23 196-202,274-281,295-299,400-436
+  s_6b0250078518c7::t_289bbd4ed2f15c 437-438
+clients/swift/Sources/StratoAPIClient/openapi-generator-config.yaml
+  s_6b0250078518c7::t_322eb94af4bf23 1-8
+control-plane/Sources/App/Controllers/VMController.swift
+  s_6b0250078518c7::t_322eb94af4bf23 101-102,123-126,383-387,547-562,850-865,872-875,888-931,933-989,993
+  s_6b0250078518c7::t_c0fdd716818582 605-606
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 122-157
+agent/Sources/StratoAgent/QEMUService.swift
+  s_6b0250078518c7::t_322eb94af4bf23 42-47,250,427,733-895,1012-1014,1228-1235
+  s_6b0250078518c7::t_d533b212005c39 1236
+docs/architecture/agent.md
+  s_6b0250078518c7::t_322eb94af4bf23 258-294,302-303
+control-plane/web/eslint.config.mjs
+  s_6b0250078518c7::t_322eb94af4bf23 15-16
+control-plane/Sources/App/Migrations/EnforcePersistedEnumValues.swift
+  s_6b0250078518c7::t_322eb94af4bf23 104-105
+control-plane/Tests/AppTests/VMResizeTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-266
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 30-48,57-59,83-90,107-110,443-529
+CLAUDE.md
+  s_6b0250078518c7::t_322eb94af4bf23 22,149
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_6b0250078518c7::t_322eb94af4bf23 117,158
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_6b0250078518c7::t_322eb94af4bf23 56
+clients/swift/Package.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-49
+control-plane/web/src/types/openapi.ts
+  s_6b0250078518c7::t_322eb94af4bf23 1-14154
+agent/Tests/StratoAgentTests/QMPProbeClientTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 27-33,35-37,60,101,271-365
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-626
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_6b0250078518c7::t_322eb94af4bf23 100-107,123-129
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_6b0250078518c7::t_322eb94af4bf23 55-56
+control-plane/Sources/App/routes.swift
+  s_6b0250078518c7::t_322eb94af4bf23 27-28,80-84
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_6b0250078518c7::t_322eb94af4bf23 55-56
+control-plane/Sources/App/Migrations/AddMaxMemoryToVM.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-31
+control-plane/Sources/App/Migrations/AddResizeOperationKind.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-28
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_6b0250078518c7::t_322eb94af4bf23 86-108
+control-plane/Sources/App/OpenAPI/OpenAPIRequestContext.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-66
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 574-631
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_6b0250078518c7::t_322eb94af4bf23 142-158
+control-plane/web/src/components/vms/operation-watcher.tsx
+  s_6b0250078518c7::t_322eb94af4bf23 18
+control-plane/Sources/App/configure.swift
+  s_6b0250078518c7::t_322eb94af4bf23 519-524
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_6b0250078518c7::t_322eb94af4bf23 47-52,67-69
+shared/Sources/StratoShared/WireProtocol.swift
+  s_6b0250078518c7::t_cfc4a3f983e8a7 219-220,223,230,387-388,391,396
+  s_6b0250078518c7::t_322eb94af4bf23 208-218,359-368
+  s_6b0250078518c7::t_f6f2bd7127efa4 369-370
+control-plane/web/package.json
+  s_6b0250078518c7::t_322eb94af4bf23 10-11,41
+agent/Tests/StratoAgentTests/CloudInitUserDataDocumentTests.swift
+  s_6b0250078518c7::t_322eb94af4bf23 33-43,95-107,191-194
+shared/Sources/StratoShared/OperationModels.swift
+  s_6b0250078518c7::t_322eb94af4bf23 14-17
+shared/Sources/StratoShared/VMSpec.swift
+  s_6b0250078518c7::t_a070379bea8c9a 98-100
+  s_6b0250078518c7::t_322eb94af4bf23 20-26,65,80,97,109-110
+control-plane/Sources/App/openapi-generator-config.yaml
+  s_6b0250078518c7::t_322eb94af4bf23 6-26
+control-plane/Sources/App/Models/vm.swift
+  s_6b0250078518c7::t_322eb94af4bf23 106-112,197,215,266-274,381-383,421
+clients/swift/Sources/StratoAPIClient/BearerTokenMiddleware.swift
+  s_6b0250078518c7::t_322eb94af4bf23 1-28
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_6b0250078518c7::t_322eb94af4bf23 35-52,72-74,149-152,185-188,352-353,611,624-625,627-670
+docs/api-reference.md
+  s_6b0250078518c7::t_322eb94af4bf23 73-127
+control-plane/Sources/App/openapi.yaml
+  s_6b0250078518c7::t_322eb94af4bf23 285-290,305,310-314,6607,6651-6660,6698-6706,6717,6751-6754,9142
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_6b0250078518c7::t_322eb94af4bf23 311-356
+.github/workflows/build.yaml
+  s_6b0250078518c7::t_322eb94af4bf23 33,64-67,90,111-112,117,134-142,192,262,291-293,295-296,301,309,331-343
+  s_6b0250078518c7::t_3fe718ac31547d 344
+control-plane/web/src/components/sandboxes/sandbox-status-badge.tsx
+  s_6b0250078518c7::t_322eb94af4bf23 51
+docs/architecture/wire-protocol.md
+  s_6b0250078518c7::t_28c45f6ddb4779 68,87-96,98,104
+  s_6b0250078518c7::t_322eb94af4bf23 67
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_6b0250078518c7::t_322eb94af4bf23 73,109-169,293-377
+docs/architecture/control-plane.md
+  s_6b0250078518c7::t_322eb94af4bf23 138-150
+agent/Sources/StratoAgent/Agent.swift
+  s_6b0250078518c7::t_322eb94af4bf23 3525-3533,3665-3666,3715-3739,3815
+clients/swift/Sources/StratoAPIClient/openapi.yaml
+  s_6b0250078518c7::t_e37fad44dd1172 1
+control-plane/web/bun.lock
+  s_6b0250078518c7::t_af20142309aef0 34,275-280,399-400,403-404,461-462,473-474,637-638,645-646,709-710,811-812,823-824,835-836,865-866,933,957-958,981-982,1003-1006,1033-1038,1059-1060,1077-1078
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "857afb2b7847ee97a1954bc74623a396bc88e208",
+  "prompts": {},
+  "sessions": {
+    "s_6b0250078518c7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64f1cd41-77da-4576-9f0d-71f7b1188e44",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

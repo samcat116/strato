@@ -1,0 +1,25 @@
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_cfe661b849c7e9::t_d844a6f45a45de 217-229
+helm/strato-control-plane/templates/deployment.yaml
+  s_cfe661b849c7e9::t_251cfbc7d79674 189-196
+  s_cfe661b849c7e9::t_1cc088a33280bd 263-264,266,270-275,279,290-298
+  s_cfe661b849c7e9::t_09512edb212ee7 299
+control-plane/Tests/AppTests/SPIREServiceTests.swift
+  s_cfe661b849c7e9::t_1499915515cc9b 205-243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0c99d3de68ac48db43279f34b5d6688363c0e586",
+  "prompts": {},
+  "sessions": {
+    "s_cfe661b849c7e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72a931f5-a31b-47d9-9bf8-f821c524c05e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

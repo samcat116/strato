@@ -1,0 +1,32 @@
+control-plane/Sources/App/Controllers/WebhookSubscriptionController.swift
+  s_44bd6e3ddfffa0::t_66a4c1a217c01d 232,235-241
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_44bd6e3ddfffa0::t_38a94ced26b353 489
+  s_44bd6e3ddfffa0::t_66a4c1a217c01d 488,494,525-532,535-536,540,549-551
+  s_44bd6e3ddfffa0::t_8c261e127bcffc 493,501-508,515-522
+  s_b46e1e8521f8aa::t_d8419cab010f26 523-524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "48bf95eb64e52f434885b4fcccd365eff38cf1f1",
+  "prompts": {},
+  "sessions": {
+    "s_44bd6e3ddfffa0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05535-5425-78a3-8c11-26c59021e9ce",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

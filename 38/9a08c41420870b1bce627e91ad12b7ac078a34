@@ -1,0 +1,172 @@
+control-plane/Sources/App/Services/AgentService+Maintenance.swift
+  s_a794bdb6881990::t_64b57b3ffb53a6 1-13,15-875
+  s_a794bdb6881990::t_0dd20c9f2ba464 14
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime+Snapshots.swift
+  s_a794bdb6881990::t_eb04d0bbecc77c 1-11,13-352
+  s_a794bdb6881990::t_1bc62933aab723 12
+control-plane/Sources/App/Services/AgentService.swift
+  s_a794bdb6881990::t_64b57b3ffb53a6 13,15,21,25-26,31,39,44,48,52,55,68,95
+  s_a794bdb6881990::t_da61970e6d890d 57-61
+  s_a794bdb6881990::t_4a01b705537380 56
+agent/Sources/StratoAgent/NetworkServiceLinux+DHCP.swift
+  s_a794bdb6881990::t_852360781c52a2 1-11,14-258
+  s_a794bdb6881990::t_128cf501ddf456 12
+  s_a794bdb6881990::t_5764360eaeffbe 13
+control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
+  s_a794bdb6881990::t_bea8207ad32f04 1-55
+control-plane/Sources/App/Services/WebSocketManager.swift
+  s_a794bdb6881990::t_64b57b3ffb53a6 1-106
+agent/Sources/StratoAgent/Agent+StorageReconciliation.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-1056
+  s_a794bdb6881990::t_595c1dab90759b 20
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_a794bdb6881990::t_7901281c1026ed 192,218
+agent/Sources/StratoAgent/Agent+Metadata.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-201
+agent/Sources/StratoAgent/NetworkServiceLinux+LoadBalancers.swift
+  s_a794bdb6881990::t_852360781c52a2 1-9,11-266
+  s_a794bdb6881990::t_128cf501ddf456 10
+agent/Sources/StratoAgent/NetworkServiceLinux+WorkloadPorts.swift
+  s_a794bdb6881990::t_e97e5bc8357e30 12
+  s_a794bdb6881990::t_852360781c52a2 1-11,13-280
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime+WarmStart.swift
+  s_a794bdb6881990::t_1bc62933aab723 12
+  s_a794bdb6881990::t_eb04d0bbecc77c 1-11,13-385
+agent/Sources/StratoAgent/Agent+HostPreflight.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-123
+  s_a794bdb6881990::t_595c1dab90759b 20
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_a794bdb6881990::t_bea8207ad32f04 1-88
+agent/Sources/StratoAgent/NetworkServiceLinux+Topology.swift
+  s_a794bdb6881990::t_852360781c52a2 1-661
+  s_a794bdb6881990::t_128cf501ddf456 662
+control-plane/Sources/App/Bootstrap/StartupReconciliation.swift
+  s_a794bdb6881990::t_c8d476d1f329df 1-25
+agent/Sources/StratoAgent/Agent+Identity.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-576
+  s_a794bdb6881990::t_595c1dab90759b 20
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_a794bdb6881990::t_c8d476d1f329df 1-69
+agent/Sources/StratoAgent/NetworkServiceLinux+PortPlumbing.swift
+  s_a794bdb6881990::t_128cf501ddf456 579
+  s_a794bdb6881990::t_852360781c52a2 1-11,13-578,580
+  s_a794bdb6881990::t_5764360eaeffbe 12
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a794bdb6881990::t_7870704b8a6f40 552
+agent/Sources/StratoAgent/Agent+Lifecycle.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-658
+  s_a794bdb6881990::t_595c1dab90759b 20
+agent/Sources/StratoAgent/Agent+DependencyObservation.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-139
+  s_a794bdb6881990::t_595c1dab90759b 20
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime+SnapshotMobility.swift
+  s_a794bdb6881990::t_eb04d0bbecc77c 1-11,13-250
+  s_a794bdb6881990::t_1bc62933aab723 12
+control-plane/Sources/App/Workflows/SandboxCreationWorkflow.swift
+  s_a794bdb6881990::t_7901281c1026ed 1-493
+agent/Sources/StratoAgent/Agent+Messages.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-1237
+control-plane/web/src/components/vms/create-vm-guest-options-fields.tsx
+  s_a794bdb6881990::t_be7928a0a23841 1-260
+agent/Sources/StratoAgent/Agent+Reconciliation.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-730
+control-plane/web/src/components/vms/create-vm-network-fields.tsx
+  s_a794bdb6881990::t_431a6e0ec7ce5f 1-201
+control-plane/Sources/App/Services/AgentService+AutoUpdate.swift
+  s_a794bdb6881990::t_0dd20c9f2ba464 14
+  s_a794bdb6881990::t_64b57b3ffb53a6 1-13,15-241
+agent/Sources/StratoAgent/NetworkServiceLinux+Errors.swift
+  s_a794bdb6881990::t_852360781c52a2 1-61
+control-plane/Sources/App/Services/AgentService+DesiredState.swift
+  s_a794bdb6881990::t_64b57b3ffb53a6 1-13,15-126
+  s_a794bdb6881990::t_0dd20c9f2ba464 14
+control-plane/Sources/App/configure.swift
+  s_a794bdb6881990::t_36ab272d589029 1,8-15
+control-plane/Sources/App/Services/AgentService+Placement.swift
+  s_a794bdb6881990::t_0dd20c9f2ba464 14
+  s_a794bdb6881990::t_64b57b3ffb53a6 1-13,15-519
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime+GuestControl.swift
+  s_a794bdb6881990::t_eb04d0bbecc77c 1-11,13-282
+  s_a794bdb6881990::t_1bc62933aab723 12
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  s_a794bdb6881990::t_64b57b3ffb53a6 1-13,15-307
+  s_a794bdb6881990::t_0dd20c9f2ba464 14
+agent/Sources/StratoAgent/NetworkServiceLinux+Connection.swift
+  s_a794bdb6881990::t_e97e5bc8357e30 12
+  s_a794bdb6881990::t_852360781c52a2 1-11,13-223
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime+GuestIO.swift
+  s_a794bdb6881990::t_1bc62933aab723 12
+  s_a794bdb6881990::t_eb04d0bbecc77c 1-11,13-487
+agent/Sources/StratoAgent/NetworkServiceLinux+SecurityGroups.swift
+  s_a794bdb6881990::t_852360781c52a2 1-193
+control-plane/web/src/app/(dashboard)/sites/sites-table.tsx
+  s_a794bdb6881990::t_1b125674bf3a9f 1-250
+agent/Sources/StratoAgent/Agent+SandboxReconciliation.swift
+  s_a794bdb6881990::t_595c1dab90759b 20
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-724
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime+Lifecycle.swift
+  s_a794bdb6881990::t_1bc62933aab723 12
+  s_a794bdb6881990::t_eb04d0bbecc77c 1-11,13-1279
+control-plane/Sources/App/Bootstrap/LifecycleBootstrap.swift
+  s_a794bdb6881990::t_c8d476d1f329df 1-19
+control-plane/Sources/App/Bootstrap/FoundationBootstrap.swift
+  s_a794bdb6881990::t_bea8207ad32f04 1-42
+agent/Sources/StratoAgent/NetworkServiceLinux+TopologySupport.swift
+  s_a794bdb6881990::t_128cf501ddf456 10
+  s_a794bdb6881990::t_852360781c52a2 1-9,11-334
+control-plane/web/src/app/(dashboard)/sites/site-model.ts
+  s_a794bdb6881990::t_88017fe7ec97e5 1-86
+agent/Sources/StratoAgent/Agent.swift
+  s_a794bdb6881990::t_5feec930bdadfa 406
+  s_a794bdb6881990::t_f7d02d9faf8a80 49-50,53-54,62,69,76-82,86,89-90,93,96-97,103-106,111,116,119,121,124-126,137-139,149,154,162,173-175,179-180,188,211-213,220-221,223-226,232-233,237,247,255,258,261,263,265,268-269,272,276,281,286-287,289,294,301,303,307-310,313-316,319,322,327-329,333,338-342,346,350,353-357,362-364,368,372,380-381,384,387-388,391,395-396,401,415-416
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a794bdb6881990::t_eb04d0bbecc77c 36-41,44,50,53,59,64,67,79,82,84,88,92,98-99,103,116,121,129,142,145,191,200,208,215,221,237-238,242,304,311,318
+agent/Sources/StratoAgent/NetworkServiceLinux+Reconciliation.swift
+  s_a794bdb6881990::t_852360781c52a2 1-597
+control-plane/web/src/app/(dashboard)/sites/site-form-dialog.tsx
+  s_a794bdb6881990::t_2e1ab2e3f50dcc 1-214
+control-plane/web/src/components/vms/create-vm-image-selector.tsx
+  s_a794bdb6881990::t_11bf079498758b 1-67
+control-plane/Sources/App/Bootstrap/RuntimeBootstrap.swift
+  s_a794bdb6881990::t_bea8207ad32f04 1-18
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  s_a794bdb6881990::t_0dd20c9f2ba464 14
+  s_a794bdb6881990::t_64b57b3ffb53a6 1-13,15-723
+agent/Sources/StratoAgent/Agent+Heartbeat.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-493
+  s_a794bdb6881990::t_595c1dab90759b 20
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_a794bdb6881990::t_852360781c52a2 11,15,18-20,23,27,35-37,45,52,59,66-67,70,74-76
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  s_a794bdb6881990::t_7870704b8a6f40 1-728
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_a794bdb6881990::t_be7928a0a23841 22,434-454
+  s_a794bdb6881990::t_431a6e0ec7ce5f 5,17-21,30,425-432
+  s_a794bdb6881990::t_11bf079498758b 23,284,365-372
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_a794bdb6881990::t_88017fe7ec97e5 22,25-31
+  s_a794bdb6881990::t_2e1ab2e3f50dcc 23,409-421
+  s_a794bdb6881990::t_b9a7c7577b84b9 5,21
+  s_a794bdb6881990::t_1b125674bf3a9f 24,390-407
+agent/Sources/StratoAgent/Agent+NetworkConnection.swift
+  s_a794bdb6881990::t_f7d02d9faf8a80 1-19,21-107
+  s_a794bdb6881990::t_595c1dab90759b 20
+control-plane/web/src/app/(dashboard)/sites/site-footprint.tsx
+  s_a794bdb6881990::t_88017fe7ec97e5 1-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "389a08c41420870b1bce627e91ad12b7ac078a34",
+  "prompts": {},
+  "sessions": {
+    "s_a794bdb6881990": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0597d-f390-7ac3-b450-7fccc3a566ae",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

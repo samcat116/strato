@@ -1,0 +1,197 @@
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  s_c00c4227b18597::t_efc9580c9e9bbc 1-277,285-308,310-313,315-333,336-367,370-399,401-420,423-443,446-452,454-530
+  s_c00c4227b18597::t_70a7cc39ed684d 334-335
+  s_c00c4227b18597::t_4a6064db3405b1 278-284,368-369,421-422
+  s_c00c4227b18597::t_a5cf6fd1cce2ab 309,400
+  s_c00c4227b18597::t_bec7da610a557e 314,444-445,453
+control-plane/Sources/App/Controllers/UserController.swift
+  s_c00c4227b18597::t_65b5f41e5e810a 289,798,1120-1121
+control-plane/Sources/App/Controllers/WebhookSubscriptionController.swift
+  s_c00c4227b18597::t_04b0d80a69fbdc 264-266
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_c00c4227b18597::t_20b350edc83cdb 329-330,338-339,391-394,405-408
+control-plane/Sources/App/Services/RegistrationPolicy.swift
+  s_c00c4227b18597::t_5b74584a1c5366 27-28,58-59,61
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_c00c4227b18597::t_70cc947c383c3c 353-356,358-361,594-601,610-614,628-630
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDAuthorityStore.swift
+  s_c00c4227b18597::t_1d616e22ef5007 226,239,242
+control-plane/Sources/App/Models/SnapshotArtifact.swift
+  s_c00c4227b18597::t_a3c896eb6ff5ac 180-184
+control-plane/Tests/AppPlatformTests/ValkeyStoreConfigurationTests.swift
+  s_c00c4227b18597::t_e5f9f4f0f2553b 7-8,12-15,19-20,24-25,31-32,40,42,55,57,72,74,88,90,104,106,119,121,132-135,139-140,144,146,167,171-172
+control-plane/Sources/App/Services/ProxyClientIP.swift
+  s_c00c4227b18597::t_5b74584a1c5366 33,35-36,72,74
+control-plane/Sources/App/Services/SPIFFE/OrgTrustDomainProvisioning.swift
+  s_c00c4227b18597::t_7d9afdd8d23ef9 23-28,37
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_c00c4227b18597::t_d1bdf011e82ce1 37-38,80-81,171-172,215,218-219
+control-plane/Sources/App/DatabaseTLSConfiguration.swift
+  s_c00c4227b18597::t_e90852ca425a1d 33-34
+  s_c00c4227b18597::t_157f99389efbc0 28-29,66,69,76
+control-plane/Tests/AppPlatformTests/AuditLoggingTests.swift
+  s_c00c4227b18597::t_c9c88cc9d82961 297,299,395
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_c00c4227b18597::t_a3c896eb6ff5ac 882-884
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_c00c4227b18597::t_a3c896eb6ff5ac 91-93
+control-plane/Sources/App/Services/SPIFFE/SPIREIssuanceMetrics.swift
+  s_c00c4227b18597::t_1d616e22ef5007 68-71,77-79,255
+control-plane/Sources/App/Services/SPIFFE/GuestIdentity.swift
+  s_c00c4227b18597::t_21b68df6c19006 114,117-118,130-141
+  s_c00c4227b18597::t_7d9afdd8d23ef9 76,79-82
+  s_59429244fc8aae::t_c1a0d40c9683df 142-150
+control-plane/Sources/App/Services/SPIFFE/GuestIdentityIssuanceConfig.swift
+  s_c00c4227b18597::t_5b74584a1c5366 18,20-22,73-74
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_c00c4227b18597::t_f23586d51b28f5 181-184
+control-plane/Tests/AppIdentityTests/RegistrationPolicyTests.swift
+  s_c00c4227b18597::t_0f1d0469af1c1f 42-69
+control-plane/Sources/App/Services/SPIFFE/OrgSPIREClientRegistry.swift
+  s_c00c4227b18597::t_196c8c344a1ab7 40-41,61-65
+control-plane/Sources/App/Services/SSFService.swift
+  s_c00c4227b18597::t_8bac6217003479 33-37,41-46,106-107,113,150-153,155-156,231-234,301-304,374,378
+  s_c00c4227b18597::t_4a6064db3405b1 193-195
+control-plane/Sources/App/Services/AgentUpdateArtifacts.swift
+  s_c00c4227b18597::t_9a54dd8d3ed95b 100,183,302,306,358
+control-plane/Tests/AppPlatformTests/SecurityHeadersTests.swift
+  s_c00c4227b18597::t_cfd1fb3e53670e 70
+  s_c00c4227b18597::t_13e07b7c4aa6b8 67-69,71-80
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_c00c4227b18597::t_7d9afdd8d23ef9 147-150
+control-plane/Tests/AppPlatformTests/ProxyClientIPTests.swift
+  s_c00c4227b18597::t_ac1609b3333c16 70-81
+  s_c00c4227b18597::t_8289f68bf17f2a 96-104
+control-plane/Sources/App/Services/AuditService.swift
+  s_c00c4227b18597::t_157f99389efbc0 104,106,111,113-119
+  s_c00c4227b18597::t_8b01aaa4ad11dc 716
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_c00c4227b18597::t_f23586d51b28f5 89,91-95,100,105-109,117,131-135,139
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_c00c4227b18597::t_1d616e22ef5007 366-370,374,380,393,395,401,421,460-461
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_c00c4227b18597::t_75b26f9561d52a 1095-1098,1115-1118
+  s_c00c4227b18597::t_65b5f41e5e810a 160
+  s_c00c4227b18597::t_a7cce7c8e8973a 585-587,612-615,1222-1225,1242-1244,1303-1305
+control-plane/Tests/AppIdentityTests/ValkeySessionDriverTests.swift
+  s_c00c4227b18597::t_c9c88cc9d82961 209-212,217,220-224,229-231
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_c00c4227b18597::t_a3c896eb6ff5ac 86-88
+control-plane/Sources/App/SchemaMigrator.swift
+  s_c00c4227b18597::t_5b74584a1c5366 89,91-93,110
+control-plane/Sources/App/Telemetry/ObservabilityBootstrap.swift
+  s_c00c4227b18597::t_4ec28d2c9beaef 33-35,44
+  s_c00c4227b18597::t_033fdfe58bea81 63-64,67-69
+control-plane/Package.swift
+  s_c00c4227b18597::t_fd0b75a8102907 35-38,121
+control-plane/Sources/App/Services/ValkeySessions.swift
+  s_c00c4227b18597::t_9e45bd597a68d8 108-109,171
+control-plane/Sources/App/Services/FilesystemImageObjectStore.swift
+  s_c00c4227b18597::t_3411e88930a7e2 27,39-40
+  s_59429244fc8aae::t_4677df644a678a 41-42
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_c00c4227b18597::t_18313d6b8b09de 306-312,319-323,328,336-344,368-373,414-418,427,440-444,456,486-490,500-501,524-527,545-546
+control-plane/Sources/App/IAM/Cedar/GuardrailAnalyzer.swift
+  s_c00c4227b18597::t_32a5b14d11f4e6 201-208,224-228,230,233-234,243
+control-plane/Sources/App/BuildInfo.swift
+  s_c00c4227b18597::t_033fdfe58bea81 12-14,17-19,33-37
+control-plane/Sources/App/Services/SSRFGuard.swift
+  s_c00c4227b18597::t_de5f5c346b54b3 96
+  s_c00c4227b18597::t_04b0d80a69fbdc 55-58,60-62,90-95,97-114,125
+control-plane/Sources/App/Models/Agent.swift
+  s_c00c4227b18597::t_07b444591e3e9c 715-719,747,750
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_c00c4227b18597::t_ff829df3308bea 69-70,74
+control-plane/Sources/App/Controllers/VMController.swift
+  s_c00c4227b18597::t_21b68df6c19006 1016
+  s_c00c4227b18597::t_f23586d51b28f5 1770-1773
+  s_c00c4227b18597::t_5f836a95c692cb 352-355,406-409,1542-1546,1740-1743
+control-plane/Sources/App/Services/ValkeyService.swift
+  s_c00c4227b18597::t_15a85cfe42ec37 67-85,88-89,94,97-98
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_c00c4227b18597::t_909a3545029d41 522-525,665-668,770-774,783-784
+control-plane/Sources/App/Services/ImageObjectStoreFactory.swift
+  s_c00c4227b18597::t_3411e88930a7e2 28-32,37-38,46,59,65-66,74-77,82,101,108,113
+  s_c00c4227b18597::t_e90852ca425a1d 24-25
+control-plane/Sources/App/Services/SPIFFE/OrgTrustDomainRegistry.swift
+  s_c00c4227b18597::t_7488cac4e22749 10-12
+  s_c00c4227b18597::t_196c8c344a1ab7 45
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  s_c00c4227b18597::t_4a6064db3405b1 256-258
+  s_c00c4227b18597::t_376cea16f11485 290-293
+  s_c00c4227b18597::t_b609654d2bff27 255,259
+control-plane/Tests/AppPlatformTests/ControlPlaneConfigurationTests.swift
+  s_c00c4227b18597::t_9d87a7f3797bb6 1-57
+control-plane/Tests/AppIdentityTests/GuestIdentityTests.swift
+  s_c00c4227b18597::t_e54a278781267a 29-36,90-96,103-107,109-111,118-128,135-144,152-155
+control-plane/Sources/App/Services/GuardedHTTPClient.swift
+  s_c00c4227b18597::t_04b0d80a69fbdc 96-99
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_c00c4227b18597::t_c8d7b0acd01666 57,151,154,157-160,166,176,787
+  s_c00c4227b18597::t_5f836a95c692cb 112-115
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_c00c4227b18597::t_157f99389efbc0 44,46
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_c00c4227b18597::t_a7cce7c8e8973a 420-422
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_c00c4227b18597::t_ea104387223d30 51,79,89,115,140
+  s_c00c4227b18597::t_8bac6217003479 62-63,258,261-264
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  s_c00c4227b18597::t_e5f9f4f0f2553b 271,273-274
+  s_c00c4227b18597::t_7322610120ebe9 272
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_c00c4227b18597::t_8a0b75063650f9 515
+  s_c00c4227b18597::t_5b74584a1c5366 34,36-39,258
+control-plane/Sources/App/configure.swift
+  s_c00c4227b18597::t_cfd1fb3e53670e 472,478
+  s_c00c4227b18597::t_033fdfe58bea81 28-29
+  s_c00c4227b18597::t_1b9ec475fe65a6 11-13,17,49,93,120,165,196,262,316-318,328,354-359,365-369,413,473-474,487,513
+  s_c00c4227b18597::t_13e07b7c4aa6b8 7-10,14-16
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_c00c4227b18597::t_20b350edc83cdb 765-766,780,804-807,914-917,980-983
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_c00c4227b18597::t_04b0d80a69fbdc 163-166,649-652
+control-plane/Sources/App/Services/LokiService.swift
+  s_c00c4227b18597::t_3b933247391584 11
+  s_c00c4227b18597::t_0924b42de6e6b3 16,292
+control-plane/Sources/App/Commands/GrantPlatformAdminCommand.swift
+  s_c00c4227b18597::t_4a6064db3405b1 201-203
+  s_c00c4227b18597::t_376cea16f11485 219-222
+control-plane/Sources/App/Services/AgentService.swift
+  s_c00c4227b18597::t_f23586d51b28f5 2727-2730
+  s_c00c4227b18597::t_37717e1aceee4a 139,148-149
+  s_c00c4227b18597::t_a3c896eb6ff5ac 1607-1608,1670
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_c00c4227b18597::t_1d616e22ef5007 181-182,184-188,694
+control-plane/Sources/App/Controllers/OAuthController.swift
+  s_c00c4227b18597::t_65b5f41e5e810a 152,165,167-168
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_c00c4227b18597::t_e90852ca425a1d 9
+  s_c00c4227b18597::t_157f99389efbc0 45,50-59
+control-plane/Tests/AppIdentityTests/OrgTrustDomainTests.swift
+  s_c00c4227b18597::t_20a7f76f52d4c1 55-62,69,71-72,87-88,115,125-126,194-197,199-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "635587455f716b80541da921da1c65709a51598f",
+  "prompts": {},
+  "sessions": {
+    "s_59429244fc8aae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2c2-af3c-7ee3-b5b0-e61fcf88259f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_c00c4227b18597": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2e1-98b7-7353-ad7c-717f9036181a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

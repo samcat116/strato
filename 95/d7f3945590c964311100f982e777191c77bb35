@@ -1,0 +1,32 @@
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_0226cff00d1a8c::t_83af679c0cfde6 253-260,263
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_0226cff00d1a8c::t_014ffecf09a58e 71-90
+control-plane/Sources/App/Services/AgentService.swift
+  s_0226cff00d1a8c::t_641d2bf4032382 312-314,316-325
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_0226cff00d1a8c::t_9691ecf5aa4387 253-258
+  s_0226cff00d1a8c::t_50a900630d8cca 699-713
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_0226cff00d1a8c::t_c9d2eb6274afea 401-413
+  s_0226cff00d1a8c::t_4fa18f1c9c6078 175-195
+  s_0226cff00d1a8c::t_332c7ecf2adeb4 399-400
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_0226cff00d1a8c::t_85bbd0d731c89c 71-77,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "95d7f3945590c964311100f982e777191c77bb35",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

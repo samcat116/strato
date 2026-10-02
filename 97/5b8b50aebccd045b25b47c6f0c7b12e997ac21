@@ -1,0 +1,20 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_9d0e32f24c133c::t_221c3e3dfb0084 67,72,78-82,335-336,360-361,381-382,410-411,439-440,462-463,518-519,563-564
+  s_9d0e32f24c133c::t_a0bfa0ac1272c2 68-71,77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "975b8b50aebccd045b25b47c6f0c7b12e997ac21",
+  "prompts": {},
+  "sessions": {
+    "s_9d0e32f24c133c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "836a2c80-dc6b-4313-a493-cbdc0f242555",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

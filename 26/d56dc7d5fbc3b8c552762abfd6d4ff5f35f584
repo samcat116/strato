@@ -1,0 +1,51 @@
+.github/workflows/README.md
+  s_4763d640788afa::t_66e88b81b9f966 98-101,104-107
+  s_4763d640788afa::t_17466f050f5138 3
+.github/workflows/build.yaml
+  s_4763d640788afa::t_4accd1f12999b7 222-224
+  s_4763d640788afa::t_4d3108818d5ca6 154-157
+  s_4763d640788afa::t_1a0be7545ef48a 382-384
+  s_4763d640788afa::t_ea94cb506b5059 402-405
+  s_4763d640788afa::t_588ccd09e9aa72 482-485
+  s_4763d640788afa::t_78c84821bc165d 81-83
+.github/workflows/release.yaml
+  s_4763d640788afa::t_903a00e4037925 13-18
+  s_4763d640788afa::t_c0bd334c9dc757 391
+  s_4763d640788afa::t_4f808d12023cf3 401
+  s_4763d640788afa::t_403f0f560a42c0 586-588,590,596-598,601
+  s_4763d640788afa::t_aa6a4c4a89038c 564-567,570-584
+  s_4763d640788afa::t_3602962c8a3182 843-845,847-856
+  s_4763d640788afa::t_2ce73d77e86d1c 26-27,29,31
+  s_4763d640788afa::t_cdc2f4b8471212 86-88,92-100
+  s_4763d640788afa::t_610586c837afd4 602-603
+  s_4763d640788afa::t_289b9002a0817f 131-134
+  s_4763d640788afa::t_7e9c72851d7969 222-231,255-257,283-285,287-289,301,322-386
+  s_4763d640788afa::t_1d92d3cf604c60 505-506,512-519,521
+  s_4763d640788afa::t_0a214cdfdf1716 387-390
+  s_4763d640788afa::t_62f4ede345f87c 585
+.github/workflows/main-build.yaml
+  s_4763d640788afa::t_4b27e269be2e6d 33-36
+  s_4763d640788afa::t_41ef1c94c53fe1 202-206,229-231,255-259,278-282,284,305-373
+  s_4763d640788afa::t_697b7ea728a78e 378,389
+  s_4763d640788afa::t_956d966ec69a96 374-377
+.github/workflows/deploy-docs.yml
+  s_4763d640788afa::t_8ce7dd622b2052 11
+.github/workflows/helm-test.yml
+  s_4763d640788afa::t_969b5c86916a74 417-421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "26d56dc7d5fbc3b8c552762abfd6d4ff5f35f584",
+  "prompts": {},
+  "sessions": {
+    "s_4763d640788afa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6fbce6a2-6a1a-4390-81a4-9cc95cf6e002",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

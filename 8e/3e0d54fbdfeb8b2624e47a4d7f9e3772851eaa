@@ -1,0 +1,59 @@
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 729-730,743-746
+agent/Sources/StratoAgentCore/DomainMemoryInventory.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 15-16,66-73,75-78,82,149-164,167,205-210,212-222,225-227,240,248-258,281-291,298,305,328-352
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 137-140
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 7-14,79-84,86-108
+control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 1-2,6-7,13-90
+control-plane/Tests/AppPlatformTests/StorageDevicePersistenceTests.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 14-85,212-213,225
+deploy/compose/memory-growth-test.sh
+  s_e071c331c9a3b5::t_96e54bd6007ab4 1-197
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 1730
+agent/Tests/StratoAgentTests/DomainMemoryInventoryTests.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 57,76-99,266-268,270-274,284,286-287
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 308,361
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 11-40,127-291,485-575
+  s_e071c331c9a3b5::t_12af5c74aa251f 576
+control-plane/Sources/App/Migrations/CreateStorageDevices.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 20
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 478,484
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 17-20,680-741,1197-1252,1254
+  s_e071c331c9a3b5::t_2496e24854020b 1253,1255
+control-plane/Sources/App/Models/DNSRecord.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 20-33
+agent/Tests/StratoAgentTests/DomainRedefinitionTests.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 636-639
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 464-473
+control-plane/Sources/App/Services/DNSZoneService.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 150,168,345
+control-plane/Sources/App/Migrations/FixStorageDeviceUsesArrayType.swift
+  s_e071c331c9a3b5::t_96e54bd6007ab4 1-77
+docs/development/e2e-testing.md
+  s_e071c331c9a3b5::t_96e54bd6007ab4 160-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "8e3e0d54fbdfeb8b2624e47a4d7f9e3772851eaa",
+  "prompts": {},
+  "sessions": {
+    "s_e071c331c9a3b5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05b05-a046-7f73-8666-3ffb6799e96e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

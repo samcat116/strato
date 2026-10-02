@@ -1,0 +1,22 @@
+agent/Sources/StratoAgentCore/DurableFileWriter.swift
+  s_c6cbfb839458a0::t_45e6e92afc85dd 97-100
+agent/Tests/StratoAgentTests/DurableFileWriterTests.swift
+  s_c6cbfb839458a0::t_45e6e92afc85dd 175-182,185-194
+  s_c6cbfb839458a0::t_45d062f4f2e424 183-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "800560512932083b4a15eeb4ee1bee95cc0ea3c6",
+  "prompts": {},
+  "sessions": {
+    "s_c6cbfb839458a0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdbf-e30c-7bd1-87e7-1ece7d3a89cd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

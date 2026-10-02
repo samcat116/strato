@@ -1,0 +1,25 @@
+control-plane/Sources/App/DatabaseTLSConfiguration.swift
+  s_8d44501606681b::t_52f8db7714ca13 29-37
+control-plane/Sources/App/Services/ImageStorageService.swift
+  s_8d44501606681b::t_0805041d27bd33 6-20,35-36,38
+control-plane/Tests/AppTests/DatabaseTLSConfigurationTests.swift
+  s_8d44501606681b::t_cd06a51b6954ac 5-9,14-17,22-23,28-33,38-39,44-45
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_8d44501606681b::t_7b8857215880c3 115-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dc0af5b4d55129a76229a0ef2d8acce946b80c5d",
+  "prompts": {},
+  "sessions": {
+    "s_8d44501606681b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "de06c4c1-e2d6-4074-a9b7-cdd7a84f6081",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

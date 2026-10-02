@@ -1,0 +1,44 @@
+control-plane/Sources/App/Migrations/EnhanceVMMigration.swift
+  s_47342e8d2efd7c::t_8b639866b2c793 12,82,86
+control-plane/Sources/App/Migrations/GeneralizeVMOperations.swift
+  s_47342e8d2efd7c::t_8b639866b2c793 21
+control-plane/Sources/App/Migrations/EnforcePersistedEnumValues.swift
+  s_47342e8d2efd7c::t_ad5f2f796462de 1-10,12-17,19-23,25-69,75-77,80-94,96-98,100-129,132-134,136-137,142,144-146,148,151-155,158-164,167-230,233,235,239-247,249,253-270,277-278,284-287,289,298-299,319-327,329,333,339-350,355-356
+  s_47342e8d2efd7c::t_8b639866b2c793 11,18,24,70-74,78-79,95,99,130-131,135,138-141,143,147,149-150,156-157,165-166,231-232,271-276,290-292,294-296,300,302-316,334
+  s_47342e8d2efd7c::t_5b24581a8944cb 250-251
+  s_47342e8d2efd7c::t_95b3ff3627a9ae 293
+  s_47342e8d2efd7c::t_a1d6471a30d8af 234,236-238,248,252,279-283,288,297,301,317-318,328,330-332,335-338,351-354
+control-plane/Sources/App/configure.swift
+  s_47342e8d2efd7c::t_ad5f2f796462de 460-466
+control-plane/Tests/AppTests/PersistedEnumConstraintTests.swift
+  s_47342e8d2efd7c::t_ad5f2f796462de 1-54,57-58,62-83,90-108,110-121,123-134
+  s_47342e8d2efd7c::t_628e95a99662ef 122
+  s_47342e8d2efd7c::t_8b639866b2c793 55-56,59-61,84-89
+  s_47342e8d2efd7c::t_fdf36beaa02e09 109
+control-plane/Sources/App/Migrations/AddDesiredStateToVM.swift
+  s_47342e8d2efd7c::t_8b639866b2c793 19
+control-plane/Sources/App/Migrations/CreateImage.swift
+  s_47342e8d2efd7c::t_8b639866b2c793 18,25
+control-plane/Sources/App/Migrations/AddFetchStateToImageArtifact.swift
+  s_47342e8d2efd7c::t_8b639866b2c793 14
+control-plane/Sources/App/Migrations/AddArchitectureToImage.swift
+  s_47342e8d2efd7c::t_8b639866b2c793 10
+control-plane/Sources/App/Migrations/CreateVolume.swift
+  s_47342e8d2efd7c::t_8b639866b2c793 18-19,22,68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "5b0768017de75339af2a729d7690afa81f324ddd",
+  "prompts": {},
+  "sessions": {
+    "s_47342e8d2efd7c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7aa5-8ab0-7842-b767-30c0842e9e6d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

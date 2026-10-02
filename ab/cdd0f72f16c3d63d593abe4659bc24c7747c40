@@ -1,0 +1,37 @@
+control-plane/web/src/lib/version.ts
+  s_b19ca90b750940::t_5d47103d2e8e30 1-35
+control-plane/web/Dockerfile
+  s_b19ca90b750940::t_aa710615ab7e06 17-26
+.github/workflows/release.yaml
+  s_b19ca90b750940::t_445b108d3bfa67 161-165
+  s_b19ca90b750940::t_262ade2303834e 190-194
+.github/workflows/main-build.yaml
+  s_b19ca90b750940::t_ee60016fbba83f 245,250-251
+  s_b19ca90b750940::t_8c8d3485efe50e 321-322
+  s_b19ca90b750940::t_1e4393e6bb159b 344-346
+  s_b19ca90b750940::t_847b351623d63c 246-249,252-253
+deploy/compose/docker-compose.yml
+  s_b19ca90b750940::t_2da4cc35d76997 313-318
+control-plane/web/src/components/layout/sidebar.tsx
+  s_b19ca90b750940::t_9aa3308fbeff9e 147-152
+  s_b19ca90b750940::t_001005ae869aad 21
+control-plane/web/next.config.ts
+  s_b19ca90b750940::t_bdbac3fe6c39bc 1,4-22,29-33
+  s_b19ca90b750940::t_86b225f8a38b76 34-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "abcdd0f72f16c3d63d593abe4659bc24c7747c40",
+  "prompts": {},
+  "sessions": {
+    "s_b19ca90b750940": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca80cb66-bb50-48a4-b0ea-96e3d13bd4b3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

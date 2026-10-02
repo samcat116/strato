@@ -1,0 +1,24 @@
+.github/workflows/helm-test.yml
+  s_f7434472ebe405::t_bd3a09e857b725 11-13,19
+  s_f7434472ebe405::t_065a75c479a433 55-63
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_f7434472ebe405::t_ba731956c2739d 1-268
+helm/strato-control-plane/templates/configmap.yaml
+  s_f7434472ebe405::t_161e299d5fefe4 8-13,15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "999c967adddb7483e9e90b830b120e05c70ef367",
+  "prompts": {},
+  "sessions": {
+    "s_f7434472ebe405": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05768f38-36f7-4f4a-b281-20e830e6ac01",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

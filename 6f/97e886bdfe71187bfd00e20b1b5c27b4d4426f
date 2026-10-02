@@ -1,0 +1,50 @@
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_c83dc918147a05::t_5ad259bb3f570f 3-5
+  s_c83dc918147a05::t_c5d098e05f591d 1-2,6-562
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_c83dc918147a05::t_6c9ee02ca8e835 100-121
+  s_c83dc918147a05::t_d694c612a883af 227-244,250-315,317-318
+control-plane/Tests/AppTests/CoordinationServiceTests.swift
+  s_c83dc918147a05::t_21ae36a1bd9b34 1-285
+helm/strato-control-plane/values.yaml
+  s_c83dc918147a05::t_0e468ee067d401 415-419
+helm/strato-control-plane/templates/deployment.yaml
+  s_c83dc918147a05::t_6ab8580953a252 206-209
+helm/strato-control-plane/templates/migration-job.yaml
+  s_c83dc918147a05::t_f026ce7c59f70c 56-70
+deploy/compose/README.md
+  s_c83dc918147a05::t_76e181174a01fc 26-27
+CLAUDE.md
+  s_c83dc918147a05::t_e0fa95fe9a5216 67
+docs/architecture/scheduler.md
+  s_c83dc918147a05::t_a013d983148292 165-190
+docs/deployment/docker-compose.md
+  s_c83dc918147a05::t_76e181174a01fc 56
+control-plane/Sources/App/configure.swift
+  s_c83dc918147a05::t_6c6e5e5150b1dc 64-72,74-86
+control-plane/Sources/App/Services/AgentService.swift
+  s_c83dc918147a05::t_59b7be0c97357d 584,586-588,591-593,595-597,607-609,611-613,616-631,633-643
+  s_c83dc918147a05::t_5b33e0e4720fc2 461-484,486
+  s_c83dc918147a05::t_0c15677be31a46 173-176
+  s_c83dc918147a05::t_47073bbeaa57bb 531-536
+  s_c83dc918147a05::t_d80866c8e7f707 962-966
+  s_c83dc918147a05::t_c4cf966e0a8c1e 322-324
+helm/strato-control-plane/templates/_helpers.tpl
+  s_c83dc918147a05::t_844c8c57758ea5 240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6f97e886bdfe71187bfd00e20b1b5c27b4d4426f",
+  "prompts": {},
+  "sessions": {
+    "s_c83dc918147a05": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "95882906-c485-4035-99e7-542e685b54d1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

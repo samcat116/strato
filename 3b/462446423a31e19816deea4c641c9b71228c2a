@@ -1,0 +1,61 @@
+agent/Sources/StratoAgentCore/VsockCIDAllocator.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 304-306
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 213,718-720,725
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 3069-3071,3074
+agent/Sources/StratoAgentCore/OCI/OCIError.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 5-6,86,92-93
+agent/Tests/StratoAgentTests/FailureClassificationTests.swift
+  s_b46e1e8521f8aa::t_26ebc7e24824f6 30-36
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 460,464-467
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_b46e1e8521f8aa::t_ce1095d5855512 931
+  s_b46e1e8521f8aa::t_86271f5c8e198f 924-930,932-953
+  s_b46e1e8521f8aa::t_26ebc7e24824f6 954-978
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 107-108,117
+agent/Tests/StratoAgentTests/VsockCIDAllocatorTests.swift
+  s_b46e1e8521f8aa::t_26ebc7e24824f6 207-210,212-213
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 127-132,155-156
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_b46e1e8521f8aa::t_26ebc7e24824f6 247,262-266
+agent/Sources/StratoAgentCore/UEFIVarstore.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 10-11,20,27-34,118,120-124
+agent/Tests/StratoAgentTests/SandboxImageServiceTests.swift
+  s_b46e1e8521f8aa::t_26ebc7e24824f6 273
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_b46e1e8521f8aa::t_26ebc7e24824f6 2193-2195
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 76-81
+agent/Sources/StratoAgentCore/FailureClassification.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 3-4,6-9,13-17,19-22,66-67
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 1727
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_b46e1e8521f8aa::t_86271f5c8e198f 201,207
+agent/Tests/StratoAgentTests/UEFIVarstoreTests.swift
+  s_b46e1e8521f8aa::t_26ebc7e24824f6 209-229,285-286,290
+agent/Sources/StratoAgent/Agent.swift
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 4340-4343,5205-5207,5650-5653
+docs/development/e2e-testing.md
+  s_b46e1e8521f8aa::t_fdb365d1cd6cd6 131-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3b462446423a31e19816deea4c641c9b71228c2a",
+  "prompts": {},
+  "sessions": {
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

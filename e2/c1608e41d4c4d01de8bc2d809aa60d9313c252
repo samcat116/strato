@@ -1,0 +1,25 @@
+control-plane/Tests/AppIdentityTests/SSFLifecycleTests.swift
+  s_448db3d02816b9::t_69263292951493 1-52
+control-plane/Sources/App/configure.swift
+  s_448db3d02816b9::t_06926f03e24bb2 121
+control-plane/Sources/App/Services/SSFService.swift
+  s_448db3d02816b9::t_69263292951493 404-406,410
+  s_448db3d02816b9::t_06926f03e24bb2 87,96,102,121,127,396,400,426-428,431,433,469
+  s_448db3d02816b9::t_51bc56128c677c 213,251,328
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "e2c1608e41d4c4d01de8bc2d809aa60d9313c252",
+  "prompts": {},
+  "sessions": {
+    "s_448db3d02816b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a012d2-ec0b-7830-a605-c46708080eb5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,53 @@
+control-plane/Sources/App/configure.swift
+  s_88f7800204a532::t_93e228deb920cd 222-228,231-233
+  s_88f7800204a532::t_5142a7e25992ab 258-259
+  s_e64eb3da2ecde9::t_f58cea8be95389 234
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_88f7800204a532::t_f17bfd17257a93 532-534,551-553,566-568,582-585,594-600,609,617,639-642,659-661,684-686,716-724,741-744,765-772,828-832,862-865,959,961,964,971-973,975-977,981,986-989
+docs/architecture/multi-replica.md
+  s_88f7800204a532::t_6b66bef583d46c 153-156,158-159
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_88f7800204a532::t_f17bfd17257a93 139
+control-plane/Sources/App/Services/RateLimitService.swift
+  s_88f7800204a532::t_93e228deb920cd 90
+control-plane/Tests/AppPlatformTests/CoordinationServiceTests.swift
+  s_88f7800204a532::t_fbdd64a7fb3759 342-345
+  s_88f7800204a532::t_b0700c562bc8b8 346
+  s_88f7800204a532::t_f17bfd17257a93 356,364-365,378
+control-plane/Tests/AppIdentityTests/APIKeyAuthenticatorTests.swift
+  s_88f7800204a532::t_5b2ce2ed44376b 123-154
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_88f7800204a532::t_8e0393164bd5b4 119,305
+  s_88f7800204a532::t_40c59e8a3effdd 212-217,219-223,231-233
+  s_88f7800204a532::t_93e228deb920cd 91-94,99-100,105-106,111,139-141,194-200,306-324
+control-plane/Tests/AppPlatformTests/RateLimitTests.swift
+  s_88f7800204a532::t_5b2ce2ed44376b 15-16,24-26,128-160,288-319
+  s_88f7800204a532::t_74ae94185e8ccc 320
+docs/deployment/rate-limiting.md
+  s_88f7800204a532::t_40c59e8a3effdd 65-72
+  s_88f7800204a532::t_5142a7e25992ab 58-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d08ae221c70c54df0ce5069734515aaaad20a65c",
+  "prompts": {},
+  "sessions": {
+    "s_88f7800204a532": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ec-e8c1-77a2-aa41-b8b76e1ec762",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e64eb3da2ecde9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ea-91f4-7053-818a-8085597f43aa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

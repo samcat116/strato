@@ -1,0 +1,33 @@
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_66f25871c0dca2::t_9c233cb9e424f5 32-36
+control-plane/Tests/AppTests/LastUsedTrackingTests.swift
+  s_66f25871c0dca2::t_8962654a72e856 190,197,202,207
+  s_66f25871c0dca2::t_9708302ebc89af 1-98,114-147,149-159,161-164,173-189,191-196,198-201,203-206,208-253,255-256,258-261,263-265
+  s_66f25871c0dca2::t_9310ec478112bb 99-113
+  s_66f25871c0dca2::t_ee8edbcc3c57d1 254,257,262
+  s_66f25871c0dca2::t_8d87f16164809d 148,160,165-172
+control-plane/Sources/App/Services/LastUsedTracking.swift
+  s_66f25871c0dca2::t_c649d394b647ff 48-50
+  s_66f25871c0dca2::t_3c7dac93b6a73b 1-47,51-95
+control-plane/Sources/App/Middleware/OAuthTokenAuthenticator.swift
+  s_66f25871c0dca2::t_f2e5b604067578 31
+control-plane/Sources/App/Controllers/SCIMController.swift
+  s_66f25871c0dca2::t_603393d615fcc1 104
+  s_66f25871c0dca2::t_106d237f0c455f 105-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ebed702a3021ac1f259dc8fd2a29b41a584f7aee",
+  "prompts": {},
+  "sessions": {
+    "s_66f25871c0dca2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74b5abc3-c902-47e6-a30c-05d97ec86096",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

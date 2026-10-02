@@ -1,0 +1,23 @@
+agent/Sources/StratoAgent/QEMUService.swift
+  s_0b0c2b9bd67cb5::t_373797e9ceb97b 520,522-536,545
+agent/Sources/StratoAgent/Agent.swift
+  s_0b0c2b9bd67cb5::t_dc2d7ad323ba58 1510-1516
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_0b0c2b9bd67cb5::t_5845eda1e30b0a 60-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6d8d95fbe0a72bda0906f78d596a1388cae4a980",
+  "prompts": {},
+  "sessions": {
+    "s_0b0c2b9bd67cb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0567f44-f1ed-44e8-8ae6-5647dcc96e6a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

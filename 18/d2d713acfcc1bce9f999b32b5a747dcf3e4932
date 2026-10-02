@@ -1,0 +1,33 @@
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  s_3af79fd703f9fa::t_130fb4be989879 340,346,353,447,451-467,512-535
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_3af79fd703f9fa::t_c7c5572e844211 1148,1150
+  s_3af79fd703f9fa::t_2856fcc6e05d18 1180,1186
+  s_3af79fd703f9fa::t_130fb4be989879 1175-1179,1181-1185,1187-1191,1195-1240
+  s_3af79fd703f9fa::t_f14dd6ece7bf9b 1174
+agent/Tests/StratoAgentRuntimeTests/HostResourcesTests.swift
+  s_3af79fd703f9fa::t_98f7795d33dfe6 28,32,34-35
+  s_3af79fd703f9fa::t_130fb4be989879 1,3-15,19-20,22-27,29,33,36-47
+  s_3af79fd703f9fa::t_f14dd6ece7bf9b 2,16-18,21,30-31
+agent/Sources/StratoAgentRuntime/HostResources.swift
+  s_3af79fd703f9fa::t_130fb4be989879 48-60
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_3af79fd703f9fa::t_2856fcc6e05d18 538-539
+  s_3af79fd703f9fa::t_130fb4be989879 60-64,66-75,540-571
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "18d2d713acfcc1bce9f999b32b5a747dcf3e4932",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

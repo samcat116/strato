@@ -1,0 +1,19 @@
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_410b83026746bf::t_4c4a4c63e04828 125-127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "50c8eb8f25f3da01ce815115de3d8c72bec5c4d8",
+  "prompts": {},
+  "sessions": {
+    "s_410b83026746bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5486d294-0d5f-42d4-a0f5-7de3e33822f2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

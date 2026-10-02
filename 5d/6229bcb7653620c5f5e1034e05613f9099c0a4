@@ -1,0 +1,47 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_79e524c6806817::t_b2e62fed455e51 596-598
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_311e4d09212c99::t_70f7fe1955de99 115,148,236,263,318,352,388,437,466,508,532,611,640,670,679,767
+control-plane/Sources/App/Services/SpiceDBProjectReconciliation.swift
+  s_2b82233990b23a::t_63246fb1fc8add 5-10,32
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_311e4d09212c99::t_d14962cacc83e5 149,183,441,460-465
+docs/architecture/overview.md
+  s_311e4d09212c99::t_2248c1a7f24e27 49,58,63-73,80-85,93,95
+helm/strato-control-plane/templates/configmap.yaml
+  s_311e4d09212c99::t_549d59bb6cdd30 9-14,19-32,36,39-41,43-44,46,49-73,75-77,80-81,83-133,140-141,143-146,149,152-164,181-256
+spicedb/schema.zed
+  s_311e4d09212c99::t_29b23a9971165e 1-9,14-27,31,34-36,38-39,41,44-68,70-71,76,79-161,179-180,199-205,220-221,224-239,241-242,244-253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5d6229bcb7653620c5f5e1034e05613f9099c0a4",
+  "prompts": {},
+  "sessions": {
+    "s_2b82233990b23a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89352b98-4bab-4033-bbb5-ac3c6c7c7e47",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_311e4d09212c99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b6dd57a-adf6-4dc0-8fd6-ae1126922c9b",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_79e524c6806817": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ac12cf4-64db-450e-b882-8b616c8cdc67",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+control-plane/web/src/types/api.ts
+  s_071366b7d1e1c2::t_2dc9eb07e1d334 855-859
+  s_071366b7d1e1c2::t_4994188278ddf4 1502-1568
+  s_071366b7d1e1c2::t_923743251e434e 284-285
+control-plane/web/src/components/security-groups/edit-security-group-dialog.tsx
+  s_071366b7d1e1c2::t_989744619af20c 1-165
+control-plane/web/src/app/(dashboard)/security-groups/page.tsx
+  s_071366b7d1e1c2::t_aec411934817f7 1-100
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_071366b7d1e1c2::t_aabcf5f2f99c88 383-419
+  s_071366b7d1e1c2::t_cf393f892bb1d3 65-71
+  s_071366b7d1e1c2::t_f20d07fbc44143 166
+  s_071366b7d1e1c2::t_c981bfacfeb42e 144-146
+  s_071366b7d1e1c2::t_3092c02a32e931 20
+  s_071366b7d1e1c2::t_a2d240c957ba58 54-56
+control-plane/web/src/lib/hooks/use-security-groups.ts
+  s_071366b7d1e1c2::t_2de8473f684f69 1-132
+control-plane/web/src/components/security-groups/security-group-table.tsx
+  s_071366b7d1e1c2::t_07feed1735e2af 1-167
+control-plane/web/src/components/security-groups/index.ts
+  s_071366b7d1e1c2::t_4430cb359d6cf5 1-4
+control-plane/web/src/lib/api/index.ts
+  s_071366b7d1e1c2::t_86eb663bc11e16 26
+control-plane/web/src/components/security-groups/security-group-rules-dialog.tsx
+  s_071366b7d1e1c2::t_550a3c177e8279 1-447
+control-plane/web/src/components/security-groups/create-security-group-dialog.tsx
+  s_071366b7d1e1c2::t_4d5ec8cca0f596 1-150
+control-plane/web/src/components/layout/nav.ts
+  s_071366b7d1e1c2::t_705bbe8076d4a6 65
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_071366b7d1e1c2::t_b253aac8d18c77 3-5,7-16,25-31,52-149,152-153,206-210,250-260,266-277
+  s_071366b7d1e1c2::t_0e2f0b0b8e75e6 278
+control-plane/web/src/lib/hooks/index.ts
+  s_071366b7d1e1c2::t_1411d8191dd385 151-162
+docs/architecture/networking.md
+  s_071366b7d1e1c2::t_3fc97e6ef86935 206-279
+control-plane/web/src/lib/api/security-groups.ts
+  s_071366b7d1e1c2::t_257a5f90fab497 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "766068b6b2c8d4e4f4b8a0a0b83f39bc4ee7550e",
+  "prompts": {},
+  "sessions": {
+    "s_071366b7d1e1c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c8d2edb-f9f6-4c81-bef3-3d415daceadb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

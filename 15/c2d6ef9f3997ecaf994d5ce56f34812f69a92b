@@ -1,0 +1,76 @@
+control-plane/web/src/lib/hooks/use-users.ts
+  s_b36c12691fceda::t_01cc8662c2c53e 16-26
+  s_b36c12691fceda::t_8814af20cc5a9c 4
+control-plane/web/src/lib/webauthn/client.ts
+  s_b36c12691fceda::t_086dac48692e4d 160-185
+  s_b36c12691fceda::t_698a63e079948d 159
+control-plane/web/src/components/users/user-table.tsx
+  s_b36c12691fceda::t_8c6bc335d25910 94
+  s_b36c12691fceda::t_88ef78a80615f6 27-40
+  s_b36c12691fceda::t_d06c69243cde1c 135-137
+control-plane/web/src/components/users/create-user-dialog.tsx
+  s_b36c12691fceda::t_61d2460346998d 1-249
+control-plane/Tests/AppTests/UserCreationAndClaimTests.swift
+  s_b36c12691fceda::t_61593aa70dedfb 1-223
+control-plane/web/src/lib/api/auth.ts
+  s_b36c12691fceda::t_4349c6f712a6eb 53-73
+  s_b36c12691fceda::t_aed4879ddc705a 4
+control-plane/Sources/App/Models/AccountClaimToken.swift
+  s_b36c12691fceda::t_680c1ea496f435 1-104
+control-plane/Sources/App/configure.swift
+  s_b36c12691fceda::t_d9276946502d85 340-343
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_b36c12691fceda::t_7f676780be9d82 34
+control-plane/Sources/App/Models/UserSource.swift
+  s_b36c12691fceda::t_90ef75fc3f7a72 1-17
+control-plane/Sources/App/Migrations/AddSourceToUser.swift
+  s_b36c12691fceda::t_d41ef6d9c24172 1,3-40
+  s_b36c12691fceda::t_161e5e3911f5ee 2
+control-plane/Sources/App/Models/User.swift
+  s_b36c12691fceda::t_efb3e4ae6a8d75 26-30
+  s_b36c12691fceda::t_daa69d1a4e7216 160-166
+  s_b36c12691fceda::t_8f90d369d8d994 80,91
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_b36c12691fceda::t_d632fed4437f4b 37
+control-plane/web/src/app/(dashboard)/admin/users/page.tsx
+  s_b36c12691fceda::t_e2c60237ac02d7 3-5,9,17
+  s_b36c12691fceda::t_9b889facb9707b 44-57,60
+  s_b36c12691fceda::t_00297f2c84dbf3 61
+control-plane/web/src/app/(auth)/claim/page.tsx
+  s_b36c12691fceda::t_a2b14da624883c 1-45,49,53-56,58-212
+  s_b36c12691fceda::t_593a3bdb7ca5b1 46-48,50-52,57
+control-plane/Sources/App/Migrations/CreateAccountClaimToken.swift
+  s_b36c12691fceda::t_3976da93c7fee1 1-24
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_b36c12691fceda::t_d40fa0d4cb43fd 140
+control-plane/web/src/lib/api/users.ts
+  s_b36c12691fceda::t_4221f77672734d 4-10,18-20
+  s_b36c12691fceda::t_de9ac8c14da662 21-22
+control-plane/web/src/types/api.ts
+  s_b36c12691fceda::t_5b88c91959dd42 3-5,14,23-46
+  s_b36c12691fceda::t_1805132f10e36c 47
+control-plane/Sources/App/Controllers/UserController.swift
+  s_b36c12691fceda::t_cff20170054c66 533-580
+  s_b36c12691fceda::t_d5839f35975aa9 757,768-769
+  s_b36c12691fceda::t_f39313dd34dbac 100-160
+  s_b36c12691fceda::t_9ffe031666c03a 679-691
+  s_b36c12691fceda::t_0ed950715a1c6d 223-235
+  s_b36c12691fceda::t_a3f3e9fddaa651 317-434
+  s_b36c12691fceda::t_c4df5bcaf16280 10,26-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "15c2d6ef9f3997ecaf994d5ce56f34812f69a92b",
+  "prompts": {},
+  "sessions": {
+    "s_b36c12691fceda": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1c63ca92-0784-45e8-9097-491fccf4ebcb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

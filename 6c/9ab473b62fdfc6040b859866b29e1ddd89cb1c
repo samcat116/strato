@@ -1,0 +1,178 @@
+control-plane/Sources/App/Services/StorageObservedMerge.swift
+  s_aeadc33ad2c139::t_14548cb3b3f586 217-226
+cli/Sources/StratoCLICore/VolumeBlockModeParser.swift
+  s_aeadc33ad2c139::t_ef9d7ab19c5e98 1-18
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_aeadc33ad2c139::t_14548cb3b3f586 342-343
+control-plane/Sources/App/Migrations/AddVolumeBlockPolicy.swift
+  s_aeadc33ad2c139::t_25ad6c86768891 1-39
+control-plane/Sources/App/openapi.yaml
+  s_aeadc33ad2c139::t_67b681887d9fe3 10000-10001,11249-11250,11282-11286,11367,11459-11466,11654-11682,11684-11690
+  s_aeadc33ad2c139::t_4efb32560f38b7 11683
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_aeadc33ad2c139::t_7a85a9d119736c 68,77-78,131-144,281-322
+  s_9d764f706ace50::t_7396cb2db66b23 323
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_aeadc33ad2c139::t_9adf3cd0ab5d05 34-63,148-152,184-186
+  s_532b37be23fdb2::t_2f638a645ec91e 187
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  s_aeadc33ad2c139::t_d9fa6b716114f4 1439,1454-1455,2303-2304
+agent/Sources/StratoAgentRuntime/FirecrackerService.swift
+  s_aeadc33ad2c139::t_d9fa6b716114f4 804
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_aeadc33ad2c139::t_7a85a9d119736c 409-422
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_aeadc33ad2c139::t_af7054088ea2b2 12-13,34-35,67-68
+control-plane/web/src/types/openapi.ts
+  s_aeadc33ad2c139::t_f1d46fd4e50d77 5829,6467,6481-6482,6570-6572,6674-6688,6690-6694
+  s_aeadc33ad2c139::t_12893b75b3d12f 6689
+cli/Sources/StratoCLI/Commands/VolumeCommand.swift
+  s_aeadc33ad2c139::t_553dd800fc7454 62-71
+  s_aeadc33ad2c139::t_7da0e7774e0d37 96-100,108,115-116
+shared/Sources/StratoShared/VMSpec.swift
+  s_aeadc33ad2c139::t_a723f7b495d937 308-322
+  s_aeadc33ad2c139::t_47c473bf8f402f 262-268,276-278,286-307
+shared/Sources/StratoShared/WireProtocol.swift
+  s_aeadc33ad2c139::t_47c473bf8f402f 14-15,33
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_aeadc33ad2c139::t_61d8178e8190b3 180,187-191,195-204
+  s_aeadc33ad2c139::t_a723f7b495d937 193-194,206-207,209-211
+  s_aeadc33ad2c139::t_1db6c741127c58 205,208
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_aeadc33ad2c139::t_292890ed507397 400-402,413-414,425,430,449-451,1467-1469,1482-1483,1496
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  s_aeadc33ad2c139::t_8e3ffcedc29f56 842-848,869-873
+agent/Sources/StratoAgentDomainXML/ResolvedDisk.swift
+  s_aeadc33ad2c139::t_3aaac9b4b5da00 31-33,37,43
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_aeadc33ad2c139::t_e3ed85ba2d1577 1102-1103
+  s_aeadc33ad2c139::t_14548cb3b3f586 209-210,585,641-644
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_aeadc33ad2c139::t_ac2856aa77e78a 563-565,584,664-670,678-680,685-709
+  s_aeadc33ad2c139::t_1db6c741127c58 551-557,566
+  s_0a6f49dab719ee::t_4886efd91f2c45 710-711
+agent/Sources/StratoAgentDomainXML/DomainXMLBuilder.swift
+  s_aeadc33ad2c139::t_3aaac9b4b5da00 563,572,830,882-892,897-899,919,923-924
+  s_aeadc33ad2c139::t_4efb32560f38b7 900
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_aeadc33ad2c139::t_cb0744f8b61058 22,45,93,141,306-329
+  s_9d764f706ace50::t_237dba76b0cca8 330-331
+agent/Tests/StratoAgentStorageTests/VMManifestStoreTests.swift
+  s_aeadc33ad2c139::t_61d8178e8190b3 162-198
+  s_aeadc33ad2c139::t_98ee4609c09cdf 136-140,142-161
+  s_aeadc33ad2c139::t_701da1a50eb047 141
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_aeadc33ad2c139::t_701da1a50eb047 457
+  s_aeadc33ad2c139::t_4efb32560f38b7 478-479
+  s_aeadc33ad2c139::t_f57873866f1556 453-456,459-477,480-481
+  s_aeadc33ad2c139::t_c4333a46cef3ae 458
+control-plane/Tests/AppPlatformTests/AddVolumeBlockPolicyTests.swift
+  s_aeadc33ad2c139::t_b59efbdd398663 1-56
+agent/Sources/StratoAgentCore/QEMUBlockDevicePolicy.swift
+  s_aeadc33ad2c139::t_4efb32560f38b7 22-28,60
+  s_aeadc33ad2c139::t_fecb9894636cc2 42
+  s_aeadc33ad2c139::t_9adf3cd0ab5d05 1-21,29-41,43-59,61-64
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  s_aeadc33ad2c139::t_7da0e7774e0d37 111-115,123
+  s_aeadc33ad2c139::t_630efd565522d8 150
+cli/Tests/StratoCLITests/VolumeBlockModeParserTests.swift
+  s_aeadc33ad2c139::t_ef9d7ab19c5e98 1-22
+control-plane/web/src/components/vms/vm-volumes-card.tsx
+  s_aeadc33ad2c139::t_cb0744f8b61058 39,50,72-75,90,252-276
+control-plane/Sources/App/Models/Volume.swift
+  s_aeadc33ad2c139::t_14548cb3b3f586 212-222,259-260,280,469,474-475,488,512-513,607-609,640-641
+  s_aeadc33ad2c139::t_7eea569db80e49 514-525
+agent/Sources/StratoAgentCore/CephRBDStorageBackend.swift
+  s_aeadc33ad2c139::t_5ead39461cb45a 120-134
+agent/Sources/StratoAgentRuntime/HypervisorProtocol.swift
+  s_aeadc33ad2c139::t_d9fa6b716114f4 235
+agent/Tests/StratoAgentStorageTests/FileSystemStorageBackendTests.swift
+  s_aeadc33ad2c139::t_2fb22e46bc75eb 233
+  s_aeadc33ad2c139::t_98ee4609c09cdf 213-232,234-288
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_aeadc33ad2c139::t_47c473bf8f402f 20
+docs/architecture/storage.md
+  s_aeadc33ad2c139::t_4efb32560f38b7 157-169
+  s_aeadc33ad2c139::t_8f83fce07d5cfd 144-156,170-210
+docs/development/e2e-testing.md
+  s_aeadc33ad2c139::t_5837509f503307 176-185
+shared/Sources/StratoShared/DiskAttachment.swift
+  s_aeadc33ad2c139::t_47c473bf8f402f 22-86
+agent/Tests/StratoAgentStorageTests/QEMUBlockDevicePolicyTests.swift
+  s_aeadc33ad2c139::t_701da1a50eb047 15
+  s_aeadc33ad2c139::t_f57873866f1556 1-14,16-17,19,21-48,51-64
+  s_aeadc33ad2c139::t_4efb32560f38b7 18,20,49-50
+agent/Sources/StratoAgentRuntime/MockHypervisorService.swift
+  s_aeadc33ad2c139::t_d9fa6b716114f4 136
+agent/Sources/StratoAgentDomainXML/DomainDeviceXML.swift
+  s_aeadc33ad2c139::t_3aaac9b4b5da00 50,55
+  s_aeadc33ad2c139::t_6d28b2617e4ef9 51
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_aeadc33ad2c139::t_1db6c741127c58 830
+  s_aeadc33ad2c139::t_caf046d4f06ec3 831
+  s_aeadc33ad2c139::t_e8867010479d2d 774,823,825-826,835
+  s_aeadc33ad2c139::t_5ead39461cb45a 31,64,78,770-773,775-786,791-792,794-805,807,809,811-812,814-818,820-822,824,827-828,832,834,836-837,839-840
+  s_aeadc33ad2c139::t_2309ce6923d382 787-790,793,806,808,810,813,819,829,833,838
+  s_aeadc33ad2c139::t_ae39874f5940d9 841
+control-plane/web/src/types/api.ts
+  s_aeadc33ad2c139::t_cb0744f8b61058 257
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_aeadc33ad2c139::t_25ad6c86768891 197-200
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_aeadc33ad2c139::t_25ad6c86768891 1521-1522,1527
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_aeadc33ad2c139::t_cb0744f8b61058 30,54,236,283,493-517
+  s_9d764f706ace50::t_cfb7c87fce59b6 518-519
+shared/Tests/StratoSharedTests/BlockDevicePolicyWireTests.swift
+  s_aeadc33ad2c139::t_701da1a50eb047 41
+  s_aeadc33ad2c139::t_f57873866f1556 1-40,42-63
+control-plane/web/src/components/volumes/volume-table.tsx
+  s_aeadc33ad2c139::t_cb0744f8b61058 110-132
+docs/operations/qemu-block-policy-benchmark.md
+  s_aeadc33ad2c139::t_e1c48d5bf915e4 1-79,84-174
+  s_aeadc33ad2c139::t_4efb32560f38b7 80-83
+control-plane/Sources/App/Services/StorageCarrierAssembler.swift
+  s_aeadc33ad2c139::t_14548cb3b3f586 250-251
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  s_aeadc33ad2c139::t_bf019c9b331e88 33-35,518-519
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6c9ab473b62fdfc6040b859866b29e1ddd89cb1c",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9d764f706ace50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-dda9-7730-90f4-480f55b6b230",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_aeadc33ad2c139": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-590c-7111-ab67-964d351744c2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

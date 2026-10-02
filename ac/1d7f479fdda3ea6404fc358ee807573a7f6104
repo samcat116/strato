@@ -1,0 +1,33 @@
+control-plane/Sources/App/Migrations/SeedDefaultNetworkDNS.swift
+  s_0b0c2b9bd67cb5::t_3f783dde46b229 1-87
+control-plane/Sources/App/configure.swift
+  s_0b0c2b9bd67cb5::t_5bce89bec190e7 432-436
+control-plane/Tests/AppTests/SeedDefaultNetworkDNSTests.swift
+  s_2113b28cc3dcb5::t_47dd7830799c18 1-103
+docs/architecture/networking.md
+  s_2113b28cc3dcb5::t_1ac3e953776ef1 24-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "ac1d7f479fdda3ea6404fc358ee807573a7f6104",
+  "prompts": {},
+  "sessions": {
+    "s_0b0c2b9bd67cb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0567f44-f1ed-44e8-8ae6-5647dcc96e6a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_2113b28cc3dcb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3ae6ec5d-10c8-40b8-a7a9-32ddcf995b4b",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

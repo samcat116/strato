@@ -1,0 +1,40 @@
+control-plane/Sources/App/Services/NetworkServiceSpaceAudit.swift
+  s_06ade315b6c855::t_3c40c7ac47f059 29
+  s_06ade315b6c855::t_92a29747846f60 1-28,30-33
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_06ade315b6c855::t_7fe87327c908ad 284-309
+control-plane/Sources/App/configure.swift
+  s_06ade315b6c855::t_92a29747846f60 860-865
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_06ade315b6c855::t_3c489bd8034c78 719
+shared/Sources/StratoShared/IPAddressing.swift
+  s_06ade315b6c855::t_143046169251d0 262-265,267-275,280-286
+control-plane/Sources/App/Migrations/AddIPv6ToLogicalNetwork.swift
+  s_06ade315b6c855::t_3c489bd8034c78 48-49,84-108
+  s_06ade315b6c855::t_b388b5ef55e819 109-110
+docs/architecture/networking.md
+  s_06ade315b6c855::t_1086523a704b6f 709-716,718-734
+shared/Tests/StratoSharedTests/IPAddressingTests.swift
+  s_06ade315b6c855::t_0175a66d9259d7 96,111-127
+  s_06ade315b6c855::t_f693768443ec12 128-129
+CONTEXT.md
+  s_06ade315b6c855::t_1086523a704b6f 326-328
+shared/Sources/StratoShared/NetworkResolverEndpoint.swift
+  s_06ade315b6c855::t_143046169251d0 95-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "03aa271f6e641890a3c837bc5905b5968104dc6f",
+  "prompts": {},
+  "sessions": {
+    "s_06ade315b6c855": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3aa-c2c9-7232-a30b-6c141568940c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

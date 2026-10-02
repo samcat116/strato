@@ -1,0 +1,94 @@
+control-plane/Sources/App/IAM/CeilingEvaluator.swift
+  s_6671064d0155b3::t_d6082731b97a87 1-67,73-74
+  s_6671064d0155b3::t_24c173b7287191 68-72
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_6671064d0155b3::t_cd21b8a8009116 56-65,75-77,87-88,95-96,103-112,116-127
+  s_6671064d0155b3::t_3b7be36df3fced 209-217,227-228,230-235,241-243,247-323
+  s_6671064d0155b3::t_11fa785887f44f 336,347
+  s_6671064d0155b3::t_696dc97049d2b3 170-175,177-180,182-186
+  s_6671064d0155b3::t_3e351c2e5eb241 324,649-654,656-657,668-688,749-767
+  s_6671064d0155b3::t_88c112f893047b 128-129
+  s_6671064d0155b3::t_66c56ba69cee94 325
+control-plane/web/src/types/openapi.ts
+  s_6671064d0155b3::t_62d23c75d09675 6528-6541,6551,6553,6555-6556,6788,6794,6796-6797,6838-6839,6843,6849-6850
+control-plane/Sources/App/IAM/GuardrailText.swift
+  s_6671064d0155b3::t_e3892756f58d08 61
+  s_6671064d0155b3::t_f1525ccfe0a821 1-60,62-121
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_6671064d0155b3::t_73672112e78bda 306,308
+  s_6671064d0155b3::t_572b67f547f4cd 71-76,78-82,102
+  s_6671064d0155b3::t_60e86130a34510 441-445,447-448
+  s_6671064d0155b3::t_c5f6630d36563a 222-230,238-263
+  s_6671064d0155b3::t_41895b1f9da4ae 122-126,135-137
+control-plane/Sources/App/Models/Guardrail.swift
+  s_6671064d0155b3::t_07110ff1ee98e5 114-115,130-131
+  s_6671064d0155b3::t_01c7ef58a33151 48-67,69-70
+control-plane/Sources/App/Migrations/AddCedarTextToGuardrail.swift
+  s_6671064d0155b3::t_956778d45bad04 1-35
+control-plane/Sources/App/openapi.yaml
+  s_6671064d0155b3::t_12237c2807b3d8 12041-12045
+  s_6671064d0155b3::t_1fb96ddef6c40b 11440-11443,11449,11451-11458
+  s_6671064d0155b3::t_f1c9c0b34b3d20 12013-12018,12025-12029
+  s_6671064d0155b3::t_3b94e7985bd13e 11891,11910,11923-11933
+  s_6671064d0155b3::t_94bdf45443c933 11376-11412,11417
+docs/architecture/iam.md
+  s_6671064d0155b3::t_b465c48d4c4791 127-128,137-151
+  s_6671064d0155b3::t_d4225a801fcf44 179-185
+  s_6671064d0155b3::t_0e468b7e42f07f 240-249
+  s_6671064d0155b3::t_deab6709793d7f 413-435
+  s_6671064d0155b3::t_7766158f212b6c 152
+control-plane/Sources/App/IAM/GuardrailVocabulary.swift
+  s_6671064d0155b3::t_1f65a285e25c14 187-195,221-242
+  s_6671064d0155b3::t_a1235f3527380d 196
+  s_6671064d0155b3::t_1b6b949b370fb7 243-244
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_6671064d0155b3::t_7bc855b06947cc 222-223,236-237
+  s_6671064d0155b3::t_81563f569595bd 325-330
+  s_6671064d0155b3::t_843380ae7f1389 115
+  s_6671064d0155b3::t_d17e7869568306 161
+  s_6671064d0155b3::t_799aa49bbf4cf1 47-76,101,109,113,116-156
+  s_6671064d0155b3::t_0530324cbdbc3e 199-204,211,213,219-221,224-235,238-256
+  s_6671064d0155b3::t_098577bb44fa52 157-160
+control-plane/Sources/App/IAM/Cedar/CedarPolicySetCache.swift
+  s_6671064d0155b3::t_7515d2f1e12347 248-254
+  s_6671064d0155b3::t_7bc855b06947cc 371-372
+  s_6671064d0155b3::t_1220d7a10f3553 313-370,373-387
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_6671064d0155b3::t_3e369e9c4ff270 133
+  s_6671064d0155b3::t_c84713b699568e 162-164,166-170
+  s_6671064d0155b3::t_089436769ecb4a 191-192,201-202
+control-plane/Sources/App/configure.swift
+  s_6671064d0155b3::t_226998d1e4cc0a 566-570
+control-plane/Sources/App/IAM/Cedar/CedarAuthoredPolicyInspector.swift
+  s_6671064d0155b3::t_1bef395cf1a8af 103-105,109-125
+  s_6671064d0155b3::t_6ea8d21b344838 52-60
+  s_6671064d0155b3::t_dc0c225021a237 126
+control-plane/Tests/AppTests/WhoCanCeilingTests.swift
+  s_6671064d0155b3::t_d0865f9951cad9 151-174
+  s_6671064d0155b3::t_2519a01884a944 1-150,175-198
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_6671064d0155b3::t_3d78aba73a159f 149-156,158
+  s_6671064d0155b3::t_153af41919243a 194-199
+control-plane/Tests/AppTests/IAMGuardrailTests.swift
+  s_6671064d0155b3::t_83e2fd55b05e06 266
+  s_6671064d0155b3::t_76fedf1d9d7702 523-673
+control-plane/Tests/AppTests/GuardrailEndpointTests.swift
+  s_6671064d0155b3::t_0a0256891b401d 60-61,69,72
+  s_6671064d0155b3::t_2293d4663847fe 257-310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9bd44e1fcec2e4ff24e4835744a32ca616b168f8",
+  "prompts": {},
+  "sessions": {
+    "s_6671064d0155b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0fee7a23-4417-4878-a3b9-5a07242ef9f3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

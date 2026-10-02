@@ -1,0 +1,60 @@
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_9d764f706ace50::t_4df4b9872fe8fa 20
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  s_9d764f706ace50::t_c3f077a7702949 1566,1573-1575,1578-1580,1592-1605
+  s_9d764f706ace50::t_847be4adf981a8 1576-1577
+  s_3af79fd703f9fa::t_69fe2637a73cfe 1606-1607
+shared/Sources/StratoShared/WireProtocol.swift
+  s_9d764f706ace50::t_4df4b9872fe8fa 14-17,35
+docs/adr/0001-declarative-agent-protocol.md
+  s_9d764f706ace50::t_4df4b9872fe8fa 491
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_9d764f706ace50::t_1fdbc7f0a2f30f 940,962,997-1008
+  s_9d764f706ace50::t_baabcea3b9ecad 1009-1010
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_9d764f706ace50::t_bfbf192a5ed1b3 292-311
+agent/Tests/StratoAgentTests/DomainBlockIOTuneTests.swift
+  s_9d764f706ace50::t_c3f077a7702949 69,74,78-89
+  s_6fa1273796521a::t_6a83f6a5f521ad 90
+docs/architecture/storage.md
+  s_9d764f706ace50::t_4df4b9872fe8fa 616
+agent/Sources/StratoAgentCore/DomainBlockIOTune.swift
+  s_9d764f706ace50::t_c3f077a7702949 107,109,120-146
+  s_6fa1273796521a::t_ad8bfcf031b63a 147
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_9d764f706ace50::t_accac244b66ebf 71
+  s_9d764f706ace50::t_a5d577041daad9 60,62-70,73,362-386,392
+  s_3af79fd703f9fa::t_31868907e0047e 387-391,393-394
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6fb959aec26523ab8b6bd2e119e3910fa796aa29",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_6fa1273796521a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06e4d-f7aa-72d3-a3e2-91811cfee6ad",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9d764f706ace50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-dda9-7730-90f4-480f55b6b230",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

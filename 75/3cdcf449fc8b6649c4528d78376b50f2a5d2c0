@@ -1,0 +1,63 @@
+control-plane/web/src/types/api.ts
+  s_6f51127af38c38::t_21236406babf62 363-502
+control-plane/web/src/components/quotas/index.ts
+  s_6f51127af38c38::t_21236406babf62 1-3
+control-plane/web/src/lib/api/quotas.ts
+  s_6f51127af38c38::t_21236406babf62 1-78
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_6f51127af38c38::t_21236406babf62 253-255
+control-plane/Tests/AppTests/VolumeAgentSelectionTests.swift
+  s_6f51127af38c38::t_21236406babf62 1-94
+control-plane/web/src/lib/hooks/use-quotas.ts
+  s_6f51127af38c38::t_21236406babf62 1-109
+control-plane/Sources/App/Models/Volume.swift
+  s_6f51127af38c38::t_21236406babf62 223-225,227
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_6f51127af38c38::t_21236406babf62 1-298
+control-plane/web/src/app/(dashboard)/hierarchy/page.tsx
+  s_6f51127af38c38::t_21236406babf62 1-177
+control-plane/web/src/components/layout/sidebar.tsx
+  s_6f51127af38c38::t_21236406babf62 15-17,182-202
+control-plane/web/src/lib/api/hierarchy.ts
+  s_6f51127af38c38::t_21236406babf62 1-37
+control-plane/web/src/lib/api/index.ts
+  s_6f51127af38c38::t_21236406babf62 14-15
+control-plane/web/src/components/hierarchy/index.ts
+  s_6f51127af38c38::t_21236406babf62 1
+control-plane/web/src/lib/hooks/index.ts
+  s_6f51127af38c38::t_21236406babf62 50-59
+  s_6f51127af38c38::t_42b7bc3e31c963 49
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_6f51127af38c38::t_21236406babf62 1-280
+control-plane/Sources/App/Services/VolumeService.swift
+  s_6f51127af38c38::t_21236406babf62 148,187-192
+  s_6f51127af38c38::t_ed2c64099fe96e 193-194
+control-plane/Tests/AppTests/VolumeStatusTests.swift
+  s_6f51127af38c38::t_21236406babf62 1-19
+control-plane/web/src/components/hierarchy/hierarchy-tree.tsx
+  s_6f51127af38c38::t_21236406babf62 1-201
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_6f51127af38c38::t_21236406babf62 1-110
+control-plane/web/src/components/quotas/usage-bar.tsx
+  s_6f51127af38c38::t_21236406babf62 1-59
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_6f51127af38c38::t_21236406babf62 4-5,37,101,128,130-138,222-235,361-364
+control-plane/web/src/lib/hooks/use-hierarchy.ts
+  s_6f51127af38c38::t_21236406babf62 1-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "753cdcf449fc8b6649c4528d78376b50f2a5d2c0",
+  "prompts": {},
+  "sessions": {
+    "s_6f51127af38c38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "29aed775-6bfa-436f-a92b-a865af431af7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

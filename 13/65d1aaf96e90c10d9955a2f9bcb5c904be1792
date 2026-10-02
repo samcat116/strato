@@ -1,0 +1,33 @@
+agent/Tests/StratoAgentTests/SecurityGroupReconcilerTests.swift
+  s_071366b7d1e1c2::t_3eb5d98b2b9fbd 362
+  s_071366b7d1e1c2::t_bb768d167552ed 321-322,330-331,333-336,339-343
+  s_071366b7d1e1c2::t_ea43fc144f91a7 259-294
+  s_071366b7d1e1c2::t_0cd8744461288f 200,202-205,207-223
+agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift
+  s_071366b7d1e1c2::t_2cef5f6e74464a 84-90
+  s_071366b7d1e1c2::t_cdd5ab1e0e7301 233-236,240,242,245
+  s_071366b7d1e1c2::t_24e219bc1fe91a 324-333,335-336
+  s_071366b7d1e1c2::t_cac04c6291ce67 431-442,446
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_071366b7d1e1c2::t_94a25f0291b5e4 770-775,780-782,788-790
+  s_071366b7d1e1c2::t_fc9b6af5d4aa0f 2121-2123,2125-2128,2140-2141,2155,2159-2162,2168,2170-2174,2179-2186,2197-2199,2201-2202,2210
+  s_071366b7d1e1c2::t_cdd18ab36d1ae6 2261,2266-2272
+  s_071366b7d1e1c2::t_331729b87855f5 791-792
+  s_071366b7d1e1c2::t_386b20a42ed386 2273-2274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1365d1aaf96e90c10d9955a2f9bcb5c904be1792",
+  "prompts": {},
+  "sessions": {
+    "s_071366b7d1e1c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c8d2edb-f9f6-4c81-bef3-3d415daceadb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,57 @@
+control-plane/Sources/App/configure.swift
+  s_041fa0100c6687::t_8977f3e789559d 95-106
+  s_041fa0100c6687::t_342b8d7de39718 365-369
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_041fa0100c6687::t_8e15b9b803c958 106-113,115-116
+deploy/compose/docker-compose.yml
+  s_041fa0100c6687::t_5fc506d26fa918 333-336
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_041fa0100c6687::t_e1ab8ac872d054 1-175
+helm/strato-control-plane/values.yaml
+  s_041fa0100c6687::t_df35b945c05613 220-228
+helm/strato-control-plane/templates/deployment.yaml
+  s_041fa0100c6687::t_3d891a5fc2fb5a 164-171
+docker-compose.yml
+  s_041fa0100c6687::t_243d3f9478eace 75-77
+docs/deployment/docker-compose.md
+  s_041fa0100c6687::t_5bf94bca911eea 72-77
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_041fa0100c6687::t_cff227c1d27f7e 20-21
+deploy/compose/setup.sh
+  s_041fa0100c6687::t_e2f7e0e3661744 112-114
+docs/architecture/overview.md
+  s_041fa0100c6687::t_64d6c24ac03603 224
+control-plane/Tests/AppTests/SecretsEncryptionServiceTests.swift
+  s_041fa0100c6687::t_70d4161daba63a 1-164
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_041fa0100c6687::t_9fdaef58076328 1-81
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_041fa0100c6687::t_c1edd3166005e6 85
+  s_041fa0100c6687::t_4f3428b6316623 713
+  s_041fa0100c6687::t_b086a33bea4622 154-156
+  s_041fa0100c6687::t_fbeac00f423e05 849-852,868-871
+  s_041fa0100c6687::t_b84d95d5e0fd5d 816-817,820,827,829-832
+control-plane/Tests/AppTests/OIDCTokenVerificationTests.swift
+  s_041fa0100c6687::t_098baf0875c797 1-170,173-245
+  s_041fa0100c6687::t_4d46f6d89ebdc8 171-172
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_041fa0100c6687::t_ef38c7dbfc06b5 276-324
+Taskfile.yml
+  s_041fa0100c6687::t_ea8873983260e4 29-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "9ad28c76b3585e15641a633b6049ed78d53fda08",
+  "prompts": {},
+  "sessions": {
+    "s_041fa0100c6687": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "43b5e7ec-987e-4360-9c72-a8198996ad58",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

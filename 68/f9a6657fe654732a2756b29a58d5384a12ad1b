@@ -1,0 +1,89 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_ffc4feaf3c1052::t_bd4ae6eae7f985 536-545,547-548,556-599,606-614,624,630
+  s_ffc4feaf3c1052::t_d21c9273f59e35 636-640,647-655
+  s_ffc4feaf3c1052::t_72d2e8d0f3c2cd 444-446
+  s_ffc4feaf3c1052::t_f647b700200684 713-737,744-753,765,771-772
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_ffc4feaf3c1052::t_a525512608ba6a 78
+  s_ffc4feaf3c1052::t_5358693c3b82f7 31-34,36,43-56,58-59,61-62,64-73,76-77,79-80,99,106-107
+control-plane/web/src/types/api.ts
+  s_ffc4feaf3c1052::t_7a8ec3c95b5ad0 292-314
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_ffc4feaf3c1052::t_ac824042743e77 106
+control-plane/web/src/lib/api/operations.ts
+  s_ffc4feaf3c1052::t_a5733c98c18566 1-10
+control-plane/web/src/app/(dashboard)/layout.tsx
+  s_ffc4feaf3c1052::t_c8c698820a97ea 6
+  s_ffc4feaf3c1052::t_5c0922beacc3dc 42-43
+control-plane/web/src/components/vms/operation-watcher.tsx
+  s_ffc4feaf3c1052::t_fd6f9dd09abcec 1-79
+control-plane/web/src/lib/stores/operations-store.ts
+  s_ffc4feaf3c1052::t_d411b25e888ceb 1-46
+shared/Sources/StratoShared/OperationModels.swift
+  s_ffc4feaf3c1052::t_2334af573847c6 1-26
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_ffc4feaf3c1052::t_a5caaafdba053d 269-273,282-286,290,293-296,304-323
+control-plane/Sources/App/configure.swift
+  s_ffc4feaf3c1052::t_12eae605b50703 237-239
+control-plane/Sources/App/Controllers/VMController.swift
+  s_ffc4feaf3c1052::t_868dcfe876d4de 198,594,598-646,648-665,667-670
+  s_ffc4feaf3c1052::t_60bb8cee87f655 39,43-197
+  s_ffc4feaf3c1052::t_0963639cbd2f7a 458-463
+  s_ffc4feaf3c1052::t_fe7fe6aa6bf91b 1
+  s_ffc4feaf3c1052::t_cbc792017f4c18 500-510,512,514-520,522-566
+  s_ffc4feaf3c1052::t_dadccdea5d690c 675,683-685,687-694,696,699,707-708,710-717,719
+  s_ffc4feaf3c1052::t_6c7788f8039a27 407,409-413
+  s_ffc4feaf3c1052::t_eb68657584e0dc 747,759-774,776,779,789-790,792-799,801,804,812-814,816-823,825
+  s_ffc4feaf3c1052::t_79a0ec87f4c275 246
+  s_de96dbd684a309::t_4b319a210b88ac 199
+control-plane/Sources/App/Migrations/CreateVMOperation.swift
+  s_ffc4feaf3c1052::t_f055fc65bdf258 1-38
+control-plane/web/src/components/vms/index.ts
+  s_ffc4feaf3c1052::t_f6b71b6d65daf8 7
+control-plane/web/src/lib/api/index.ts
+  s_ffc4feaf3c1052::t_248383c763bf2f 7
+control-plane/web/src/lib/api/vms.ts
+  s_ffc4feaf3c1052::t_d051220488094c 8,13-15,25-26,33-34,37-38,41-42,45-46,49-50,53-60
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_ffc4feaf3c1052::t_f6ce5283e964a1 19
+  s_ffc4feaf3c1052::t_2a94f6b391c515 102-104,115-116
+  s_ffc4feaf3c1052::t_920f3d37c35781 36
+control-plane/web/src/components/vms/vm-table.tsx
+  s_ffc4feaf3c1052::t_7246d4ff6e052b 76
+control-plane/Sources/App/Models/VMOperation.swift
+  s_ffc4feaf3c1052::t_6d33125c30c138 1-80,87-116
+  s_ffc4feaf3c1052::t_c672deb151b7b9 81-86
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_ffc4feaf3c1052::t_3b40dc7a706de7 1-38
+control-plane/Sources/App/routes.swift
+  s_ffc4feaf3c1052::t_6a0b1af7f47fcc 13
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_ffc4feaf3c1052::t_03dafa5b4b03f0 1-2,4-5,46-77
+  s_ffc4feaf3c1052::t_98b8356b605f7d 78
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_ffc4feaf3c1052::t_2281eee1f796aa 1-275
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "68f9a6657fe654732a2756b29a58d5384a12ad1b",
+  "prompts": {},
+  "sessions": {
+    "s_de96dbd684a309": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "532eac8e-33b7-49a6-8d51-bf6eb51f4d38",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_ffc4feaf3c1052": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17d1e043-f1fd-4515-8161-780f6dcc7911",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

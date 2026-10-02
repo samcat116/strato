@@ -1,0 +1,39 @@
+docs/development/e2e-testing.md
+  s_df2978a7c14aee::t_eb6c9c39cbd466 79,82-84,87,100,107-111,146-156
+  s_df2978a7c14aee::t_d78071f6489da4 157
+.claude/commands/pr-comments.md
+  s_df2978a7c14aee::t_eb6c9c39cbd466 2,5-6,8-12,14-25
+docs/agents/domain.md
+  s_df2978a7c14aee::t_34bfb4b9994dcb 1,5,7-8
+  s_df2978a7c14aee::t_5535d00a23d0f1 3-4
+docs/agents/strato-dev.md
+  s_df2978a7c14aee::t_34bfb4b9994dcb 1-17
+CLAUDE.md
+  s_df2978a7c14aee::t_34bfb4b9994dcb 1,3,5
+docs/development/local-development.md
+  s_df2978a7c14aee::t_34bfb4b9994dcb 8,77-90,92-98
+  s_df2978a7c14aee::t_d8f5063f880335 6-7,121
+  s_df2978a7c14aee::t_be3e24e92d269e 91
+docs/development/code-review.md
+  s_df2978a7c14aee::t_34bfb4b9994dcb 26-27,230-231,478-479
+.agents/skills/e2e/SKILL.md
+  s_df2978a7c14aee::t_f3febaf1afdcfb 2-3,6-39
+AGENTS.md
+  s_df2978a7c14aee::t_34bfb4b9994dcb 1-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "92586f20aa6aeaa4ec1023e8898eb6bc1221e301",
+  "prompts": {},
+  "sessions": {
+    "s_df2978a7c14aee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a091dd-b61f-7981-ad74-32fc35a885a1",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

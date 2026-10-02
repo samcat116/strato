@@ -1,0 +1,31 @@
+control-plane/Sources/App/Services/URLSigningService.swift
+  s_75812976e3ec91::t_949d7adfa3536f 224,231
+control-plane/Sources/App/Services/LokiService.swift
+  s_75812976e3ec91::t_c0b96bc7a29013 223,229
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_75812976e3ec91::t_1675f3570ad3f8 301,307
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_75812976e3ec91::t_0f16dcca80362e 255,261
+control-plane/Sources/App/Services/VolumeService.swift
+  s_75812976e3ec91::t_44dff31687dd49 389,395
+control-plane/Sources/App/Extensions/Application+LazyService.swift
+  s_75812976e3ec91::t_890ba6dacbed33 1-29
+control-plane/Sources/App/Services/AgentService.swift
+  s_75812976e3ec91::t_74ecd2487d4ace 903,909,916,922
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e4ef47d92a181e4cc694941a8cc6d6c4e24a78d8",
+  "prompts": {},
+  "sessions": {
+    "s_75812976e3ec91": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "191ad43b-b85a-4ced-90fa-20e2513b4f22",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,75 @@
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a80ae461e08851::t_c164fb922b2eb6 433-435
+  s_a80ae461e08851::t_9af31e83e666a5 221,447-472,474
+  s_a80ae461e08851::t_ed396e7e8a78f1 45-53
+  s_a80ae461e08851::t_4c78dcf8dd27a1 142-143,151-153,160
+  s_a80ae461e08851::t_b4588fd02c6950 219-220
+  s_53168cace5d67d::t_57f2b33d194895 7,42-44,54-55,73-76,140-141,208-218,222-295,301-309,317-318,326,328,334,337-339,345-346,348-353,425-428,431-432,446,479-483,488,498-510,513,515-517,520,1166-1170,1179-1246
+docs/architecture/sandboxes.md
+  s_a80ae461e08851::t_7fa01e4e351344 430-435
+  s_53168cace5d67d::t_aea42bff1f6038 364-429,436-437,439
+agent/Sources/StratoAgent/Agent.swift
+  s_a80ae461e08851::t_814c222f0452db 416-466
+  s_8185f190b06763::t_168b3da58c1004 13-15,184-192,241-244,269-272,414-415,467-468,765-766
+SwiftFirecracker/Tests/SwiftFirecrackerTests/JailerOptionsTests.swift
+  s_a80ae461e08851::t_56a97a63a9e30e 41
+  s_a80ae461e08851::t_f7da8951cc52d6 38-40
+  s_a80ae461e08851::t_bb176ce01c5ba1 42-44
+  s_a80ae461e08851::t_e407ff512b679b 1-37,45-92
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_a80ae461e08851::t_b73c79e69dff5b 29-31,35-39,44-55,74-87,93-94,98-102,111,118-121,123-133,147,157-172,183-188,206-215,223,237,243-248,299-305,358-387
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Jailer.swift
+  s_a80ae461e08851::t_b7b59da19ff016 1-120
+Taskfile.yml
+  s_a80ae461e08851::t_d02d2a0b015da0 1239,1251-1253,1255
+agent/Sources/StratoAgent/SandboxRuntimeProtocol.swift
+  s_a80ae461e08851::t_6065605e724328 119-123,129,148-149
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_a80ae461e08851::t_feb9579b22f96c 251-260,290,326-329
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_a80ae461e08851::t_d954d376c50343 153-162,190-193,220-223,248-251,340-366,471-474,682-703
+agent/Sources/StratoAgentCore/SandboxJail.swift
+  s_a80ae461e08851::t_8cb1e060bde9f8 1-170
+agent/Sources/StratoAgentCore/SandboxRuntimeProbe.swift
+  s_a80ae461e08851::t_f6a83b00bf3458 58-61,65-66,73-78
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_a80ae461e08851::t_6a36372195e8ad 57-145
+agent/Tests/StratoAgentTests/SandboxJailTests.swift
+  s_a80ae461e08851::t_4aff9da95ca753 1-146
+agent/Tests/StratoAgentTests/SandboxRuntimeProbeTests.swift
+  s_a80ae461e08851::t_bf3a4f60a7c197 113-126
+config.toml.example
+  s_a80ae461e08851::t_997c6aca48613a 99-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "f06767d75e3d82a2c694847018b524ad26ac00b3",
+  "prompts": {},
+  "sessions": {
+    "s_53168cace5d67d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17217173-2f91-45c2-9999-559543ac6261",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_8185f190b06763": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ce32444-3211-4b93-b79b-4645f9c6c3af",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a80ae461e08851": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8acc851f-5517-4c80-8b67-2216544b35d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
