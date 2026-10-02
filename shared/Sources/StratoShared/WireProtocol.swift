@@ -12,9 +12,8 @@ import Foundation
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
     /// The only wire/schema version this build accepts. Version 65 adds host memory
-    /// profile observations and swap counters. Version 64 is reserved for the
-    /// concurrent GuestConfig change and must be integrated before coordinated deployment.
-    /// Version 63 requires
+    /// profile observations and swap counters, retaining Version 64's optional,
+    /// generation-guarded VM guest configuration (STR-90). Version 63 requires
     /// first-boot Strato guest-agent installation and carries the selected
     /// bootstrap release and independent guest-agent reachability observation.
     /// Version 62 carries the

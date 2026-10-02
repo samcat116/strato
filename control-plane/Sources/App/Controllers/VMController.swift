@@ -1132,10 +1132,51 @@ struct VMController: RouteCollection {
     /// `POST /api/vms/:id/actions/run`: accept a durable captured command and
     /// queue its exec stream on the replica that owns the VM's agent socket.
     func runCommand(req: Request) async throws -> Response {
-        let user = try req.requireActingUser("Running a command on a VM")
         let run = try req.content.decodeValidated(VMRunCommandRequest.self)
-        let vm = try await fetchVMWithAction(req: req, action: "vm:runCommand")
-        let vmID = try vm.requireID()
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else { throw Abort(.badRequest) }
+        let executionID = UUID()
+        let execution = try await acceptRunCommand(req: req, vmID: vmID, run: run, executionID: executionID, on: req.db)
+        do {
+            try await req.application.replicaBridge.deliver(
+                GuestExecStartMessage(
+                    resourceKind: .virtualMachine,
+                    resourceId: vmID.uuidString,
+                    sessionKind: .recorded,
+                    sessionId: executionID.uuidString,
+                    command: run.command,
+                    env: run.env,
+                    workingDir: run.workingDir,
+                    tty: false),
+                agentKey: execution.agentKey)
+        } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
+            req.logger.warning(
+                "VM command delivery outcome is unknown; leaving operation pending",
+                metadata: [
+                    "executionId": .string(executionID.uuidString),
+                    "strato.agent.identity": .string(execution.agentKey),
+                    "error": .string(error.localizedDescription),
+                ])
+        } catch {
+            await req.vmCommandExecutionService.markDispatchFailed(
+                id: executionID, reason: "Could not dispatch command: \(error.localizedDescription)")
+        }
+
+        guard let stored = try await VMCommandExecution.find(executionID, on: req.db) else {
+            throw Abort(.internalServerError, reason: "Command execution disappeared after acceptance")
+        }
+        let response = Response(status: .accepted)
+        try response.content.encode(try await stored.operationResponse(on: req.db))
+        return response
+    }
+
+    /// Shared acceptance path: the fleet owns queueing, but every child uses
+    /// the same permission, eligibility, attribution and durable command contract.
+    func acceptRunCommand(
+        req: Request, vmID: UUID, run: VMRunCommandRequest, executionID: UUID = UUID(),
+        on db: any Database, recordAudit: Bool = true
+    ) async throws -> VMCommandExecution {
+        let user = try req.requireActingUser("Running a command on a VM")
+        let vm = try await req.authorizedVM(vmID, action: "vm:runCommand")
 
         guard vm.isRunning else {
             throw Abort(
@@ -1149,7 +1190,7 @@ struct VMController: RouteCollection {
         }
         guard let agentIDString = vm.hypervisorId,
             let agentID = UUID(uuidString: agentIDString),
-            let agent = try await Agent.find(agentID, on: req.db)
+            let agent = try await Agent.find(agentID, on: db)
         else {
             throw Abort(.conflict, reason: "VM is not placed on an available agent")
         }
@@ -1159,14 +1200,13 @@ struct VMController: RouteCollection {
                 reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)")
         }
 
-        let executionID = UUID()
         let auditContext = VMGuestExecutionAudit.makeContext(
             vmID: vmID,
             projectID: vm.$project.id,
             correlationID: executionID.uuidString,
             argv: run.command,
             on: req)
-        try await req.db.transaction { db in
+        let execution = try await db.transaction { db in
             let acceptedAt = try await ClusterClock.read(on: db)
             let execution = VMCommandExecution(
                 id: executionID,
@@ -1181,41 +1221,14 @@ struct VMController: RouteCollection {
                 sourceIP: auditContext.sourceIP,
                 adminBypass: auditContext.adminBypass)
             try await execution.create(command: run.command, on: db)
+            return execution
         }
-        let requestedAuditRecord = VMGuestExecutionAudit.makeCommandRequestedRecord(auditContext)
-        await req.audit.recordFailOpen(requestedAuditRecord)
-
-        do {
-            try await req.application.replicaBridge.deliver(
-                GuestExecStartMessage(
-                    resourceKind: .virtualMachine,
-                    resourceId: vmID.uuidString,
-                    sessionKind: .recorded,
-                    sessionId: executionID.uuidString,
-                    command: run.command,
-                    env: run.env,
-                    workingDir: run.workingDir,
-                    tty: false),
-                agentKey: agent.identity.key)
-        } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
-            req.logger.warning(
-                "VM command delivery outcome is unknown; leaving operation pending",
-                metadata: [
-                    "executionId": .string(executionID.uuidString),
-                    "strato.agent.identity": .string(agent.identity.key),
-                    "error": .string(error.localizedDescription),
-                ])
-        } catch {
-            await req.vmCommandExecutionService.markDispatchFailed(
-                id: executionID, reason: "Could not dispatch command: \(error.localizedDescription)")
+        if recordAudit {
+            let requestedAuditRecord = VMGuestExecutionAudit.makeCommandRequestedRecord(auditContext)
+            await req.audit.recordFailOpen(requestedAuditRecord)
         }
 
-        guard let stored = try await VMCommandExecution.find(executionID, on: req.db) else {
-            throw Abort(.internalServerError, reason: "Command execution disappeared after acceptance")
-        }
-        let response = Response(status: .accepted)
-        try response.content.encode(try await stored.operationResponse(on: req.db))
-        return response
+        return execution
     }
 
     /// `POST /api/vms/:id/exec`: mint an exec session inside a running VM.

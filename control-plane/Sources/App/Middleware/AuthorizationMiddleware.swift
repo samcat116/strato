@@ -102,6 +102,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // says `me`, so there is no other user's record to reach — and matched
         // before the `/api/users` handler-checked prefix below.
         "/api/users/me",
+        "/api/vm-fleet-runs",  // initiator and exact credential scoped; per-VM checks at confirmation
         "/api/operations",  // initiator-may-read fallback; non-initiators 404
         "/api/oauth",  // the caller's own device approvals and CLI sessions
         "/api/authorization",  // can-i / who-can gate per queried resource internally

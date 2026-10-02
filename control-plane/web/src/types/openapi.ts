@@ -429,6 +429,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vm-fleet-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a fleet command without dispatch
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         */
+        post: operations["prepareVMFleetRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vm-fleet-runs/{runID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read collected fleet results
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         */
+        get: operations["getVMFleetRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vm-fleet-runs/{runID}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the exact fleet target list
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         */
+        post: operations["confirmVMFleetRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/actions/run": {
         parameters: {
             query?: never;
@@ -5790,6 +5854,36 @@ export interface components {
             /** Format: date-time */
             completedAt?: string;
             result?: components["schemas"]["VMCommandResult"];
+        };
+        VMFleetPrepareRequest: {
+            /** @description Intersect project=<uuid>,environment=<name>,tag:<key>=<value>; or ids=<uuid;uuid>. Environment/tag filters require a project. At most 100 targets. */
+            selector: string;
+            command: string[];
+        };
+        VMFleetConfirmRequest: {
+            vmIDs: string[];
+        };
+        VMFleetEntry: {
+            /** Format: uuid */
+            vmID: string;
+            name?: string;
+            /** @enum {string} */
+            state: "ready" | "skipped" | "queued" | "dispatched";
+            reason?: string;
+            /** Format: uuid */
+            operationID?: string;
+        };
+        VMFleetRun: {
+            /** Format: uuid */
+            id: string;
+            command: string[];
+            confirmed: boolean;
+            /** Format: date-time */
+            deadline: string;
+            entries: components["schemas"]["VMFleetEntry"][];
+            /** @description Per-child results with at most 4 KiB from each output stream. Fetch an individual operation for full captured output. */
+            operations: components["schemas"]["ResourceOperation"][];
+            complete: boolean;
         };
         VMRunCommandRequest: {
             command: string[];
@@ -11410,6 +11504,93 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    prepareVMFleetRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VMFleetPrepareRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved fleet run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMFleetRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getVMFleetRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved fleet run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMFleetRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    confirmVMFleetRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VMFleetConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved fleet run. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMFleetRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     runVMCommand: {

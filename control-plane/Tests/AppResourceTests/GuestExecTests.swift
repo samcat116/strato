@@ -422,6 +422,168 @@ final class GuestExecTests {
         }
     }
 
+    @Test("Fleet confirmation skips unauthorized VMs, binds targets, and is repeatable")
+    func fleetConfirmationContract() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "fleet-vm", project: project)
+            var preview: VMFleetRunResponse?
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    VMFleetPrepareRequest(selector: "project=\(project.id!)", command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                preview = try res.content.decode(VMFleetRunResponse.self)
+                #expect(preview?.entries.first?.state == "skipped")
+                #expect(preview?.entries.first?.vmID == vm.id)
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+            let id = try #require(preview?.id)
+            try await app.test(.POST, "/api/vm-fleet-runs/\(id)/confirm") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(VMFleetConfirmRequest(vmIDs: [UUID()]))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/vm-fleet-runs/\(id)/confirm") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(VMFleetConfirmRequest(vmIDs: [vm.id!]))
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                    let fleet = try res.content.decode(VMFleetRunResponse.self)
+                    #expect(fleet.complete)
+                    #expect(fleet.operations.isEmpty)
+                }
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+            let otherToken = try await user.generateAPIKey(on: app.db)
+            try await app.test(.GET, "/api/vm-fleet-runs/\(id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: otherToken)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+        }
+    }
+
+    @Test("Fleet rechecks authorization after preview and never widens a saved list")
+    func fleetRevocationAndFrozenList() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "fleet-original", project: project)
+            var id: UUID?
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    VMFleetPrepareRequest(selector: "project=\(project.id!)", command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let preview = try res.content.decode(VMFleetRunResponse.self)
+                #expect(preview.entries.first?.state == "ready")
+                id = preview.id
+            }
+            _ = try await TestDataBuilder(db: app.db).createVM(name: "fleet-added-later", project: project)
+            user.isSystemAdmin = false
+            try await user.save(on: app.db)
+            try await app.test(.POST, "/api/vm-fleet-runs/\(id!)/confirm") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(VMFleetConfirmRequest(vmIDs: [vm.id!]))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                let fleet = try res.content.decode(VMFleetRunResponse.self)
+                #expect(fleet.entries.count == 1)
+                #expect(fleet.entries.first?.state == "skipped")
+                #expect(fleet.operations.isEmpty)
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("Fleet tag resolution, eligibility failures and repeated confirmation collect one child")
+    func fleetEligiblePartialRun() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "fleet-running", project: project)
+            vm.tags = ["role": "worker"]
+            vm.environment = "production"
+            vm.guestAgentEnabled = true
+            _ = try await self.registerAgent(app: app, vm: vm, supportsVMGuestExec: true)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+            let stopped = try await builder.createVM(name: "fleet-stopped", project: project)
+            stopped.tags = ["role": "worker"]
+            stopped.environment = "production"
+            try await stopped.save(on: app.db)
+            _ = try await builder.createVM(name: "fleet-unmatched", project: project)
+            var preview: VMFleetRunResponse?
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    VMFleetPrepareRequest(
+                        selector: "project=\(project.id!),environment=production,tag:role=worker",
+                        command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                preview = try res.content.decode(VMFleetRunResponse.self)
+                #expect(preview?.entries.count == 2)
+            }
+            let fleet = try #require(preview)
+            var operationIDs: [UUID] = []
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/vm-fleet-runs/\(fleet.id)/confirm") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(VMFleetConfirmRequest(vmIDs: fleet.entries.map(\.vmID)))
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                    let result = try res.content.decode(VMFleetRunResponse.self)
+                    #expect(result.entries.filter { $0.state == "skipped" }.count == 1)
+                    #expect(result.operations.count == 1)
+                    #expect(result.operations.first?.status == .failed)
+                    operationIDs.append(try #require(result.operations.first?.id))
+                }
+            }
+            #expect(operationIDs[0] == operationIDs[1])
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 1)
+        }
+    }
+
+    @Test("Expired fleet preview and inaccessible explicit IDs never create commands")
+    func fleetExpiredAndOpaqueTargets() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            let unknown = UUID()
+            var preview: VMFleetRunResponse?
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(VMFleetPrepareRequest(selector: "ids=\(unknown)", command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                preview = try res.content.decode(VMFleetRunResponse.self)
+                #expect(preview?.entries.first?.name == nil)
+                #expect(preview?.entries.first?.reason == "VM is missing or inaccessible")
+            }
+            let fleet = try #require(try await VMFleetRun.find(preview!.id, on: app.db))
+            fleet.deadline = Date.distantPast
+            try await fleet.save(on: app.db)
+            try await app.test(.POST, "/api/vm-fleet-runs/\(fleet.id!)/confirm") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(VMFleetConfirmRequest(vmIDs: [unknown]))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    VMFleetPrepareRequest(selector: "project=\(project.id!),bad=true", command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+        }
+    }
+
     // MARK: - POST /api/vms/:id/actions/run
 
     @Test("VM command run is denied without the separate vm:runCommand grant")
