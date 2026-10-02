@@ -339,6 +339,15 @@ final class SiteTests {
             site.$networkControllerAgent.id = UUID(uuidString: controllerId)
             try await site.save(on: app.db)
 
+            // These successful deletions need acknowledged local ownership.
+            // An unknown socket owner deliberately reports 503 after durable
+            // cleanup; that refusal is covered by AgentRevocationTests.
+            for name in ["dereg-ctl", "dereg-peer"] {
+                let key = AgentIdentity(trustDomain: PlatformTrustDomain.current, name: name).key
+                #expect(await app.replicaBridge.recordRoute(agentKey: key))
+                #expect(await app.coordination.agentRoute(agentKey: key) == app.replicaID)
+            }
+
             // The controller reference has no FK, so deletion would leave the
             // site pointing at a vanished agent and reconciliation would stop
             // for the peer that is still there.
