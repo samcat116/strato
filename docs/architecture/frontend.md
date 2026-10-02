@@ -136,8 +136,9 @@ The most involved pieces:
 - **Terminals** (`components/terminal/`): `console-terminal.tsx` drives xterm.js
   for the VM serial console through `lib/hooks/use-console.ts`. The shared
   `guest-terminal.tsx` and `lib/hooks/use-guest-exec.ts` implement VM and sandbox
-  guest execution; `vm-terminal.tsx`, `sandbox-terminal.tsx`, and
-  `use-sandbox-exec.ts` adapt their resource paths to that shared implementation.
+  guest execution. `components/vms/vm-detail-page.tsx` loads the shared terminal
+  for VMs; `sandbox-terminal.tsx` and `use-sandbox-exec.ts` adapt the sandbox
+  resource path to that shared implementation.
   Sockets are opened same-origin (`wss://<host>/api/vms/{id}/console`, or the
   `websocketPath` returned by `/api/vms/{id}/exec` or
   `/api/sandboxes/{id}/exec`). The hooks memoize callbacks by ref so 5-second
