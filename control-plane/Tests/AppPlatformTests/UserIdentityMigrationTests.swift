@@ -6,7 +6,7 @@ import Vapor
 
 @testable import App
 
-@Suite("User identity database backstop", .serialized)
+@Suite("User identity database backstop", .serialized, .postgresFixture)
 struct UserIdentityMigrationTests {
     @Test("Length checks are idempotent and reject writes bypassing the model")
     func databaseBackstop() async throws {

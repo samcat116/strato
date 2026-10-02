@@ -24,7 +24,7 @@ import AppTestSupport
 ///
 /// Volume attach — the site that prompted the audit — is pinned in
 /// `VolumeAttachProjectContainmentTests`.
-@Suite("Cross-Project Containment Tests", .serialized)
+@Suite("Cross-Project Containment Tests", .serialized, .postgresFixture)
 final class CrossProjectContainmentTests {
 
     /// The wording every site shares: "<subject> belongs to a different project

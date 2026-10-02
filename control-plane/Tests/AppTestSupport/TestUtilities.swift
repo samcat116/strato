@@ -39,12 +39,10 @@ private func isTestProcessAlive(_ pid: Int32) -> Bool {
 package actor PostgresTestDatabases {
     package static let shared = PostgresTestDatabases()
 
-    /// Small event-loop group shared by every test app in the suite.
-    /// The pool opens at most two connections per event loop by default, so
-    /// this caps each app at four connections (unless a test passes a larger
-    /// `maxConnectionsPerEventLoop` to `makeForTesting`) and keeps the fully
-    /// parallel suite well under the server's default max_connections=100 —
-    /// the constraint that used to force CI's Postgres run to be --no-parallel.
+    /// Small event-loop group shared by test apps. The default pool can open
+    /// four connections per app; that per-app bound alone does not bound the
+    /// suite. .postgresFixture admits four test cases through complete teardown,
+    /// leaving headroom for shared-schema apps, larger pools and the admin pool.
     package static let appEventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 
     /// Connection parameters from the environment. `DATABASE_NAME` is only the
@@ -77,15 +75,23 @@ package actor PostgresTestDatabases {
 
     /// Mint a fresh clone of the migrated template for one test.
     package func createDatabaseForTest() async throws -> String {
-        if template == nil {
-            template = Task { try await self.buildTemplate() }
-        }
-        try await template!.value
+        let scope = try PostgresFixtureScope.requireCurrent()
+        let started = ContinuousClock().now
+        do {
+            if template == nil {
+                template = Task { try await self.buildTemplate() }
+            }
+            try await template!.value
 
-        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let name = "strato_test_db_\(testProcessID)_\(suffix)"
-        try await run(#"CREATE DATABASE "\#(name)" TEMPLATE "\#(templateName)""#)
-        return name
+            let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            let name = "strato_test_db_\(testProcessID)_\(suffix)"
+            try await run(#"CREATE DATABASE "\#(name)" TEMPLATE "\#(templateName)""#)
+            await scope.register(database: name)
+            return name
+        } catch {
+            TestFixtureDiagnostics.shared.reportCloneFailure(error, started: started)
+            throw error
+        }
     }
 
     /// Mint an EMPTY database (no migrations applied) for tests that need to
@@ -94,6 +100,7 @@ package actor PostgresTestDatabases {
     /// before/after tests impossible. Shares the clone namespace so teardown
     /// (`dropDatabase`) and the dead-run sweep cover these too.
     package func createBareDatabaseForTest() async throws -> String {
+        let scope = try PostgresFixtureScope.requireCurrent()
         // Await the template build even though its result is unused: every
         // other admin statement is serialized behind it, and buildTemplate()'s
         // internal queries (`allDatabaseNames`) run outside the FIFO chain.
@@ -107,6 +114,7 @@ package actor PostgresTestDatabases {
         let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
         let name = "strato_test_db_\(testProcessID)_\(suffix)"
         try await run(#"CREATE DATABASE "\#(name)""#)
+        await scope.register(database: name)
         return name
     }
 
@@ -114,6 +122,13 @@ package actor PostgresTestDatabases {
     /// next run's buildTemplate().
     package func dropDatabase(_ name: String) async {
         try? await run(#"DROP DATABASE IF EXISTS "\#(name)" WITH (FORCE)"#)
+    }
+
+    /// Scope teardown must observe failures rather than silently returning a
+    /// permit after an unsuccessful drop. The older best-effort helper remains
+    /// available for explicit test cleanup; the scope verifies it again.
+    package func dropDatabaseForFixture(_ name: String) async throws {
+        try await run(#"DROP DATABASE IF EXISTS "\#(name)" WITH (FORCE)"#)
     }
 
     private func buildTemplate() async throws {
@@ -289,7 +304,10 @@ extension Application {
         owningDatabase: Bool = true,
         maxConnectionsPerEventLoop: Int = 2
     ) async throws -> Application {
+        let scope = try PostgresFixtureScope.requireCurrent()
+        let fixtureStarted = ContinuousClock().now
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
+        await scope.register(app)
         app.logger.logLevel = .debug
         app.databases.use(
             .postgres(
@@ -300,6 +318,13 @@ extension Application {
         if owningDatabase {
             app.storage[TestDatabaseNameKey.self] = databaseName
         }
+        TestFixtureDiagnostics.shared.register(
+            app, started: fixtureStarted, poolLimitPerLoop: maxConnectionsPerEventLoop)
+        // Storage shutdown follows Fluent's pool shutdown lifecycle handler,
+        // including tests that call asyncShutdown directly rather than our helper.
+        await app.storage.setWithAsyncShutdown(
+            TestFixtureDiagnosticKey.self, to: ObjectIdentifier(app),
+            onShutdown: { TestFixtureDiagnostics.shared.finished($0) })
         return app
     }
 }
@@ -309,13 +334,23 @@ package struct TestDatabaseNameKey: StorageKey {
     package typealias Value = String
 }
 
+private struct TestFixtureDiagnosticKey: StorageKey {
+    typealias Value = ObjectIdentifier
+}
+
 extension Application {
     /// Tear down an app made by `makeForTesting`: shut Vapor down (closing its
     /// database pool), then destroy the test's database clone.
     package func shutdownForTesting() async throws {
         let databaseName = storage[TestDatabaseNameKey.self]
-
-        try await asyncShutdown()
+        TestFixtureDiagnostics.shared.closing(self)
+        do {
+            try await asyncShutdown()
+        } catch {
+            TestFixtureDiagnostics.shared.report(error, on: self)
+            throw error
+        }
+        TestFixtureDiagnostics.shared.finished(self)
 
         if let databaseName {
             await PostgresTestDatabases.shared.dropDatabase(databaseName)
@@ -359,12 +394,15 @@ package func withTestApp(
     let app = try await Application.makeForTesting()
 
     do {
+        TestFixtureDiagnostics.shared.configuring(app)
         try await configureApp(app)
         if let analyzer {
             app.guardrailAnalyzer = analyzer
         }
+        TestFixtureDiagnostics.shared.running(app)
         try await test(app)
     } catch {
+        TestFixtureDiagnostics.shared.report(error, on: app)
         try? await app.shutdownForTesting()
         throw error
     }

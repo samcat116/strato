@@ -18,7 +18,7 @@ import VaporTesting
 /// one token among a list. These tests cover the list itself: that it holds the
 /// row, that clearing is atomic and idempotent, and that it cannot reap
 /// something that was never deleted.
-@Suite("Resource Finalizer Tests", .serialized)
+@Suite("Resource Finalizer Tests", .serialized, .postgresFixture)
 final class ResourceFinalizerTests {
 
     /// A token no participant in this build knows about — the stand-in for both

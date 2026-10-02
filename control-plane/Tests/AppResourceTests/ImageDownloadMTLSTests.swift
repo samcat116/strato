@@ -18,7 +18,7 @@ import AppTestSupport
 /// is only accepted from a loopback peer, and Vapor's in-memory `test()`
 /// harness has no remote address at all, so both the accept and reject paths
 /// need a genuine socket.
-@Suite("Image download over agent mTLS", .serialized)
+@Suite("Image download over agent mTLS", .serialized, .postgresFixture)
 struct ImageDownloadMTLSTests {
 
     /// Enable SPIRE mTLS auth without a trust bundle: with

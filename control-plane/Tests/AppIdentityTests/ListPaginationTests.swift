@@ -13,7 +13,7 @@ import AppTestSupport
 /// mechanics (all endpoints go through the same `ListPaging` helper); the
 /// authorization interaction gets its own test because it is the property the
 /// slicing order exists to protect.
-@Suite("List Pagination Tests", .serialized)
+@Suite("List Pagination Tests", .serialized, .postgresFixture)
 final class ListPaginationTests: BaseTestCase {
 
     @Test("GET /api/vms pages with the envelope: defaults, slices, clamping, validation")

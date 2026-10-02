@@ -13,7 +13,7 @@ import AppTestSupport
 /// convergence. Drives `OIDCIdentityService` directly (no fake IdP needed —
 /// the service starts after ID-token validation) and asserts on the DB state:
 /// organization membership rows, group pivot rows, and `role_bindings`.
-@Suite("OIDC Identity Mapping Tests", .serialized)
+@Suite("OIDC Identity Mapping Tests", .serialized, .postgresFixture)
 final class OIDCIdentityMappingTests {
 
     // MARK: - Claim extraction (pure)

@@ -189,6 +189,13 @@ struct GuestExecWebSocketController: RouteCollection {
                     userId: userId,
                     websocket: ws
                 )
+                if resource.kind == .virtualMachine, let id = UUID(uuidString: sessionId) {
+                    do { try await VMExecSessionLimits.attach(id: id, on: req.db) } catch {
+                        await manager.endSession(
+                            sessionId: sessionId, outcome: .refused, reason: "Presence reservation expired")
+                        throw error
+                    }
+                }
             } catch {
                 let rejectionStatus = Self.attachRejectionStatus(for: error)
                 req.logger.warning(
@@ -281,6 +288,16 @@ struct GuestExecWebSocketController: RouteCollection {
                         } catch {
                             req.logger.error("Failed to route exec stdin EOF to agent: \(error)")
                         }
+                    case .terminate(let reason):
+                        if started {
+                            try? await manager.sendExecClose(sessionId: sessionId, reason: reason)
+                        }
+                        await manager.endSession(sessionId: sessionId, outcome: .terminated, reason: reason)
+                        let frame = TerminationControlFrame(type: "error", message: reason)
+                        if let data = try? JSONEncoder().encode(frame), let text = String(data: data, encoding: .utf8) {
+                            try? await ws.send(text)
+                        }
+                        try? await ws.close(code: .policyViolation)
                     case .browserClosed:
                         // Tell the agent to tear the exec down before removing
                         // the session. A no-op if the agent already reported
@@ -300,6 +317,9 @@ struct GuestExecWebSocketController: RouteCollection {
             // The start is the pump's first event — enqueued before the frame
             // handlers exist, so no input/resize/close can precede it.
             eventContinuation.yield(.start)
+            manager.setTerminationHandler(sessionId: sessionId) { reason in
+                eventContinuation.yield(.terminate(reason))
+            }
 
             // WebSocketKit's frame-callback setters are loop-bound
             // (`NIOLoopBoundBox`): calling them from this task — which runs on
@@ -309,6 +329,7 @@ struct GuestExecWebSocketController: RouteCollection {
             ws.eventLoop.execute {
                 // Binary frames are stdin bytes for the exec process.
                 ws.onBinary { _, buffer in
+                    manager.noteActivity(sessionId: sessionId)
                     let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
                     eventContinuation.yield(.input(Data(bytes)))
                 }
@@ -318,8 +339,10 @@ struct GuestExecWebSocketController: RouteCollection {
                 ws.onText { _, text in
                     switch Self.decodeClientControlFrame(text) {
                     case .resize(let rows, let cols):
+                        manager.noteActivity(sessionId: sessionId)
                         eventContinuation.yield(.resize(rows: rows, cols: cols))
                     case .stdinEOF:
+                        manager.noteActivity(sessionId: sessionId)
                         eventContinuation.yield(.stdinEOF)
                     case nil:
                         break
@@ -365,6 +388,12 @@ struct GuestExecWebSocketController: RouteCollection {
         case resize(rows: Int, cols: Int)
         case stdinEOF
         case browserClosed
+        case terminate(String)
+    }
+
+    private struct TerminationControlFrame: Encodable {
+        let type: String
+        let message: String
     }
 
     private struct ClientControlFrame: Decodable {

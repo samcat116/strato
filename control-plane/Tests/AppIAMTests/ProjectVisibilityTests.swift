@@ -14,7 +14,7 @@ import AppTestSupport
 /// would get wrong, so they are the ones driven here against the real engine: a
 /// grant a guardrail takes back must disappear from the list, and access an
 /// authored policy hands out with no binding behind it must appear in it.
-@Suite("Project Visibility Tests", .serialized)
+@Suite("Project Visibility Tests", .serialized, .postgresFixture)
 final class ProjectVisibilityTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

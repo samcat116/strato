@@ -11,7 +11,7 @@ import AppTestSupport
 /// Two properties carry most of the weight here and both are easy to lose in a
 /// refactor: guardrails are structurally forbid-only, and they **intersect**
 /// down the tree rather than the nearest one winning.
-@Suite("IAM Guardrail Tests", .serialized)
+@Suite("IAM Guardrail Tests", .serialized, .postgresFixture)
 final class IAMGuardrailTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

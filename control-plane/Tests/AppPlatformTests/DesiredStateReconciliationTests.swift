@@ -12,7 +12,7 @@ import AppTestSupport
 /// update status/generation and complete operations, deletions are confirmed
 /// by absence, and registration requires a state-sync protocol version (the
 /// imperative path is gone).
-@Suite("Desired State Reconciliation Tests", .serialized)
+@Suite("Desired State Reconciliation Tests", .serialized, .postgresFixture)
 final class DesiredStateReconciliationTests {
 
     private static func healthyOverlayObservation(at checkedAt: Date = Date())

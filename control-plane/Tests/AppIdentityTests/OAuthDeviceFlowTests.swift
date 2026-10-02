@@ -7,7 +7,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("OAuth Device Flow Tests", .serialized)
+@Suite("OAuth Device Flow Tests", .serialized, .postgresFixture)
 struct OAuthDeviceFlowTests {
 
     // MARK: - Helpers

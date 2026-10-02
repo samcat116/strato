@@ -1,17 +1,137 @@
 import Fluent
 import Foundation
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("Fleet run durability and bounds", .serialized)
+@Suite("Fleet run durability and bounds", .serialized, .postgresFixture)
 struct VMFleetRunTests {
     private actor Deliveries {
         var ids: [String] = []
         func record(_ message: GuestExecStartMessage) { ids.append(message.sessionId) }
         func count() -> Int { ids.count }
+    }
+
+    private actor ConfirmationGate {
+        var held = false
+        private var released = false
+        private var waiter: CheckedContinuation<Void, Never>?
+        func hold() async {
+            held = true
+            guard !released else { return }
+            await withCheckedContinuation { waiter = $0 }
+        }
+        func release() {
+            released = true
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+
+    private func preview(deadline: Date) -> VMFleetRun {
+        VMFleetRun(
+            actorID: UUID(), apiKeyID: nil, command: ["/usr/bin/id"],
+            entries: [VMFleetEntry(vmID: UUID(), state: "skipped", reason: "VM is missing or inaccessible")],
+            deadline: deadline)
+    }
+
+    @Test("Maintenance removes expired opaque previews and repeated cleanup is harmless")
+    func expiredPreviewsAreReaped() async throws {
+        try await withTestApp { app in
+            let now = try await ClusterClock.read(on: app.db).date
+            let expired = preview(deadline: now.addingTimeInterval(-60))
+            let fresh = preview(deadline: now.addingTimeInterval(600))
+            try await expired.create(on: app.db)
+            try await fresh.create(on: app.db)
+            await VMFleetRunDispatcher.sweep(app: app)
+            #expect(try await VMFleetRun.find(expired.requireID(), on: app.db) == nil)
+            #expect(try await VMFleetRun.find(fresh.requireID(), on: app.db) != nil)
+            #expect(try await VMFleetRunDispatcher.reapExpiredPreviews(on: app.db) == 0)
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("Cleanup is bounded and preserves fresh previews and confirmed command history")
+    func cleanupBoundsAndConfirmedHistory() async throws {
+        try await withTestApp { app in
+            let now = try await ClusterClock.read(on: app.db).date
+            let expired = (0..<(VMFleetRunDispatcher.previewCleanupBatchSize + 2)).map { _ in
+                preview(deadline: now.addingTimeInterval(-60))
+            }
+            try await expired.create(on: app.db)
+            let fresh = preview(deadline: now.addingTimeInterval(600))
+            try await fresh.create(on: app.db)
+            let confirmed = try await queuedFleet(count: 1, on: app)
+            confirmed.deadline = now.addingTimeInterval(-60)
+            try await confirmed.save(on: app.db)
+            #expect(
+                try await VMFleetRunDispatcher.reapExpiredPreviews(on: app.db)
+                    == VMFleetRunDispatcher.previewCleanupBatchSize)
+            #expect(try await VMFleetRun.query(on: app.db).filter(\.$confirmed == false).count() == 3)
+            #expect(try await VMFleetRunDispatcher.reapExpiredPreviews(on: app.db) == 2)
+            #expect(try await VMFleetRunDispatcher.reapExpiredPreviews(on: app.db) == 0)
+            #expect(try await VMFleetRun.find(fresh.requireID(), on: app.db) != nil)
+            #expect(try await VMFleetRun.find(confirmed.requireID(), on: app.db)?.confirmed == true)
+            #expect(try await VMCommandExecution.query(on: app.db).filter(\.$status == .pending).count() == 1)
+        }
+    }
+
+    @Test("A concurrent confirmation's locked preview is skipped and survives as confirmed history")
+    func cleanupSkipsConfirmingParent() async throws {
+        try await withTestApp { app in
+            let now = try await ClusterClock.read(on: app.db).date
+            let fleet = preview(deadline: now.addingTimeInterval(-60))
+            try await fleet.create(on: app.db)
+            let id = try fleet.requireID()
+            let gate = ConfirmationGate()
+            let confirmation = Task {
+                try await app.db.transaction { db in
+                    let sql = try #require(db as? any SQLDatabase)
+                    try await sql.raw("SELECT id FROM vm_fleet_runs WHERE id = \(bind: id) FOR UPDATE").run()
+                    let current = try #require(try await VMFleetRun.find(id, on: db))
+                    await gate.hold()
+                    current.confirmed = true
+                    try await current.save(on: db)
+                }
+            }
+            do {
+                let timeout = ContinuousClock.now.advanced(by: .seconds(5))
+                while !(await gate.held), ContinuousClock.now < timeout { await Task.yield() }
+                try #require(await gate.held)
+                let removed = try await app.db.transaction { db in
+                    let sql = try #require(db as? any SQLDatabase)
+                    try await sql.raw("SET LOCAL statement_timeout = '1s'").run()
+                    return try await VMFleetRunDispatcher.reapExpiredPreviews(on: db)
+                }
+                #expect(removed == 0)
+                await gate.release()
+                try await confirmation.value
+                #expect(try await VMFleetRunDispatcher.reapExpiredPreviews(on: app.db) == 0)
+                #expect(try await VMFleetRun.find(id, on: app.db)?.confirmed == true)
+            } catch {
+                await gate.release()
+                _ = try? await confirmation.value
+                throw error
+            }
+        }
+    }
+
+    @Test("Interrupted cleanup leaves previews available for the next maintenance pass")
+    func interruptedCleanupCanResume() async throws {
+        try await withTestApp { app in
+            let fleet = preview(deadline: Date.distantPast)
+            try await fleet.create(on: app.db)
+            let interrupted = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await VMFleetRunDispatcher.reapExpiredPreviews(on: app.db)
+            }
+            await #expect(throws: CancellationError.self) { try await interrupted.value }
+            #expect(try await VMFleetRun.find(fleet.requireID(), on: app.db) != nil)
+            #expect(try await VMFleetRunDispatcher.reapExpiredPreviews(on: app.db) == 1)
+        }
     }
 
     private func queuedFleet(count: Int, on app: Application) async throws -> VMFleetRun {

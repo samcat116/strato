@@ -6,7 +6,7 @@ import VaporTesting
 
 @testable import App
 
-@Suite("Account identity boundaries", .serialized)
+@Suite("Account identity boundaries", .serialized, .postgresFixture)
 final class UserIdentityValidationTests: BaseTestCase {
     @Test("Both creation routes reject malformed and oversized identities", arguments: [false, true])
     func invalidCreation(admin: Bool) async throws {

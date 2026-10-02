@@ -12,7 +12,7 @@ import AppTestSupport
 /// deletes sandboxes past their lifetime budget, reaps terminal records once
 /// the retention window closes, and does both down the user-initiated delete
 /// path — so quota releases exactly as it would on `DELETE /api/sandboxes/:id`.
-@Suite("Sandbox Expiry Tests", .serialized)
+@Suite("Sandbox Expiry Tests", .serialized, .postgresFixture)
 final class SandboxExpiryTests {
 
     /// Same harness shape as `SandboxTests`: full stack, one org/project, and

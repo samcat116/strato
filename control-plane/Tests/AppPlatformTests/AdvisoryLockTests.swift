@@ -3,12 +3,13 @@ import Fluent
 import Foundation
 import Logging
 import MetricsTestKit
+import SQLKit
 import Testing
 import Vapor
 
 @testable import App
 
-@Suite("Advisory locks", .serialized)
+@Suite("Advisory locks", .serialized, .postgresFixture)
 struct AdvisoryLockTests {
     @Test("Namespaces have unique, stable values in acquisition order")
     func namespaceValuesAreUniqueAndOrdered() {
@@ -98,31 +99,22 @@ struct AdvisoryLockTests {
                 UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
             let key = AdvisoryLockKey.object(.volumeAttachment, id: objectID)
 
-            let timedOut = try await holder.db.transaction { heldTransaction in
-                try await AdvisoryLock.acquireTransactionLock(key, on: heldTransaction)
-                do {
-                    _ = try await AdvisoryLock.withSessionLock(
-                        key,
-                        on: waiter.db,
-                        timeout: .milliseconds(100),
-                        pollInterval: .milliseconds(10),
-                        logger: waiter.logger
-                    ) { _ in true }
-                    return false
-                } catch AdvisoryLockError.acquisitionTimedOut {
-                    return true
+            // Borrow the observer's connection before holding the lock. This
+            // tests PostgreSQL lock state, not whether pool/scheduler admission
+            // completes within a short acquisition deadline under suite load.
+            // The enrollment test below separately covers deadline behavior.
+            try await waiter.db.withConnection { connection in
+                let acquiredWhileHeld = try await holder.db.transaction { heldTransaction in
+                    try await AdvisoryLock.acquireTransactionLock(key, on: heldTransaction)
+                    return try await probeSessionLock(key, on: connection)
                 }
-            }
+                #expect(acquiredWhileHeld == false)
 
-            #expect(timedOut)
-            let acquiredAfterCommit = try await AdvisoryLock.withSessionLock(
-                key,
-                on: waiter.db,
-                timeout: .milliseconds(100),
-                pollInterval: .milliseconds(10),
-                logger: waiter.logger
-            ) { _ in true }
-            #expect(acquiredAfterCommit)
+                // Fluent awaits COMMIT before returning from transaction, so
+                // this nonblocking probe observes the release without a sleep.
+                let acquiredAfterCommit = try await probeSessionLock(key, on: connection)
+                #expect(acquiredAfterCommit)
+            }
         }
     }
 
@@ -249,6 +241,25 @@ struct AdvisoryLockTests {
         }
         try await waiter.shutdownForTesting()
     }
+}
+
+/// A nonblocking observer on the same pinned session in both phases. Always
+/// release a successful probe, including an unexpected success while held, so
+/// a broken acquisition cannot hide behind PostgreSQL's reentrant lock count.
+private func probeSessionLock(
+    _ key: AdvisoryLockKey,
+    on connection: any Database
+) async throws -> Bool {
+    let sql = try #require(connection as? any SQLDatabase)
+    let acquired = try #require(
+        try await sql.raw(
+            "SELECT pg_try_advisory_lock(\(bind: key.namespace.rawValue)::int4, \(bind: key.objectDigest)::int4) AS acquired"
+        ).first(decodingColumn: "acquired", as: Bool.self))
+    if acquired {
+        let released = try await AdvisoryLock.releaseSessionLockForTesting(key, on: connection)
+        #expect(released)
+    }
+    return acquired
 }
 
 private struct EnrollmentLockAttempt: Sendable {

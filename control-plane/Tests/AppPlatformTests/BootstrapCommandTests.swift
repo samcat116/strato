@@ -5,7 +5,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("Bootstrap Command Tests")
+@Suite("Bootstrap Command Tests", .postgresFixture)
 struct BootstrapCommandTests {
     @discardableResult
     private func runBootstrap(_ app: Application, arguments: [String] = []) async throws -> CaptureConsole {

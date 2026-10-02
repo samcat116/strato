@@ -4,7 +4,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Security Headers Tests", .serialized)
+@Suite("Security Headers Tests", .serialized, .postgresFixture)
 struct SecurityHeadersTests {
 
     @Test("Standard security headers are set on responses")

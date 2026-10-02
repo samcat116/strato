@@ -12,7 +12,7 @@ import AppTestSupport
 /// exactly once before accepting an assertion. These tests exercise the
 /// `consumeAuthenticationChallenge` claim directly, which is the step that
 /// provides replay protection.
-@Suite("WebAuthn Challenge Consumption", .serialized)
+@Suite("WebAuthn Challenge Consumption", .serialized, .postgresFixture)
 struct WebAuthnChallengeTests {
 
     private func makeService() -> WebAuthnService {

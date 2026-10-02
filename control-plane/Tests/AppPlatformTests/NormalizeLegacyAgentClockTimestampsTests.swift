@@ -5,7 +5,7 @@ import Testing
 import AppTestSupport
 @testable import App
 
-@Suite("Normalize legacy agent clock timestamps", .serialized)
+@Suite("Normalize legacy agent clock timestamps", .serialized, .postgresFixture)
 struct NormalizeLegacyAgentClockTimestampsTests {
     @Test("future legacy receipt timestamps fail closed")
     func futureTimestampsFailClosed() async throws {

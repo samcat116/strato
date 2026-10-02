@@ -46,7 +46,7 @@ private func makeSCIMFixture(
 /// requests carry only an org-scoped `scim_` bearer token — no user session —
 /// so these tests pin the middleware exemption that lets them reach the
 /// controller, where the token is actually verified.
-@Suite("SCIM Provisioning Integration Tests", .serialized)
+@Suite("SCIM Provisioning Integration Tests", .serialized, .postgresFixture)
 struct SCIMProvisioningIntegrationTests {
 
     /// Distinguishes a handler-level rejection (SCIM error document) from a
