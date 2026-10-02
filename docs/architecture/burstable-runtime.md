@@ -42,11 +42,21 @@ Libvirt's cgroup-v2 backend maps soft limits to `memory.high` and shares to
 `cpu.weight` (or systemd CPUWeight); see the
 [libvirt implementation](https://raw.githubusercontent.com/libvirt/libvirt/master/src/util/vircgroupv2.c)
 and [CPU tuning documentation](https://libvirt.org/formatdomain.html#cpu-tuning).
-Libvirt memory parameters use KiB. The plan rounds the pressure threshold down,
-starting reclaim at most 1023 bytes earlier, and rounds the containment ceiling
-up as the existing ceiling code does. Thresholds too small to represent refuse
-enforcement. This backend quantization must be reflected in desired/applied
-readback and coordinated with the class-contract owner before integration.
+Libvirt memory parameters use KiB, but kernel controls are page-granular. KiB-only
+rounding can collapse the pressure interval after kernel quantization. Callers
+must supply the actual enforcement host's page size; it is never assumed to be
+4096. The plan rounds high down to that page size and max up to it, checks for
+overflow, and requires `0 < effective high < effective max`. Both libvirt's KiB
+arguments and jailer byte arguments represent these same aligned targets
+exactly. The shift in each direction is less than one page. A threshold too
+small to represent refuses enforcement. Desired raw bytes and effective
+page-aligned bytes remain distinct. This proposal needs class-owner coordination
+before runtime integration; the guaranteed ceiling path remains unchanged.
+
+The [kernel page-counter implementation](https://raw.githubusercontent.com/torvalds/linux/master/mm/page_counter.c)
+parses memory limits in pages; [kernel documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
+also warns about page-size quantization. Readback must check the actual aligned
+values and fail closed if a backend/kernel does not realize them.
 
 The read-only `scripts/check-burstable-cgroup.py` scaffold checks effective files
 at an explicitly supplied owned cgroup path against expected values and captures
@@ -61,3 +71,21 @@ telemetry. Controller listing or unit-test fixtures alone never enable support.
 Actual QEMU and jailed Firecracker kernel tests must verify create/restart/adopt,
 pressure survival, workload-local containment, and CPU fairness/idle use before
 claiming runtime acceptance.
+
+## Lifecycle hook design pending canonical class integration
+
+| Path | Required integration | Failure behavior |
+| --- | --- | --- |
+| Create | Resolve the persisted admitted snapshot; validate complete backend support; define libvirt controls or pass the jailer plan before execution. | Refuse burstable before spawning when any required control is unavailable. |
+| Boot/restart | Converge persistent QEMU controls in the required pre-boot hook immediately before `bootVM`; Firecracker respawn uses the persisted jailer plan and ownership identity. | A failed required rewrite blocks boot at the same generation. Never fall back to unlimited controls. |
+| Adoption | Use the persisted admitted snapshot and actual guest grant; validate owned membership; converge supported live/config controls and read back before reporting enforcement. | Keep the existing workload and grant; report unknown/degraded enforcement and refuse new burstable commitment. Do not relabel the agent/shared cgroup as workload-owned. |
+| Positive memory growth | Keep the old pressure threshold while safely widening containment, update the pressure threshold, then grow the guest. Existing controls remain active throughout. | Preserve the previous applied echo until backend acknowledgement; report failure against the current generation. |
+| Memory shrink | Reduce the guest grant first, then converge lower pressure/containment targets through backend controls. | Do not lower containment under the old guest grant. |
+| Delete | Stop the owning backend process before removing its exact owned cgroup; preserve other workloads' boundaries. | Cleanup failure must not authorize touching unowned parents or descendants. |
+| Catalog edit | No runtime call for an unchanged admitted snapshot. | Existing grants and limits remain intact. |
+
+The lifecycle implementations and capability/readback gate are intentionally not
+connected by this foundations change. They require the executable STR-267 type
+and coordination with the active reconciler owner. Unit planning tests establish
+arithmetic, persisted XML idempotence and conflict refusal; they do not establish
+actual application order, owned kernel paths, adoption safety or cleanup.

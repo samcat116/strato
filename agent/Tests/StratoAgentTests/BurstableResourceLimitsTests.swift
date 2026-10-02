@@ -13,8 +13,11 @@ struct BurstableResourceLimitsTests {
             memoryHighPercent: 80, cpuWeight: 37)
         #expect(limits.memoryHighBytes == 993_211_187)
         #expect(limits.memoryMaxBytes == 1_207_959_552)
-        #expect(limits.jailerEntries == ["memory.high=993211187", "memory.max=1207959552", "cpu.weight=37"])
-        let libvirt = try limits.libvirtMemoryKibibytes()
+        #expect(
+            try limits.jailerEntries(pageSize: 4096) == [
+                "memory.high=993210368", "memory.max=1207959552", "cpu.weight=37",
+            ])
+        let libvirt = try limits.libvirtMemoryKibibytes(pageSize: 4096)
         #expect(libvirt.high == 969_932)
         #expect(libvirt.maximum == 1_179_648)
     }
@@ -49,11 +52,43 @@ struct BurstableResourceLimitsTests {
             try BurstableResourceLimits(
                 guestGrantBytes: 1, backendOverheadBytes: 0, memoryHighPercent: 80, cpuWeight: 100)
         }
-        #expect(throws: BurstableResourceLimits.InvalidLimits.libvirtGranularity) {
+        #expect(throws: BurstableResourceLimits.InvalidLimits.kernelGranularity) {
             try BurstableResourceLimits(
                 guestGrantBytes: 1024, backendOverheadBytes: 0, memoryHighPercent: 80, cpuWeight: 100
             )
-            .libvirtMemoryKibibytes()
+            .libvirtMemoryKibibytes(pageSize: 4096)
+        }
+    }
+
+    @Test("page alignment preserves the pressure interval that KiB-only rounding can collapse")
+    func pageQuantization() throws {
+        let limits = try BurstableResourceLimits(
+            guestGrantBytes: 10_000, backendOverheadBytes: 0, memoryHighPercent: 99, cpuWeight: 100)
+        let bytes = try limits.kernelMemoryBytes(pageSize: 4096)
+        #expect(bytes.high == 8192)
+        #expect(bytes.maximum == 12288)
+        let libvirt = try limits.libvirtMemoryKibibytes(pageSize: 4096)
+        #expect(libvirt.high * 1024 == UInt64(bytes.high))
+        #expect(libvirt.maximum * 1024 == UInt64(bytes.maximum))
+
+        let ordinary = try BurstableResourceLimits(
+            guestGrantBytes: 1024 * 1024, backendOverheadBytes: 128 * 1024 * 1024,
+            memoryHighPercent: 80, cpuWeight: 100)
+        for pageSize: Int64 in [4096, 16384, 65536] {
+            let effective = try ordinary.kernelMemoryBytes(pageSize: pageSize)
+            #expect(effective.high > 0 && effective.high < effective.maximum)
+            #expect(effective.high.isMultiple(of: pageSize) && effective.maximum.isMultiple(of: pageSize))
+            #expect(ordinary.memoryHighBytes - effective.high < pageSize)
+            #expect(effective.maximum - ordinary.memoryMaxBytes < pageSize)
+        }
+        #expect(throws: BurstableResourceLimits.InvalidLimits.pageSize) {
+            try ordinary.kernelMemoryBytes(pageSize: 3072)
+        }
+        #expect(throws: BurstableResourceLimits.InvalidLimits.overflow) {
+            try BurstableResourceLimits(
+                guestGrantBytes: .max, backendOverheadBytes: 0, memoryHighPercent: 99, cpuWeight: 100
+            )
+            .kernelMemoryBytes(pageSize: 4096)
         }
     }
 
@@ -66,16 +101,16 @@ struct BurstableResourceLimitsTests {
             <domain><name>vm</name><memtune><swap_hard_limit unit='KiB'>200000</swap_hard_limit></memtune>
             <vcpu>2</vcpu><cputune><vcpupin vcpu='0' cpuset='1'/><quota>-1</quota></cputune></domain>
             """
-        let updated = try #require(try DomainBurstableTuning.updating(in: xml, limits: limits))
+        let updated = try #require(try DomainBurstableTuning.updating(in: xml, limits: limits, pageSize: 4096))
         #expect(updated.contains("<hard_limit unit='KiB'>132096</hard_limit>"))
-        #expect(updated.contains("<soft_limit unit='KiB'>131891</soft_limit>"))
+        #expect(updated.contains("<soft_limit unit='KiB'>131888</soft_limit>"))
         #expect(updated.contains("<shares>37</shares>"))
         #expect(updated.contains("<swap_hard_limit unit='KiB'>200000</swap_hard_limit>"))
         let cputune = try #require(try DomainXMLNode.parse(updated).child(named: "cputune"))
         #expect(cputune.child(named: "vcpupin")?.attribute("vcpu") == "0")
         #expect(cputune.child(named: "vcpupin")?.attribute("cpuset") == "1")
         #expect(cputune.child(named: "quota")?.text == "-1")
-        #expect(try DomainBurstableTuning.updating(in: updated, limits: limits) == nil)
+        #expect(try DomainBurstableTuning.updating(in: updated, limits: limits, pageSize: 4096) == nil)
     }
 
     @Test("positive quotas and ambiguous domain definitions refuse shared tuning")
@@ -89,7 +124,9 @@ struct BurstableResourceLimitsTests {
             "<domain><cputune>invalid</cputune></domain>",
             "<other/>",
         ] {
-            #expect(throws: (any Error).self) { try DomainBurstableTuning.updating(in: xml, limits: limits) }
+            #expect(throws: (any Error).self) {
+                try DomainBurstableTuning.updating(in: xml, limits: limits, pageSize: 4096)
+            }
         }
     }
 }

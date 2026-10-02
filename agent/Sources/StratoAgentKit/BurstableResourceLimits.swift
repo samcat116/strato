@@ -10,7 +10,8 @@ public struct BurstableResourceLimits: Sendable, Equatable {
         case cpuWeight
         case overflow
         case pressureThreshold
-        case libvirtGranularity
+        case pageSize
+        case kernelGranularity
     }
 
     public let memoryHighBytes: Int64
@@ -36,19 +37,33 @@ public struct BurstableResourceLimits: Sendable, Equatable {
         self.cpuWeight = cpuWeight
     }
 
-    /// Libvirt memory parameters use KiB. Reclaim may start up to 1023 bytes
-    /// earlier, while the existing hard-ceiling conversion rounds upward.
-    /// Refuse an unrepresentable pressure threshold rather than disable it.
-    public func libvirtMemoryKibibytes() throws -> (high: UInt64, maximum: UInt64) {
-        let high = UInt64(memoryHighBytes) / 1024
-        let maximum = (UInt64(memoryMaxBytes) + 1023) / 1024
-        guard high > 0, high < maximum else { throw InvalidLimits.libvirtGranularity }
+    /// Use the enforcement host's actual page size. Explicit alignment avoids
+    /// losing the pressure interval when the kernel quantizes memory controls.
+    /// The earlier high threshold and extra hard-limit headroom are each less
+    /// than one page. Never saturate an overflowing hard limit to infinity.
+    public func kernelMemoryBytes(pageSize: Int64) throws -> (high: Int64, maximum: Int64) {
+        guard pageSize >= 1024, pageSize.nonzeroBitCount == 1 else { throw InvalidLimits.pageSize }
+        let high = (memoryHighBytes / pageSize) * pageSize
+        let remainder = memoryMaxBytes % pageSize
+        let padding = remainder == 0 ? 0 : pageSize - remainder
+        let (maximum, overflow) = memoryMaxBytes.addingReportingOverflow(padding)
+        guard !overflow else { throw InvalidLimits.overflow }
+        guard high > 0, high < maximum else { throw InvalidLimits.kernelGranularity }
+        return (high, maximum)
+    }
+
+    /// Page-aligned bytes are exactly representable in libvirt's KiB units.
+    public func libvirtMemoryKibibytes(pageSize: Int64) throws -> (high: UInt64, maximum: UInt64) {
+        let bytes = try kernelMemoryBytes(pageSize: pageSize)
+        let high = UInt64(bytes.high) / 1024
+        let maximum = UInt64(bytes.maximum) / 1024
         return (high, maximum)
     }
 
     /// Jailer limits are installed before the Firecracker process executes.
     /// Do not add cpu.max: unused CPU remains available to the shared tier.
-    public var jailerEntries: [String] {
-        ["memory.high=\(memoryHighBytes)", "memory.max=\(memoryMaxBytes)", "cpu.weight=\(cpuWeight)"]
+    public func jailerEntries(pageSize: Int64) throws -> [String] {
+        let bytes = try kernelMemoryBytes(pageSize: pageSize)
+        return ["memory.high=\(bytes.high)", "memory.max=\(bytes.maximum)", "cpu.weight=\(cpuWeight)"]
     }
 }

@@ -5,7 +5,7 @@ import StratoAgentKit
 /// before boot and separately apply/read back live controls for adoption.
 /// Nothing here discovers or writes libvirt-owned cgroup descendants.
 public enum DomainBurstableTuning {
-    public static func updating(in xml: String, limits: BurstableResourceLimits) throws -> String? {
+    public static func updating(in xml: String, limits: BurstableResourceLimits, pageSize: Int64) throws -> String? {
         var domain = try DomainXMLNode.parse(xml)
         guard domain.name == "domain" else {
             throw DomainInventoryError.unparseable("the document root is <\(domain.name)>, not <domain>")
@@ -28,7 +28,7 @@ public enum DomainBurstableTuning {
                 throw DomainInventoryError.unparseable("<\(quota.name)> conflicts with burstable CPU sharing")
             }
         }
-        let memory = try limits.libvirtMemoryKibibytes()
+        let memory = try limits.libvirtMemoryKibibytes(pageSize: pageSize)
         var memtune = domain.child(named: "memtune") ?? DomainXMLNode("memtune")
         set(&memtune, name: "hard_limit", value: String(memory.maximum), unit: "KiB")
         set(&memtune, name: "soft_limit", value: String(memory.high), unit: "KiB")
