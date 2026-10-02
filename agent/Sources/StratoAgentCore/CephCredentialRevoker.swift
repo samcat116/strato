@@ -72,6 +72,10 @@ public actor CephCredentialRevoker {
                 in: directory, descriptor: descriptor, rejectUnsafeMatches: true
             ) { name in
                 if names.contains(name) { return true }
+                // Fixed staging names from pre-UUID writers are also reserved
+                // credential copies. Generic/operator `.tmp` names elsewhere
+                // are deliberately outside this credential-specific cleanup.
+                if names.contains(where: { name == $0 + ".tmp" }) { return true }
                 if (names + ["libvirt-secret.xml"]).contains(where: {
                     OwnedFileCleanup.isStagingName(name, for: $0)
                 }) {

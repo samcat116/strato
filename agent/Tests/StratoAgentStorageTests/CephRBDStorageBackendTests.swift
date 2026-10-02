@@ -923,6 +923,7 @@ struct CephRBDStorageBackendTests {
             valuePath + ".tmp." + UUID().uuidString,
             keyringPath + ".tmp." + UUID().uuidString,
             configPath + ".tmp." + UUID().uuidString,
+            configPath + ".tmp", keyringPath + ".tmp", valuePath + ".tmp",
         ]
         for path in interruptedPaths {
             try Self.secret.write(toFile: path, atomically: false, encoding: .utf8)
