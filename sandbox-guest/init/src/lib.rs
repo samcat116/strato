@@ -16,8 +16,11 @@
 //!     drive's network block (see [`net`] and `linux::net`).
 
 pub mod config;
+pub mod convergence;
 #[cfg(target_os = "linux")]
 pub mod convergence_command;
+#[cfg(target_os = "linux")]
+pub mod convergence_linux;
 pub mod identity;
 pub mod logbuf;
 pub mod net;

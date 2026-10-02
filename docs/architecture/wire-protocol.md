@@ -642,3 +642,22 @@ owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
 remain decodable; live peers still require exact wire v64 registration.
+
+### Guest realization observations (STR-91, following STR-90)
+
+`ObservedVMState.guestConfigObservation` is optional and generation-scoped. It
+contains `generation`, `status` (`converged` / `failed`), nullable `error`, and
+bounded arrays: packages (`name`, nullable `version`), files (`path`, nullable
+`sha256` / `mode`), services (`name`, nullable `enabled` / `activeState`), and
+sysctls (`key`, nullable `value`). No file contents or command output are reported.
+Success requires complete identities and no error; failure may contain partial
+facts but also sets the existing VM `lastError` / `failedGeneration` fields.
+Old payloads without this optional field decode as nil. This extends STR-90's
+wire v64 contract on the dependent branch.
+
+Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`)
+and `guest_config_state` (`nonce`, `observation`). These are additive to the
+sandbox guest v4 surface; sandbox init does not realize VM guest intent. An old
+VM daemon rejects the new request explicitly rather than reporting convergence.
+The same connection first performs the existing v4 ping handshake and every
+reply is checked against that boot nonce.

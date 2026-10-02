@@ -1322,6 +1322,7 @@ public struct ObservedVMState: Codable, Sendable {
     /// participates in convergence.
     public let guestInfo: GuestInfo?
     public let guestAgentObservation: GuestAgentObservation?
+    public let guestConfigObservation: GuestConfigObservation?
     /// Guest memory usage from the VM's virtio-balloon device (issue #567).
     /// Nil for guests without the virtio_balloon driver, still booting, or on
     /// agents/hypervisors that don't poll it — the same tolerant-both-ways
@@ -1347,6 +1348,7 @@ public struct ObservedVMState: Codable, Sendable {
         failureClassification: ObservedFailureClassification? = nil,
         guestInfo: GuestInfo? = nil,
         guestAgentObservation: GuestAgentObservation? = nil,
+        guestConfigObservation: GuestConfigObservation? = nil,
         memoryStats: VMMemoryStats? = nil,
         resourceTelemetry: WorkloadResourceTelemetry? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
@@ -1360,6 +1362,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.failureClassification = failureClassification
         self.guestInfo = guestInfo
         self.guestAgentObservation = guestAgentObservation
+        self.guestConfigObservation = guestConfigObservation
         self.memoryStats = memoryStats
         self.resourceTelemetry = resourceTelemetry
         self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds

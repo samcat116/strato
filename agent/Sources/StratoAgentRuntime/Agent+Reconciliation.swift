@@ -616,6 +616,8 @@ extension Agent: ReconcileActuator {
                 try await reconcileService(for: item.id).resumeVM(vmId: item.id)
             case .resize:
                 try await reconcileResize(item)
+            case .convergeGuestConfig:
+                try await reconcileGuestConfig(item)
             case .reconfigureNetworks:
                 try await reconcileNetworks(item)
             case .shutdown:
