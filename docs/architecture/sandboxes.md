@@ -1122,7 +1122,9 @@ authoritative evidence; a persisted timestamp alone cannot authorize suspension.
 The runtime combines pending handshakes registered before their first await,
 established exec sessions, explicit user-stream observations, and guest/network
 coverage. Internal log followers do not enter this evidence. An absent user-stream
-count or guest/network proof is unknown, never zero. Exec start and closure advance
+count, queued control-plane command count, or guest/network proof is unknown,
+never zero. Runtime handshakes alone do not prove that no command is waiting on
+the control plane. Exec start and closure advance
 local activity; the clock cannot move backward with an older observation. Snapshot,
 restore, boot, and stop requests invalidate idle proofs. Reconnect clears proofs
 and prepared claims, and a new runtime uses a new activity incarnation. No current

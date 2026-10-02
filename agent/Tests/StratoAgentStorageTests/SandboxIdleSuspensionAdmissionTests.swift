@@ -126,7 +126,7 @@ struct SandboxIdleActivityObservationTests {
     func observation(streams: Int?) -> SandboxIdleActivityObservation {
         .init(
             observedAt: now, lastActiveAt: now.addingTimeInterval(-600),
-            residentSince: now.addingTimeInterval(-600), activeUserStreams: streams,
+            residentSince: now.addingTimeInterval(-600), activeUserStreams: streams, pendingUserCommands: 0,
             guestAndNetworkActivityKnown: true)
     }
 
@@ -170,6 +170,25 @@ struct SandboxIdleActivityObservationTests {
             supportsFullSnapshot: true, snapshotOrRestoreInProgress: false)
         #expect(sample.residentSince == now)
         #expect(policy().evaluate(sample, at: now) == .minimumResidency)
+    }
+
+    @Test func queuedControlPlaneCommandsRequireAnExplicitCoveredSignal() {
+        for queued in [Int?.none, 1, -1, Int.max] {
+            let observation = SandboxIdleActivityObservation(
+                observedAt: now, lastActiveAt: now.addingTimeInterval(-600),
+                residentSince: now.addingTimeInterval(-600), activeUserStreams: 0,
+                pendingUserCommands: queued, guestAndNetworkActivityKnown: true)
+            let sample = observation.evidence(
+                sandboxID: UUID(), agentIncarnation: UUID(), activityGeneration: 0,
+                lastLocalActivity: nil, activeExecSessions: 0, pendingCommands: 1,
+                supportsFullSnapshot: true, snapshotOrRestoreInProgress: false)
+            #expect(policy().evaluate(sample, at: now) != .eligible)
+            if queued == nil || queued == -1 || queued == Int.max {
+                #expect(sample.pendingCommands == nil)
+            } else {
+                #expect(sample.pendingCommands == 2)
+            }
+        }
     }
 
     @Test func invalidAndOverflowingCountersAreUnknown() {

@@ -19,14 +19,17 @@ extension FirecrackerSandboxRuntime {
         let previous = idleActivityObservations[sandboxId]
         idleResidentSince[sandboxId] = idleResidentSince[sandboxId] ?? Date()
         noteIdleActivity(sandboxId: sandboxId, at: observation.lastActiveAt)
-        if previous?.activeUserStreams != observation.activeUserStreams,
-            (previous?.activeUserStreams ?? 0) > 0 || (observation.activeUserStreams ?? 0) > 0
+        if (previous?.activeUserStreams != observation.activeUserStreams
+            && ((previous?.activeUserStreams ?? 0) > 0 || (observation.activeUserStreams ?? 0) > 0))
+            || (previous?.pendingUserCommands != observation.pendingUserCommands
+                && ((previous?.pendingUserCommands ?? 0) > 0 || (observation.pendingUserCommands ?? 0) > 0))
         {
             noteIdleActivity(sandboxId: sandboxId)
         }
         if previous == nil || previous?.lastActiveAt != observation.lastActiveAt
             || previous?.residentSince != observation.residentSince
             || previous?.activeUserStreams != observation.activeUserStreams
+            || previous?.pendingUserCommands != observation.pendingUserCommands
             || previous?.guestAndNetworkActivityKnown != observation.guestAndNetworkActivityKnown
         {
             let token = suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].beginActivity()

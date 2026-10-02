@@ -9,16 +9,18 @@ public struct SandboxIdleActivityObservation: Sendable {
     public let lastActiveAt: Date
     public let residentSince: Date
     public let activeUserStreams: Int?
+    public let pendingUserCommands: Int?
     public let guestAndNetworkActivityKnown: Bool
 
     public init(
         observedAt: Date, lastActiveAt: Date, residentSince: Date,
-        activeUserStreams: Int?, guestAndNetworkActivityKnown: Bool
+        activeUserStreams: Int?, pendingUserCommands: Int? = nil, guestAndNetworkActivityKnown: Bool
     ) {
         self.observedAt = observedAt
         self.lastActiveAt = lastActiveAt
         self.residentSince = residentSince
         self.activeUserStreams = activeUserStreams
+        self.pendingUserCommands = pendingUserCommands
         self.guestAndNetworkActivityKnown = guestAndNetworkActivityKnown
     }
 
@@ -36,13 +38,21 @@ public struct SandboxIdleActivityObservation: Sendable {
         } else {
             sessions = nil
         }
+        let commands: Int?
+        if let queued = pendingUserCommands, queued >= 0, pendingCommands >= 0,
+            queued <= Int.max - pendingCommands
+        {
+            commands = queued + pendingCommands
+        } else {
+            commands = nil
+        }
         return .init(
             sandboxID: sandboxID, agentIncarnation: agentIncarnation,
             activityGeneration: activityGeneration, observedAt: observedAt,
             lastActiveAt: max(lastActiveAt, lastLocalActivity ?? lastActiveAt),
             residentSince: max(residentSince, localResidentSince ?? residentSince),
             supportsFullSnapshot: supportsFullSnapshot,
-            activeSessions: sessions, pendingCommands: pendingCommands,
+            activeSessions: sessions, pendingCommands: commands,
             snapshotOrRestoreInProgress: snapshotOrRestoreInProgress,
             guestAndNetworkActivityKnown: guestAndNetworkActivityKnown)
     }
