@@ -143,6 +143,69 @@ struct AgentWebSocketIntegrationTests {
         }
     }
 
+    @Test("A lost remote route cannot acknowledge revocation of a socket held by another replica")
+    func unknownRemoteOwnerDoesNotAcknowledge() async throws {
+        let store = InMemoryCoordinationStore()
+        try await withRunningApp(coordinationStore: store) { holder, port in
+            self.enableSPIRE(on: holder)
+            try await withTestApp { requester in
+                requester.coordination = CoordinationService(store: store, logger: requester.logger)
+                await holder.replicaBridge.start(delegate: holder.agentService)
+                await requester.replicaBridge.start(delegate: requester.agentService)
+                let builder = TestDataBuilder(db: holder.db)
+                let org = try await builder.createOrganization(name: "Lost Route Org")
+                let agent = try await builder.createAgent(
+                    named: "lost-remote-route", status: .online,
+                    organizationScope: .organization(try org.requireID()))
+                let client = try await AgentTestClient.connect(
+                    app: holder, port: port, name: agent.name,
+                    headers: self.xfccHeaders(agentName: agent.name))
+                client.send(try encodeRegister(agentName: agent.name))
+                #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+                #expect(await requester.coordination.agentRoute(agentKey: agent.identity.key) == holder.replicaID)
+                try await Agent.query(on: holder.db).filter(\.$id == agent.id!)
+                    .set(\.$administrativelyOffline, to: true).set(\.$status, to: .offline).update()
+                await requester.coordination.clearAgentRoute(agentKey: agent.identity.key, replicaId: holder.replicaID)
+                #expect(await requester.coordination.agentRoute(agentKey: agent.identity.key) == nil)
+                do {
+                    try await requester.agentService.forceUnregisterAgent(agent.identity)
+                    Issue.record("An unknown remote socket owner cannot acknowledge teardown")
+                } catch let error as Abort {
+                    #expect(error.status == .serviceUnavailable)
+                }
+                #expect(holder.websocketManager.getConnection(agentKey: agent.identity.key) != nil)
+                #expect(try await Agent.find(agent.id, on: holder.db)?.administrativelyOffline == true)
+                #expect(await requester.coordination.isAgentPresent(agentKey: agent.identity.key) == false)
+                try await client.close()
+            }
+        }
+    }
+
+    @Test("A local socket is revoked and acknowledged even when its coordination route is absent")
+    func unknownRouteWithLocalSocketIsAcknowledged() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Local Lost Route Org")
+            let agent = try await builder.createAgent(
+                named: "lost-local-route", status: .online,
+                organizationScope: .organization(try org.requireID()))
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agent.name, headers: self.xfccHeaders(agentName: agent.name))
+            client.send(try encodeRegister(agentName: agent.name))
+            #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+            try await Agent.query(on: app.db).filter(\.$id == agent.id!)
+                .set(\.$administrativelyOffline, to: true).set(\.$status, to: .offline).update()
+            await app.coordination.clearAgentRoute(agentKey: agent.identity.key, replicaId: app.replicaID)
+            #expect(await app.coordination.agentRoute(agentKey: agent.identity.key) == nil)
+            #expect(app.websocketManager.getConnection(agentKey: agent.identity.key) != nil)
+            try await app.agentService.forceUnregisterAgent(agent.identity)
+            #expect(try await client.waitForClose() == .policyViolation)
+            #expect(app.websocketManager.getConnection(agentKey: agent.identity.key) == nil)
+            #expect(await app.coordination.isAgentPresent(agentKey: agent.identity.key) == false)
+        }
+    }
+
     @Test("The forwarded leaf deadline closes the socket and a rotated SVID can reconnect")
     func leafExpiryAndRotatedReconnect() async throws {
         try await withRunningApp { app, port in

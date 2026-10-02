@@ -444,6 +444,9 @@ extension AgentService {
         // Capture routing before local cleanup clears claims. This works even
         // after the agent row and enrollment have been deleted.
         let owner = await app.coordination.agentRoute(agentKey: agentKey)
+        // Coordination fails open: a missing route cannot prove a remote
+        // socket is absent. A known local connection can still be revoked.
+        let hasLocalConnection = app.websocketManager.getConnection(agentKey: agentKey) != nil
         var failure: (any Error)?
         do {
             if let owner, owner != app.replicaID {
@@ -456,6 +459,12 @@ extension AgentService {
         await disconnectLocalAgent(agentKey: agentKey)
         if let owner {
             await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: owner)
+        }
+        if owner == nil && !hasLocalConnection {
+            throw Abort(
+                .serviceUnavailable,
+                reason: "Agent revocation is durable, but socket ownership is unknown and teardown was not acknowledged"
+            )
         }
         if failure != nil {
             throw Abort(

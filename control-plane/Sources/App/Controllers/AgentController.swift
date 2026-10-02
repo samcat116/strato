@@ -1116,6 +1116,7 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(id, on: req.db) else { throw Abort(.notFound) }
         try await req.requireAgentAction("agent:manage", on: agent)
         try await Agent.query(on: req.db).filter(\.$id == id)
+            .filter(\.$administrativelyOffline == true)
             .set(\.$administrativelyOffline, to: false)
             .set(\.$lastHeartbeat, to: nil).update()
         return .noContent
