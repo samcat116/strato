@@ -10,7 +10,7 @@ import AppTestSupport
 
 /// IAM phase 3 (issue #480): the per-replica compiled policy set and its
 /// invalidation through the policy-set version watch (#479).
-@Suite("Cedar Policy Set Cache Tests", .serialized)
+@Suite("Cedar Policy Set Cache Tests", .serialized, .postgresFixture)
 final class CedarPolicySetCacheTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

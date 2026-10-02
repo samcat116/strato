@@ -14,7 +14,7 @@ import AppTestSupport
 ///
 /// These tests pin the fix: oversized, zero, and negative `sizeGB` values return
 /// `400 Bad Request` on both the create and resize paths instead of crashing.
-@Suite("Volume Size Validation Tests", .serialized)
+@Suite("Volume Size Validation Tests", .serialized, .postgresFixture)
 final class VolumeSizeValidationTests {
 
     /// Boots a configured test app with a non-admin user, org, and project.

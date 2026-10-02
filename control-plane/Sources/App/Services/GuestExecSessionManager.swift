@@ -1,5 +1,6 @@
 import Foundation
 import NIOConcurrencyHelpers
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -279,28 +280,36 @@ final class GuestExecSessionManager: @unchecked Sendable {
     func maintainSessions(now: Date = Date()) async {
         let attached = lock.withLock {
             sweepExpiredPendingLocked(now: now)
-            return Array(sessions.values)
+            return sessions.values.filter { terminationReasons[$0.sessionId] == nil }
         }
+        var leases: [(renewal: VMExecSessionLimits.Renewal, sessionID: String)] = []
         for session in attached where session.resourceKind == .virtualMachine {
-            guard let id = UUID(uuidString: session.sessionId) else { continue }
+            guard let id = UUID(uuidString: session.sessionId),
+                let vmID = UUID(uuidString: session.resourceId),
+                let userID = UUID(uuidString: session.userId)
+            else { continue }
             if now.timeIntervalSince(session.lastActivityAt) >= Double(GuestExecLimits.idleTimeoutSeconds) {
                 requestTermination(sessionId: session.sessionId, reason: "Exec session idle timeout", idleAt: now)
                 continue
             }
-            do {
-                if try await !VMExecSessionLimits.renew(id: id, lastActivity: session.lastActivityAt, on: app.db) {
-                    requestTermination(
-                        sessionId: session.sessionId, reason: "Exec session terminated or presence lease expired")
-                }
-            } catch {
-                // Presence/admission must not silently lose authority. Close
-                // the guest through the pump when a lease cannot be renewed.
-                app.logger.warning("Could not renew VM exec presence: \(error)")
-                requestTermination(sessionId: session.sessionId, reason: "Exec session presence unavailable")
-            }
+            leases.append(
+                (.init(id: id, vmID: vmID, userID: userID, lastActivity: session.lastActivityAt), session.sessionId))
         }
-        do { try await VMExecSessionLimits.prune(on: app.db) } catch {
-            app.logger.warning("Could not prune expired VM exec presence: \(error)")
+        guard !leases.isEmpty else { return }
+        do {
+            guard let sql = app.db as? any SQLDatabase else { throw Abort(.internalServerError) }
+            let renewed = try await VMExecSessionLimits.renew(leases.map(\.renewal), on: sql)
+            for lease in leases where !renewed.contains(lease.renewal.id) {
+                requestTermination(
+                    sessionId: lease.sessionID, reason: "Exec session terminated or presence lease expired")
+            }
+        } catch {
+            // Losing presence authority still fails closed, including a failed
+            // batch after an earlier batch succeeded.
+            app.logger.warning("Could not renew VM exec presence: \(error)")
+            for lease in leases {
+                requestTermination(sessionId: lease.sessionID, reason: "Exec session presence unavailable")
+            }
         }
     }
 

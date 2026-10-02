@@ -18,7 +18,7 @@ import AppTestSupport
 /// the running-server harness the XFCC provenance check needs; these cover the
 /// grant-recording side, where a missed path would mean a silently broken image
 /// pull in production.
-@Suite("Image download scoping", .serialized)
+@Suite("Image download scoping", .serialized, .postgresFixture)
 final class ImageDownloadScopingTests {
 
     private func withScopingApp(

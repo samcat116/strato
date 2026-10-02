@@ -28,7 +28,7 @@ private actor ConcurrentResizeRequests {
 /// it rests. Live CPU shrink is rejected. The same endpoint carries an
 /// operator's balloon target (issue #567 phase 2), which moves the guest's
 /// usable memory without moving the grant it is charged for.
-@Suite("VM Resize Tests", .serialized)
+@Suite("VM Resize Tests", .serialized, .postgresFixture)
 final class VMResizeTests {
 
     /// Boots a configured test app with a user, org, project and one VM sized

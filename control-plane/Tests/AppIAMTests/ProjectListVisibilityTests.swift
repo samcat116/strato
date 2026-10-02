@@ -19,7 +19,7 @@ import AppTestSupport
 /// that the same caller's `GET /api/projects/{id}` answers 403 — a list and the
 /// item read that follows it are the same question, and the bug was that only
 /// one of them was asked.
-@Suite("Project List Visibility Tests", .serialized)
+@Suite("Project List Visibility Tests", .serialized, .postgresFixture)
 final class ProjectListVisibilityTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

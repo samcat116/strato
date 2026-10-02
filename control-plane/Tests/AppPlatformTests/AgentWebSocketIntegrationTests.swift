@@ -21,7 +21,7 @@ import AppTestSupport
 /// after upgrade, and the refusals that apply when SPIRE is unconfigured or no
 /// client certificate is presented. None of this is reachable through Vapor's
 /// in-memory `test()` harness, which never performs a WebSocket upgrade.
-@Suite("Agent WebSocket Integration", .serialized)
+@Suite("Agent WebSocket Integration", .serialized, .postgresFixture)
 struct AgentWebSocketIntegrationTests {
 
     @Test("Recorded command output is excluded from raw trace previews regardless of JSON key order")

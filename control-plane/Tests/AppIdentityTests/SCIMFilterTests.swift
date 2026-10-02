@@ -12,7 +12,7 @@ import AppTestSupport
 /// These exercise the `co`/`sw`/`ew`/`eq` operators through the real
 /// `UserSCIMHandler`/`GroupSCIMHandler` search paths, asserting on
 /// case-insensitive matching semantics.
-@Suite("SCIM Filter Tests", .serialized)
+@Suite("SCIM Filter Tests", .serialized, .postgresFixture)
 final class SCIMFilterTests: BaseTestCase {
 
     // MARK: - Helpers

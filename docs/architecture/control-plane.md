@@ -861,3 +861,38 @@ Fleet polls expose per-VM status, exit code and at most 4 KiB from each stream;
 individual operation reads retain the full bounded recorded output. Partial
 failure completes the fleet normally; CLI waiting returns a failure exit status
 when a VM is skipped, a child fails, or a command exits nonzero.
+
+## Bounded workload log delivery (issue #1366)
+
+When Loki is configured, VM and sandbox log ingestors each own a 4 MiB FIFO
+with at most 4,096 entries. The budget includes all retained message strings,
+agent identity, and a 128-byte per-entry allowance. Overflow evicts oldest;
+an entry larger than the budget is rejected without evicting useful lines.
+These are lossy workload logs: shedding never closes the authenticated agent
+socket or affects exec/console sessions. Cached negative ownership answers are
+rejected before enqueue. Cache misses are checked by one serial worker, with a
+hard 1,024-pair cache bound and the existing 30-second TTL. Resource IDs over
+256 UTF-8 bytes or agent keys over 1,024 bytes are rejected before retaining
+cache keys; ordinary UUID IDs and authenticated identities fit these limits.
+
+The worker flushes at 256 lines / 256 KiB or within 100 ms (size pressure is
+checked every 5 ms), grouping complete Loki label sets in one HTTP request and
+preserving each stream's arrival order. The active batch is separately bounded;
+a single oversize line can occupy up to the FIFO budget. HTTP push has a
+2-second deadline covering both response headers and body consumption, plus
+a 64 KiB response-body cap. Transport/non-2xx failures
+reach the ingestor, which sheds the failed batch and queued backlog and rejects
+new lines for 30 seconds. The next arrival after cooldown permits one serial
+probe; success resumes delivery. Failed telemetry is never retried. Outage
+errors are rate limited across both ingestors. Shutdown discards pending logs
+and cancels the active consumer without waiting on the backend.
+
+Replica-local metrics use bounded kind/reason labels:
+`strato_workload_log_queue_depth`, `strato_workload_log_queue_bytes`,
+`strato_workload_log_dropped_total`, `strato_workload_log_push_failures_total`,
+and `strato_workload_log_batch_duration_seconds`. Aggregate queue gauges by sum
+across replicas. Drop reasons distinguish overflow, unowned, backend unavailable,
+failed push, and shutdown. Payload estimates bound retained queue data rather
+than claiming an exact allocator/RSS measurement. A non-cooperative injected
+push closure can retain one active batch until it returns; production uses the
+HTTP client's deadline and task cancellation.

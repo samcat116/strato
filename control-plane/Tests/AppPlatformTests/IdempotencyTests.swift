@@ -7,7 +7,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("Mutation idempotency")
+@Suite("Mutation idempotency", .postgresFixture)
 struct IdempotencyTests {
     private actor Latch {
         private var open = false

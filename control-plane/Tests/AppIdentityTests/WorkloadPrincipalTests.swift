@@ -13,7 +13,7 @@ import AppTestSupport
 /// engine — so they also prove the extended schema (three principal types,
 /// four grants sets per role, `is`-guarded permits) survives strict
 /// validation — plus the workload registry and the who-can surfaces.
-@Suite("Workload Principal Tests", .serialized)
+@Suite("Workload Principal Tests", .serialized, .postgresFixture)
 final class WorkloadPrincipalTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

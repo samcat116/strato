@@ -16,7 +16,7 @@ import AppTestSupport
 /// (authored permits, conditioned bindings, platform permits for machine
 /// principals), plus the two seams that deliberately sit outside the
 /// evaluator: principals that could never reach it, and group principals.
-@Suite("IAM who-can Evaluator Agreement Tests", .serialized)
+@Suite("IAM who-can Evaluator Agreement Tests", .serialized, .postgresFixture)
 final class WhoCanEvaluatorAgreementTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

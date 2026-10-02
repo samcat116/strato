@@ -8,7 +8,7 @@ import VaporTesting
 
 @testable import App
 
-@Suite("Storage device controller")
+@Suite("Storage device controller", .postgresFixture)
 struct StorageDeviceControllerTests {
     @Test("agent usage observations insert, update, and list through the API")
     func reportedUsesRoundTripThroughAPI() async throws {

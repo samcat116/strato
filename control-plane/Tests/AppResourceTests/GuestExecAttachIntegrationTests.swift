@@ -16,7 +16,7 @@ import AppTestSupport
 /// attaching killed the process before the agent ever received
 /// `guest_exec_start` — none of this path is reachable through Vapor's
 /// in-memory `test()` harness, which never performs a WebSocket upgrade.
-@Suite("Guest Exec Attach Integration", .serialized)
+@Suite("Guest Exec Attach Integration", .serialized, .postgresFixture)
 struct GuestExecAttachIntegrationTests {
 
     enum ExecEnd: CaseIterable, Sendable { case exit, operatorTermination }

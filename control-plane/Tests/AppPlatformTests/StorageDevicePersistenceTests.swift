@@ -9,7 +9,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Storage device persistence", .serialized)
+@Suite("Storage device persistence", .serialized, .postgresFixture)
 struct StorageDevicePersistenceTests {
     @Test("structured device uses round-trip through PostgreSQL")
     func structuredUsesRoundTrip() async throws {
@@ -173,6 +173,7 @@ struct StorageDevicePersistenceTests {
             environment,
             .shared(PostgresTestDatabases.appEventLoopGroup))
         let databaseName = Environment.get("DATABASE_NAME") ?? "strato_test"
+        await (try PostgresFixtureScope.requireCurrent()).register(app)
         app.databases.use(
             .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
             as: .psql)
