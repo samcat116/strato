@@ -687,19 +687,23 @@ final class GuestExecSessionManager: @unchecked Sendable {
         exitCode: Int? = nil,
         reason: String? = nil
     ) async {
+        // Enqueue the terminal fact before presence I/O. The browser close
+        // can already be observed, so adding a database round trip before the
+        // enqueue lets a consumer's audit flush miss this claimed terminal event.
+        if let context = removed.session.auditContext {
+            let auditRecord = VMGuestExecutionAudit.makeExecEndedRecord(
+                context,
+                outcome: outcome,
+                exitCode: exitCode,
+                reason: reason,
+                timestamp: removed.endedAt)
+            await app.audit.recordFailOpen(auditRecord)
+        }
         if removed.session.resourceKind == .virtualMachine, let id = UUID(uuidString: removed.session.sessionId) {
             do { try await VMExecSessionLimits.remove(id: id, on: app.db) } catch {
                 app.logger.warning("Could not release VM exec presence: \(error)")
             }
         }
-        guard let context = removed.session.auditContext else { return }
-        let auditRecord = VMGuestExecutionAudit.makeExecEndedRecord(
-            context,
-            outcome: outcome,
-            exitCode: exitCode,
-            reason: reason,
-            timestamp: removed.endedAt)
-        await app.audit.recordFailOpen(auditRecord)
     }
 
     private func logWrongAgent(
