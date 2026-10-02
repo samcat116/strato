@@ -7,6 +7,7 @@ extension Application {
     /// Configures PostgreSQL, registers the ordered schema history, and runs it
     /// through the control plane's serialized migration runner.
     func bootstrapDatabase() async throws {
+        databases.middleware.use(UserIdentityMiddleware(), on: .psql)
         let databaseStatementTimeouts = try configureDatabaseDriver()
         registerMigrations()
 
@@ -230,6 +231,14 @@ extension Application {
         migrations.add(AddVMFleetPreviewExpiryIndex())
         migrations.add(CreateGuestExecSessionLimits())
         migrations.add(AddAgentAdministrativeOffline())
+
+        // Compute density additions follow the reviewed historical migration prefix.
+        migrations.add(AddAgentMemoryAccounting())
+        migrations.add(AddWorkloadResourceClasses())
+        migrations.add(AddDurableResourceAdmissions())
+
+        // STR-324: bound account identities without rewriting historic values.
+        migrations.add(AddUserIdentityLengthConstraints())
         migrations.add(AddSandboxSuspension())
         migrations.add(AddSandboxIdleActivity())
         migrations.add(AddSandboxIdleFences())

@@ -155,6 +155,15 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "resource_telemetry")
     var resourceTelemetry: HostResourceTelemetry?
 
+    @OptionalField(key: "memory_accounting")
+    var memoryAccounting: HostMemoryAccounting?
+
+    @OptionalField(key: "available_cpu_micro_units")
+    var availableCPUMicroUnits: Int64?
+
+    @OptionalField(key: "resource_class_enforcement")
+    var resourceClassEnforcement: [WorkloadResourceClassEnforcement]?
+
     /// Control-plane receipt time for `resourceTelemetry`; placement must not
     /// trust the agent's wall clock when evaluating freshness.
     @OptionalField(key: "resource_telemetry_received_at")
@@ -305,6 +314,8 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.administrativelyOffline = false
         self.totalCPU = resources.totalCPU
         self.totalMemory = resources.totalMemory
+        self.memoryAccounting = resources.memoryAccounting
+        self.availableCPUMicroUnits = resources.availableCPUMicroUnits
         self.totalDisk = resources.totalDisk
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
@@ -342,11 +353,15 @@ final class Agent: Model, Content, @unchecked Sendable {
                 || availableMemory != memory
                 || availableDisk != disk
                 || physicalFreeDisk != resources.physicalFreeDisk
+                || memoryAccounting != resources.memoryAccounting
+                || availableCPUMicroUnits != resources.availableCPUMicroUnits
         else { return false }
         availableCPU = cpu
         availableMemory = memory
         availableDisk = disk
         physicalFreeDisk = resources.physicalFreeDisk
+        availableCPUMicroUnits = resources.availableCPUMicroUnits
+        memoryAccounting = resources.memoryAccounting
         return true
     }
 
@@ -358,7 +373,9 @@ final class Agent: Model, Content, @unchecked Sendable {
             availableMemory: availableMemory,
             totalDisk: totalDisk,
             availableDisk: availableDisk,
-            physicalFreeDisk: physicalFreeDisk
+            physicalFreeDisk: physicalFreeDisk,
+            memoryAccounting: memoryAccounting,
+            availableCPUMicroUnits: availableCPUMicroUnits
         )
     }
 }
@@ -448,6 +465,7 @@ extension Agent {
         hypervisors = registration.hypervisors
         networkCapability = registration.networkCapability?.rawValue
         if let hostInfo = registration.hostInfo { self.hostInfo = hostInfo }
+        resourceClassEnforcement = registration.resourceClassEnforcement
         sandboxCapable = registration.sandboxCapable
         sandboxNetworkingCapable = registration.sandboxNetworkingCapable
         tpmCapable = registration.tpmCapable
@@ -457,6 +475,8 @@ extension Agent {
         dependencyObservationsReceivedAt = receivedAt
         totalCPU = registration.resources.totalCPU
         totalMemory = registration.resources.totalMemory
+        availableCPUMicroUnits = registration.resources.availableCPUMicroUnits
+        memoryAccounting = registration.resources.memoryAccounting
         totalDisk = registration.resources.totalDisk
         _ = updateAvailableResources(registration.resources)
         lastHeartbeat = receivedAt
@@ -533,13 +553,26 @@ extension Agent {
         }
     }
 
+    /// Memory profile failures (especially KSM unmerging) fence every backend,
+    /// including Firecracker VMs and sandboxes without networking.
+    func hostMemoryProfileAllowsPlacement(at instant: ClusterInstant) -> Bool {
+        guard let profile = dependencyObservations.first(where: { $0.id == .hostMemoryProfile }) else {
+            return resourceTelemetry?.memoryProfile == nil
+        }
+        guard let receivedAt = dependencyObservationsReceivedAt else { return false }
+        return profile.allowsNewWork(
+            receivedAt: receivedAt, at: instant.date,
+            staleAfter: Self.dependencyObservationStaleAfter)
+    }
+
     /// Hypervisor backends this agent can actually run. Agents probe each
     /// backend before reporting it, so an empty list means the agent cannot
     /// run VMs at all — it stays registered but is never eligible for
     /// placement. No QEMU fallback here: assuming QEMU for an empty list
     /// would defeat the agent-side probe in exactly the case it exists for.
     func supportedHypervisors(at instant: ClusterInstant) -> [HypervisorType] {
-        hypervisors.filter { support in
+        guard hostMemoryProfileAllowsPlacement(at: instant) else { return [] }
+        return hypervisors.filter { support in
             guard support.available else { return false }
             return support.type != .qemu || dependencyAllows(.qemuPlacement, at: instant)
         }.map(\.type)
@@ -597,6 +630,7 @@ extension Agent {
     /// both Firecracker snapshot support and the separately probed sandbox
     /// runtime; a Firecracker binary alone cannot load Strato's guest image.
     func supportsSnapshotArtifact(_ kind: SnapshotArtifactKind, at instant: ClusterInstant) -> Bool {
+        guard hostMemoryProfileAllowsPlacement(at: instant) else { return false }
         let backend: HypervisorType
         switch kind {
         case .volumeSnapshot, .vmCheckpoint:
@@ -722,6 +756,7 @@ struct AgentResponse: Content {
     let dependencyObservationsReceivedAt: Date?
     /// Latest host PSI, reclaim, swap, OOM, and MGLRU snapshot.
     let resourceTelemetry: HostResourceTelemetry?
+    let memoryAccounting: HostMemoryAccounting?
     /// Control-plane receipt time for the snapshot above.
     let resourceTelemetryReceivedAt: Date?
     /// Descriptive hardware/platform/OS details for operator display; nil for
@@ -829,6 +864,7 @@ struct AgentResponse: Content {
         self.dependencyObservations = agent.dependencyObservations
         self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
         self.resourceTelemetry = agent.resourceTelemetry
+        self.memoryAccounting = agent.memoryAccounting
         self.resourceTelemetryReceivedAt = agent.resourceTelemetryReceivedAt
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id

@@ -1650,7 +1650,12 @@ final class GuestExecTests {
                     id: UUID(), vmID: vmID, userID: userID, username: user.username, on: app.db)
             }
             for _ in 0..<2 {
-                try await app.agentService.forceUnregisterAgent(identity)
+                do {
+                    try await app.agentService.forceUnregisterAgent(identity)
+                    Issue.record("Unknown socket ownership must not acknowledge teardown")
+                } catch let error as Abort {
+                    #expect(error.status == .serviceUnavailable)
+                }
             }
             for id in ids {
                 #expect(!manager.hasPendingSession(sessionId: id.uuidString))

@@ -10221,6 +10221,8 @@ components:
       type: object
       required: [name, projectId]
       properties:
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassReference"
         name:
           type: string
         hostname:
@@ -10484,6 +10486,20 @@ components:
         - networkInterfaces
         - conditions
       properties:
+        admittedReservation:
+          $ref: "#/components/schemas/WorkloadAdmittedReservation"
+        effectiveMemoryReservationBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Durable physical memory commitment; absent for historical guaranteed accounting.
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        resourceClassKind:
+          type: string
+          enum: [guaranteed, burstable]
+          description: Missing historical references resolve to guaranteed.
         id:
           type: string
           format: uuid
@@ -10857,6 +10873,8 @@ components:
       type: object
       required: [name, projectId]
       properties:
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassReference"
         name:
           type: string
         image:
@@ -11001,6 +11019,20 @@ components:
         - status
         - conditions
       properties:
+        admittedReservation:
+          $ref: "#/components/schemas/WorkloadAdmittedReservation"
+        effectiveMemoryReservationBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Durable physical memory commitment; absent for historical guaranteed accounting.
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        resourceClassKind:
+          type: string
+          enum: [guaranteed, burstable]
+          description: Missing historical references resolve to guaranteed.
         id:
           type: string
           format: uuid
@@ -13076,10 +13108,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
 
     AdminCreateUserRequest:
       type: object
@@ -13088,10 +13123,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
         isSystemAdmin:
           type: boolean
           default: false
@@ -13130,10 +13168,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
 
     SessionResponse:
       type: object
@@ -15474,7 +15515,7 @@ components:
       properties:
         id:
           type: string
-          enum: [spire, libvirt, ovn_ovs, frr, ceph_client, ceph_cluster]
+          enum: [spire, libvirt, ovn_ovs, frr, ceph_client, ceph_cluster, host_memory_profile]
         role:
           type: string
           enum: [identity, compute, networking, routing, storage]
@@ -15721,6 +15762,8 @@ components:
           description: >-
             Control-plane time when the latest dependency snapshot arrived.
             Placement freshness uses this value instead of the agent's clock.
+        memoryAccounting:
+          $ref: "#/components/schemas/HostMemoryAccounting"
         resourceTelemetry:
           $ref: "#/components/schemas/HostResourceTelemetry"
         resourceTelemetryReceivedAt:
@@ -15918,6 +15961,11 @@ components:
         - availableDisk
         - physicalFreeDisk
       properties:
+        availableCPUMicroUnits:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Physical CPU capacity after inventory and provisional commitments; one CPU is 1000000 units.
         totalCPU:
           type: integer
           description: Total vCPUs on the host.
@@ -15942,6 +15990,29 @@ components:
           type: integer
           format: int64
           description: Bytes physically free on the local volume filesystem.
+        memoryAccounting:
+          $ref: "#/components/schemas/HostMemoryAccounting"
+
+    HostMemoryAccounting:
+      type: object
+      required: [physicalBytes, hostReservedBytes, workloadEffectiveBytes, remainingAllocatableBytes, qemuOverheadBytes]
+      properties:
+        physicalBytes:
+          type: integer
+          format: int64
+        hostReservedBytes:
+          type: integer
+          format: int64
+        workloadEffectiveBytes:
+          type: integer
+          format: int64
+        remainingAllocatableBytes:
+          type: integer
+          format: int64
+          description: Clamped remaining bytes; host and workload reserves are already subtracted.
+        qemuOverheadBytes:
+          type: integer
+          format: int64
 
     ResourceTelemetryAvailability:
       type: string
@@ -16059,6 +16130,45 @@ components:
           $ref: "#/components/schemas/ResourceTelemetryValue"
         mglruEnabled:
           $ref: "#/components/schemas/ResourceTelemetryFlag"
+        memoryProfile:
+          $ref: "#/components/schemas/HostMemoryProfileObservation"
+        swapInPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        swapOutPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        zramOriginalBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        swapInPagesPerSecond: { type: number, nullable: true }
+        swapOutPagesPerSecond: { type: number, nullable: true }
+        memoryWarnings:
+          type: array
+          items: { type: string, enum: [swap_thrashing, oom_kill] }
+
+    HostMemoryProfileConfiguration:
+      type: object
+      additionalProperties: false
+      required: [tier, tenant_class, nvme_swap]
+      properties:
+        tier: { type: string, enum: [zswap, zram] }
+        tenant_class: { type: string, enum: [single, multi] }
+        zram_bytes: { type: integer, format: int64, minimum: 1048576, maximum: 1099511627776 }
+        zswap_pool_percent: { type: integer, minimum: 1, maximum: 50 }
+        nvme_swap: { type: string }
+        ksm: { type: boolean }
+        require_mglru: { type: boolean }
+        ksm_pages_to_scan: { type: integer, minimum: 1, maximum: 1000 }
+        ksm_sleep_millisecs: { type: integer, minimum: 50, maximum: 60000 }
+
+    HostMemoryProfileObservation:
+      type: object
+      additionalProperties: false
+      properties:
+        configured:
+          $ref: "#/components/schemas/HostMemoryProfileConfiguration"
+        effectiveTier: { type: string, enum: [zswap, zram], nullable: true }
+        thpPolicy: { type: string, nullable: true }
+        ksmRunning: { type: boolean, nullable: true }
+        reason: { type: string, nullable: true }
 
     WorkloadMemoryEventsTelemetry:
       type: object
@@ -16729,6 +16839,14 @@ components:
         logical network pinned to the site can span its nodes.
       required: [id, name, status, labels]
       properties:
+        resourceClasses:
+          type: array
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        burstableAdmissionAvailable:
+          type: boolean
+          description: False until verified STR272 runtime enforcement is available.
         id:
           type: string
           format: uuid
@@ -16865,6 +16983,8 @@ components:
         it (labels omitted → empty map). `status` is the exception — an omitted
         status leaves the current lifecycle unchanged.
       properties:
+        burstableResourcePolicy:
+          $ref: "#/components/schemas/WorkloadResourceClassPolicy"
         description:
           type: string
           maxLength: 4096
@@ -19485,3 +19605,55 @@ components:
           description: The Loki stream labels attached to this entry.
           additionalProperties:
             type: string
+
+    WorkloadResourceClassReference:
+      type: object
+      description: Site-scoped class selection. Omission preserves guaranteed placement; burstable assignment currently fails closed.
+      required: [siteID, classID]
+      properties:
+        siteID: { type: string, format: uuid }
+        classID: { type: string, format: uuid }
+
+    WorkloadResourceClassPolicy:
+      type: object
+      description: >-
+        Configuration ceilings are policy bounds, not recommendations for safe
+        overcommit. Guaranteed is immutable at 1:1; burstable is explicit and
+        requires verified runtime enforcement. Catalog changes affect new
+        placement and growth only, never existing grants or generations.
+      required: [kind, cpuAllocationRatio, memoryAllocationRatio, cpuWeight, memoryHighPercent, hardLimitPolicy, maxCPUPressure10, maxMemoryPressure10, maxTelemetryAgeSeconds]
+      properties:
+        kind: { type: string, enum: [guaranteed, burstable] }
+        cpuAllocationRatio: { type: number, format: double, minimum: 1, maximum: 64 }
+        memoryAllocationRatio: { type: number, format: double, minimum: 1, maximum: 16 }
+        cpuWeight: { type: integer, minimum: 1, maximum: 10000 }
+        memoryHighPercent:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Guaranteed requires 100; burstable requires 1 through 99. Denominator is current guest grant, before backend overhead.
+        hardLimitPolicy: { type: string, enum: [guestAndBackend] }
+        maxCPUPressure10: { type: number, format: double, minimum: 0, maximum: 100 }
+        maxMemoryPressure10: { type: number, format: double, minimum: 0, maximum: 100 }
+        maxTelemetryAgeSeconds: { type: integer, minimum: 15, maximum: 300 }
+
+    WorkloadResourceClassSnapshot:
+      allOf:
+        - $ref: "#/components/schemas/WorkloadResourceClassPolicy"
+        - type: object
+          required: [classID, siteID, revision]
+          properties:
+            classID: { type: string, format: uuid }
+            siteID: { type: string, format: uuid }
+            revision: { type: integer, format: int64, minimum: 1 }
+
+    WorkloadAdmittedReservation:
+      type: object
+      description: Durable admitted physical commitment; growth preserves previous pricing.
+      required: [grantedCPUs, guestCommitmentBytes, cpuMicroUnits, discountedGuestBytes, backendOverheadBytes]
+      properties:
+        grantedCPUs: { type: integer, minimum: 0 }
+        guestCommitmentBytes: { type: integer, format: int64, minimum: 0 }
+        cpuMicroUnits: { type: integer, format: int64, minimum: 0 }
+        discountedGuestBytes: { type: integer, format: int64, minimum: 0 }
+        backendOverheadBytes: { type: integer, format: int64, minimum: 0 }

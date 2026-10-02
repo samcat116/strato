@@ -102,6 +102,38 @@ final class User: Model, @unchecked Sendable {
     }
 }
 
+/// DTO validation protects uniqueness checks; this backstop protects every model
+/// create and changed identity field, including future provisioning paths.
+/// Unchanged legacy identity fields do not prevent security-state updates.
+struct UserIdentityMiddleware: AsyncModelMiddleware {
+    func create(model: User, on db: Database, next: any AnyAsyncModelResponder) async throws {
+        model.username = try UserController.validateUsername(model.username)
+        model.email = try UserController.validateEmail(model.email)
+        model.displayName = try UserController.validateDisplayName(model.displayName)
+        try await next.create(model, on: db)
+    }
+
+    func update(model: User, on db: Database, next: any AnyAsyncModelResponder) async throws {
+        let changed = UserIdentityInput()
+        model.input(to: changed)
+        if changed.keys.contains("username") {
+            model.username = try UserController.validateUsername(model.username)
+        }
+        if changed.keys.contains("email") {
+            model.email = try UserController.validateEmail(model.email)
+        }
+        if changed.keys.contains("display_name") {
+            model.displayName = try UserController.validateDisplayName(model.displayName)
+        }
+        try await next.update(model, on: db)
+    }
+}
+
+private final class UserIdentityInput: DatabaseInput {
+    var keys: Set<FieldKey> = []
+    func set(_ value: DatabaseQuery.Value, at key: FieldKey) { keys.insert(key) }
+}
+
 extension User: Content {}
 
 extension User: SessionAuthenticatable {

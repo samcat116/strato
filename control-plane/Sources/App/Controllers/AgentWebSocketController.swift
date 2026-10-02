@@ -272,7 +272,7 @@ struct AgentWebSocketController: RouteCollection {
     }
 
     private func handleWebSocketMessage(
-        req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent
+        req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent, inventorySessionID: UUID
     ) async {
         // The key every agent-scoped registry is stored under (sockets,
         // presence, routes, session ownership) — the full SPIFFE ID, never the
@@ -310,6 +310,7 @@ struct AgentWebSocketController: RouteCollection {
 
             switch envelope.type {
             case .agentRegister:
+                guard req.application.websocketManager.getConnection(agentKey: agentKey) === ws else { return }
                 let message: AgentRegisterMessage
                 do {
                     message = try envelope.decode(as: AgentRegisterMessage.self)
@@ -326,63 +327,64 @@ struct AgentWebSocketController: RouteCollection {
                         code: ErrorMessage.ErrorCode.unsupportedProtocolVersion, logger: req.logger)
                     return
                 }
-                Task {
-                    do {
-                        // Site and organization scope come from the agent's
-                        // enrollment row, resolved inside registerAgent: an SVID
-                        // authenticates the node's identity but carries neither.
-                        let agentUUID = try await req.agentService.registerAgent(
-                            message, identity: agent.identity,
-                            identityOrganizationID: agent.organizationID)
+                // Await registration in this serial frame handler. Draining
+                // a predecessor must include its registration transaction.
+                do {
+                    // Site and organization scope come from the agent's
+                    // enrollment row, resolved inside registerAgent: an SVID
+                    // authenticates the node's identity but carries neither.
+                    let agentUUID = try await req.agentService.registerAgent(
+                        message, identity: agent.identity,
+                        identityOrganizationID: agent.organizationID, inventorySessionID: inventorySessionID)
 
-                        // Send registration response with the assigned UUID
-                        let response = AgentRegisterResponseMessage(
-                            requestId: message.requestId,
-                            agentId: agentUUID.uuidString,
-                            name: agentName
-                        )
-                        self.sendMessage(ws: ws, message: response, logger: req.logger)
+                    // Send registration response with the assigned UUID
+                    let response = AgentRegisterResponseMessage(
+                        requestId: message.requestId,
+                        agentId: agentUUID.uuidString,
+                        name: agentName
+                    )
+                    self.sendMessage(ws: ws, message: response, logger: req.logger)
 
-                        // Ring immediately on (re)registration so drift
-                        // accumulated while the agent was away converges
-                        // without waiting for its unconditional refetch.
-                        await req.agentService.syncDesiredState(agentId: agentUUID.uuidString)
-                    } catch {
-                        Telemetry.agentRegistrationFailed(reason: "register_error")
-                        req.logger.error("Failed to register agent: \(error)")
+                    // Ring immediately on (re)registration so drift
+                    // accumulated while the agent was away converges
+                    // without waiting for its unconditional refetch.
+                    await req.agentService.syncDesiredState(agentId: agentUUID.uuidString)
+                } catch {
+                    Telemetry.agentRegistrationFailed(reason: "register_error")
+                    req.logger.error("Failed to register agent: \(error)")
 
-                        // A protocol-version rejection is permanent until the
-                        // agent is upgraded — classify it so the agent can stop
-                        // its reconnect loop. Everything else stays unclassified
-                        // (treated as transient; the agent retries with backoff).
-                        let errorCode: String?
-                        switch error {
-                        case AgentServiceError.unsupportedProtocolVersion:
-                            // Permanent until the binary is upgraded.
-                            errorCode = ErrorMessage.ErrorCode.unsupportedProtocolVersion
-                        case AgentServiceError.missingOrganizationScope:
-                            // Permanent until an operator acts: this node has no
-                            // enrollment carrying an org scope, and reconnecting
-                            // will not create one. Classified as invalid_token so
-                            // the agent stops its reconnect loop and exits with
-                            // instructions rather than looping on an
-                            // unrecognized code.
-                            errorCode = ErrorMessage.ErrorCode.invalidToken
-                        default:
-                            errorCode = nil
-                        }
-                        self.sendErrorResponse(
-                            ws: ws, requestId: message.requestId,
-                            error: "Failed to register agent: \(error.localizedDescription)",
-                            code: errorCode, logger: req.logger)
+                    // A protocol-version rejection is permanent until the
+                    // agent is upgraded — classify it so the agent can stop
+                    // its reconnect loop. Everything else stays unclassified
+                    // (treated as transient; the agent retries with backoff).
+                    let errorCode: String?
+                    switch error {
+                    case AgentServiceError.unsupportedProtocolVersion:
+                        // Permanent until the binary is upgraded.
+                        errorCode = ErrorMessage.ErrorCode.unsupportedProtocolVersion
+                    case AgentServiceError.missingOrganizationScope:
+                        // Permanent until an operator acts: this node has no
+                        // enrollment carrying an org scope, and reconnecting
+                        // will not create one. Classified as invalid_token so
+                        // the agent stops its reconnect loop and exits with
+                        // instructions rather than looping on an
+                        // unrecognized code.
+                        errorCode = ErrorMessage.ErrorCode.invalidToken
+                    default:
+                        errorCode = nil
                     }
+                    self.sendErrorResponse(
+                        ws: ws, requestId: message.requestId,
+                        error: "Failed to register agent: \(error.localizedDescription)",
+                        code: errorCode, logger: req.logger)
                 }
 
             case .agentHeartbeat:
                 let message = try envelope.decode(as: AgentHeartbeatMessage.self)
                 Task {
                     do {
-                        try await req.agentService.updateAgentHeartbeat(message, fromAgentKey: agentKey)
+                        try await req.agentService.updateAgentHeartbeat(
+                            message, fromAgentKey: agentKey, inventorySession: inventorySessionID)
                         self.sendSuccessResponse(
                             ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
                     } catch {
@@ -434,7 +436,8 @@ struct AgentWebSocketController: RouteCollection {
                 // deletions by absence (issue #260). Enqueued rather than
                 // applied directly so same-agent reports apply in send order.
                 Task {
-                    await req.agentService.enqueueObservedStateReport(envelope, fromAgentKey: agentKey)
+                    await req.agentService.enqueueObservedStateReport(
+                        envelope, fromAgentKey: agentKey, inventorySession: inventorySessionID)
                 }
 
             case .consoleData:
@@ -656,8 +659,12 @@ struct AgentWebSocketController: RouteCollection {
                     "authMethod": .string(authMethod),
                 ])
 
+            // Allocated locally, never supplied by the peer or looked up from
+            // the identity after a delayed frame crosses a reconnect.
+            let inventorySessionID = UUID()
             let processor = AgentWebSocketFrameProcessor { text in
-                await self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
+                await self.handleWebSocketMessage(
+                    req: req, ws: ws, text: text, agent: agent, inventorySessionID: inventorySessionID)
             }
 
             // The mTLS handshake authenticates one credential, not every future

@@ -28,11 +28,19 @@ extension Agent {
             return
         }
 
+        try ManagedStatePermissions.migrate(at: configuration.vmStoragePath, legacyStagingRoot: NSTemporaryDirectory())
+
         // Recover the workload manifest from a previous incarnation of this agent.
         // These workloads are not re-adopted here — the reconciler re-adopts them
         // when the backend supports it — but they stay routable to the backend that
         // owns them and keep reserving capacity until deleted or re-created.
-        await applyManifestLoad(manifestStore.load())
+        let manifestLoad = manifestStore.load()
+        if case .loaded(let entries, _) = manifestLoad {
+            let qemuVMIds = Set(entries.compactMap { $0.value.hypervisorType == .qemu ? $0.key : nil })
+            try ManagedStatePermissions.migrate(
+                at: configuration.vmStoragePath, qemuVMIds: qemuVMIds, legacyStagingRoot: NSTemporaryDirectory())
+        }
+        await applyManifestLoad(manifestLoad)
         applySnapshotInventory(snapshotRecordStore.load())
 
         // Simulation mode drives no real network backend. `NetworkOrchestrator`
@@ -199,7 +207,8 @@ extension Agent {
             // Nothing here touches Firecracker itself.
             logger.info("Simulation mode: registering mock hypervisor backend(s)")
             for type in HypervisorType.allCases {
-                hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type)
+                hypervisorServices[type] = MockHypervisorService(
+                    logger: logger, hypervisorType: type, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             }
 
             // The mock sandbox runtime (issue #470), so simulated agents host
@@ -247,7 +256,8 @@ extension Agent {
                     "detail": .string(
                         "this host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only")
                 ])
-            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+            hypervisorServices[.qemu] = MockHypervisorService(
+                logger: logger, hypervisorType: .qemu, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             #endif
 
             #if os(Linux)

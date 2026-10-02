@@ -37,6 +37,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     let logger: Logger
     let client: FirecrackerClient
+    /// Supplied only by a validated backend capability owner; production defaults to unsupported.
+    let burstableEnforcement: WorkloadResourceClassEnforcement?
     let imageService: SandboxImageService
     let socketDirectory: String
     let sandboxStoragePath: String
@@ -296,6 +298,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         warmStartEnabled: Bool = true,
         warmCacheBudgetBytes: Int64? = nil,
         snapshotTransfer: SnapshotArtifactTransfer? = nil,
+        burstableEnforcement: WorkloadResourceClassEnforcement? = nil,
         suspensionRestoreLimit: Int = 2,
         suspensionRestoreTimeoutSeconds: Int = StageBudget.checkpointSeconds,
         idlePolicy: SandboxIdlePolicy = SandboxIdlePolicy(),
@@ -310,6 +313,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.restoreAdmission = try SandboxRestoreAdmission(limit: suspensionRestoreLimit)
         self.logger = logger
         self.client = client
+        self.burstableEnforcement =
+            burstableEnforcement?.backend == .jailedFirecrackerSandbox ? burstableEnforcement : nil
         self.imageService = imageService
         self.socketDirectory = socketDirectory
         self.sandboxStoragePath = sandboxStoragePath

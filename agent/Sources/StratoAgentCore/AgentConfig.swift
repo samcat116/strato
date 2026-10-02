@@ -26,8 +26,13 @@ public struct AgentConfig {
     public let ovnNorthboundTLS: OVNNorthboundTLSConfig?
     public let enableKVM: Bool?
     /// Fixed QEMU process allowance above current guest RAM. This only sizes
-    /// libvirt's cgroup ceiling; it is not a placement reservation.
+    /// libvirt's cgroup ceiling and the workload placement reservation.
     public let qemuMemoryOverheadMB: Int?
+    public let hostMemoryReserveMB: Int?
+    public var hostMemoryReserveBytes: Int64 {
+        let (bytes, overflow) = Int64(max(0, hostMemoryReserveMB ?? 1024)).multipliedReportingOverflow(by: 1024 * 1024)
+        return overflow ? Int64.max : bytes
+    }
     public let vmStoragePath: String?
     /// Where managed volume disks and their snapshots live. Nil means the
     /// platform default (`/var/lib/strato/volumes` on Linux) — see
@@ -187,6 +192,7 @@ public struct AgentConfig {
         ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
         enableKVM: Bool? = nil,
         qemuMemoryOverheadMB: Int? = nil,
+        hostMemoryReserveMB: Int? = nil,
         vmStoragePath: String? = nil,
         volumeStoragePath: String? = nil,
         imageCacheDir: String? = nil,
@@ -237,6 +243,7 @@ public struct AgentConfig {
         self.ovnNorthboundTLS = ovnNorthboundTLS
         self.enableKVM = enableKVM
         self.qemuMemoryOverheadMB = qemuMemoryOverheadMB
+        self.hostMemoryReserveMB = hostMemoryReserveMB
         self.vmStoragePath = vmStoragePath
         self.volumeStoragePath = volumeStoragePath
         self.imageCacheDir = imageCacheDir

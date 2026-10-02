@@ -251,7 +251,8 @@ public actor FirecrackerClient {
     /// returned manager's configure calls.
     public func createVM(
         vmId: String, jail: JailerOptions?,
-        httpAPIMaxPayloadSize: Int? = nil
+        httpAPIMaxPayloadSize: Int? = nil,
+        validateCgroup: (@Sendable (Int32, String) throws -> Void)? = nil
     ) async throws -> FirecrackerManager {
         guard !destroyingVMIds.contains(vmId) else {
             throw FirecrackerError.vmTeardownInProgress(vmId)
@@ -451,6 +452,17 @@ public actor FirecrackerClient {
             manager: manager
         )
 
+        if let validateCgroup {
+            do {
+                try validateOwnedCgroup(vmId: vmId, validate: validateCgroup)
+            } catch {
+                // This process was just spawned by us. Never leave an
+                // unacknowledged boundary available to boot or snapshot load.
+                try? await destroyVM(vmId: vmId)
+                throw error
+            }
+        }
+
         logger.info("VM created successfully", metadata: ["strato.vm.id": "\(vmId)"])
         return manager
     }
@@ -480,9 +492,10 @@ public actor FirecrackerClient {
     /// VM, with a jail root laid out exactly as at snapshot time). A load
     /// failure tears the spawned process back down so a retry starts clean.
     public func restoreVM(
-        vmId: String, jail: JailerOptions?, snapshot: SnapshotLoadConfig
+        vmId: String, jail: JailerOptions?, snapshot: SnapshotLoadConfig,
+        validateCgroup: (@Sendable (Int32, String) throws -> Void)? = nil
     ) async throws -> FirecrackerManager {
-        let manager = try await createVM(vmId: vmId, jail: jail)
+        let manager = try await createVM(vmId: vmId, jail: jail, validateCgroup: validateCgroup)
         do {
             try await manager.loadSnapshot(snapshot)
         } catch {
@@ -596,6 +609,56 @@ public actor FirecrackerClient {
                 "pid": "\(pid.map(String.init) ?? "unknown")",
             ])
         return (manager, info)
+    }
+
+    /// Samples the exact jailer boundary while a retained kernel process
+    /// identity is live. The callback is synchronous: no lifecycle operation
+    /// can interleave on this actor. This never discovers child cgroups or
+    /// writes controls. An adopted workload is preserved if validation fails.
+    public func validateOwnedCgroup(
+        vmId: String, validate: @Sendable (Int32, String) throws -> Void
+    ) throws {
+        try readOwnedCgroup(vmId: vmId, read: validate)
+    }
+
+    /// Returns evidence only after the pinned process remains live across
+    /// the entire synchronous read. No new process identity is discovered.
+    public func readOwnedCgroup<Value: Sendable>(
+        vmId: String, read: @Sendable (Int32, String) throws -> Value
+    ) throws -> Value {
+        guard let vm = runningVMs[vmId], let path = vm.cgroupDirectory else {
+            throw FirecrackerError.processInspectionFailed("VM \(vmId) has no tracked jailer cgroup boundary")
+        }
+        #if os(Linux)
+        let pid: Int32
+        let descriptor: Int32
+        let closeDescriptor: Bool
+        if let process = vm.process {
+            guard process.isRunning, let handle = try Self.openPIDFD(pid: process.processIdentifier) else {
+                throw FirecrackerError.processInspectionFailed("VM \(vmId) process is not live")
+            }
+            pid = process.processIdentifier
+            descriptor = handle
+            closeDescriptor = true
+        } else if let pinned = vm.adoptedProcess {
+            pid = pinned.pid
+            descriptor = pinned.pidfd
+            closeDescriptor = false
+        } else {
+            throw FirecrackerError.processInspectionFailed("VM \(vmId) has no pinned process identity")
+        }
+        defer { if closeDescriptor { _ = Glibc.close(descriptor) } }
+        guard vm.process?.isRunning != false, try !Self.pidfdHasExited(descriptor) else {
+            throw FirecrackerError.processInspectionFailed("VM \(vmId) exited before cgroup validation")
+        }
+        let value = try read(pid, path)
+        guard try !Self.pidfdHasExited(descriptor) else {
+            throw FirecrackerError.processInspectionFailed("VM \(vmId) exited during cgroup validation")
+        }
+        return value
+        #else
+        throw FirecrackerError.processInspectionFailed("Owned cgroup validation requires Linux pidfds")
+        #endif
     }
 
     /// Waits for a tracked Firecracker process to exit without signalling it.
@@ -1425,7 +1488,7 @@ public actor FirecrackerClient {
         }
         for entry in entries {
             guard let pid = Int32(entry),
-                let data = FileManager.default.contents(atPath: "/proc/\(entry)/cmdline")
+                let data = try? Self.readProcFile("/proc/\(entry)/cmdline")
             else { continue }
             // /proc/<pid>/cmdline is NUL-separated argv.
             let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
@@ -1452,7 +1515,7 @@ public actor FirecrackerClient {
         }
         for entry in entries {
             guard let pid = Int32(entry),
-                let data = FileManager.default.contents(atPath: "/proc/\(entry)/cmdline")
+                let data = try? Self.readProcFile("/proc/\(entry)/cmdline")
             else { continue }
             // /proc/<pid>/cmdline is NUL-separated argv.
             let args = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }

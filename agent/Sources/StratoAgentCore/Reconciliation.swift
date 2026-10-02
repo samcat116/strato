@@ -462,9 +462,11 @@ public actor Reconciler {
             // wanting), and leaving the nonce unrecorded is what would fire it
             // weeks later.
             if item.steps.isEmpty {
+                await actuator.resourceEnforcementWillConverge(item)
                 lastApplied[ref] = item.generation
                 failures.removeValue(forKey: ref)
                 if let edges = item.appliedEdges { await actuator.recordAppliedEdges(item, edges) }
+                await actuator.resourceEnforcementDidConverge(item)
                 advancedWithoutWork = true
                 continue
             }
@@ -708,6 +710,7 @@ public actor Reconciler {
 
     private func execute(_ item: ReconcileWorkItem) async {
         let ref = WorkloadRef(item)
+        await actuator.resourceEnforcementWillConverge(item)
         do {
             var steps = item.steps
             var index = 0
@@ -753,6 +756,7 @@ public actor Reconciler {
             // only after the whole item succeeded, so a failed reboot retries
             // on the next sync instead of being silently swallowed.
             if let edges = item.appliedEdges { await actuator.recordAppliedEdges(item, edges) }
+            await actuator.resourceEnforcementDidConverge(item)
             logger.info(
                 "Workload converged to desired state",
                 metadata: [

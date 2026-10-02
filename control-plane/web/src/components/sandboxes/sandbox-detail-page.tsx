@@ -151,6 +151,10 @@ export function SandboxDetailPage({ id }: { id: string }) {
         <TabsContent value="overview" className="space-y-6 mt-6">
           {/* Resources */}
           <DetailGrid>
+            <StatCard title="Resource class" icon={<Cpu className="h-4 w-4" />}>
+              <div className="text-xl font-bold capitalize">{sandbox.resourceClassKind ?? "guaranteed"}</div>
+              <p className="text-xs text-muted-foreground">{sandbox.resourceClass ? `Admitted revision ${sandbox.resourceClass.revision}` : "Immutable default · 1:1"}</p>
+            </StatCard>
             <StatCard title="vCPUs" icon={<Cpu className="h-4 w-4" />}>
                 <div className="text-xl font-bold text-foreground">
                   {sandbox.cpus}

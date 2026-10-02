@@ -22,6 +22,7 @@ extension AgentConfig {
         ["ovn_northbound_tls", "server_hostname"],
         ["enable_kvm"],
         ["qemu_memory_overhead_mb"],
+        ["host_memory_reserve_mb"],
         ["vm_storage_dir"],
         ["volume_storage_dir"],
         ["image_cache_dir"],
@@ -185,6 +186,10 @@ extension AgentConfig {
             ovnNorthboundTLS = nil
         }
         let enableKVM = try await values.bool("enable_kvm")
+        let hostMemoryReserveMB = try await values.int("host_memory_reserve_mb")
+        if let reserve = hostMemoryReserveMB, reserve < 0 || Int64(reserve) > Int64.max / (1024 * 1024) {
+            throw AgentConfigError.invalidConfiguration("host_memory_reserve_mb must be nonnegative and fit in bytes")
+        }
         let qemuMemoryOverheadMB = try await values.int("qemu_memory_overhead_mb")
         if let qemuMemoryOverheadMB, !Self.qemuMemoryOverheadRange.contains(qemuMemoryOverheadMB) {
             throw AgentConfigError.invalidConfiguration(
@@ -522,6 +527,7 @@ extension AgentConfig {
             ovnNorthboundTLS: ovnNorthboundTLS,
             enableKVM: enableKVM,
             qemuMemoryOverheadMB: qemuMemoryOverheadMB,
+            hostMemoryReserveMB: hostMemoryReserveMB,
             vmStoragePath: vmStoragePath,
             volumeStoragePath: volumeStoragePath,
             imageCacheDir: imageCacheDir,

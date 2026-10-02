@@ -537,6 +537,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             let agent = try await makeAgent(named: "node-orphan", on: app)
             agent.trustDomain = "org-deadbeefdeadbeef.strato.local"
             try await agent.save(on: app.db)
+            await app.replicaBridge.recordRoute(agentKey: agent.identity.key)
 
             try await app.test(.DELETE, "/api/agents/\(agent.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
@@ -859,7 +860,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
         } else {
             organization = try await builder.createOrganization(name: "SPIRE Agent Org")
         }
-        return try await builder.createAgent(
+        let agent = try await builder.createAgent(
             named: name,
             hostname: "\(name).example.com",
             resources: AgentResources(
@@ -867,6 +868,9 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
                 totalMemory: 16_000_000_000, availableMemory: 16_000_000_000,
                 totalDisk: 100_000_000_000, availableDisk: 100_000_000_000),
             organizationScope: .organization(try organization.requireID()))
+        // These fixtures represent a registered agent owned by this replica.
+        await app.replicaBridge.recordRoute(agentKey: agent.identity.key)
+        return agent
     }
 
     private static func redeemBootstrap(_ token: String, on app: Application) async throws -> HTTPStatus {

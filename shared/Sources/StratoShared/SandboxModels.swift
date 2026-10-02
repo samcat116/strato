@@ -51,6 +51,8 @@ public enum SandboxCPUTemplate {
 /// only what it can legitimately know; rootfs materialization, kernel choice,
 /// and vsock wiring are agent-side concerns.
 public struct SandboxSpec: Codable, Sendable {
+    public private(set) var admittedReservation: WorkloadAdmittedReservation?
+    public let resourceClass: WorkloadResourceClassSnapshot?
     /// OCI image reference as provided by the user, e.g.
     /// `ghcr.io/acme/worker:v3`. Kept verbatim for guest identity and logging;
     /// agents converge on `imageDigest` when present.
@@ -100,8 +102,12 @@ public struct SandboxSpec: Codable, Sendable {
         workingDir: String? = nil,
         network: NetworkSpec? = nil,
         restoreFrom: SandboxSnapshotRef? = nil,
-        cpuTemplate: String? = nil
+        cpuTemplate: String? = nil,
+        resourceClass: WorkloadResourceClassSnapshot? = nil,
+        admittedReservation: WorkloadAdmittedReservation? = nil
     ) {
+        self.admittedReservation = admittedReservation
+        self.resourceClass = resourceClass
         self.image = image
         self.imageDigest = imageDigest
         self.cpus = cpus

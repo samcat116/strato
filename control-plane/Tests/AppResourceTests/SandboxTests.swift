@@ -2155,3 +2155,64 @@ final class SandboxTests {
     }
 
 }
+
+extension SandboxTests {
+    @Test("Concurrent class placements preserve a single committed owner and ledger")
+    func concurrentGuaranteedClassPlacements() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let agentID = try await self.registerAgent(app: app, named: "class-atomic-agent", sandboxCapable: true)
+            let agent = try #require(try await Agent.find(UUID(uuidString: agentID), on: app.db))
+            let site = try #require(try await Site.find(agent.$site.id, on: app.db))
+            sandbox.resourceClass = try site.resourceClasses()[0]
+            try await sandbox.save(on: app.db)
+            let stale = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            async let first: Void = app.workloadPlacement.createSandbox(sandbox: sandbox, db: app.db)
+            async let second: Void = app.workloadPlacement.createSandbox(sandbox: stale, db: app.db)
+            _ = try await (first, second)
+            let persisted = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(persisted.hypervisorId == agentID)
+            #expect(persisted.resourceClass == sandbox.resourceClass)
+            #expect(persisted.admittedReservation?.cpuMicroUnits == 1_000_000)
+            #expect(
+                persisted.admittedReservation?.effectiveMemoryBytes
+                    == WorkloadMemoryReservation.sandbox(memoryBytes: sandbox.memory).effectiveBytes)
+            let claims = await app.coordination.activeReservations(agentIds: [agentID])
+            #expect(claims[agentID]?.cpuMicroUnits == 1_000_000)
+            let cached = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            cached.admittedReservation = nil
+            try await app.db.transaction { tx in
+                #expect(try await cached.lockAndRefresh(on: tx))
+                try await cached.save(on: tx)
+            }
+            #expect(
+                try await Sandbox.find(sandbox.id, on: app.db)?.admittedReservation == persisted.admittedReservation)
+        }
+    }
+}
+
+extension SandboxTests {
+    @Test("Metadata edits retain the admitted class and physical commitment")
+    func metadataPreservesClassAdmission() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, token in
+            let site = Site(
+                name: "Metadata class site", organizationScope: .organization(try #require(project.$organization.id)))
+            try await site.save(on: app.db)
+            let snapshot = try site.resourceClasses()[0]
+            let admitted = WorkloadAdmittedReservation(
+                cpus: sandbox.cpus, memory: .sandbox(memoryBytes: sandbox.memory), policy: .guaranteed)
+            sandbox.resourceClass = snapshot
+            sandbox.admittedReservation = admitted
+            try await sandbox.save(on: app.db)
+            try await app.testing().test(
+                .PUT, "/api/sandboxes/\(try sandbox.requireID())",
+                beforeRequest: { request in
+                    request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    request.headers.contentType = .json
+                    request.body = ByteBuffer(string: "{\"name\":\"renamed-class-sandbox\",\"ttlSeconds\":600}")
+                }, afterResponse: { response in #expect(response.status == .ok) })
+            let saved = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(saved.name == "renamed-class-sandbox" && saved.ttlSeconds == 600)
+            #expect(saved.resourceClass == snapshot && saved.admittedReservation == admitted)
+        }
+    }
+}

@@ -148,6 +148,10 @@ struct ReconciliationTests {
         var sizing: [String: VMSizing] = [:]
         private(set) var performed: [(step: ReconcileStep, vmId: String)] = []
         private(set) var reportCount = 0
+        private(set) var enforcementStarted: [Int64] = []
+        private(set) var enforcementSucceeded: [Int64] = []
+        func resourceEnforcementWillConverge(_ item: ReconcileWorkItem) { enforcementStarted.append(item.generation) }
+        func resourceEnforcementDidConverge(_ item: ReconcileWorkItem) { enforcementSucceeded.append(item.generation) }
         /// Status an adopted orphan turns out to have.
         var adoptedStatus: VMStatus = .running
         /// The durable applied-nonce record this host keeps (STR-151). A
@@ -263,6 +267,23 @@ struct ReconciliationTests {
     }
 
     // MARK: - Pure diff engine
+
+    @Test("enforcement success hooks exclude failed work and include no-step generation advancement")
+    func enforcementSuccessProvenance() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .managed(.running)])
+        let reconciler = makeReconciler(actuator)
+        await reconciler.apply(Self.sync([Self.desired(id, status: .running, generation: 1)]))
+        _ = await actuator.waitForReports(1)
+        #expect(await actuator.enforcementStarted == [1])
+        #expect(await actuator.enforcementSucceeded == [1])
+        await actuator.setFailure(ConvergenceError.blocked("fixture refuses shutdown"))
+        await reconciler.apply(Self.sync([Self.desired(id, status: .shutdown, generation: 2)]))
+        _ = await actuator.waitForReports(2)
+        #expect(await actuator.enforcementStarted == [1, 2])
+        #expect(await actuator.enforcementSucceeded == [1])
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 1)
+    }
 
     @Test("Desired-but-absent VM plans create plus boot steps")
     func planCreatesAbsentVM() {

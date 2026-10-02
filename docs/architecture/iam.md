@@ -1543,3 +1543,22 @@ of principals, actions, and node types all the same.
 | Nested projects; multi-parent resources | — |
 | Free-form customer-authored Cedar | — |
 | Silent eventual consistency on grant/revoke | — |
+
+### Account identity validation
+
+Account creation and edits share the username, email, and display-name grammars.
+Request DTOs normalize values before checking uniqueness; Fluent user middleware
+also validates every new account and each changed identity field. Unchanged
+legacy identity values do not prevent security-state changes such as disabling
+an account or invalidating sessions. SQL length checks use Unicode scalar counts,
+matching PostgreSQL `char_length`; the additive upgrade refuses incompatible
+existing rows and requires explicit repair rather than rewriting identifiers.
+
+OIDC derives email-shaped username claims from their local part and rejects
+claims that cannot satisfy the username grammar. Without an email claim it uses
+a provider/subject digest for a unique reserved `@identity.invalid` address and,
+when no username claim is available, a bounded username. Synthetic addresses
+never participate in verified-email linking. SCIM validates both creation and
+replacement and returns protocol `invalidValue` errors for malformed input.
+The headless bootstrap email defaults to `bootstrap@localhost.invalid`, and
+explicit bootstrap identifiers follow the same grammar.

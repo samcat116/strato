@@ -27,14 +27,16 @@ extension AgentService {
         trustDomain: String = PlatformTrustDomain.current,
         identityOrganizationID: UUID? = nil,
         siteID: UUID? = nil,
-        organizationScope: OrganizationScope? = nil
+        organizationScope: OrganizationScope? = nil,
+        inventorySessionID: UUID? = nil
     ) async throws -> UUID {
         try await registerAgent(
             message,
             identity: AgentIdentity(trustDomain: trustDomain, name: agentName),
             identityOrganizationID: identityOrganizationID,
             siteID: siteID,
-            organizationScope: organizationScope
+            organizationScope: organizationScope,
+            inventorySessionID: inventorySessionID
         )
     }
 
@@ -52,7 +54,9 @@ extension AgentService {
         identity: AgentIdentity,
         identityOrganizationID: UUID? = nil,
         siteID: UUID? = nil,
-        organizationScope: OrganizationScope? = nil
+        organizationScope: OrganizationScope? = nil,
+        inventorySessionID: UUID? = nil,
+        afterCapturingInventorySession: (@Sendable () async -> Void)? = nil
     ) async throws -> UUID {
         let agentName = identity.name
         let agentKey = identity.key
@@ -67,6 +71,627 @@ extension AgentService {
         }
 
         let db = app.db
+        // Capture the predecessor at the first registration DB read. A late
+        // completion on another replica cannot replace a session that changed
+        // while enrollment/resource work was in flight.
+        guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
+        let predecessor = try await sql.raw(
+            "SELECT id, inventory_session_id FROM agents WHERE trust_domain = \(bind: trustDomain) AND name = \(bind: agentName)"
+        ).first()
+        let capturedAgentID = try predecessor?.decode(column: "id", as: UUID.self)
+        let token = try predecessor?.decode(column: "inventory_session_id", as: UUID?.self)
+        let registrationExpectation = InventorySessionExpectation.matches(token ?? nil)
+        if inventorySessionID != nil, observedInventorySessions[agentKey] == inventorySessionID,
+            token ?? nil != inventorySessionID
+        {
+            throw Abort(.conflict, reason: "The registered socket was superseded by another replica")
+        }
+        await afterCapturingInventorySession?()
+        let targetAgentID = capturedAgentID ?? UUID()
+        let session = inventorySessionID ?? UUID()
+        let result: RegistrationPersistence = try await withCheckedThrowingContinuation { continuation in
+            enqueueInventoryOperation(for: agentKey) {
+                do {
+                    let result = try await InventorySessionFence.withLock(
+                        agentID: targetAgentID, on: db, logger: self.app.logger
+                    ) { connection in
+                        try await connection.transaction { tx in
+                            try await self.persistAgentRegistration(
+                                message, identity: identity, identityOrganizationID: identityOrganizationID,
+                                siteID: siteID, organizationScope: organizationScope,
+                                targetAgentID: targetAgentID, capturedAgentID: capturedAgentID,
+                                expectation: registrationExpectation, session: session, on: tx)
+                        }
+                    }
+                    await self.activateRegistrationSession(session, for: agentKey)
+                    continuation.resume(returning: result)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+        let agent = result.agent
+        let agentUUID = targetAgentID
+        let previousDependencyObservations = result.previousDependencyObservations
+        let dependencyObservations = result.dependencyObservations
+        let registrationInstant = result.registrationInstant
+
+        // Attach the UUID to the live socket so local routing (console and
+        // exec streams) can resolve it without a database read. No-op when no
+        // socket exists (tests).
+        app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
+
+        // Publish presence to the coordination store so every control-plane
+        // process — not just the one holding this socket — can see the agent.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey, force: true)
+
+        Telemetry.agentConnected()
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
+        Telemetry.recordRemovedDependenciesUnavailable(
+            agentName: agent.name,
+            previousObservations: previousDependencyObservations,
+            currentObservations: dependencyObservations)
+        for observation in dependencyObservations {
+            Telemetry.recordDependency(
+                agentName: agent.name,
+                observation: observation,
+                receivedAt: registrationInstant.date,
+                at: registrationInstant)
+        }
+        await WebhookEvents.emitAgentPresence(
+            agent: agent, connected: true, reason: "registered", on: db, logger: app.logger)
+        app.logger.info(
+            "Agent registered",
+            metadata: [
+                "strato.agent.id": .string(agentUUID.uuidString),
+                "strato.agent.identity": .string(agentKey),
+                "hostname": .string(message.hostname),
+                "version": .string(message.version),
+            ])
+
+        return agentUUID
+    }
+
+    /// The bare agent name inside an identity key, for logs and metric labels
+    /// (a full SPIFFE ID would change every existing dashboard's series).
+    nonisolated static func displayName(forKey agentKey: String) -> String {
+        AgentIdentity(key: agentKey)?.name ?? agentKey
+    }
+
+    /// Resolve an agent's database UUID from its identity key: the local
+    /// socket's registration first (no I/O), the database otherwise.
+    func agentId(forKey agentKey: String) async -> String? {
+        if let local = app.websocketManager.agentId(agentKey: agentKey) {
+            return local
+        }
+        guard let identity = AgentIdentity(key: agentKey) else { return nil }
+        let agent = try? await Agent.query(on: app.db)
+            .filter(\.$trustDomain == identity.trustDomain)
+            .filter(\.$name == identity.name)
+            .first()
+        return agent?.id?.uuidString
+    }
+
+    /// Whether `vmId` is currently assigned to the agent authenticated as
+    /// `agentKey`. Used to reject agent-reported data (VM logs, console)
+    /// tagged with a VM the reporting agent doesn't own — otherwise a compromised
+    /// agent could forge log entries for another tenant's VM.
+    func vmIsOwnedByAgent(vmId: String, agentKey: String) async -> Bool {
+        guard let vmUUID = UUID(uuidString: vmId),
+            let senderAgentId = await agentId(forKey: agentKey),
+            let vm = try? await VM.find(vmUUID, on: app.db)
+        else {
+            return false
+        }
+        return vm.hypervisorId == senderAgentId
+    }
+
+    /// Whether `sandboxId` is currently assigned to the agent authenticated as
+    /// `agentKey` — the sandbox counterpart of `vmIsOwnedByAgent`, guarding
+    /// agent-reported sandbox data (workload logs, exec frames) against a
+    /// compromised agent forging entries for another tenant's sandbox.
+    func sandboxIsOwnedByAgent(sandboxId: String, agentKey: String) async -> Bool {
+        guard let sandboxUUID = UUID(uuidString: sandboxId),
+            let senderAgentId = await agentId(forKey: agentKey),
+            let sandbox = try? await Sandbox.find(sandboxUUID, on: app.db)
+        else {
+            return false
+        }
+        return sandbox.hypervisorId == senderAgentId
+    }
+
+    /// Resolve an agent's identity key from its database UUID: the local
+    /// socket's registration first (no I/O), the database otherwise.
+    func agentKey(forId agentId: String) async -> String? {
+        if let local = app.websocketManager.agentKey(agentId: agentId) {
+            return local
+        }
+        guard let agentUUID = UUID(uuidString: agentId) else { return nil }
+        let agent = try? await Agent.find(agentUUID, on: app.db)
+        return agent?.identity.key
+    }
+
+    func unregisterAgent(_ agentId: String, fromAgentKey connectionAgentKey: String) async throws {
+        let db = app.db
+
+        // Resolve the target and confirm it belongs to the authenticated
+        // connection. Without this an agent could pass another agent's id in the
+        // message body and force *that* agent offline (cross-tenant DoS) — the
+        // same ownership guard the heartbeat/observed-state handlers enforce.
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else {
+            app.logger.warning(
+                "Unregister for unknown agent; ignoring",
+                metadata: ["strato.agent.claimed.id": .string(agentId)])
+            return
+        }
+
+        guard agent.identity.key == connectionAgentKey else {
+            app.logger.warning(
+                "Unregister claims an agentId not owned by the authenticated connection; ignoring",
+                metadata: [
+                    "strato.agent.claimed.id": .string(agentId),
+                    "strato.agent.claimed.identity": .string(agent.identity.key),
+                    "strato.agent.connection.identity": .string(connectionAgentKey),
+                ])
+            return
+        }
+
+        agent.status = .offline
+        try await agent.save(on: db)
+        let agentKey = agent.identity.key
+
+        _ = app.websocketManager.closeConnection(agentKey: agentKey, code: .normalClosure)
+        // The eventual socket close skips its cleanup once the connection is
+        // gone (`removeClosedConnection(ifCurrent:)` no longer matches), so console
+        // and attached exec sessions must be torn down here for the
+        // graceful-unregister path. Captured commands remain pending because a
+        // terminal frame may already be in flight; their deadline is the safe
+        // failure backstop.
+        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
+        await app.guestExecSessionManager.closeAllSessions(
+            forAgent: agentKey, reason: "agent unregistered")
+        await endObservedInventorySession(for: agentKey)
+        presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
+        await app.coordination.clearAgentPresence(agentKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
+
+        Telemetry.agentDisconnected(reason: "unregister")
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+        Telemetry.recordDependenciesUnavailable(
+            agentName: agent.name, observations: agent.dependencyObservations)
+        await WebhookEvents.emitAgentPresence(
+            agent: agent, connected: false, reason: "unregistered", on: db, logger: app.logger)
+        app.logger.info("Agent unregistered", metadata: ["strato.agent.id": .string(agentId)])
+    }
+
+    /// Tear down an agent's in-memory state from an operator action
+    /// (deregister, force-offline).
+    ///
+    /// Takes an `AgentIdentity` rather than a `String` **on purpose**. This
+    /// used to be an unlabeled `String`, so a bare `agent.name` could be passed
+    /// silently — and since nothing is keyed by name any more, the lookup below
+    /// missed and every teardown step was skipped. A dedicated type makes that
+    /// mistake a compile error rather than a silent no-op.
+    func forceUnregisterAgent(_ identity: AgentIdentity) async throws {
+        let agentKey = identity.key
+        // Capture routing before local cleanup clears claims. This works even
+        // after the agent row and enrollment have been deleted.
+        let owner = await app.coordination.agentRoute(agentKey: agentKey)
+        // Coordination fails open: a missing route cannot prove a remote
+        // socket is absent. A known local connection can still be revoked.
+        let hasLocalConnection = app.websocketManager.getConnection(agentKey: agentKey) != nil
+        var failure: (any Error)?
+        do {
+            if let owner, owner != app.replicaID {
+                try await app.replicaBridge.disconnectAgent(agentKey: agentKey, owner: owner)
+            }
+        } catch {
+            failure = error
+            app.logger.error("Agent revocation acknowledgement failed: \(error)")
+        }
+        await disconnectLocalAgent(agentKey: agentKey)
+        if let owner {
+            await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: owner)
+        }
+        if owner == nil && !hasLocalConnection {
+            throw Abort(
+                .serviceUnavailable,
+                reason: "Agent revocation is durable, but socket ownership is unknown and teardown was not acknowledged"
+            )
+        }
+        if failure != nil {
+            throw Abort(
+                .serviceUnavailable, reason: "Agent revocation is durable, but socket teardown was not acknowledged")
+        }
+    }
+
+    /// The bridge calls only this local half; never route a received RPC again.
+    func disconnectLocalAgent(agentKey: String) async {
+        await app.websocketManager.closeConnection(agentKey: agentKey)?.value
+        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent revoked")
+        await app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent revoked")
+        // Captured commands retain their terminal-event/deadline contract.
+        await endObservedInventorySession(for: agentKey)
+        presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
+        await app.coordination.clearAgentPresence(agentKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+        // Telemetry is conditional; a missing/deleted row must never skip the
+        // identity-keyed teardown above.
+        do {
+            if let identity = AgentIdentity(key: agentKey),
+                let agent = try await Agent.query(on: app.db)
+                    .filter(\.$trustDomain == identity.trustDomain)
+                    .filter(\.$name == identity.name).first()
+            {
+                Telemetry.recordDependenciesUnavailable(
+                    agentName: agent.name, observations: agent.dependencyObservations)
+            }
+        } catch {
+            app.logger.warning("Unable to project revoked agent dependency telemetry: \(error)")
+        }
+        app.logger.info("Agent revoked", metadata: ["strato.agent.identity": .string(agentKey)])
+    }
+
+    /// Socket-close cleanup. Only reached when this socket was still the
+    /// agent's current *local* connection — `removeClosedConnection(ifCurrent:)` in
+    /// the close handler already drops a delayed close superseded by a
+    /// same-replica reconnect.
+    ///
+    /// The delivery-only route restored for captured commands identifies the
+    /// socket-holding replica, but it is not durable liveness truth. A close
+    /// delayed past a reconnect on another replica can therefore still write
+    /// `offline` under a live connection until the holder's next frame writes
+    /// `.online` back — bounded by the agent's heartbeat interval, about 20
+    /// seconds. Compare-and-delete does ensure this cleanup cannot erase the
+    /// successor replica's route.
+    ///
+    /// **That window is not cosmetic**, and it is worth being precise about the
+    /// cost: `status == .online` is an admission gate, not just a badge.
+    /// `SnapshotArtifactMutation.requireCaptureCapableAgent` refuses a capture
+    /// with `409 Agent is offline`, and `selectVolumeAgent` and the scheduler's
+    /// `filterEligibleAgents` both skip the host. So a capture aimed at that
+    /// agent is *rejected* rather than delayed, and new placements route around
+    /// a healthy node.
+    ///
+    /// Presence is deliberately not used as a stand-in. `agent:{name}:presence`
+    /// is a single fleet-wide key with no owner attribution — this replica
+    /// refreshed it within the last half-TTL too — so "presence is live" cannot
+    /// distinguish another replica's claim from our own, and skipping the
+    /// offline mark whenever it is live would leave a genuinely dead agent
+    /// `online` for up to a full TTL on the single-replica deployments that are
+    /// the common case. That inverts the failure into the more damaging
+    /// direction: admitting placements onto a host that is gone, rather than
+    /// refusing them onto one that is live. Closing the window properly needs a
+    /// signal that says *which connection generation* is current; a replica id
+    /// alone is intentionally not treated as that authority.
+    func removeAgent(_ agentKey: String) async {
+        // For the same reason, do not fail captured commands from this close.
+        // A terminal frame may belong to a successor connection; the durable
+        // command deadline handles executions that are truly abandoned.
+        await endObservedInventorySession(for: agentKey)
+        presenceRefreshedAt.removeValue(forKey: agentKey)
+        routeRefreshedAt.removeValue(forKey: agentKey)
+        await app.replicaBridge.clearRoute(agentKey: agentKey)
+
+        Telemetry.agentDisconnected(reason: "connection_closed")
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+
+        // Update database status asynchronously
+        Task {
+            do {
+                let db = self.app.db
+                if let identity = AgentIdentity(key: agentKey),
+                    let agent = try await Agent.query(on: db)
+                        .filter(\.$trustDomain == identity.trustDomain)
+                        .filter(\.$name == identity.name)
+                        .first()
+                {
+                    agent.status = .offline
+                    Telemetry.recordDependenciesUnavailable(
+                        agentName: agent.name, observations: agent.dependencyObservations)
+                    try await agent.save(on: db)
+                    await WebhookEvents.emitAgentPresence(
+                        agent: agent, connected: false, reason: "connection_closed",
+                        on: db, logger: self.app.logger)
+                }
+            } catch {
+                self.app.logger.error("Failed to update agent offline status in database: \(error)")
+            }
+        }
+    }
+
+    /// `agentKey` identifies the authenticated connection the heartbeat arrived on;
+    /// the claimed `agentId` must belong to it, so one agent cannot drive another
+    /// agent's resource tracking or VM reconciliation.
+    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
+        let session = observedInventorySessions[agentKey]
+        try await updateAgentHeartbeat(message, fromAgentKey: agentKey, inventorySession: session)
+    }
+
+    /// Network callers supply the immutable session captured by their socket,
+    /// never a fresh lookup using the identity shared by successor connections.
+    func updateAgentHeartbeat(
+        _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, inventorySession session: UUID?
+    ) async throws {
+        guard let agentID = UUID(uuidString: message.agentId), observedInventorySessions[agentKey] == session else {
+            return
+        }
+        try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
+            guard try await InventorySessionFence.current(agentID: agentID, on: db) == session else { return }
+            try await self.applyFencedHeartbeat(message, fromAgentKey: agentKey, on: db)
+        }
+    }
+
+    private func applyFencedHeartbeat(
+        _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, on db: any Database
+    ) async throws {
+        let instant = try await ClusterClock.read(on: db)
+        guard let agentUUID = UUID(uuidString: message.agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else {
+            app.logger.warning(
+                "Received heartbeat from unknown agent",
+                metadata: ["strato.agent.claimed.id": .string(message.agentId)])
+            return
+        }
+
+        guard agent.identity.key == agentKey else {
+            app.logger.warning(
+                "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
+                metadata: [
+                    "strato.agent.claimed.id": .string(message.agentId),
+                    "strato.agent.claimed.identity": .string(agent.identity.key),
+                    "strato.agent.connection.identity": .string(agentKey),
+                ])
+            return
+        }
+
+        // The database row is the registry (issue #261), but the heartbeat
+        // and observed report carry the same snapshot on the same cadence.
+        // Persist only real resource/status changes or one heartbeat per half
+        // TTL so identical pairs do not churn the row.
+        // Once coherent reporting is established, unordered heartbeat capacity
+        // cannot overwrite the accepted accounting snapshot. The existing
+        // session fence serializes this read/save with reports and reconnects.
+        let accepted = try await AgentResourceAdmission.find(agentUUID, on: db)?.state.resources
+        if applyPeriodicAgentState(
+            accepted ?? message.resources,
+            dependencyObservations: message.dependencyObservations,
+            hostResourceTelemetry: message.hostResourceTelemetry,
+            to: agent,
+            at: instant)
+        {
+            try await saveActiveAgent(agent, on: db)
+        }
+
+        guard !agent.administrativelyOffline else { return }
+        // Refresh the agent's presence key so its liveness stays visible
+        // cluster-wide, not just to the process holding this socket.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
+
+        app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentId)])
+    }
+
+    /// Serialize report writes with the operator's durable state transition.
+    /// Re-read under a row lock rather than trusting the pre-await snapshot.
+    func saveActiveAgent(_ agent: Agent, on db: any Database) async throws {
+        try await db.transaction { tx in
+            guard let sql = tx as? any SQLDatabase else { throw Abort(.internalServerError) }
+            if let id = agent.id, agent.$id.exists {
+                guard
+                    let row = try await sql.raw(
+                        "SELECT administratively_offline FROM agents WHERE id = \(bind: id) FOR UPDATE"
+                    ).first()
+                else { throw Abort(.forbidden, reason: "Agent was deregistered") }
+                guard try !row.decode(column: "administratively_offline", as: Bool.self) else {
+                    throw Abort(.forbidden, reason: "Agent is administratively offline")
+                }
+            }
+            try await agent.save(on: tx)
+        }
+    }
+
+    /// Apply the mutable fields from a periodic agent report. A real state
+    /// change always persists and refreshes `lastHeartbeat`; otherwise the
+    /// timestamp advances at half the presence TTL.
+    func applyPeriodicAgentState(
+        _ resources: AgentResources,
+        dependencyObservations: [NodeDependencyObservation]?,
+        hostResourceTelemetry: HostResourceTelemetry? = nil,
+        to agent: Agent,
+        at instant: ClusterInstant
+    ) -> Bool {
+        guard !agent.administrativelyOffline else { return false }
+        var changed = agent.updateAvailableResources(resources)
+        if let accounting = resources.memoryAccounting, let agentID = agent.id?.uuidString {
+            Telemetry.recordHostMemoryAccounting(agentID: agentID, accounting: accounting)
+        }
+        let now = instant.date
+        if let dependencyObservations {
+            let storedObservations = normalizedDependencyObservations(
+                agent.dependencyObservations, agentName: agent.name)
+            let incomingObservations = normalizedDependencyObservations(
+                dependencyObservations, agentName: agent.name)
+            let previous = Dictionary(uniqueKeysWithValues: storedObservations.map { ($0.id, $0) })
+            if agent.dependencyObservations != incomingObservations {
+                agent.dependencyObservations = incomingObservations
+                changed = true
+            }
+            agent.dependencyObservationsReceivedAt = now
+            for observation in incomingObservations {
+                Telemetry.recordDependency(
+                    agentName: agent.name,
+                    observation: observation,
+                    receivedAt: now,
+                    at: instant)
+                if previous[observation.id]?.functionalState != observation.functionalState
+                    || previous[observation.id]?.reason?.code != observation.reason?.code
+                {
+                    app.logger.log(
+                        level: observation.functionalState == .unhealthy ? .error : .info,
+                        "Agent dependency state changed",
+                        metadata: [
+                            "strato.agent.name": .string(agent.name),
+                            "dependency": .string(observation.id.rawValue),
+                            "state": .string(observation.functionalState.rawValue),
+                            "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
+                        ])
+                }
+            }
+        }
+        if let hostResourceTelemetry {
+            if let agentID = agent.id?.uuidString {
+                Telemetry.recordHostResourceTelemetry(
+                    agentID: agentID,
+                    telemetry: hostResourceTelemetry)
+            }
+            if agent.resourceTelemetry != hostResourceTelemetry {
+                agent.resourceTelemetry = hostResourceTelemetry
+                agent.resourceTelemetryReceivedAt = now
+                changed = true
+            }
+        }
+        if agent.status != .online {
+            agent.status = .online
+            changed = true
+        }
+
+        let heartbeatDue =
+            agent.lastHeartbeat.map {
+                now.timeIntervalSince($0) >= Self.databaseHeartbeatRefreshInterval
+            } ?? true
+        if changed || heartbeatDue {
+            agent.lastHeartbeat = now
+            return true
+        }
+        return false
+    }
+
+    /// Canonicalize an agent-controlled wire array before it is indexed or
+    /// persisted. A dependency ID names one registry module, so duplicate IDs
+    /// are malformed; retaining the freshest sample keeps ingestion resilient
+    /// without letting array order replace newer health with older health.
+    func normalizedDependencyObservations(
+        _ observations: [NodeDependencyObservation],
+        agentName: String
+    ) -> [NodeDependencyObservation] {
+        let normalized = Self.normalizedDependencyObservations(observations)
+        guard normalized.count != observations.count else { return normalized }
+
+        var seen = Set<NodeDependencyID>()
+        let duplicateIDs = Set(
+            observations.compactMap { observation in
+                seen.insert(observation.id).inserted ? nil : observation.id.rawValue
+            }
+        ).sorted()
+        app.logger.warning(
+            "Agent reported duplicate dependency observations; retaining the freshest sample",
+            metadata: [
+                "strato.agent.name": .string(agentName),
+                "dependencyIds": .array(duplicateIDs.map { .string($0) }),
+            ])
+        return normalized
+    }
+
+    /// Pure test seam for the dependency-observation wire invariant.
+    static func normalizedDependencyObservations(
+        _ observations: [NodeDependencyObservation]
+    ) -> [NodeDependencyObservation] {
+        var orderedIDs: [NodeDependencyID] = []
+        var byID: [NodeDependencyID: NodeDependencyObservation] = [:]
+        for observation in observations {
+            guard let current = byID[observation.id] else {
+                orderedIDs.append(observation.id)
+                byID[observation.id] = observation
+                continue
+            }
+            if observation.checkedAt >= current.checkedAt {
+                byID[observation.id] = observation
+            }
+        }
+        return orderedIDs.compactMap { byID[$0] }
+    }
+
+    /// Refresh the agent's presence and local-socket route at most once per
+    /// half TTL. Their success timestamps are independent: either failed write
+    /// retries on the next incoming frame even when the other one landed.
+    func refreshAgentPresenceIfNeeded(agentKey: String, force: Bool = false) async {
+        guard let identity = AgentIdentity(key: agentKey),
+            let agent = try? await Agent.query(on: app.db)
+                .filter(\.$trustDomain == identity.trustDomain)
+                .filter(\.$name == identity.name).first(),
+            !agent.administrativelyOffline
+        else { return }
+        let now = ContinuousClock.now
+        let presenceDue =
+            force
+            || presenceRefreshedAt[agentKey].map {
+                $0.duration(to: now) >= Self.presenceRefreshInterval
+            } ?? true
+        let routeDue =
+            force
+            || routeRefreshedAt[agentKey].map {
+                $0.duration(to: now) >= Self.presenceRefreshInterval
+            } ?? true
+
+        if presenceDue, await app.coordination.recordAgentPresence(agentKey: agentKey) {
+            presenceRefreshedAt[agentKey] = now
+        }
+
+        if routeDue, app.websocketManager.getConnection(agentKey: agentKey) != nil,
+            await app.replicaBridge.recordRoute(agentKey: agentKey)
+        {
+            routeRefreshedAt[agentKey] = now
+        }
+    }
+}
+
+extension AgentService {
+
+    private struct RegistrationPersistence: Sendable {
+        let agent: Agent
+        let previousDependencyObservations: [NodeDependencyObservation]
+        let dependencyObservations: [NodeDependencyObservation]
+        let registrationInstant: ClusterInstant
+    }
+
+    private func activateRegistrationSession(_ session: UUID, for agentKey: String) {
+        observedInventorySessions[agentKey] = session
+        acceptedInventorySections.removeValue(forKey: agentKey)
+    }
+
+    /// Metadata, designation, enrollment and inventory ownership commit together.
+    /// Check the predecessor before any registration-derived durable write.
+    private func persistAgentRegistration(
+        _ message: AgentRegisterMessage, identity: AgentIdentity, identityOrganizationID: UUID?,
+        siteID: UUID?, organizationScope: OrganizationScope?, targetAgentID: UUID,
+        capturedAgentID: UUID?, expectation: InventorySessionExpectation, session: UUID,
+        on db: any Database
+    ) async throws -> RegistrationPersistence {
+        let agentName = identity.name
+        let agentKey = identity.key
+        let trustDomain = identity.trustDomain
+        guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
+        let current = try await sql.raw(
+            "SELECT id, inventory_session_id, administratively_offline FROM agents WHERE trust_domain = \(bind: trustDomain) AND name = \(bind: agentName) FOR UPDATE"
+        ).first()
+        let currentID = try current?.decode(column: "id", as: UUID.self)
+        guard currentID == capturedAgentID else {
+            throw Abort(.conflict, reason: "Agent registration identity changed while in flight")
+        }
+        if case .matches(let expected) = expectation,
+            try current?.decode(column: "inventory_session_id", as: UUID?.self) ?? nil != expected
+        {
+            throw Abort(.conflict, reason: "Agent registration was superseded while in flight")
+        }
+        if try current?.decode(column: "administratively_offline", as: Bool.self) == true {
+            throw Abort(.forbidden, reason: "Agent is administratively offline")
+        }
         var organizationScope = organizationScope
         var siteID = siteID
         let dependencyObservations = normalizedDependencyObservations(
@@ -237,6 +862,7 @@ extension AgentService {
             }
         }
 
+        if agent.id == nil { agent.id = targetAgentID }
         try await saveActiveAgent(agent, on: db)
 
         // A site with no designated network controller reconciles no topology
@@ -275,511 +901,12 @@ extension AgentService {
             }
         }
 
-        guard let agentUUID = agent.id else {
-            throw AgentServiceError.invalidResponse("Failed to get agent ID after save")
-        }
-
-        // Attach the UUID to the live socket so local routing (console and
-        // exec streams) can resolve it without a database read. No-op when no
-        // socket exists (tests).
-        try await beginObservedInventorySession(for: agentKey)
-        app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
-
-        // Publish presence to the coordination store so every control-plane
-        // process — not just the one holding this socket — can see the agent.
-        await refreshAgentPresenceIfNeeded(agentKey: agentKey, force: true)
-
-        Telemetry.agentConnected()
-        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
-        Telemetry.recordRemovedDependenciesUnavailable(
-            agentName: agent.name,
-            previousObservations: previousDependencyObservations,
-            currentObservations: dependencyObservations)
-        for observation in dependencyObservations {
-            Telemetry.recordDependency(
-                agentName: agent.name,
-                observation: observation,
-                receivedAt: registrationInstant.date,
-                at: registrationInstant)
-        }
-        await WebhookEvents.emitAgentPresence(
-            agent: agent, connected: true, reason: "registered", on: db, logger: app.logger)
-        app.logger.info(
-            "Agent registered",
-            metadata: [
-                "strato.agent.id": .string(agentUUID.uuidString),
-                "strato.agent.identity": .string(agentKey),
-                "hostname": .string(message.hostname),
-                "version": .string(message.version),
-            ])
-
-        return agentUUID
+        try await InventorySessionFence.replace(session, agentID: targetAgentID, on: db)
+        try await ResourceAdmissionService.invalidateSession(agentID: targetAgentID, on: db)
+        return RegistrationPersistence(
+            agent: agent, previousDependencyObservations: previousDependencyObservations,
+            dependencyObservations: dependencyObservations, registrationInstant: registrationInstant)
     }
-
-    /// The bare agent name inside an identity key, for logs and metric labels
-    /// (a full SPIFFE ID would change every existing dashboard's series).
-    nonisolated static func displayName(forKey agentKey: String) -> String {
-        AgentIdentity(key: agentKey)?.name ?? agentKey
-    }
-
-    /// Resolve an agent's database UUID from its identity key: the local
-    /// socket's registration first (no I/O), the database otherwise.
-    func agentId(forKey agentKey: String) async -> String? {
-        if let local = app.websocketManager.agentId(agentKey: agentKey) {
-            return local
-        }
-        guard let identity = AgentIdentity(key: agentKey) else { return nil }
-        let agent = try? await Agent.query(on: app.db)
-            .filter(\.$trustDomain == identity.trustDomain)
-            .filter(\.$name == identity.name)
-            .first()
-        return agent?.id?.uuidString
-    }
-
-    /// Whether `vmId` is currently assigned to the agent authenticated as
-    /// `agentKey`. Used to reject agent-reported data (VM logs, console)
-    /// tagged with a VM the reporting agent doesn't own — otherwise a compromised
-    /// agent could forge log entries for another tenant's VM.
-    func vmIsOwnedByAgent(vmId: String, agentKey: String) async -> Bool {
-        guard let vmUUID = UUID(uuidString: vmId),
-            let senderAgentId = await agentId(forKey: agentKey),
-            let vm = try? await VM.find(vmUUID, on: app.db)
-        else {
-            return false
-        }
-        return vm.hypervisorId == senderAgentId
-    }
-
-    /// Whether `sandboxId` is currently assigned to the agent authenticated as
-    /// `agentKey` — the sandbox counterpart of `vmIsOwnedByAgent`, guarding
-    /// agent-reported sandbox data (workload logs, exec frames) against a
-    /// compromised agent forging entries for another tenant's sandbox.
-    func sandboxIsOwnedByAgent(sandboxId: String, agentKey: String) async -> Bool {
-        guard let sandboxUUID = UUID(uuidString: sandboxId),
-            let senderAgentId = await agentId(forKey: agentKey),
-            let sandbox = try? await Sandbox.find(sandboxUUID, on: app.db)
-        else {
-            return false
-        }
-        return sandbox.hypervisorId == senderAgentId
-    }
-
-    /// Resolve an agent's identity key from its database UUID: the local
-    /// socket's registration first (no I/O), the database otherwise.
-    func agentKey(forId agentId: String) async -> String? {
-        if let local = app.websocketManager.agentKey(agentId: agentId) {
-            return local
-        }
-        guard let agentUUID = UUID(uuidString: agentId) else { return nil }
-        let agent = try? await Agent.find(agentUUID, on: app.db)
-        return agent?.identity.key
-    }
-
-    func unregisterAgent(_ agentId: String, fromAgentKey connectionAgentKey: String) async throws {
-        let db = app.db
-
-        // Resolve the target and confirm it belongs to the authenticated
-        // connection. Without this an agent could pass another agent's id in the
-        // message body and force *that* agent offline (cross-tenant DoS) — the
-        // same ownership guard the heartbeat/observed-state handlers enforce.
-        guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: db)
-        else {
-            app.logger.warning(
-                "Unregister for unknown agent; ignoring",
-                metadata: ["strato.agent.claimed.id": .string(agentId)])
-            return
-        }
-
-        guard agent.identity.key == connectionAgentKey else {
-            app.logger.warning(
-                "Unregister claims an agentId not owned by the authenticated connection; ignoring",
-                metadata: [
-                    "strato.agent.claimed.id": .string(agentId),
-                    "strato.agent.claimed.identity": .string(agent.identity.key),
-                    "strato.agent.connection.identity": .string(connectionAgentKey),
-                ])
-            return
-        }
-
-        agent.status = .offline
-        try await agent.save(on: db)
-        let agentKey = agent.identity.key
-
-        _ = app.websocketManager.closeConnection(agentKey: agentKey, code: .normalClosure)
-        // The eventual socket close skips its cleanup once the connection is
-        // gone (`removeClosedConnection(ifCurrent:)` no longer matches), so console
-        // and attached exec sessions must be torn down here for the
-        // graceful-unregister path. Captured commands remain pending because a
-        // terminal frame may already be in flight; their deadline is the safe
-        // failure backstop.
-        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.guestExecSessionManager.closeAllSessions(
-            forAgent: agentKey, reason: "agent unregistered")
-        await endObservedInventorySession(for: agentKey)
-        presenceRefreshedAt.removeValue(forKey: agentKey)
-        routeRefreshedAt.removeValue(forKey: agentKey)
-        await app.coordination.clearAgentPresence(agentKey: agentKey)
-        await app.replicaBridge.clearRoute(agentKey: agentKey)
-
-        Telemetry.agentDisconnected(reason: "unregister")
-        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
-        Telemetry.recordDependenciesUnavailable(
-            agentName: agent.name, observations: agent.dependencyObservations)
-        await WebhookEvents.emitAgentPresence(
-            agent: agent, connected: false, reason: "unregistered", on: db, logger: app.logger)
-        app.logger.info("Agent unregistered", metadata: ["strato.agent.id": .string(agentId)])
-    }
-
-    /// Tear down an agent's in-memory state from an operator action
-    /// (deregister, force-offline).
-    ///
-    /// Takes an `AgentIdentity` rather than a `String` **on purpose**. This
-    /// used to be an unlabeled `String`, so a bare `agent.name` could be passed
-    /// silently — and since nothing is keyed by name any more, the lookup below
-    /// missed and every teardown step was skipped. A dedicated type makes that
-    /// mistake a compile error rather than a silent no-op.
-    func forceUnregisterAgent(_ identity: AgentIdentity) async throws {
-        let agentKey = identity.key
-        // Capture routing before local cleanup clears claims. This works even
-        // after the agent row and enrollment have been deleted.
-        let owner = await app.coordination.agentRoute(agentKey: agentKey)
-        var failure: (any Error)?
-        do {
-            if let owner, owner != app.replicaID {
-                try await app.replicaBridge.disconnectAgent(agentKey: agentKey, owner: owner)
-            }
-        } catch {
-            failure = error
-            app.logger.error("Agent revocation acknowledgement failed: \(error)")
-        }
-        await disconnectLocalAgent(agentKey: agentKey)
-        if let owner {
-            await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: owner)
-        }
-        if failure != nil {
-            throw Abort(
-                .serviceUnavailable, reason: "Agent revocation is durable, but socket teardown was not acknowledged")
-        }
-    }
-
-    /// The bridge calls only this local half; never route a received RPC again.
-    func disconnectLocalAgent(agentKey: String) async {
-        await app.websocketManager.closeConnection(agentKey: agentKey)?.value
-        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent revoked")
-        await app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent revoked")
-        // Captured commands retain their terminal-event/deadline contract.
-        await endObservedInventorySession(for: agentKey)
-        presenceRefreshedAt.removeValue(forKey: agentKey)
-        routeRefreshedAt.removeValue(forKey: agentKey)
-        await app.coordination.clearAgentPresence(agentKey: agentKey)
-        await app.replicaBridge.clearRoute(agentKey: agentKey)
-        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
-        // Telemetry is conditional; a missing/deleted row must never skip the
-        // identity-keyed teardown above.
-        do {
-            if let identity = AgentIdentity(key: agentKey),
-                let agent = try await Agent.query(on: app.db)
-                    .filter(\.$trustDomain == identity.trustDomain)
-                    .filter(\.$name == identity.name).first()
-            {
-                Telemetry.recordDependenciesUnavailable(
-                    agentName: agent.name, observations: agent.dependencyObservations)
-            }
-        } catch {
-            app.logger.warning("Unable to project revoked agent dependency telemetry: \(error)")
-        }
-        app.logger.info("Agent revoked", metadata: ["strato.agent.identity": .string(agentKey)])
-    }
-
-    /// Socket-close cleanup. Only reached when this socket was still the
-    /// agent's current *local* connection — `removeClosedConnection(ifCurrent:)` in
-    /// the close handler already drops a delayed close superseded by a
-    /// same-replica reconnect.
-    ///
-    /// The delivery-only route restored for captured commands identifies the
-    /// socket-holding replica, but it is not durable liveness truth. A close
-    /// delayed past a reconnect on another replica can therefore still write
-    /// `offline` under a live connection until the holder's next frame writes
-    /// `.online` back — bounded by the agent's heartbeat interval, about 20
-    /// seconds. Compare-and-delete does ensure this cleanup cannot erase the
-    /// successor replica's route.
-    ///
-    /// **That window is not cosmetic**, and it is worth being precise about the
-    /// cost: `status == .online` is an admission gate, not just a badge.
-    /// `SnapshotArtifactMutation.requireCaptureCapableAgent` refuses a capture
-    /// with `409 Agent is offline`, and `selectVolumeAgent` and the scheduler's
-    /// `filterEligibleAgents` both skip the host. So a capture aimed at that
-    /// agent is *rejected* rather than delayed, and new placements route around
-    /// a healthy node.
-    ///
-    /// Presence is deliberately not used as a stand-in. `agent:{name}:presence`
-    /// is a single fleet-wide key with no owner attribution — this replica
-    /// refreshed it within the last half-TTL too — so "presence is live" cannot
-    /// distinguish another replica's claim from our own, and skipping the
-    /// offline mark whenever it is live would leave a genuinely dead agent
-    /// `online` for up to a full TTL on the single-replica deployments that are
-    /// the common case. That inverts the failure into the more damaging
-    /// direction: admitting placements onto a host that is gone, rather than
-    /// refusing them onto one that is live. Closing the window properly needs a
-    /// signal that says *which connection generation* is current; a replica id
-    /// alone is intentionally not treated as that authority.
-    func removeAgent(_ agentKey: String) async {
-        // For the same reason, do not fail captured commands from this close.
-        // A terminal frame may belong to a successor connection; the durable
-        // command deadline handles executions that are truly abandoned.
-        await endObservedInventorySession(for: agentKey)
-        presenceRefreshedAt.removeValue(forKey: agentKey)
-        routeRefreshedAt.removeValue(forKey: agentKey)
-        await app.replicaBridge.clearRoute(agentKey: agentKey)
-
-        Telemetry.agentDisconnected(reason: "connection_closed")
-        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
-
-        // Update database status asynchronously
-        Task {
-            do {
-                let db = self.app.db
-                if let identity = AgentIdentity(key: agentKey),
-                    let agent = try await Agent.query(on: db)
-                        .filter(\.$trustDomain == identity.trustDomain)
-                        .filter(\.$name == identity.name)
-                        .first()
-                {
-                    agent.status = .offline
-                    Telemetry.recordDependenciesUnavailable(
-                        agentName: agent.name, observations: agent.dependencyObservations)
-                    try await agent.save(on: db)
-                    await WebhookEvents.emitAgentPresence(
-                        agent: agent, connected: false, reason: "connection_closed",
-                        on: db, logger: self.app.logger)
-                }
-            } catch {
-                self.app.logger.error("Failed to update agent offline status in database: \(error)")
-            }
-        }
-    }
-
-    /// `agentKey` identifies the authenticated connection the heartbeat arrived on;
-    /// the claimed `agentId` must belong to it, so one agent cannot drive another
-    /// agent's resource tracking or VM reconciliation.
-    func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
-        let db = app.db
-        let instant = try await ClusterClock.read(on: db)
-        guard let agentUUID = UUID(uuidString: message.agentId),
-            let agent = try await Agent.find(agentUUID, on: db)
-        else {
-            app.logger.warning(
-                "Received heartbeat from unknown agent",
-                metadata: ["strato.agent.claimed.id": .string(message.agentId)])
-            return
-        }
-
-        guard agent.identity.key == agentKey else {
-            app.logger.warning(
-                "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
-                metadata: [
-                    "strato.agent.claimed.id": .string(message.agentId),
-                    "strato.agent.claimed.identity": .string(agent.identity.key),
-                    "strato.agent.connection.identity": .string(agentKey),
-                ])
-            return
-        }
-
-        // The database row is the registry (issue #261), but the heartbeat
-        // and observed report carry the same snapshot on the same cadence.
-        // Persist only real resource/status changes or one heartbeat per half
-        // TTL so identical pairs do not churn the row.
-        if applyPeriodicAgentState(
-            message.resources,
-            dependencyObservations: message.dependencyObservations,
-            hostResourceTelemetry: message.hostResourceTelemetry,
-            to: agent,
-            at: instant)
-        {
-            try await saveActiveAgent(agent, on: db)
-        }
-
-        guard !agent.administrativelyOffline else { return }
-        // Refresh the agent's presence key so its liveness stays visible
-        // cluster-wide, not just to the process holding this socket.
-        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
-
-        app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentId)])
-    }
-
-    /// Serialize report writes with the operator's durable state transition.
-    /// Re-read under a row lock rather than trusting the pre-await snapshot.
-    func saveActiveAgent(_ agent: Agent, on db: any Database) async throws {
-        try await db.transaction { tx in
-            guard let sql = tx as? any SQLDatabase else { throw Abort(.internalServerError) }
-            if let id = agent.id, agent.$id.exists {
-                guard
-                    let row = try await sql.raw(
-                        "SELECT administratively_offline FROM agents WHERE id = \(bind: id) FOR UPDATE"
-                    ).first()
-                else { throw Abort(.forbidden, reason: "Agent was deregistered") }
-                guard try !row.decode(column: "administratively_offline", as: Bool.self) else {
-                    throw Abort(.forbidden, reason: "Agent is administratively offline")
-                }
-            }
-            try await agent.save(on: tx)
-        }
-    }
-
-    /// Apply the mutable fields from a periodic agent report. A real state
-    /// change always persists and refreshes `lastHeartbeat`; otherwise the
-    /// timestamp advances at half the presence TTL.
-    func applyPeriodicAgentState(
-        _ resources: AgentResources,
-        dependencyObservations: [NodeDependencyObservation]?,
-        hostResourceTelemetry: HostResourceTelemetry? = nil,
-        to agent: Agent,
-        at instant: ClusterInstant
-    ) -> Bool {
-        guard !agent.administrativelyOffline else { return false }
-        var changed = agent.updateAvailableResources(resources)
-        let now = instant.date
-        if let dependencyObservations {
-            let storedObservations = normalizedDependencyObservations(
-                agent.dependencyObservations, agentName: agent.name)
-            let incomingObservations = normalizedDependencyObservations(
-                dependencyObservations, agentName: agent.name)
-            let previous = Dictionary(uniqueKeysWithValues: storedObservations.map { ($0.id, $0) })
-            if agent.dependencyObservations != incomingObservations {
-                agent.dependencyObservations = incomingObservations
-                changed = true
-            }
-            agent.dependencyObservationsReceivedAt = now
-            for observation in incomingObservations {
-                Telemetry.recordDependency(
-                    agentName: agent.name,
-                    observation: observation,
-                    receivedAt: now,
-                    at: instant)
-                if previous[observation.id]?.functionalState != observation.functionalState
-                    || previous[observation.id]?.reason?.code != observation.reason?.code
-                {
-                    app.logger.log(
-                        level: observation.functionalState == .unhealthy ? .error : .info,
-                        "Agent dependency state changed",
-                        metadata: [
-                            "strato.agent.name": .string(agent.name),
-                            "dependency": .string(observation.id.rawValue),
-                            "state": .string(observation.functionalState.rawValue),
-                            "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
-                        ])
-                }
-            }
-        }
-        if let hostResourceTelemetry {
-            if let agentID = agent.id?.uuidString {
-                Telemetry.recordHostResourceTelemetry(
-                    agentID: agentID,
-                    telemetry: hostResourceTelemetry)
-            }
-            if agent.resourceTelemetry != hostResourceTelemetry {
-                agent.resourceTelemetry = hostResourceTelemetry
-                agent.resourceTelemetryReceivedAt = now
-                changed = true
-            }
-        }
-        if agent.status != .online {
-            agent.status = .online
-            changed = true
-        }
-
-        let heartbeatDue =
-            agent.lastHeartbeat.map {
-                now.timeIntervalSince($0) >= Self.databaseHeartbeatRefreshInterval
-            } ?? true
-        if changed || heartbeatDue {
-            agent.lastHeartbeat = now
-            return true
-        }
-        return false
-    }
-
-    /// Canonicalize an agent-controlled wire array before it is indexed or
-    /// persisted. A dependency ID names one registry module, so duplicate IDs
-    /// are malformed; retaining the freshest sample keeps ingestion resilient
-    /// without letting array order replace newer health with older health.
-    func normalizedDependencyObservations(
-        _ observations: [NodeDependencyObservation],
-        agentName: String
-    ) -> [NodeDependencyObservation] {
-        let normalized = Self.normalizedDependencyObservations(observations)
-        guard normalized.count != observations.count else { return normalized }
-
-        var seen = Set<NodeDependencyID>()
-        let duplicateIDs = Set(
-            observations.compactMap { observation in
-                seen.insert(observation.id).inserted ? nil : observation.id.rawValue
-            }
-        ).sorted()
-        app.logger.warning(
-            "Agent reported duplicate dependency observations; retaining the freshest sample",
-            metadata: [
-                "strato.agent.name": .string(agentName),
-                "dependencyIds": .array(duplicateIDs.map { .string($0) }),
-            ])
-        return normalized
-    }
-
-    /// Pure test seam for the dependency-observation wire invariant.
-    static func normalizedDependencyObservations(
-        _ observations: [NodeDependencyObservation]
-    ) -> [NodeDependencyObservation] {
-        var orderedIDs: [NodeDependencyID] = []
-        var byID: [NodeDependencyID: NodeDependencyObservation] = [:]
-        for observation in observations {
-            guard let current = byID[observation.id] else {
-                orderedIDs.append(observation.id)
-                byID[observation.id] = observation
-                continue
-            }
-            if observation.checkedAt >= current.checkedAt {
-                byID[observation.id] = observation
-            }
-        }
-        return orderedIDs.compactMap { byID[$0] }
-    }
-
-    /// Refresh the agent's presence and local-socket route at most once per
-    /// half TTL. Their success timestamps are independent: either failed write
-    /// retries on the next incoming frame even when the other one landed.
-    func refreshAgentPresenceIfNeeded(agentKey: String, force: Bool = false) async {
-        guard let identity = AgentIdentity(key: agentKey),
-            let agent = try? await Agent.query(on: app.db)
-                .filter(\.$trustDomain == identity.trustDomain)
-                .filter(\.$name == identity.name).first(),
-            !agent.administrativelyOffline
-        else { return }
-        let now = ContinuousClock.now
-        let presenceDue =
-            force
-            || presenceRefreshedAt[agentKey].map {
-                $0.duration(to: now) >= Self.presenceRefreshInterval
-            } ?? true
-        let routeDue =
-            force
-            || routeRefreshedAt[agentKey].map {
-                $0.duration(to: now) >= Self.presenceRefreshInterval
-            } ?? true
-
-        if presenceDue, await app.coordination.recordAgentPresence(agentKey: agentKey) {
-            presenceRefreshedAt[agentKey] = now
-        }
-
-        if routeDue, app.websocketManager.getConnection(agentKey: agentKey) != nil,
-            await app.replicaBridge.recordRoute(agentKey: agentKey)
-        {
-            routeRefreshedAt[agentKey] = now
-        }
-    }
-}
-
-extension AgentService {
     // MARK: - Agent Status
 
     /// Every agent known to the cluster, from the shared registry. Rows are

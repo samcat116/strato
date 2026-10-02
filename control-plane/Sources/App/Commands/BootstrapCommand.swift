@@ -45,7 +45,7 @@ struct BootstrapCommand: AsyncCommand {
 
         @Option(
             name: "email",
-            help: "Email for the seeded headless automation user (default: bootstrap@localhost)")
+            help: "Email for the seeded headless automation user (default: bootstrap@localhost.invalid)")
         var email: String?
 
         @Option(name: "org-name", help: "Organization name (default: Default Organization)")
@@ -118,10 +118,8 @@ struct BootstrapCommand: AsyncCommand {
             throw RefusedError()
         }
 
-        // `--admin-email` and `--email` name the same column for opposite
-        // purposes, so taking both would silently drop one. Only the human path
-        // is validated: the headless default (`bootstrap@localhost`) has no dot
-        // in its domain and `validateEmail` would rightly refuse it.
+        // Both flags address the same column. Reject ambiguous input; the
+        // reserved headless default also follows the shared email grammar.
         guard signature.adminEmail == nil || signature.email == nil else { throw ConflictingEmailError() }
         // Dropping the key is only safe when something else can reach the
         // account. Without `--admin-email` there is no passkey either, and the
@@ -131,7 +129,7 @@ struct BootstrapCommand: AsyncCommand {
         let adminEmail = try signature.adminEmail.map { try UserController.validateEmail($0) }
 
         let username = try Self.resolveUsername(signature.username, adminEmail: adminEmail)
-        let email = adminEmail ?? signature.email ?? "bootstrap@localhost"
+        let email = try UserController.validateEmail(adminEmail ?? signature.email ?? "bootstrap@localhost.invalid")
         let orgName = signature.orgName ?? "Default Organization"
         // A label, not a role: nothing resolves a project by name (issue #1059),
         // so `--project-name` is free to be anything. It did matter once — VM
@@ -299,19 +297,10 @@ struct BootstrapCommand: AsyncCommand {
     /// The seeded account's username: the flag when given, `bootstrap` for the
     /// headless identity, otherwise the admin email's local part.
     ///
-    /// Only the *derived* name is validated, and only the local part that needs
-    /// no editing is accepted. Deriving `adaci` from `ada+ci@example.com` would
-    /// seed an account under a name the operator never typed and, under
-    /// `--quiet`, never sees — so a local part carrying anything outside the
-    /// username alphabet asks for `--username` instead of being quietly
-    /// mangled. `UserController.usernameAllowedCharacters` is the shared
-    /// source of that alphabet; a second copy here could drift from it.
-    ///
-    /// An explicit `--username` is passed through as it always has been —
-    /// tightening it here would break existing automation over a rule this
-    /// command never enforced.
+    /// Derived local parts and explicit flags follow the same identity grammar.
+    /// Invalid local parts require an explicit conforming --username.
     private static func resolveUsername(_ explicit: String?, adminEmail: String?) throws -> String {
-        if let explicit { return explicit }
+        if let explicit { return try UserController.validateUsername(explicit) }
         guard let adminEmail else { return "bootstrap" }
 
         let localPart = String(adminEmail.prefix { $0 != "@" })

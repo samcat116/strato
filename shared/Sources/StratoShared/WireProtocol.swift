@@ -13,11 +13,13 @@ import Foundation
 public enum WireProtocol {
     /// Version 69 adds ordered sandbox idle evidence and automatic-fence provenance.
     /// Version 68 adds generation-bound sandbox suspension and storage admission.
-    /// Versions 64–67 are allocated to coordinated guest configuration and host resource work.
-    /// The only wire/schema version this build accepts. Version 63 requires
-
-    /// first-boot Strato guest-agent installation and carries the selected
-    /// bootstrap release and independent guest-agent reachability observation.
+    /// The only wire/schema version this build accepts. Version 67 carries
+    /// resource-class snapshots, fractional CPU capacity, and enforcement observations.
+    /// Version 66 carries host memory accounting and backend allowances (STR-265).
+    /// Version 65 carries host density observations. GuestConfig remains staged
+    /// vocabulary; guest realization must ship its own subsequent exact version.
+    /// Version 63 requires first-boot Strato guest-agent installation and carries
+    /// the bootstrap release and independent guest-agent reachability observation.
     /// Version 62 carries the
     /// requested and agent-applied QEMU block-device policy. Version 61 adds
     /// physical free disk reporting and observed network-fabric outcomes

@@ -132,7 +132,8 @@ public struct VMManifestEntry: Codable, Sendable {
         self.kind = .sandbox
         self.hypervisorType = .firecracker
         self.spec = VMSpec(
-            cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil))
+            cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil),
+            resourceClass: sandboxSpec.resourceClass, admittedReservation: sandboxSpec.admittedReservation)
         self.realizedMemoryReservationBytes = nil
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil
@@ -521,7 +522,8 @@ public struct VMManifestStore {
     }
 
     /// Atomically writes the current manifest to disk, re-emitting any
-    /// quarantined entries verbatim.
+    /// quarantined entries verbatim. The manifest carries userData and sandbox
+    /// environment variables, so replacements and preserved copies are always 0600.
     ///
     /// Callers must not call this at all while the manifest is unreadable —
     /// the first write after a failed read is what turns a recoverable file
@@ -541,7 +543,7 @@ public struct VMManifestStore {
             // directory afterwards. The manifest therefore survives both a
             // process crash during the write and an unclean host shutdown
             // after this method reports success.
-            try DurableFileWriter().write(data, to: path)
+            try DurableFileWriter().write(data, to: path, permissions: 0o600)
             return true
         } catch {
             logger.error("Failed to write VM manifest at \(path): \(error)")
@@ -591,7 +593,7 @@ public struct VMManifestStore {
 
         let destination = path + Self.preservedSuffix + Self.preservationTimestamp()
         do {
-            try data.write(to: URL(fileURLWithPath: destination), options: .atomic)
+            try DurableFileWriter().write(data, to: destination, permissions: 0o600)
             return destination
         } catch {
             logger.error("Failed to preserve unreadable VM manifest at \(destination): \(error)")

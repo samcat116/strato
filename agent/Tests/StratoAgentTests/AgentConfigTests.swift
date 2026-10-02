@@ -306,6 +306,23 @@ struct AgentConfigTests {
 
     // MARK: - Sandbox jailer settings (issue #425)
 
+    @Test("host memory reserve defaults, zero, and bounds")
+    func hostMemoryReserve() async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(toFile: path, atomically: true, encoding: .utf8)
+            #expect(try await loadConfig(from: path).hostMemoryReserveBytes == 1024 * 1024 * 1024)
+            for reserve in [0, 2048] {
+                try "control_plane_url = \"ws://x:8080/agent/ws\"\nhost_memory_reserve_mb = \(reserve)".write(
+                    toFile: path, atomically: true, encoding: .utf8)
+                #expect(try await loadConfig(from: path).hostMemoryReserveBytes == Int64(reserve) * 1024 * 1024)
+            }
+            try "control_plane_url = \"ws://x:8080/agent/ws\"\nhost_memory_reserve_mb = -1".write(
+                toFile: path, atomically: true, encoding: .utf8)
+            await #expect(throws: AgentConfigError.self) { try await loadConfig(from: path) }
+        }
+    }
+
     @Test("QEMU memory overhead defaults to 512 MiB and loads valid bounds")
     func qemuMemoryOverhead() async throws {
         try await withTempDirectory { tempDirectory in
