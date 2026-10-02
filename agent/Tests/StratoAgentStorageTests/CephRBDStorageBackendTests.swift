@@ -38,6 +38,29 @@ private actor CephSecretReadBarrier {
     }
 }
 
+private actor CephRevocationBarrier {
+    private var blocked = false
+    private var command: CheckedContinuation<Void, Never>?
+    private var observer: CheckedContinuation<Void, Never>?
+
+    func blockFirst() async {
+        guard !blocked else { return }
+        await withCheckedContinuation {
+            command = $0
+            blocked = true
+            observer?.resume()
+            observer = nil
+        }
+    }
+
+    func waitUntilBlocked() async {
+        if blocked { return }
+        await withCheckedContinuation { observer = $0 }
+    }
+
+    func release() { command?.resume(); command = nil }
+}
+
 private actor CephCommandRecorder {
     struct Invocation: Sendable {
         let executable: String
@@ -1015,6 +1038,29 @@ struct CephRBDStorageBackendTests {
         }
         #expect(!FileManager.default.fileExists(atPath: secret))
         #expect(try String(contentsOfFile: operatorFile, encoding: .utf8) == "operator")
+    }
+
+    @Test("Overlapping revocations remain idempotent when another call removes the directory")
+    func concurrentRevocationIsIdempotent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ceph-double-revoke-\(UUID())").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let directory = CephRBDStorageBackend.clientDirectory(
+            root: root, clusterId: Self.clusterId, credentialId: Self.credentialId)
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try "<secret/>".write(toFile: directory + "/libvirt-secret.xml", atomically: false, encoding: .utf8)
+        let barrier = CephRevocationBarrier()
+        let revoker = CephCredentialRevoker(
+            clientRoot: root,
+            runSubprocess: { _, _ in
+                await barrier.blockFirst()
+                return ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
+            })
+        let first = Task { try await revoker.revoke(clusterId: Self.clusterId, credentialId: Self.credentialId) }
+        await barrier.waitUntilBlocked()
+        try await revoker.revoke(clusterId: Self.clusterId, credentialId: Self.credentialId)
+        #expect(!FileManager.default.fileExists(atPath: directory))
+        await barrier.release()
+        try await first.value
     }
 
     @Test("Revocation deny-lists a credential before waiting for in-flight work")
