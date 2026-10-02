@@ -92,6 +92,7 @@ public actor CephCredentialRevoker {
                 throw CephCredentialRevocationError.localCleanupFailed
             }
         } catch {
+            if Self.isMissingDirectory(error) { return }
             throw CephCredentialRevocationError.localCleanupFailed
         }
 
@@ -120,6 +121,7 @@ public actor CephCredentialRevoker {
                     in: directory, descriptor: descriptor, rejectUnsafeMatches: true
                 ) { $0 == "libvirt-secret.xml" }
             } catch {
+                if Self.isMissingDirectory(error) { return }
                 throw CephCredentialRevocationError.localCleanupFailed
             }
         }
@@ -157,6 +159,16 @@ public actor CephCredentialRevoker {
             }
         }
         return credential.path
+    }
+
+    private nonisolated static func isMissingDirectory(_ error: any Error) -> Bool {
+        // Another revocation may finish while this actor awaits libvirt. Its
+        // removal of the now-empty directory already establishes local cleanup.
+        if let error = error as? DurableFileWriteError { return error.errorNumber == ENOENT }
+        if let error = error as? CocoaError {
+            return error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+        }
+        return false
     }
 
     private nonisolated static func isMissingSecret(_ result: ProcessResult) -> Bool {
