@@ -7,6 +7,36 @@ import AppTestSupport
 @Suite("HealthController Tests", .serialized, .postgresFixture)
 struct HealthControllerTests {
 
+    @Test("Readiness reports observed coordination degradation without probing the store")
+    func observedCoordinationDegradation() async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            try await configure(app)
+            let gate = CoordinationFailureGate(
+                threshold: 1, cooldown: .seconds(60),
+                probe: {
+                    Issue.record("Readiness must not issue a recovery probe")
+                })
+            app.coordination = CoordinationService(
+                store: InMemoryCoordinationStore(), logger: app.logger, failureGate: gate)
+            await #expect(throws: StoreTimeoutError.self) {
+                try await gate.run(operation: "fixture", deadline: .milliseconds(10)) {
+                    try await Task.sleep(for: .seconds(60))
+                }
+            }
+            try await app.test(.GET, "/health/ready") { response async throws in
+                #expect(response.status == .ok)
+                let health = try response.content.decode(HealthResponse.self)
+                #expect(health.status == "degraded")
+                #expect(health.checks.first { $0.name == "coordination" }?.status == "degraded")
+            }
+        } catch {
+            try await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     // MARK: - Basic Health Check Tests
 
     @Test("Health endpoint returns 200 OK")

@@ -723,6 +723,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: VM concurrent exec session limit reached. }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/vm-fleet-runs:
     post:
@@ -735,6 +736,9 @@ paths:
         and binds the exact resolved IDs. Repeated confirmation never replays commands.
         At most eight children are active per fleet. Poll until complete; failures
         and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
       requestBody:
         required: true
         content:
@@ -767,6 +771,9 @@ paths:
         and binds the exact resolved IDs. Repeated confirmation never replays commands.
         At most eight children are active per fleet. Poll until complete; failures
         and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
       responses:
         "200":
           description: The saved fleet run.
@@ -794,6 +801,9 @@ paths:
         and binds the exact resolved IDs. Repeated confirmation never replays commands.
         At most eight children are active per fleet. Poll until complete; failures
         and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
       requestBody:
         required: true
         content:
@@ -810,6 +820,45 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/exec-sessions:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: listLiveVMExecSessions
+      summary: List attached interactive sessions on a VM
+      description: Requires vm:read. Presence is shared across replicas and expires within 60 seconds after an owner crash. Pending reservations are excluded.
+      tags: [VMs]
+      responses:
+        "200":
+          description: Live interactive sessions, bounded by the per-VM cap.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 4
+                items:
+                  $ref: "#/components/schemas/LiveVMExecSession"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/vms/{vmID}/exec-sessions/{sessionID}/terminate:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: terminateVMExecSession
+      summary: Request termination of an attached interactive session
+      description: Requires vm:exec on this VM. The socket owner closes the guest process and browser on its next maintenance tick. Repeating while termination is pending returns 202; an ended or foreign session returns 404.
+      tags: [VMs]
+      responses:
+        "202": { description: Termination requested. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/vms/{vmID}/actions/run:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -843,6 +892,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: VM session cap or project command rate limit reached. }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/vms/{vmID}/snapshots:
     parameters:
@@ -5888,7 +5938,8 @@ paths:
         "503":
           description: >-
             SPIRE entries for this agent cannot be revoked because the SPIRE
-            server API is not configured.
+            server API is not configured, or the durable deregistration completed
+            but the owning replica did not acknowledge socket teardown.
           content:
             application/json:
               schema:
@@ -5900,10 +5951,34 @@ paths:
       operationId: forceAgentOffline
       summary: Force an agent offline
       description: >-
-        Drops the agent from the in-memory registry and marks it `offline` in
-        the database. Requires `manage` on the agent, and falls back to
+        Persists an administrative offline hold and closes the owning agent socket
+        across replicas. Heartbeats and reconnects cannot clear the hold; use the
+        resume action to release it. Requires `manage` on the agent, and falls back to
         system-admin only while the agent hosts another organization's
         workloads.
+      tags: [Agents]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: The offline hold is durable but socket teardown was not acknowledged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/agents/{agentId}/actions/resume:
+    parameters:
+      - $ref: "#/components/parameters/AgentID"
+    post:
+      operationId: resumeAgent
+      summary: Release an agent's administrative offline hold
+      description: >-
+        Allows authenticated reconnect and registration again. Does not mark the
+        agent online until it reports in. Requires manage on the agent, with the
+        same system-admin requirement for foreign workloads as force-offline.
       tags: [Agents]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -10835,6 +10910,16 @@ components:
         Browser-facing output framing. Raw sends agent output bytes unchanged.
         Multiplexed prefixes each binary frame with 0x01 for stdout or 0x02 for
         stderr. Omission selects raw for compatibility with browser terminals.
+    LiveVMExecSession:
+      type: object
+      required: [sessionId, userId, attachedAt, lastActivityAt, terminationRequested]
+      properties:
+        sessionId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        username: { type: string }
+        attachedAt: { type: string, format: date-time }
+        lastActivityAt: { type: string, format: date-time }
+        terminationRequested: { type: boolean }
     GuestExecRequest:
       type: object
       required: [command]
@@ -15508,6 +15593,7 @@ components:
         - hostname
         - version
         - status
+        - administrativelyOffline
         - resources
         - hypervisors
         - sandboxCapable
@@ -15534,6 +15620,9 @@ components:
           description: The agent build currently running on the node.
         status:
           $ref: "#/components/schemas/AgentStatus"
+        administrativelyOffline:
+          type: boolean
+          description: Operator hold that only the resume action clears.
         resources:
           $ref: "#/components/schemas/AgentResources"
         architecture:

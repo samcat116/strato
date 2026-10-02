@@ -404,8 +404,10 @@ extension Agent {
         // ordering survives; the pump tasks below serialize the sends.
         if let sandboxRuntime {
             await sandboxRuntime.setSandboxLogHandler {
-                [continuation = sandboxLogLinesContinuation] sandboxId, streamName, line in
-                continuation.yield((sandboxId, streamName, line))
+                [queue = sandboxLogLines] sandboxId, streamName, line in
+                queue.append(
+                    (sandboxId, streamName, line),
+                    byteCount: sandboxId.utf8.count + streamName.utf8.count + line.utf8.count)
             }
         }
         startSandboxPumps()
@@ -642,7 +644,7 @@ extension Agent {
         // Stop the sandbox exec/log pumps the same way.
         await sandboxRuntime?.controlPlaneDisconnected()
         sandboxExecEventsContinuation.finish()
-        sandboxLogLinesContinuation.finish()
+        sandboxLogLines.finish()
         sandboxExecPumpTask?.cancel()
         sandboxExecPumpTask = nil
         sandboxLogPumpTask?.cancel()

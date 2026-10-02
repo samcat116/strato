@@ -154,7 +154,9 @@ extension Application {
             valkeyEnabled ? ValkeyRateLimitStore(client: coordinationValkey) : nil
         let rateLimitBackend = RateLimitBackend(
             fallbackStore: rateLimitFallbackStore,
-            valkeyStore: valkeyRateLimitStore)
+            valkeyStore: valkeyRateLimitStore,
+            deadline: .milliseconds(controlPlaneConfiguration.int(.coordinationStoreDeadlineMS)),
+            gate: coordination.failureGate)
         // Agent minting authenticates inside its controller, after this global
         // middleware runs. Give it the same policy and stores but a dedicated,
         // verified-agent key space so every Envoy sidecar request does not share

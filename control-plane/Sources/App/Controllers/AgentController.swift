@@ -23,6 +23,7 @@ struct AgentController: RouteCollection {
         agents.get(":agentId", use: getAgent)
         agents.delete(":agentId", use: deregisterAgent)
         agents.post(":agentId", "actions", "force-offline", use: forceAgentOffline)
+        agents.post(":agentId", "actions", "resume", use: resumeAgent)
         agents.post(":agentId", "actions", "update", use: updateAgent)
         // Withdraws an update assignment. The only way back from an update that
         // can never converge, since the agent it was assigned to is usually the
@@ -1070,7 +1071,7 @@ struct AgentController: RouteCollection {
         }
 
         // Remove from the live registry only once durable state committed.
-        await req.agentService.forceUnregisterAgent(agent.identity)
+        try await req.agentService.forceUnregisterAgent(agent.identity)
 
         req.logger.info(
             "Deregistered agent",
@@ -1091,12 +1092,12 @@ struct AgentController: RouteCollection {
 
         try await req.requireAgentAction("agent:manage", on: agent)
 
-        // Force agent offline in in-memory registry
-        await req.agentService.forceUnregisterAgent(agent.identity)
-
-        // Update database status
-        agent.status = .offline
-        try await agent.save(on: req.db)
+        // Persist intent before closing: any concurrent report or reconnect
+        // sees the administrative hold and must refuse to revive the node.
+        try await Agent.query(on: req.db).filter(\.$id == agentId)
+            .set(\.$administrativelyOffline, to: true)
+            .set(\.$status, to: .offline).update()
+        try await req.agentService.forceUnregisterAgent(agent.identity)
 
         req.logger.info(
             "Forced agent offline",
@@ -1105,6 +1106,18 @@ struct AgentController: RouteCollection {
                 "strato.agent.name": .string(agent.name),
             ])
 
+        return .noContent
+    }
+
+    /// Explicitly release the hold. The next authenticated registration or
+    /// heartbeat establishes online status; resuming alone does not assert life.
+    func resumeAgent(req: Request) async throws -> HTTPStatus {
+        let id = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
+        guard let agent = try await Agent.find(id, on: req.db) else { throw Abort(.notFound) }
+        try await req.requireAgentAction("agent:manage", on: agent)
+        try await Agent.query(on: req.db).filter(\.$id == id)
+            .set(\.$administrativelyOffline, to: false)
+            .set(\.$lastHeartbeat, to: nil).update()
         return .noContent
     }
 

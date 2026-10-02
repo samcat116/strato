@@ -13,6 +13,48 @@ import StratoShared
 ///
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
+    static func coordinationStoreUnavailable(_ unavailable: Bool, factory: (any MetricsFactory)? = nil) {
+        recordGauge(label: "strato_coordination_store_unavailable", value: unavailable ? 1 : 0, factory: factory)
+    }
+
+    static func coordinationFailOpen(operation: String, factory: (any MetricsFactory)? = nil) {
+        incrementCounter(
+            label: "strato_coordination_fail_open_total", dimensions: [("operation", operation)], count: 1,
+            factory: factory
+        )
+    }
+
+    /// Replica-local workload log pressure. Dimensions are resource kind and
+    /// bounded loss cause only; no workload/agent IDs or backend URLs.
+    static func recordWorkloadLogQueue(kind: String, count: Int, bytes: Int, factory: (any MetricsFactory)? = nil) {
+        let dimensions = [("kind", kind)]
+        recordGauge(
+            label: "strato_workload_log_queue_depth", dimensions: dimensions, value: Double(count), factory: factory)
+        recordGauge(
+            label: "strato_workload_log_queue_bytes", dimensions: dimensions, value: Double(bytes), factory: factory)
+    }
+
+    static func workloadLogsDropped(kind: String, reason: String, count: Int, factory: (any MetricsFactory)? = nil) {
+        incrementCounter(
+            label: "strato_workload_log_dropped_total", dimensions: [("kind", kind), ("reason", reason)],
+            count: count, factory: factory)
+    }
+
+    static func workloadLogPushFailed(kind: String, factory: (any MetricsFactory)? = nil) {
+        incrementCounter(
+            label: "strato_workload_log_push_failures_total", dimensions: [("kind", kind)], count: 1, factory: factory)
+    }
+
+    static func workloadLogBatchCompleted(kind: String, elapsed: Duration, factory: (any MetricsFactory)? = nil) {
+        let timer =
+            if let factory {
+                Timer(
+                    label: "strato_workload_log_batch_duration_seconds", dimensions: [("kind", kind)], factory: factory)
+            } else {
+                Timer(label: "strato_workload_log_batch_duration_seconds", dimensions: [("kind", kind)])
+            }
+        timer.recordSeconds(elapsed.asSeconds)
+    }
 
     enum SecurityRecordStream: String, CaseIterable, Sendable {
         case audit

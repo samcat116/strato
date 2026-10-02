@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
 
 // The workload registry (issue #491): SPIFFE IDs become principals by
@@ -126,6 +127,36 @@ enum WorkloadRegistry {
     /// agent path, and a first-seen identity is registered so every later
     /// connection resolves through the registry (issue #491).
     static func requireAgentRegistration(identity: AgentIdentity, on db: any Database) async throws {
+        try await db.transaction { tx in
+            guard let sql = tx as? any SQLDatabase else { throw Abort(.internalServerError) }
+            if let row = try await sql.raw(
+                """
+                SELECT administratively_offline FROM agents
+                WHERE trust_domain = \(bind: identity.trustDomain) AND name = \(bind: identity.name)
+                FOR SHARE
+                """
+            ).first() {
+                guard try !row.decode(column: "administratively_offline", as: Bool.self) else {
+                    throw Abort(.forbidden, reason: "Agent is administratively offline")
+                }
+            } else {
+                guard
+                    try await sql.raw(
+                        """
+                        SELECT id FROM agent_enrollments
+                        WHERE trust_domain = \(bind: identity.trustDomain) AND agent_name = \(bind: identity.name)
+                        FOR SHARE
+                        """
+                    ).first() != nil
+                else {
+                    throw Abort(.forbidden, reason: "Agent is not enrolled")
+                }
+            }
+            try await requireMapping(identity: identity, on: tx)
+        }
+    }
+
+    private static func requireMapping(identity: AgentIdentity, on db: any Database) async throws {
         if let registered = try await resolve(spiffeID: identity.key, on: db) {
             guard case .agent(let registeredName) = registered, registeredName == identity.name else {
                 throw Abort(.forbidden, reason: "SPIFFE identity is registered to a different principal")

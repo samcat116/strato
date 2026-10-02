@@ -588,3 +588,69 @@ The rest of the package is vocabulary used on both sides:
 documentation — `MessageEnvelopeTests.swift`, `ReconciliationProtocolTests.swift`,
 `WireProtocolTests.swift`, and `GuestExecMessageTests.swift` show the
 expected encode/decode flows and compatibility behavior.
+
+## Managed VM guest configuration (STR-90, staged for wire v64)
+
+STR-90 introduces shared vocabulary, not a live realization capability. Its
+model-only build remains on wire v63. STR-91 must introduce wire v64 together
+with the agent consumer; exact registration then rejects model-only agents
+before exchanging desired state. Do not publish v64 from a model-only build.
+
+`DesiredVMState.guestConfig: GuestConfig?` extends the VM's existing desired
+state. It uses **the enclosing VM generation**: every accepted edit must bump
+that generation, and consumers must ignore stale generations before any guest
+write. There is no second generation counter, command language, or transport.
+
+A missing or null `guestConfig` decodes as nil for older stored payloads and
+means no managed guest intent. A present object requires all four arrays:
+
+```json
+{
+  "packages": [{"name": "curl", "state": "present"}],
+  "files": [{"path": "/etc/example.conf", "content": "hello\n", "mode": "0644"}],
+  "services": [{"name": "example.service", "enabled": true}],
+  "sysctls": [{"key": "net.ipv4.ip_forward", "value": "1"}]
+}
+```
+
+Package states are strictly `present` or `absent`; version pinning, repository
+configuration, scripts and package-manager flags are outside this contract.
+Services specify boot enablement only, with no implied start, stop, or restart.
+Files are regular UTF-8 text writes with explicit ordinary permission bits:
+`mode` is four octal digits starting with zero (no special bits). No append,
+remote source, templating, deletion, owner, or group operation is expressed.
+Sysctls specify nonempty single-line values; guest support and persistence are
+realization concerns, not inferred by the shared schema.
+
+**Omission withdraws management, never reverses changes.** Removing an entry,
+sending empty arrays, or setting `guestConfig` to nil does not remove packages,
+delete files, disable services, or reset sysctls previously managed. Package
+removal and service disablement require explicit `absent` and `enabled: false`
+entries. List order does not express dependencies or an execution sequence.
+
+`GuestConfig.validate()` is the reusable API boundary validator; encoding and
+decoding also validate. Unknown object fields and enum values fail closed.
+Identities must be unique within each section; sections are limited to 128
+entries. Names are at most 255 ASCII bytes and begin with a letter or digit.
+Package names additionally allow `.+_:-`; service names allow `._-@:`; sysctl
+keys allow `._-` and require nonempty dot-separated components. Paths are
+canonical absolute non-root paths up to 4096 UTF-8 bytes, without empty, dot,
+or parent components or control characters. Content excludes NUL, is limited
+to 65536 UTF-8 bytes per file and 262144 bytes per configuration. Sysctl values
+are at most 1024 UTF-8 bytes and exclude controls except tab.
+
+These limits are per VM; the assembler must still respect the whole-sync frame
+budget. This schema does not resolve symlinks: the guest writer must refuse
+unsafe traversal and nonregular destinations in the guest, never on the host.
+It must use argument arrays rather than interpolated shell commands. Do not
+log configurations, file content, sysctl values, or command output; observation
+errors should identify a field or item index and a fixed failure category.
+Shared validation errors do not echo caller values.
+
+STR-90 owns the shared contract and its tests. STR-91 owns guest-side realization,
+capability checks, generation guarding, and content-free observations. STR-92
+owns persistence, API/UI/CLI integration, transactionally accepted generation
+bumps, and projection into desired state. Schema availability alone does not
+mean a guest agent supports realization. Older stored payloads missing the field
+remain decodable. Realization-capable live peers will require exact wire v64
+registration once STR-91 lands; the staged model does not advertise that version.

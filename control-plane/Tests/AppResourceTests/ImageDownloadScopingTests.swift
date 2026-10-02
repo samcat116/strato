@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -39,6 +40,63 @@ final class ImageDownloadScopingTests {
             throw error
         }
         try await app.shutdownForTesting()
+    }
+
+    @Test("Forty VM images and image-sourced volumes receive one grant batch per sync")
+    func manyWorkloadsShareOneGrantBatch() async throws {
+        try await withScopingApp { app, builder, project, user in
+            let agentID = try await self.registerAgent(app: app, named: "batch-agent")
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let store = CoordinationFixtureStore()
+            app.coordination = CoordinationService(store: store, logger: app.logger)
+            for index in 0..<40 {
+                let vm = try await builder.createVM(name: "batch-vm-\(index)", project: project)
+                vm.hypervisorId = agentID
+                vm.$sourceImage.id = image.id
+                try await vm.save(on: app.db)
+                let boot = try await attachBootVolume(to: vm, on: agentID, using: app.db)
+                boot.$sourceImage.id = image.id
+                try await boot.save(on: app.db)
+            }
+            let started = ContinuousClock.now
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentID)
+            #expect(sync.vms.count == 40)
+            #expect(sync.volumes.count == 40)
+            let batches = await store.batches
+            #expect(batches.count == 1)
+            #expect(batches.first == [CoordinationService.imageDownloadGrantKey(agentId: agentID, imageId: image.id!)])
+            #expect(started.duration(to: .now) < .seconds(45))
+        }
+    }
+
+    @Test("Placement reservation can lock and update the VM on another connection")
+    func reservationRunsOutsideVMLock() async throws {
+        try await withScopingApp { app, builder, project, user in
+            let agentID = try await self.registerAgent(app: app, named: "reservation-agent")
+            let vm = try await builder.createVM(name: "reservation-vm", project: project)
+            let vmID = try vm.requireID()
+            try await attachBootVolume(to: vm, on: nil, using: app.db)
+            let store = CoordinationFixtureStore {
+                // NOWAIT proves placement does not hold this row lock while
+                // contacting the store. Update an unplaced metadata switch too:
+                // that field deliberately changes without a generation bump.
+                try await app.db.transaction { tx in
+                    let sql = try #require(tx as? any SQLDatabase)
+                    try await sql.raw("SELECT id FROM vms WHERE id = \(bind: vmID) FOR UPDATE NOWAIT").run()
+                    let current = try #require(try await VM.find(vmID, on: tx))
+                    current.metadataEnabled = false
+                    try await current.save(on: tx)
+                }
+            }
+            app.coordination = CoordinationService(store: store, logger: app.logger)
+            // Restore presence into the instrumented store after swapping it.
+            let agent = try #require(try await Agent.find(UUID(uuidString: agentID), on: app.db))
+            await app.coordination.recordAgentPresence(agentKey: agent.identity.key)
+            try await app.workloadPlacement.createVM(vm: vm, db: app.db)
+            let placed = try #require(try await VM.find(vmID, on: app.db))
+            #expect(placed.hypervisorId == agentID)
+            #expect(placed.metadataEnabled == false)
+        }
     }
 
     private func registerAgent(

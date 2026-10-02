@@ -1666,3 +1666,17 @@ readable and live adoption preserves their existing identity. A legacy NIC with
 no MAC must receive one in desired state before network realization can proceed.
 The retired `enable_hvf` TOML key is rejected: macOS uses the mock hypervisor;
 Linux still supports `enable_kvm`.
+
+## Workload log pressure (issue #1366)
+
+The sandbox stdout/stderr handler writes synchronously to `BoundedLogQueue`,
+with the same 4 MiB byte budget, 4,096-entry ceiling, per-entry accounting, and
+oldest-first shedding as the control plane. Only one coalesced wakeup lives in
+AsyncStream; log payloads remain in the bounded FIFO. The serial outbound pump
+holds one active line outside the queue while awaiting the socket. The queue's
+cumulative dropped counter and pending byte count appear in a rate-limited
+warning (at most once per 30 seconds), and are directly available in its
+snapshot. Disconnected/failed active sends also increment the same loss counter without
+per-line errors. Stop discards pending telemetry and cancels the pump. This policy
+applies only to sandbox workload log lines; interactive terminal/session bytes
+retain their separate lossless delivery and overflow contracts (STR-89).

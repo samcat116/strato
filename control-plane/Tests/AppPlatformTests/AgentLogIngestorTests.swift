@@ -42,7 +42,7 @@ struct AgentLogIngestorTests {
             logger: Logger(label: "test"),
             checkOwnership: { _, _ in true },
             push: { message in
-                pushed.withLockedValue { $0.append(message.message) }
+                pushed.withLockedValue { $0.append(contentsOf: message.map(\.message)) }
             }
         )
 
@@ -68,8 +68,8 @@ struct AgentLogIngestorTests {
                 checks.withLockedValue { $0.append(sandboxId) }
                 return sandboxId == "owned"
             },
-            push: { _ in
-                pushedCount.withLockedValue { $0 += 1 }
+            push: { messages in
+                pushedCount.withLockedValue { $0 += messages.count }
             }
         )
 
@@ -105,8 +105,8 @@ struct AgentLogIngestorTests {
                 checkCount.withLockedValue { $0 += 1 }
                 return true
             },
-            push: { _ in
-                pushedCount.withLockedValue { $0 += 1 }
+            push: { messages in
+                pushedCount.withLockedValue { $0 += messages.count }
             }
         )
 
@@ -142,7 +142,7 @@ struct AgentLogIngestorTests {
                 return vmId == "owned"
             },
             push: { message in
-                pushed.withLockedValue { $0.append(message.message) }
+                pushed.withLockedValue { $0.append(contentsOf: message.map(\.message)) }
             }
         )
 
@@ -167,4 +167,151 @@ struct AgentLogIngestorTests {
         #expect(lines == (0..<50).map { "line-\($0)" })
         ingestor.shutdown()
     }
+    @Test("Hung delivery stays bounded, sheds oldest, batches followers and cancels at shutdown")
+    func slowConsumer() async throws {
+        let batches = NIOLockedValueBox<[[String]]>([])
+        let release = NIOLockedValueBox(false)
+        let ingestor = SandboxLogIngestor(
+            logger: Logger(label: "test"), bufferLimitBytes: 4096, batchInterval: .zero,
+            checkOwnership: { _, _ in true },
+            push: { messages in
+                let first = batches.withLockedValue { batches in
+                    batches.append(messages.map(\.message))
+                    return batches.count == 1
+                }
+                if first {
+                    while !release.withLockedValue({ $0 }) { try await Task.sleep(for: .milliseconds(5)) }
+                }
+            }
+        )
+        ingestor.enqueue(makeMessage(sandboxId: "s", line: "initial"), fromAgentKey: "a")
+        #expect(await poll { batches.withLockedValue { $0.count == 1 } })
+        for index in 0..<100_000 {
+            ingestor.enqueue(makeMessage(sandboxId: "s", line: "line-\(index)"), fromAgentKey: "a")
+        }
+        let snapshot = ingestor.queueSnapshot
+        #expect(snapshot.bytes <= 4096)
+        #expect(snapshot.count < 32)
+        #expect(snapshot.dropped > 99_900)
+        release.withLockedValue { $0 = true }
+        #expect(await poll { batches.withLockedValue { $0.count == 2 } })
+        let followers = batches.withLockedValue { $0[1] }
+        #expect(followers == (100_000 - snapshot.count..<100_000).map { "line-\($0)" })
+        ingestor.shutdown()
+        #expect(ingestor.queueSnapshot.bytes == 0)
+    }
+
+    @Test("Shutdown cancels an active push and releases all pending lines")
+    func cancelsStalledPush() async {
+        let started = NIOLockedValueBox(false)
+        let cancelled = NIOLockedValueBox(false)
+        let ingestor = SandboxLogIngestor(
+            logger: Logger(label: "test"), batchInterval: .zero,
+            checkOwnership: { _, _ in true },
+            push: { _ in
+                started.withLockedValue { $0 = true }
+                defer { cancelled.withLockedValue { $0 = Task.isCancelled } }
+                try await Task.sleep(for: .seconds(300))
+            }
+        )
+        ingestor.enqueue(makeMessage(sandboxId: "s", line: "initial"), fromAgentKey: "a")
+        #expect(await poll { started.withLockedValue { $0 } })
+        for _ in 0..<1000 { ingestor.enqueue(makeMessage(sandboxId: "s", line: "pending"), fromAgentKey: "a") }
+        ingestor.shutdown()
+        #expect(ingestor.queueSnapshot.count == 0)
+        #expect(await poll { cancelled.withLockedValue { $0 } })
+    }
+
+    @Test("Cached unowned lines never occupy the queue while Loki is stalled")
+    func earlyOwnershipRejection() async {
+        let checked = NIOLockedValueBox(false)
+        let started = NIOLockedValueBox(false)
+        let ingestor = SandboxLogIngestor(
+            logger: Logger(label: "test"), batchInterval: .zero,
+            checkOwnership: { resource, _ in
+                if resource == "spoofed" { checked.withLockedValue { $0 = true }; return false }
+                return true
+            },
+            push: { _ in
+                started.withLockedValue { $0 = true }
+                try await Task.sleep(for: .seconds(300))
+            }
+        )
+        ingestor.enqueue(makeMessage(sandboxId: "spoofed", line: "x"), fromAgentKey: "a")
+        ingestor.enqueue(makeMessage(sandboxId: "owned", line: "x"), fromAgentKey: "a")
+        #expect(await poll { checked.withLockedValue { $0 } && started.withLockedValue { $0 } })
+        for _ in 0..<10_000 { ingestor.enqueue(makeMessage(sandboxId: "spoofed", line: "x"), fromAgentKey: "a") }
+        #expect(ingestor.queueSnapshot.count == 0)
+        #expect(ingestor.queueSnapshot.dropped == 0)
+        ingestor.shutdown()
+    }
+
+    @Test("Loki outage sheds immediately and allows one serial recovery probe per window")
+    func circuitBreaker() async {
+        struct Failed: Error {}
+        let clock = NIOLockedValueBox(Date())
+        let pushes = NIOLockedValueBox(0)
+        let ingestor = SandboxLogIngestor(
+            logger: Logger(label: "test"), now: { clock.withLockedValue { $0 } }, batchInterval: .zero,
+            checkOwnership: { _, _ in true },
+            push: { _ in
+                let attempt = pushes.withLockedValue {
+                    $0 += 1; return $0
+                }
+                if attempt < 3 { throw Failed() }
+            }
+        )
+        ingestor.enqueue(makeMessage(sandboxId: "s", line: "fails"), fromAgentKey: "a")
+        #expect(await poll { ingestor.isCircuitOpen })
+        for _ in 0..<10_000 { ingestor.enqueue(makeMessage(sandboxId: "s", line: "drop"), fromAgentKey: "a") }
+        #expect(pushes.withLockedValue { $0 } == 1)
+        #expect(ingestor.queueSnapshot.count == 0)
+        clock.withLockedValue { $0 = $0.addingTimeInterval(31) }
+        ingestor.enqueue(makeMessage(sandboxId: "s", line: "probe"), fromAgentKey: "a")
+        #expect(await poll { pushes.withLockedValue { $0 == 2 } && ingestor.isCircuitOpen })
+        clock.withLockedValue { $0 = $0.addingTimeInterval(31) }
+        ingestor.enqueue(makeMessage(sandboxId: "s", line: "recovers"), fromAgentKey: "a")
+        #expect(await poll { pushes.withLockedValue { $0 == 3 } && !ingestor.isCircuitOpen })
+        ingestor.enqueue(makeMessage(sandboxId: "s", line: "healthy"), fromAgentKey: "a")
+        #expect(await poll { pushes.withLockedValue { $0 == 4 } })
+        ingestor.shutdown()
+    }
+
+    @Test("Time flush batches sparse entries, size flush leaves a bounded active batch")
+    func batchesBySizeAndTime() async {
+        let batches = NIOLockedValueBox<[[String]]>([])
+        let ingestor = SandboxLogIngestor(
+            logger: Logger(label: "test"), batchInterval: .milliseconds(100),
+            checkOwnership: { _, _ in true },
+            push: { messages in batches.withLockedValue { $0.append(messages.map(\.message)) } }
+        )
+        for index in 0..<300 { ingestor.enqueue(makeMessage(sandboxId: "s", line: "\(index)"), fromAgentKey: "a") }
+        #expect(await poll { batches.withLockedValue { $0.flatMap { $0 }.count == 300 } })
+        #expect(batches.withLockedValue { $0.map(\.count) } == [256, 44])
+        #expect(batches.withLockedValue { $0.flatMap { $0 } } == (0..<300).map(String.init))
+        ingestor.shutdown()
+    }
+
+    @Test("All retained strings count toward the queue budget, including request IDs")
+    func requestIDBudget() async {
+        let checks = NIOLockedValueBox(0)
+        let ingestor = SandboxLogIngestor(
+            logger: Logger(label: "test"), bufferLimitBytes: 1024,
+            checkOwnership: { _, _ in
+                checks.withLockedValue { $0 += 1 }; return true
+            },
+            push: { _ in Issue.record("Oversize message reached Loki") }
+        )
+        ingestor.enqueue(
+            SandboxLogMessage(
+                requestId: String(repeating: "x", count: 2048), sandboxId: "s", stream: "stdout", message: "x"),
+            fromAgentKey: "a")
+        #expect(ingestor.queueSnapshot.count == 0)
+        #expect(ingestor.queueSnapshot.dropped == 1)
+        ingestor.enqueue(makeMessage(sandboxId: String(repeating: "x", count: 1024), line: "x"), fromAgentKey: "a")
+        #expect(ingestor.queueSnapshot.count == 0)
+        #expect(checks.withLockedValue { $0 } == 0)
+        ingestor.shutdown()
+    }
+
 }

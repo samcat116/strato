@@ -36,7 +36,7 @@ final class WebSocketManager: @unchecked Sendable {
     /// replaced (a different socket under the same name) or nil. A non-nil
     /// result means the agent reconnected while its previous socket's close
     /// was still pending: that delayed close will take the
-    /// `removeConnection(ifCurrent:)`
+    /// `removeClosedConnection(ifCurrent:)`
     /// no-match path and skip its cleanup, so the caller must tear down state
     /// tied to the superseded connection (e.g. console or guest-exec sessions)
     /// here instead.
@@ -84,18 +84,25 @@ final class WebSocketManager: @unchecked Sendable {
         }
     }
 
-    /// Remove connection by agent identity key
-    func removeConnection(agentKey: String) {
-        lock.withLock {
-            _ = connections.removeValue(forKey: agentKey)
+    /// Atomically detach outbound delivery and stop inbound processing. Socket
+    /// close runs on its event loop. The returned task is the active frame;
+    /// operator callers await it before cleanup. A graceful unregister already
+    /// runs inside that task and must not await itself.
+    func closeConnection(agentKey: String, code: WebSocketErrorCode = .policyViolation) -> Task<Void, Never>? {
+        let connection = lock.withLock { connections.removeValue(forKey: agentKey) }
+        guard let connection else { return nil }
+        let activeFrame = connection.frameProcessor.stopAndDiscard()
+        connection.websocket.eventLoop.execute {
+            _ = connection.websocket.close(code: code)
         }
+        return activeFrame
     }
 
     /// Remove the connection for an agent only if the stored socket is the given
     /// instance. Used by close handlers so a delayed close from a replaced
     /// connection cannot tear down its successor (e.g. after an agent reconnects
     /// under the same name). Returns true when the connection was removed.
-    func removeConnection(agentKey: String, ifCurrent websocket: WebSocket) -> Bool {
+    func removeClosedConnection(agentKey: String, ifCurrent websocket: WebSocket) -> Bool {
         lock.withLock {
             guard connections[agentKey]?.websocket === websocket else { return false }
             connections.removeValue(forKey: agentKey)

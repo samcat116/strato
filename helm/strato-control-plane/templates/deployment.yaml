@@ -185,6 +185,8 @@ spec:
             # Bound statements on every pooled connection (STR-207). The
             # in-process migrator uses the same bounded budget by default on
             # its pinned connection and restores it before the pod serves.
+            - name: COORDINATION_STORE_DEADLINE_MS
+              value: {{ .Values.coordination.storeDeadlineMs | quote }}
             - name: DATABASE_STATEMENT_TIMEOUT_MS
               value: "{{ .Values.strato.database.statementTimeoutMs }}"
             # Encrypt the Postgres connection (issue #56). Defaults by topology
