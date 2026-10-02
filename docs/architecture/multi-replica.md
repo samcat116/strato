@@ -249,6 +249,10 @@ The gate logs transitions once; individual failures are debug logs.
 During an outage, rate limits remain enforced by a bounded local shadow of
 windows and known lockouts. Shared counts and lockout reads are mirrored while
 healthy, and locally armed lockouts are written before contacting Valkey.
+Shadow expiry never slides when another count is observed. Valkey returns its
+precise remaining lifetime and fixed expiry so rollover starts a fresh window;
+late responses from older windows cannot overwrite newer state. Counter loss
+before an active window ends preserves that window's local count and deadline.
 Limits become per-replica (up to N times the fleet-wide allowance); a lockout
 created exclusively on another replica cannot be discovered during a partition.
 Local overflow denies new keys conservatively instead of evicting active
