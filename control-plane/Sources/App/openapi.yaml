@@ -724,6 +724,92 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /api/vm-fleet-runs:
+    post:
+      operationId: prepareVMFleetRun
+      summary: Resolve a fleet command without dispatch
+      tags: [Virtual Machines]
+      description: >-
+        Initiator and credential scoped. Requires vm:runCommand per VM. Preview
+        expires after ten minutes. Confirmation rechecks authorization and eligibility
+        and binds the exact resolved IDs. Repeated confirmation never replays commands.
+        At most eight children are active per fleet. Poll until complete; failures
+        and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VMFleetPrepareRequest" }
+      responses:
+        "200":
+          description: The saved fleet run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VMFleetRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vm-fleet-runs/{runID}:
+    parameters:
+      - name: runID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getVMFleetRun
+      summary: Read collected fleet results
+      tags: [Virtual Machines]
+      description: >-
+        Initiator and credential scoped. Requires vm:runCommand per VM. Preview
+        expires after ten minutes. Confirmation rechecks authorization and eligibility
+        and binds the exact resolved IDs. Repeated confirmation never replays commands.
+        At most eight children are active per fleet. Poll until complete; failures
+        and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+      responses:
+        "200":
+          description: The saved fleet run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VMFleetRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vm-fleet-runs/{runID}/confirm:
+    parameters:
+      - name: runID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: confirmVMFleetRun
+      summary: Confirm the exact fleet target list
+      tags: [Virtual Machines]
+      description: >-
+        Initiator and credential scoped. Requires vm:runCommand per VM. Preview
+        expires after ten minutes. Confirmation rechecks authorization and eligibility
+        and binds the exact resolved IDs. Repeated confirmation never replays commands.
+        At most eight children are active per fleet. Poll until complete; failures
+        and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VMFleetConfirmRequest" }
+      responses:
+        "202":
+          description: The saved fleet run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VMFleetRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}/actions/run:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -9902,6 +9988,57 @@ components:
           format: date-time
         result:
           $ref: "#/components/schemas/VMCommandResult"
+
+    VMFleetPrepareRequest:
+      type: object
+      required: [selector, command]
+      properties:
+        selector:
+          type: string
+          maxLength: 8192
+          description: "Intersect project=<uuid>,environment=<name>,tag:<key>=<value>; or ids=<uuid;uuid>. Environment/tag filters require a project. At most 100 targets."
+        command:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: { type: string, maxLength: 4096 }
+    VMFleetConfirmRequest:
+      type: object
+      required: [vmIDs]
+      properties:
+        vmIDs:
+          type: array
+          maxItems: 100
+          items: { type: string, format: uuid }
+    VMFleetEntry:
+      type: object
+      required: [vmID, state]
+      properties:
+        vmID: { type: string, format: uuid }
+        name: { type: string }
+        state:
+          type: string
+          enum: [ready, skipped, queued, dispatched]
+        reason: { type: string }
+        operationID: { type: string, format: uuid }
+    VMFleetRun:
+      type: object
+      required: [id, command, confirmed, deadline, entries, operations, complete]
+      properties:
+        id: { type: string, format: uuid }
+        command:
+          type: array
+          items: { type: string }
+        confirmed: { type: boolean }
+        deadline: { type: string, format: date-time }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/VMFleetEntry" }
+        operations:
+          description: Per-child results with at most 4 KiB from each output stream. Fetch an individual operation for full captured output.
+          type: array
+          items: { $ref: "#/components/schemas/ResourceOperation" }
+        complete: { type: boolean }
 
     VMRunCommandRequest:
       type: object
