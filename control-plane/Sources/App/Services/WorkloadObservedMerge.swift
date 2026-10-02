@@ -41,6 +41,17 @@ extension ObservedStateApplier {
         // nil, so without this its "guest agent connected" state would persist
         // forever). A nil on a running/paused/transitional/unknown VM is left
         // alone — that's a transient probe miss, and nil-preserves-last-known.
+        if vm.guestAgentEnabled, observed.status == .running,
+            let observation = observed.guestAgentObservation,
+            observation.checkedAt > (vm.guestAgentObservation?.checkedAt ?? .distantPast)
+        {
+            vm.guestAgentObservation = observation
+            try await vm.update(on: db)
+        } else if observed.status != .running, vm.guestAgentObservation != nil {
+            vm.guestAgentObservation = nil
+            try await vm.update(on: db)
+        }
+
         if let guestInfo = observed.guestInfo {
             try await persistGuestInfo(vm: vm, guestInfo: guestInfo, interfaces: interfaces, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {

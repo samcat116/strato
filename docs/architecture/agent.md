@@ -660,6 +660,41 @@ no-caller path embeds it in `runcmd`; the multipart path carries it as a
 cloud-init's `dict(replace)+list()` policy (the same reason console setup
 travels as a script part).
 
+### Strato guest-agent opt-in (STR-86)
+
+New Linux/QEMU VMs may explicitly request `guestAgentEnabled` (default false).
+The create dialog and `strato vm create --guest-agent` disclose that this installs
+an exec-capable **root** systemd daemon. The setting changes vsock PCI topology;
+existing VMs require recreation, including changing it while stopped.
+
+First boot downloads `guest-agent-manifest.json` from the pinned published
+`v0.1.2` release, selects `x86_64` or `aarch64` from the guest, and verifies the
+native tarball's SHA-256 before publishing either file. It installs the packaged
+binary and unit, then enables/starts `strato-guest-agent.service`. The installer
+requires cloud-init, Python 3, systemd and HTTPS egress to GitHub. Download,
+manifest, architecture, checksum and startup errors fail the cloud-init script;
+an image without cloud-init cannot execute it at all. Opt-in does not prove
+installation succeeded. A seed-generation error prevents an opted-in VM from
+booting without its installer. There are no automatic guest software updates.
+
+The installer is an explicitly named MIME script part on both ISO and IMDS
+NoCloud paths. Caller user data, including a full MIME document, is preserved;
+cloud-init walks the nested MIME parts. The historical full-MIME escape hatch
+still skips console/SSH provisioning, but an explicit guest-agent opt-in adds
+its installer alongside it. Tenants can inspect the delivered ISO `user-data`,
+IMDS `/latest/user-data`, or `/var/lib/cloud/instance/user-data.txt` in the guest.
+`InstanceMetadata.guestAgentRelease` carries the optional release pin for IMDS;
+missing means no bootstrap, so old peers cannot accidentally opt in.
+
+VM detail and `strato vm get` separate enabled/disabled policy from the optional
+`guestAgentObservation { reachable, checkedAt }`. Node agents probe the Strato
+vsock service with a read-only protocol ping every 30 seconds, outside inventory
+assembly, with one-second connection/read bounds and a five-second pass budget.
+They never execute a command to probe. This is independent of QEMU's QGA.
+Clients show missing or 90-second-old observations as Unknown and suppress
+reachability for stopped or opted-out VMs. Control-plane storage preserves the
+probe timestamp; replay does not refresh it.
+
 ## QEMU guest agent (qga)
 
 Every VM's domain document binds a `virtserialport` named

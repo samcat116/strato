@@ -20,6 +20,8 @@ interface VMGuestOptionsFieldsProps {
   setTpm: Dispatch<SetStateAction<boolean>>;
   graphicsConsole: boolean;
   setGraphicsConsole: Dispatch<SetStateAction<boolean>>;
+  guestAgentEnabled: boolean;
+  setGuestAgentEnabled: Dispatch<SetStateAction<boolean>>;
   userData: string;
   onUserDataChange: (value: string) => void;
 }
@@ -40,6 +42,8 @@ export function VMGuestOptionsFields({
   setTpm,
   graphicsConsole,
   setGraphicsConsole,
+  guestAgentEnabled,
+  setGuestAgentEnabled,
   userData,
   onUserDataChange,
 }: VMGuestOptionsFieldsProps) {
@@ -223,6 +227,32 @@ export function VMGuestOptionsFields({
         </p>
       </div>
       
+      <div className="space-y-3 rounded-md border border-border p-3">
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={!isFirecracker && guestAgentEnabled}
+            onChange={(e) => setGuestAgentEnabled(e.target.checked)}
+            disabled={isLoading || isFirecracker}
+            className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+          />
+          Install Strato guest agent (root command execution)
+        </label>
+        <p className="text-xs text-muted-foreground">
+          Off by default. Installs the published, checksum-verified agent as a root
+          systemd daemon and permits authorized Strato users to execute commands
+          inside this VM. Requires Linux/QEMU, cloud-init, Python 3, systemd and
+          HTTPS access to GitHub. No automatic updates. Recreation is required to
+          change this setting.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          The installer is a separate visible part of first-boot user data on the
+          seed ISO or IMDS and in /var/lib/cloud/instance/user-data.txt. Caller
+          user data is preserved. An image without cloud-init cannot install it
+          and will remain unreachable.
+        </p>
+      </div>
+
       <div className="space-y-2">
         <Label htmlFor="userData" className="text-foreground">
           Cloud-init user data{" "}

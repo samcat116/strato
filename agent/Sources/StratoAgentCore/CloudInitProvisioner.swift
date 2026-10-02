@@ -53,6 +53,7 @@ public struct CloudInitProvisioner {
     public func makeNoCloudISO(
         at isoPath: String, vmId: String, hostname: String? = nil, sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
+        guestAgentRelease: String? = nil,
         metadataSource: MetadataSource = .iso,
         noCloudSeedToken: UUID? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = []
@@ -88,7 +89,7 @@ public struct CloudInitProvisioner {
                 }
                 if let userData, CloudInitUserDataFormat.detect(userData) == .mime {
                     logger.info(
-                        "VM user data is a caller-composed MIME document; using it verbatim (Strato console/SSH provisioning skipped)"
+                        "VM user data is caller-composed MIME; preserving it (console/SSH provisioning skipped; explicit guest-agent opt-in still applies)"
                     )
                 }
             }
@@ -100,7 +101,8 @@ public struct CloudInitProvisioner {
                 hostname: hostname,
                 sshAuthorizedKeys: sshAuthorizedKeys,
                 userData: userData,
-                networkAttachments: networkAttachments)
+                networkAttachments: networkAttachments,
+                guestAgentRelease: guestAgentRelease)
             for (filename, contents) in documents.sorted(by: { $0.key < $1.key }) {
                 let path = (tempDir as NSString).appendingPathComponent(filename)
                 try contents.write(toFile: path, atomically: true, encoding: .utf8)
@@ -170,7 +172,8 @@ public struct CloudInitProvisioner {
         hostname: String?,
         sshAuthorizedKeys: [String],
         userData: String?,
-        networkAttachments: [ResolvedNetworkAttachment]
+        networkAttachments: [ResolvedNetworkAttachment],
+        guestAgentRelease: String? = nil
     ) throws -> [String: String] {
         var documents: [String: String]
         switch metadataSource {
@@ -178,7 +181,7 @@ public struct CloudInitProvisioner {
             documents = [
                 "meta-data": metaDataDocument(vmId: vmId, hostname: hostname),
                 "user-data": userDataDocument(
-                    sshAuthorizedKeys: sshAuthorizedKeys, userData: userData),
+                    sshAuthorizedKeys: sshAuthorizedKeys, userData: userData, guestAgentRelease: guestAgentRelease),
             ]
         case .imds:
             guard let noCloudSeedToken else {
@@ -316,9 +319,24 @@ public struct CloudInitProvisioner {
     ///   in caller-supplied cloud-config can never replace — and silently
     ///   drop — the console setup.
     /// - Caller payload is itself a complete MIME document: used verbatim
-    ///   (a MIME message cannot be nested as a plain part), replacing Strato's
-    ///   provisioning entirely. Documented escape hatch for full control.
-    public static func userDataDocument(sshAuthorizedKeys: [String], userData: String?) -> String {
+    ///   replacing console/SSH provisioning. Explicit guest-agent opt-in nests
+    ///   this document alongside its separate installer script.
+    public static func userDataDocument(
+        sshAuthorizedKeys: [String], userData: String?, guestAgentRelease: String? = nil
+    ) -> String {
+        if let guestAgentRelease {
+            let installer = MIMEPart(
+                mimeType: "text/x-shellscript", filename: "strato-guest-agent-install.sh",
+                content: GuestAgentBootstrap.installScript(release: guestAgentRelease))
+            let baseline = userDataDocument(sshAuthorizedKeys: sshAuthorizedKeys, userData: userData)
+            // Cloud-init walks nested MIME parts. Preserve the caller document and
+            // keep our root-daemon installer as a separate, inspectable script.
+            let baselinePart = MIMEPart(
+                mimeType: CloudInitUserDataFormat.detect(baseline)?.mimeType ?? "text/plain",
+                filename: "user-data", content: baseline,
+                rawMIME: CloudInitUserDataFormat.detect(baseline) == .mime)
+            return multipartDocument(parts: [baselinePart, installer])
+        }
         let keys =
             sshAuthorizedKeys
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -379,7 +397,7 @@ public struct CloudInitProvisioner {
     public static func userDataDocument(for metadata: InstanceMetadata) -> String {
         userDataDocument(
             sshAuthorizedKeys: metadata.sshAuthorizedKeys,
-            userData: metadata.userData)
+            userData: metadata.userData, guestAgentRelease: metadata.guestAgentRelease)
     }
 
     /// A part of a multipart `user-data` document.
@@ -387,6 +405,7 @@ public struct CloudInitProvisioner {
         let mimeType: String
         let filename: String
         let content: String
+        var rawMIME: Bool = false
     }
 
     /// Renders a `multipart/mixed` MIME document. The boundary is extended
@@ -405,10 +424,12 @@ public struct CloudInitProvisioner {
         ]
         for part in parts {
             lines.append("--\(boundary)")
-            lines.append("Content-Type: \(part.mimeType); charset=\"utf-8\"")
-            lines.append("MIME-Version: 1.0")
-            lines.append("Content-Disposition: attachment; filename=\"\(part.filename)\"")
-            lines.append("")
+            if !part.rawMIME {
+                lines.append("Content-Type: \(part.mimeType); charset=\"utf-8\"")
+                lines.append("MIME-Version: 1.0")
+                lines.append("Content-Disposition: attachment; filename=\"\(part.filename)\"")
+                lines.append("")
+            }
             // The newline before the next boundary belongs to the delimiter,
             // so drop the content's own trailing one to avoid a stray blank
             // line inside the part body.
