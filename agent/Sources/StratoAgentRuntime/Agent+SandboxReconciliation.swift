@@ -77,7 +77,9 @@ extension Agent {
         let (stagingBytes, stagingOverflow) = estimate.multipliedReportingOverflow(by: 2)
         guard !stagingOverflow else { throw ConvergenceError.sourceNotReady("checkpoint staging size overflow") }
         let extra = HostReservation(
-            cpus: spec.cpus, memoryBytes: spec.memoryBytes, diskBytes: stagingBytes)
+            cpus: spec.cpus,
+            memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: spec.memoryBytes).effectiveBytes,
+            diskBytes: stagingBytes)
         let raw = await rawHostCapacitySnapshot()
         let claim =
             try retainedSuspensionClaims[item.id]

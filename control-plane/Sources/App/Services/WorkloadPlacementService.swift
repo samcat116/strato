@@ -368,6 +368,9 @@ actor WorkloadPlacementService {
             agentId = try await db.transaction { tx -> String? in
                 guard try await sandbox.lockAndRefresh(on: tx), sandbox.desiredStatus != .absent else { return nil }
                 if let placedAgent = sandbox.hypervisorId { return placedAgent }
+                guard sandbox.suspensionEvidence == nil else {
+                    throw Abort(.conflict, reason: "Local suspension checkpoint is pinned to its owning agent")
+                }
                 let scheduledClass: WorkloadResourceClassSnapshot?
                 if let snapshot = sandbox.resourceClass {
                     scheduledClass = try await WorkloadResourceClassService.currentPolicy(snapshot, on: tx)

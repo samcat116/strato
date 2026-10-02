@@ -20,6 +20,6 @@ struct ResourceEnforcementSnapshotTests {
         let decoded = try JSONDecoder().decode(
             ResourceEnforcementSnapshot.self, from: JSONEncoder().encode(report))
         #expect(decoded == report)
-        #expect(WireProtocol.currentVersion == 67)
+        #expect(WireProtocol.currentVersion == 69)
     }
 }

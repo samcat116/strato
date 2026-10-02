@@ -166,6 +166,8 @@ extension FirecrackerSandboxRuntime {
             throw SandboxRuntimeError.notSnapshottable(
                 "durable suspension requires an adopted, jailed sandbox")
         }
+        try BurstableRuntimeGate.requireSupport(
+            resourceClass: managed.spec.resourceClass, enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId), suspending.insert(sandboxId).inserted else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
@@ -334,7 +336,8 @@ extension FirecrackerSandboxRuntime {
             ] {
                 try chownPath(path, uid: plan.uid, gid: plan.gid)
             }
-            let options = makeJailerOptions(plan: plan, guestMemoryBytes: managed.spec.memoryBytes)
+            let options = try makeJailerOptions(
+                plan: plan, guestMemoryBytes: managed.spec.memoryBytes, resourceClass: managed.spec.resourceClass)
             let manager = try await client.restoreVM(
                 vmId: proofId, jail: options,
                 snapshot: SnapshotLoadConfig(
@@ -461,7 +464,8 @@ extension FirecrackerSandboxRuntime {
             throw SandboxCheckpointManifest.CheckpointError.identityMismatch
         }
         let plan = try jailPlan(for: sandboxId, recordedUID: record.jailUID)
-        let options = makeJailerOptions(plan: plan, guestMemoryBytes: record.spec.memoryBytes)
+        let options = try makeJailerOptions(
+            plan: plan, guestMemoryBytes: record.spec.memoryBytes, resourceClass: record.spec.resourceClass)
         let manager = await client.disconnectedManager(vmId: sandboxId, jail: options)
         sandboxes[sandboxId] = Managed(
             spec: record.spec, rootfsPath: plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail),
