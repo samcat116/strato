@@ -34,6 +34,8 @@ class Fixture(http.server.ThreadingHTTPServer):
         self.ready = threading.Event()
         self.closed = threading.Event()
         self.resized = threading.Event()
+        self.input_received = threading.Event()
+        self.close_received = threading.Event()
         self.errors = []
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
@@ -114,9 +116,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             while True:
                 opcode, data = self.read_frame()
                 if opcode == 8:
+                    self.server.close_received.set()
                     self.send_frame(data, 8)
                     break
                 self.server.frames.append((opcode, data))
+                if opcode == 2:
+                    self.server.input_received.set()
                 if opcode == 1:
                     control = json.loads(data)
                     if control["type"] == "resize":
@@ -162,31 +167,58 @@ def check(binary):
                 fixture.shutdown()
                 print(f"PASS: {resource} session {attempt + 1}: immediate ready, pipe I/O, exit, close")
 
-        fixture = Fixture("terminal")
+        for termination_signal in [signal.SIGTERM, signal.SIGINT]:
+            fixture = Fixture("terminal")
+            master, slave = os.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            before = termios.tcgetattr(slave)
+            process = launch(binary, fixture, directory, [], stdin=slave, stdout=slave, stderr=subprocess.PIPE)
+            assert fixture.ready.wait(10)
+            assert fixture.minted["command"] == ["/bin/sh"] and fixture.minted["tty"] is True
+            assert (fixture.minted["rows"], fixture.minted["cols"]) == (24, 80)
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+            process.send_signal(signal.SIGWINCH)
+            assert fixture.resized.wait(3)
+            assert any(op == 1 and json.loads(data) == {"type": "resize", "rows": 40, "cols": 120}
+                       for op, data in fixture.frames)
+            os.write(master, b"\x03")
+            time.sleep(0.1)
+            assert process.poll() is None  # Ctrl-C must remain guest input in raw mode.
+            assert fixture.input_received.wait(3)
+            assert any(op == 2 and b"\x03" in data for op, data in fixture.frames)
+            process.send_signal(termination_signal)
+            process.communicate(timeout=30)
+            assert process.returncode in (-termination_signal, 128 + termination_signal), (process.returncode, fixture.errors)
+            assert termios.tcgetattr(slave) == before
+            assert fixture.close_received.wait(3)
+            assert fixture.closed.wait(3) and not fixture.errors
+            os.close(master)
+            os.close(slave)
+            fixture.shutdown()
+            print(f"PASS: default shell, PTY resize, guest Ctrl-C, external {termination_signal.name} cleanup/restoration")
+
+        fixture = Fixture("pipe")
         master, slave = os.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         before = termios.tcgetattr(slave)
-        process = launch(binary, fixture, directory, [], stdin=slave, stdout=slave, stderr=subprocess.PIPE)
+        process = launch(binary, fixture, directory, ["--no-tty", "--", "cat"],
+                         stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert fixture.ready.wait(10)
-        assert fixture.minted["command"] == ["/bin/sh"] and fixture.minted["tty"] is True
-        assert (fixture.minted["rows"], fixture.minted["cols"]) == (24, 80)
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-        process.send_signal(signal.SIGWINCH)
-        assert fixture.resized.wait(3)
-        assert any(op == 1 and json.loads(data) == {"type": "resize", "rows": 40, "cols": 120}
-                   for op, data in fixture.frames)
-        os.write(master, b"\x03")
-        time.sleep(0.1)
-        assert process.poll() is None  # Ctrl-C must remain guest input in raw mode.
-        process.terminate()
-        process.communicate(timeout=30)
-        assert process.returncode in (-signal.SIGTERM, 128 + signal.SIGTERM), (process.returncode, fixture.errors)
+        assert fixture.minted["tty"] is False and fixture.minted["outputMode"] == "multiplexed"
+        os.write(master, b"terminal input\n")
+        assert fixture.input_received.wait(3), "--no-tty discarded terminal stdin"
+        assert process.poll() is None, "--no-tty sent EOF before the user closed stdin"
+        os.write(master, b"\x04")  # Canonical local terminal Ctrl-D delivers real EOF.
+        out, err = process.communicate(timeout=30)
+        assert (process.returncode, out, err) == (37, b"out\n", b"err\n")
+        assert b"".join(data for opcode, data in fixture.frames if opcode == 2) == b"terminal input\n"
+        assert sum(op == 1 and json.loads(data).get("type") == "stdin_eof"
+                   for op, data in fixture.frames) == 1
         assert termios.tcgetattr(slave) == before
-        assert fixture.closed.wait(3) and not fixture.errors
+        assert fixture.close_received.wait(3) and not fixture.errors
         os.close(master)
         os.close(slave)
         fixture.shutdown()
-        print("PASS: default shell, PTY dimensions/resize, guest Ctrl-C, SIGTERM cleanup/restoration")
+        print("PASS: --no-tty streams terminal input before real EOF and preserves stdout/stderr")
 
         for resource in ["vm", "sandbox"]:
             for mode in (["disconnect", "guest-error", "interrupt"] if resource == "vm"
