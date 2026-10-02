@@ -230,6 +230,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     let automaticSuspensionTransport: (any SandboxAutomaticSuspensionTransport)?
     var suspensionRecords: [String: SandboxSuspensionRecord] = [:]
     var restoreAdmission = SandboxRestoreAdmission()
+    var activeValidationProofs: Set<String> = []
+    var validationProofRecoveryPending = false
+    var validationProofRecoveryTask: Task<Void, any Error>?
+    var validationProofStore: SandboxValidationProofStore {
+        SandboxValidationProofStore(directory: sandboxStoragePath + "/suspension-validation")
+    }
     let suspensionRestoreTimeoutSeconds: Int
     var suspensionStore: SandboxSuspensionStore {
         SandboxSuspensionStore(directory: sandboxStoragePath + "/suspension-records")
@@ -310,7 +316,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         self.idlePolicy = idlePolicy
         self.suspensionRestoreTimeoutSeconds = suspensionRestoreTimeoutSeconds
         self.automaticSuspensionTransport = automaticSuspensionTransport
-        self.restoreAdmission = try SandboxRestoreAdmission(limit: suspensionRestoreLimit)
+        var admission = try SandboxRestoreAdmission(limit: suspensionRestoreLimit)
+        admission.recover(
+            Set(
+                try SandboxValidationProofStore(
+                    directory: sandboxStoragePath + "/suspension-validation"
+                ).loadAll().map(\.permit)))
+        self.restoreAdmission = admission
         self.logger = logger
         self.client = client
         self.burstableEnforcement =

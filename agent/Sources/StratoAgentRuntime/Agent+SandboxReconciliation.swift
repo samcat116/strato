@@ -61,6 +61,9 @@ extension Agent {
             guard persistManifest() else {
                 throw SandboxRuntimeError.snapshotIOFailed("could not persist suspended sandbox reservations")
             }
+            guard await observeSuspensionValidationReservations(runtime) != nil else {
+                throw ConvergenceError.sourceNotReady("suspension validation inventory is unknown")
+            }
             if let retained = retainedSuspensionClaims.removeValue(forKey: item.id) {
                 capacityAdmissionLedger.release(retained)
             }
@@ -104,15 +107,21 @@ extension Agent {
         } catch {
             entry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
             managedSandboxes[item.id] = entry
-            mayReleaseClaim = persistManifest()
-            // A failed durable reservation update retains the admission claim
-            // in this agent life rather than lending those bytes to another VM.
+            if persistManifest() {
+                mayReleaseClaim = await observeSuspensionValidationReservations(runtime) != nil
+            }
+            // Durable shadow reservations take over only after their inventory
+            // is known. Otherwise retain the provisional claim in this agent
+            // life rather than lending those bytes to another VM.
             throw error
         }
         entry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
         managedSandboxes[item.id] = entry
         guard persistManifest() else {
             throw SandboxRuntimeError.snapshotIOFailed("could not persist suspended sandbox reservations")
+        }
+        guard await observeSuspensionValidationReservations(runtime) != nil else {
+            throw ConvergenceError.sourceNotReady("suspension validation inventory is unknown")
         }
         mayReleaseClaim = true
     }
@@ -472,7 +481,17 @@ extension Agent {
             snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         defer { capacityAdmissionLedger.release(claim) }
 
-        if var record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase != .resumed {
+        if let record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase == .capturing {
+            // Capture has not committed a checkpoint. Recover the original
+            // guest (including its paused VMM and automatic guest fence)
+            // without converting its rollback journal into a restore intent.
+            try await runtime.bootSandbox(sandboxId: item.id)
+            manifestEntry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            if let manifestEntry { managedSandboxes[item.id] = manifestEntry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist capture rollback reservations")
+            }
+        } else if var record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase != .resumed {
             // Reacquire the durable reservation before any restore side effect.
             record.phase = .restoring
             manifestEntry?.sandboxSuspension = record

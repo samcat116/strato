@@ -247,6 +247,8 @@ public struct SandboxRestoreAdmission: Sendable {
         leases.insert(token)
         return token
     }
+    /// Recovered durable owners remain admitted even if the configured limit shrank.
+    public mutating func recover(_ tokens: Set<UUID>) { leases.formUnion(tokens) }
     public mutating func release(_ token: UUID) { leases.remove(token) }
     public var activeCount: Int { leases.count }
 }

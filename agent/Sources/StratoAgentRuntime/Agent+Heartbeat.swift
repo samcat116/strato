@@ -341,6 +341,7 @@ extension Agent {
         let simulatedDiskBytes: Int64?
         let diskCapacityBefore: (total: Int64, free: Int64)?
         var diskInventoryKnown = true
+        var suspensionInventoryKnown = true
         if let simulation = configuration.simulation, simulation.enabled {
             totalCPU = simulation.resolvedCPUCores
             totalMemory = simulation.resolvedMemoryBytes
@@ -438,9 +439,9 @@ extension Agent {
             reserved = reserved.addingSaturating(reservation)
         }
 
-        // Sandbox reservations always come from the manifest (managed and
-        // orphaned alike): the sandbox runtime seam has no reservation query,
-        // and the manifest entry is authoritative for the workload's sizing.
+        // The manifest owns normal sandbox sizing. Journaled validation VMMs
+        // have separate identities and durable reservations until teardown is
+        // proven, even when the sandbox itself is stopped or suspended.
         for (id, entry) in managedSandboxes {
             let reservation =
                 entry.sandboxSpec.map { _ in SandboxHostReservation.forManifestEntry(entry) }
@@ -458,6 +459,15 @@ extension Agent {
                     qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             workloadReservations[id] = reservation
             reserved = reserved.addingSaturating(reservation)
+        }
+
+        if let proofs = await observeSuspensionValidationReservations(sandboxRuntime) {
+            for (id, reservation) in proofs {
+                workloadReservations[id] = reservation
+                reserved = reserved.addingSaturating(reservation)
+            }
+        } else {
+            suspensionInventoryKnown = false
         }
 
         // Workloads whose manifest entry this build cannot route (STR-138) are
@@ -631,10 +641,47 @@ extension Agent {
         return HostCapacitySnapshot(
             total: HostReservation(
                 cpus: totalCPU, memoryBytes: totalMemory, diskBytes: totalDisk),
-            reserved: reserved, inventoryKnown: manifestReadFailure == nil,
-            diskInventoryKnown: diskInventoryKnown && manifestReadFailure == nil,
+            reserved: reserved, inventoryKnown: manifestReadFailure == nil && suspensionInventoryKnown,
+            diskInventoryKnown: diskInventoryKnown && manifestReadFailure == nil && suspensionInventoryKnown,
             hostReservedMemoryBytes: configuration.hostMemoryReserveBytes,
             qemuOverheadBytes: configuration.qemuMemoryOverheadBytes, workloadReservations: workloadReservations)
+    }
+
+    func observeSuspensionValidationReservations(
+        _ runtime: (any SandboxRuntimeService)?
+    ) async -> [String: HostReservation]? {
+        let storagePath = configuration.vmStoragePath
+        do {
+            return try await StageBudget.run(
+                seconds: StageBudget.observationSeconds, stage: "suspension-validation-inventory", onTimeout: .abandon
+            ) {
+                if let runtime { return try await runtime.suspensionValidationReservations() }
+                // Disabling the runtime does not prove an old validation VMM
+                // disappeared. Its durable reservations survive configuration
+                // changes and remain authoritative before runtime construction.
+                let records = try SandboxValidationProofStore(
+                    directory: storagePath + "/suspension-validation"
+                ).loadAll()
+                var reservations: [String: HostReservation] = [:]
+                for record in records {
+                    guard reservations.updateValue(record.reservation, forKey: record.proofId) == nil else {
+                        throw SandboxSuspensionGuard.GateError.stale
+                    }
+                }
+                let names: [String]
+                do { names = try FileManager.default.contentsOfDirectory(atPath: storagePath) } catch let error
+                    as CocoaError where error.code == .fileReadNoSuchFile
+                { names = [] }
+                guard
+                    names.filter({ $0.hasPrefix("warm-template-suspend-proof-") })
+                        .allSatisfy({ reservations[$0] != nil })
+                else { throw SandboxSuspensionGuard.GateError.stale }
+                return reservations
+            }
+        } catch {
+            logger.warning("Suspension validation inventory is unknown; retaining capacity reservations")
+            return nil
+        }
     }
 
     func getAgentResources() async -> AgentResources {

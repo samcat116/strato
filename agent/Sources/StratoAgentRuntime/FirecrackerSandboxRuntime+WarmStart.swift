@@ -445,7 +445,8 @@ extension FirecrackerSandboxRuntime {
                 "Abandoned warm-template staging cleanup failed; sandbox creation will continue",
                 metadata: ["path": .string(failure.path), "error": .string(failure.reason)])
         }
-        var leaked: Set<String> = []
+        let validationProofs = try validationProofStore.loadAll()
+        var leaked = Set(validationProofs.map(\.proofId))
         let storageNames = try directoryContentsIfPresent(atPath: sandboxStoragePath)
         leaked.formUnion(storageNames.filter { $0.hasPrefix("warm-template-") })
         let jailBase =
@@ -467,6 +468,9 @@ extension FirecrackerSandboxRuntime {
             }
         }
         for templateId in leaked.sorted() {
+            // A retry sweep may run while another shadow is still validating.
+            // Only abandoned owners may be destroyed by recovery.
+            if activeValidationProofs.contains(templateId) { continue }
             logger.warning(
                 "Sweeping leaked warm-template artifacts from a previous agent life",
                 metadata: ["templateId": .string(templateId)])
@@ -476,8 +480,15 @@ extension FirecrackerSandboxRuntime {
                     "leaked warm template \(templateId) has processes under multiple jail UIDs: "
                         + liveUIDs.sorted().map(String.init).joined(separator: ", "))
             }
-            let uid = try recoveredWarmTemplateUID(
-                templateId, processEffectiveUID: liveUIDs.first)
+            let uid: UInt32
+            if let proof = validationProofs.first(where: { $0.proofId == templateId }) {
+                guard liveUIDs.first.map({ $0 == proof.jailUID }) ?? true else {
+                    throw SandboxSuspensionGuard.GateError.stale
+                }
+                uid = proof.jailUID
+            } else {
+                uid = try recoveredWarmTemplateUID(templateId, processEffectiveUID: liveUIDs.first)
+            }
             let reservation = jailUIDs.reserve(uid, for: templateId)
             if case .notAssignable = reservation {
                 throw SandboxRuntimeError.jailIdentityUnavailable(
@@ -493,8 +504,10 @@ extension FirecrackerSandboxRuntime {
                     ])
             }
             let plan = try jailPlan(for: templateId, recordedUID: uid)
-            try await destroyLeakedWarmTemplateProcess(templateId, plan: plan)
-            try removeWarmTemplateArtifacts(templateId, plan: plan)
+            try await finishValidationProofCleanup(templateId: templateId) {
+                try await destroyLeakedWarmTemplateProcess(templateId, plan: plan)
+                try removeWarmTemplateArtifacts(templateId, plan: plan)
+            }
             _ = jailUIDs.release(templateId)
         }
         let rangeEnd = jailerConfig.uidBase + SandboxJailerConfig.uidCount

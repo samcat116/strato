@@ -7,6 +7,66 @@ import Glibc
 import SwiftFirecracker
 
 extension FirecrackerSandboxRuntime {
+    func suspensionValidationReservations() async throws -> [String: HostReservation] {
+        let records = try validationProofStore.loadAll()
+        let known = Set(records.map(\.proofId))
+        // Legacy/unrecorded debris has unknown sizing. A successful crash sweep
+        // must establish process death before any new capacity can be admitted.
+        let names = try directoryContentsIfPresent(atPath: sandboxStoragePath)
+        guard
+            names.filter({ $0.hasPrefix("warm-template-suspend-proof-") })
+                .allSatisfy({ known.contains($0) })
+        else { throw SandboxSuspensionGuard.GateError.stale }
+        return Dictionary(uniqueKeysWithValues: records.map { ($0.proofId, $0.reservation) })
+    }
+
+    /// Retry only abandoned validation owners. Re-running the general warm
+    /// template crash sweep here could kill a concurrently building template.
+    func recoverAbandonedValidationProofs() async throws {
+        if let task = validationProofRecoveryTask {
+            try await task.value
+            return
+        }
+        guard validationProofRecoveryPending else { return }
+        let task = Task { try await self.sweepAbandonedValidationProofs() }
+        validationProofRecoveryTask = task
+        defer { validationProofRecoveryTask = nil }
+        try await task.value
+    }
+
+    func sweepAbandonedValidationProofs() async throws {
+        for record in try validationProofStore.loadAll() where !activeValidationProofs.contains(record.proofId) {
+            let reservation = jailUIDs.reserve(record.jailUID, for: record.proofId)
+            guard reservation != .notAssignable else { throw SandboxSuspensionGuard.GateError.stale }
+            let plan = try jailPlan(for: record.proofId, recordedUID: record.jailUID)
+            try await finishValidationProofCleanup(templateId: record.proofId) {
+                try await destroyLeakedWarmTemplateProcess(record.proofId, plan: plan)
+                try removeWarmTemplateArtifacts(record.proofId, plan: plan)
+            }
+            _ = jailUIDs.release(record.proofId)
+        }
+        // Another validation may have failed while cleanup was awaiting its
+        // process proof. Recompute rather than erasing its pending recovery.
+        validationProofRecoveryPending = try validationProofStore.loadAll().contains {
+            !activeValidationProofs.contains($0.proofId)
+        }
+    }
+
+    /// The cleanup closure must prove process death and remove its artifacts.
+    /// Any failed proof keeps both durable capacity and restore ownership.
+    func finishValidationProofCleanup(
+        templateId: String, cleanup: () async throws -> Void
+    ) async throws {
+        try await cleanup()
+        try releaseValidationProof(templateId: templateId)
+    }
+
+    func releaseValidationProof(templateId: String) throws {
+        guard let record = try validationProofStore.loadAll().first(where: { $0.proofId == templateId }) else { return }
+        try validationProofStore.remove(record.id)
+        restoreAdmission.release(record.permit)
+    }
+
     func suspensionStorageEstimate(sandboxId: String) async throws -> Int64 {
         guard let managed = sandboxes[sandboxId], managed.jail != nil else {
             throw SandboxRuntimeError.notSnapshottable("suspension requires a jailed sandbox")
@@ -297,20 +357,41 @@ extension FirecrackerSandboxRuntime {
     func validateSuspensionCheckpoint(
         _ checkpoint: SandboxCheckpointManifest, managed: Managed, sandboxId: String
     ) async throws {
+        try await ensureWarmTemplateSweep()
+        try await recoverAbandonedValidationProofs()
         let permit = try restoreAdmission.acquire()
-        defer { restoreAdmission.release(permit) }
+        var durableOwner = false
+        defer { if !durableOwner { restoreAdmission.release(permit) } }
         guard managed.jail != nil else { throw SandboxSuspensionGuard.GateError.stale }
         let version = await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath)
         guard version == checkpoint.firecrackerVersion else {
             throw SandboxRuntimeError.notSnapshottable("checkpoint Firecracker version does not match this host")
         }
-        try await ensureWarmTemplateSweep()
         // Reuse the existing crash-swept temporary UID ownership mechanism.
-        let proofId = "warm-template-suspend-proof-" + UUID().uuidString.lowercased()
+        let id = UUID()
+        let proofId = "warm-template-suspend-proof-" + id.uuidString.lowercased()
         let lease = try jailUIDs.lease(for: proofId)
-        try persistWarmTemplateUID(lease.uid, templateId: proofId)
-        let plan = try jailPlan(for: proofId, recordedUID: lease.uid)
+        activeValidationProofs.insert(proofId)
+        defer { activeValidationProofs.remove(proofId) }
+        let reservation = HostReservation(
+            cpus: managed.spec.cpus,
+            memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: managed.spec.memoryBytes).effectiveBytes,
+            diskBytes: checkpoint.artifacts.reduce(0) { total, artifact in
+                let (next, overflow) = total.addingReportingOverflow(artifact.sizeBytes)
+                return overflow ? Int64.max : next
+            })
         do {
+            try validationProofStore.save(
+                SandboxValidationProof(
+                    id: id, permit: permit, jailUID: lease.uid, reservation: reservation))
+        } catch {
+            jailUIDs.rollBack(lease)
+            throw error
+        }
+        durableOwner = true
+        do {
+            try persistWarmTemplateUID(lease.uid, templateId: proofId)
+            let plan = try jailPlan(for: proofId, recordedUID: lease.uid)
             let attachments = try await prepareTemplateNIC(
                 templateId: proofId, nicCount: managed.spec.network == nil ? 0 : 1)
             if attachments.isEmpty { try await createNetns(plan.netnsName) }
@@ -349,10 +430,24 @@ extension FirecrackerSandboxRuntime {
         } catch {
             // Cleanup failure takes precedence: retain the lease until the
             // existing crash sweep can prove the shadow process gone.
-            try await teardownWarmTemplate(templateId: proofId, vm: nil, lease: lease)
+            do {
+                try await finishValidationProofCleanup(templateId: proofId) {
+                    try await teardownWarmTemplate(templateId: proofId, vm: nil, lease: lease)
+                }
+            } catch {
+                validationProofRecoveryPending = true
+                throw error
+            }
             throw error
         }
-        try await teardownWarmTemplate(templateId: proofId, vm: nil, lease: lease)
+        do {
+            try await finishValidationProofCleanup(templateId: proofId) {
+                try await teardownWarmTemplate(templateId: proofId, vm: nil, lease: lease)
+            }
+        } catch {
+            validationProofRecoveryPending = true
+            throw error
+        }
     }
 
     func resumeSuspendedSandbox(sandboxId: String, expectedGeneration: Int64? = nil, allowRacedActivity: Bool = false)
@@ -365,6 +460,8 @@ extension FirecrackerSandboxRuntime {
         guard record.phase != .resumed else { return }
         let resumeGeneration = try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()]
             .resumeGeneration(expected: expectedGeneration, allowRacedActivity: allowRacedActivity)
+        try await ensureWarmTemplateSweep()
+        try await recoverAbandonedValidationProofs()
         let permit = try restoreAdmission.acquire()
         defer { restoreAdmission.release(permit) }
         if [.verified, .destroying].contains(record.phase), let managed = sandboxes[sandboxId] {

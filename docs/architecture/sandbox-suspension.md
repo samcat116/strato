@@ -103,6 +103,13 @@ proof VMM. File restore reserves the archive and fresh jail copy through restart
 Host manifests retain spec/UID, release guest CPU/RAM only on verified suspended
 facts, and retain checkpoint storage. Restore persists the full reservation before
 spawning. Failed reservation writes retain the admission claim for retry.
+Each validation VMM publishes its own durable CPU/RAM/disk reservation and restore
+permit before spawning. Failed destruction or process inventory keeps those
+owners across agent restart; cleanup releases them only after process death and
+artifact removal are proved. Unknown proof inventory advertises no available
+capacity, including when the sandbox runtime is disabled. Recovery skips active
+validation owners and retries abandoned proofs separately from warm-template
+builds.
 Internal artifacts live under `<sandbox>/hibernation/<id>`; retiring a previous
 internally owned checkpoint cannot delete a user snapshot. Cold recreation is
 refused when a suspension journal represents the only copy or a guest that may

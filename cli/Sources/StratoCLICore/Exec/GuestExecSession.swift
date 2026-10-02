@@ -196,13 +196,23 @@ public struct GuestExecSessionClient: Sendable {
         )
 
         while true {
+            try Task.checkCancellation()
             do {
                 let response: Components.Schemas.GuestExecSession
                 switch invocation.resource {
                 case .sandbox(let id):
-                    response = try await client.createSandboxExecSession(
-                        path: .init(sandboxID: id), body: .json(request)
-                    ).created.body.json
+                    let result = try await client.createSandboxExecSession(
+                        path: .init(sandboxID: id), body: .json(request))
+                    try Task.checkCancellation()
+                    if case .accepted = result {
+                        guard now() < deadline else {
+                            throw CLIError.timedOut(
+                                "Sandbox did not become ready for guest exec within thirty seconds.")
+                        }
+                        try await sleep(Self.retryDelay)
+                        continue
+                    }
+                    response = try result.created.body.json
                 case .virtualMachine(let id):
                     response = try await client.createVMExecSession(
                         path: .init(vmID: id), body: .json(request)

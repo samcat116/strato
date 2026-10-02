@@ -307,6 +307,99 @@ struct GuestExecSessionTests {
         }
     }
 
+    @Test("Waits for an accepted sandbox wake before attaching", arguments: [GuestExecOutputMode.raw, .multiplexed])
+    func acceptedWake(mode: GuestExecOutputMode) async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(responses: [
+                .init(statusCode: 202, json: Self.acceptedWakeJSON),
+                .init(statusCode: 201, json: Self.sessionJSON(mode: mode == .raw ? "raw" : "multiplexed")),
+            ])
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let socket = FakeGuestExecSocket(frames: [
+                .text(#"{"type":"ready"}"#),
+                .text(#"{"type":"exit","exitCode":17}"#),
+            ])
+            let connector = FakeGuestExecConnector(sockets: [socket])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector,
+                now: Date.init,
+                sleep: { _ in
+                    #expect(transport.recordedRequests.count == 1)
+                    #expect(await connector.calls().isEmpty)
+                })
+            let exit = try await session.run(
+                GuestExecInvocation(
+                    resource: .sandbox("sandbox-1"), command: ["true"],
+                    tty: mode == .raw, outputMode: mode), onOutput: { _ in })
+            #expect(exit == 17)
+            #expect(transport.recordedRequests.count == 2)
+            #expect(await connector.calls().count == 1)
+            #expect(await socket.wasClosed())
+        }
+    }
+
+    @Test("Repeated sandbox wake responses exhaust the existing mint budget")
+    func acceptedWakeTimeout() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(handler: { _ in
+                .init(statusCode: 202, json: Self.acceptedWakeJSON)
+            })
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let clock = FakeGuestExecClock(now: Date(timeIntervalSince1970: 1_000))
+            let connector = FakeGuestExecConnector(sockets: [])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector,
+                now: { clock.current() }, sleep: { _ in clock.advance(by: 10) })
+            let failure = await #expect(throws: CLIError.self) {
+                try await session.run(
+                    GuestExecInvocation(
+                        resource: .sandbox("sandbox-1"), command: ["true"],
+                        tty: false, outputMode: .multiplexed), onOutput: { _ in })
+            }
+            if case .timedOut(let message)? = failure {
+                #expect(message == "Sandbox did not become ready for guest exec within thirty seconds.")
+            } else {
+                Issue.record("Expected a sandbox wake timeout, got \(String(describing: failure))")
+            }
+            #expect(transport.recordedRequests.count == 4)
+            #expect(clock.current().timeIntervalSince1970 == 1_030)
+            #expect(await connector.calls().isEmpty)
+        }
+    }
+
+    @Test("Cancellation during sandbox wake does not retry or attach")
+    func acceptedWakeCancellation() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(handler: { _ in
+                .init(statusCode: 202, json: Self.acceptedWakeJSON)
+            })
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let waiting = Mutex(false)
+            let connector = FakeGuestExecConnector(sockets: [])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector,
+                now: Date.init,
+                sleep: { _ in
+                    waiting.withLock { $0 = true }
+                    while !Task.isCancelled { await Task.yield() }
+                })
+            let task = Task {
+                try await session.run(
+                    GuestExecInvocation(
+                        resource: .sandbox("sandbox-1"), command: ["true"],
+                        tty: false, outputMode: .multiplexed), onOutput: { _ in })
+            }
+            while !waiting.withLock({ $0 }) { await Task.yield() }
+            task.cancel()
+            await #expect(throws: CancellationError.self) { try await task.value }
+            #expect(transport.recordedRequests.count == 1)
+            #expect(await connector.calls().isEmpty)
+        }
+    }
+
     @Test(
         "Authorization failures do not retry or open a WebSocket",
         arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
@@ -468,6 +561,12 @@ struct GuestExecSessionTests {
         case .virtualMachine(let id): "vms/\(id)"
         }
     }
+
+    private static let acceptedWakeJSON = """
+        {"resource":{"name":"sandbox-1","environment":"test","image":"alpine",
+        "cpus":1,"memory":256,"env":{},"status":"Starting","conditions":{"converged":false,"targetGeneration":2,"observedGeneration":1}},
+        "targetGeneration":2,"mutationId":"00000000-0000-0000-0000-000000000001"}
+        """
 
     private static func sessionJSON(
         mode: String?, resource: GuestExecResource = .sandbox("sandbox-1")

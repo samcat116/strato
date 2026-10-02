@@ -60,7 +60,12 @@ public actor SandboxLazyMemoryStore {
         self.maximumBytes = maximumBytes
     }
 
-    deinit { _ = close(root) }
+    deinit {
+        if root >= 0 {
+            _ = flock(root, LOCK_UN)
+            _ = close(root)
+        }
+    }
 
     /// Atomically publish a memory image and compatibility manifest. Existing
     /// keys are reverified, never overwritten. Total store bytes are bounded.
@@ -183,6 +188,10 @@ public actor SandboxLazyMemoryStore {
     public func shutdown() throws {
         guard pins.isEmpty else { throw StoreError.pinned }
         if root >= 0 {
+            // A forked child can retain this open file description before
+            // CLOEXEC closes it. Closing only our descriptor leaves its flock
+            // alive; explicit unlock ends ownership when this store shuts down.
+            guard flock(root, LOCK_UN) == 0 else { throw StoreError.io(errno) }
             _ = close(root)
             root = -1
         }

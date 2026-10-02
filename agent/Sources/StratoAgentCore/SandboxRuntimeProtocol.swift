@@ -15,6 +15,10 @@ import StratoShared
 /// (issue #423) is stream-shaped instead: sessions are keyed by the control
 /// plane's sessionId and end with exactly one terminal event.
 public protocol SandboxRuntimeService: Sendable {
+    /// Durable shadow VMM capacity, retained until process death is proved.
+    /// Unknown evidence must fail admission closed.
+    func suspensionValidationReservations() async throws -> [String: HostReservation]
+
     /// Local desired/applied evidence; not a capability advertisement.
     func resourceEnforcementEvidence(
         sandboxId: String, application: ResourceEnforcementProducer.Application,
@@ -226,6 +230,7 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public func suspensionValidationReservations() async throws -> [String: HostReservation] { [:] }
     public func noteSandboxIdleControlPlane(_ desired: DesiredSandboxState) async {}
     public func sampleSandboxIdleActivity(sandboxId: String) async -> SandboxIdleActivityReport? { nil }
     public func prepareIdleSuspension(

@@ -33,6 +33,60 @@ struct SandboxLazyMemoryStoreTests {
         }
     }
 
+    #if os(Linux)
+    @Test func shutdownUnlocksWhileForkChildRetainsDescriptor() async throws {
+        try await withStore { root, store in
+            let (child, releaseDescriptor) = try forkDescriptorHolder()
+            defer {
+                // EOF releases the child without signals or an exec. Reap it
+                // even if opening the second store throws.
+                _ = close(releaseDescriptor)
+                var status: Int32 = 0
+                while waitpid(child, &status, 0) < 0 && errno == EINTR {}
+            }
+            #expect(kill(child, 0) == 0)
+            #expect(throws: (any Error).self) { try SandboxLazyMemoryStore(directory: root) }
+            try await store.shutdown()
+            // close alone cannot release flock while a forked child retains
+            // the same open-file description. Explicit LOCK_UN must do so.
+            let reopened = try SandboxLazyMemoryStore(directory: root)
+            #expect(kill(child, 0) == 0)
+            try await reopened.shutdown()
+        }
+    }
+
+    private func forkDescriptorHolder() throws -> (pid_t, Int32) {
+        var descriptors: [Int32] = [-1, -1]
+        guard pipe(&descriptors) == 0 else { throw POSIXError(.EIO) }
+        let readDescriptor = descriptors[0]
+        let writeDescriptor = descriptors[1]
+        guard fcntl(readDescriptor, F_SETFD, FD_CLOEXEC) == 0,
+            fcntl(writeDescriptor, F_SETFD, FD_CLOEXEC) == 0
+        else {
+            _ = close(readDescriptor)
+            _ = close(writeDescriptor)
+            throw POSIXError(.EIO)
+        }
+        let child = fork()
+        if child == 0 {
+            // No Foundation, allocation, actor operations, or exec after
+            // fork: retain inherited descriptors until the parent closes
+            // its writer, then exit using only POSIX operations.
+            _ = close(writeDescriptor)
+            var byte: UInt8 = 0
+            while read(readDescriptor, &byte, 1) < 0 && errno == EINTR {}
+            _ = close(readDescriptor)
+            _exit(0)
+        }
+        _ = close(readDescriptor)
+        guard child > 0 else {
+            _ = close(writeDescriptor)
+            throw POSIXError(.EIO)
+        }
+        return (child, writeDescriptor)
+    }
+    #endif
+
     @Test func publishReopenAndPrivateIdentity() async throws {
         try await withStore { root, store in
             let key = try await store.publishBase(
