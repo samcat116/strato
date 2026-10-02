@@ -74,6 +74,7 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
     case databasePort = "DATABASE_PORT"
     case databaseStatementTimeoutMS = "DATABASE_STATEMENT_TIMEOUT_MS"
     case databaseMigrationStatementTimeoutMS = "DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS"
+    case coordinationStoreDeadlineMS = "COORDINATION_STORE_DEADLINE_MS"
     case valkeyPort = "VALKEY_PORT"
     case valkeyDatabase = "VALKEY_DATABASE"
     case sessionValkeyPort = "SESSION_VALKEY_PORT"
@@ -116,6 +117,7 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .databasePort: 5432
         case .databaseStatementTimeoutMS: DatabaseStatementTimeout.defaultMilliseconds
         case .databaseMigrationStatementTimeoutMS: normalStatementTimeout
+        case .coordinationStoreDeadlineMS: 2000
         case .valkeyPort, .sessionValkeyPort: 6379
         case .valkeyDatabase, .sessionValkeyDatabase: 0
         case .sessionTTLSeconds: ValkeySessionDriver.defaultTTL
@@ -155,7 +157,7 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
             1...65_535
         case .valkeyDatabase, .sessionValkeyDatabase:
             0...Int.max
-        case .databaseStatementTimeoutMS, .databaseMigrationStatementTimeoutMS:
+        case .databaseStatementTimeoutMS, .databaseMigrationStatementTimeoutMS, .coordinationStoreDeadlineMS:
             1...DatabaseStatementTimeout.maximumMilliseconds
         case .sessionTTLSeconds:
             ValkeySessionDriver.minimumTTL...Int.max
