@@ -334,3 +334,6 @@ export type WorkloadIdentityOverview = OpenAPISchemas["WorkloadIdentityOverview"
 export type PendingDeviceAuthorization = OpenAPISchemas["PendingDeviceAuthorization"];
 
 export type CLISession = WithRequired<OpenAPISchemas["CLISessionSummary"], "id">;
+
+export type WorkloadResourceClassPolicy = OpenAPISchemas["WorkloadResourceClassPolicy"];
+export type WorkloadResourceClassSnapshot = OpenAPISchemas["WorkloadResourceClassSnapshot"];

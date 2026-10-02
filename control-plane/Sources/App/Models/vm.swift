@@ -5,6 +5,12 @@ import StratoShared
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
 /// receive IDs or immutable snapshots and reload their own instance.
 final class VM: Model, @unchecked Sendable {
+    @OptionalField(key: "admitted_reservation")
+    var admittedReservation: WorkloadAdmittedReservation?
+
+    @OptionalField(key: "resource_class")
+    var resourceClass: WorkloadResourceClassSnapshot?
+
     static let schema = "vms"
 
     @ID(key: .id)
@@ -695,6 +701,10 @@ enum InstanceIdentityStatus: String, Content, Sendable {
 }
 
 struct VMDetailResponse: Content {
+    let admittedReservation: WorkloadAdmittedReservation?
+    let effectiveMemoryReservationBytes: Int64?
+    let resourceClass: WorkloadResourceClassSnapshot?
+    let resourceClassKind: WorkloadResourceClassKind
     let id: UUID?
     let name: String
     let description: String
@@ -806,6 +816,10 @@ struct VMDetailResponse: Content {
         instanceIdentityStatus: InstanceIdentityStatus? = nil
     ) {
         self.id = vm.id
+        self.admittedReservation = vm.admittedReservation
+        self.effectiveMemoryReservationBytes = vm.admittedReservation?.effectiveMemoryBytes
+        self.resourceClass = vm.resourceClass
+        self.resourceClassKind = vm.resourceClass?.policy.kind ?? .guaranteed
         self.name = vm.name
         self.description = vm.description
         self.image = vm.image

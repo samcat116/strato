@@ -1,4 +1,4 @@
-import type { SiteStatus } from "@/types/api";
+import type { SiteStatus, WorkloadResourceClassPolicy } from "@/types/api";
 
 export {
   agentsAtSite as siteMembers,
@@ -20,6 +20,7 @@ export const SITE_STATUSES: SiteStatus[] = [
 ];
 
 export interface SiteFormState {
+  burstablePolicy: WorkloadResourceClassPolicy;
   name: string;
   description: string;
   status: SiteStatus;
@@ -32,6 +33,8 @@ export interface SiteFormState {
 }
 
 export const EMPTY_FORM: SiteFormState = {
+  burstablePolicy: { kind: "burstable", cpuAllocationRatio: 4, memoryAllocationRatio: 1, cpuWeight: 100,
+    memoryHighPercent: 80, hardLimitPolicy: "guestAndBackend", maxCPUPressure10: 10, maxMemoryPressure10: 5, maxTelemetryAgeSeconds: 60 },
   name: "",
   description: "",
   status: "active",

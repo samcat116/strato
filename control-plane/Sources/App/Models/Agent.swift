@@ -154,6 +154,12 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "memory_accounting")
     var memoryAccounting: HostMemoryAccounting?
 
+    @OptionalField(key: "available_cpu_micro_units")
+    var availableCPUMicroUnits: Int64?
+
+    @OptionalField(key: "resource_class_enforcement")
+    var resourceClassEnforcement: [WorkloadResourceClassEnforcement]?
+
     /// Control-plane receipt time for `resourceTelemetry`; placement must not
     /// trust the agent's wall clock when evaluating freshness.
     @OptionalField(key: "resource_telemetry_received_at")
@@ -304,6 +310,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.totalCPU = resources.totalCPU
         self.totalMemory = resources.totalMemory
         self.memoryAccounting = resources.memoryAccounting
+        self.availableCPUMicroUnits = resources.availableCPUMicroUnits
         self.totalDisk = resources.totalDisk
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
@@ -342,11 +349,13 @@ final class Agent: Model, Content, @unchecked Sendable {
                 || availableDisk != disk
                 || physicalFreeDisk != resources.physicalFreeDisk
                 || memoryAccounting != resources.memoryAccounting
+                || availableCPUMicroUnits != resources.availableCPUMicroUnits
         else { return false }
         availableCPU = cpu
         availableMemory = memory
         availableDisk = disk
         physicalFreeDisk = resources.physicalFreeDisk
+        availableCPUMicroUnits = resources.availableCPUMicroUnits
         memoryAccounting = resources.memoryAccounting
         return true
     }
@@ -360,7 +369,8 @@ final class Agent: Model, Content, @unchecked Sendable {
             totalDisk: totalDisk,
             availableDisk: availableDisk,
             physicalFreeDisk: physicalFreeDisk,
-            memoryAccounting: memoryAccounting
+            memoryAccounting: memoryAccounting,
+            availableCPUMicroUnits: availableCPUMicroUnits
         )
     }
 }
@@ -450,6 +460,7 @@ extension Agent {
         hypervisors = registration.hypervisors
         networkCapability = registration.networkCapability?.rawValue
         if let hostInfo = registration.hostInfo { self.hostInfo = hostInfo }
+        resourceClassEnforcement = registration.resourceClassEnforcement
         sandboxCapable = registration.sandboxCapable
         sandboxNetworkingCapable = registration.sandboxNetworkingCapable
         tpmCapable = registration.tpmCapable
@@ -459,6 +470,7 @@ extension Agent {
         dependencyObservationsReceivedAt = receivedAt
         totalCPU = registration.resources.totalCPU
         totalMemory = registration.resources.totalMemory
+        availableCPUMicroUnits = registration.resources.availableCPUMicroUnits
         memoryAccounting = registration.resources.memoryAccounting
         totalDisk = registration.resources.totalDisk
         _ = updateAvailableResources(registration.resources)

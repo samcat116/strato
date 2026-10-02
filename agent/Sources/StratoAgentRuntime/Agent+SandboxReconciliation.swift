@@ -27,6 +27,10 @@ extension Agent {
     }
 
     func performSandbox(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        if step != .shutdown && step != .delete, item.desiredSandbox?.spec.resourceClass?.policy.kind == .burstable {
+            throw HypervisorServiceError.invalidConfiguration(
+                "Burstable workloads require verified STR272 runtime enforcement")
+        }
         switch step {
         case .adopt:
             // Adoption flows through adoptSandbox (the reconciler needs the

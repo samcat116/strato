@@ -12,6 +12,7 @@ enum VMCreationWorkflow {
         let user = try req.requireActingUser("Creating a VM")
 
         struct CreateVMRequest: Content, ValidatedRequestBody {
+            let resourceClass: WorkloadResourceClassReference?
             var name: String
             /// The VM's DNS label (issue #770). Defaults to a slugified
             /// `name`, disambiguated against whatever already registers into
@@ -152,6 +153,8 @@ enum VMCreationWorkflow {
             resourceKind: "VMs"
         )
         let projectId = try project.requireID()
+        let resourceClass = try await WorkloadResourceClassService.resolve(
+            createRequest.resourceClass, project: project, req: req)
         let bootPool = try await StoragePool.resolveForCreate(
             requestedPoolID: createRequest.poolId, projectID: projectId, on: req.db)
         let bootPoolID = try bootPool.requireID()
@@ -309,6 +312,7 @@ enum VMCreationWorkflow {
             metadataEnabled: metadataEnabled,
             metadataSource: metadataSource
         )
+        vm.resourceClass = resourceClass
         vm.cmdline = cmdlineValue
         // Link VM to source image
         vm.$sourceImage.id = image.id

@@ -1,3 +1,4 @@
+import StratoShared
 import Foundation
 import Valkey
 import Vapor
@@ -27,9 +28,16 @@ enum ValkeyConfigurationError: Error, CustomStringConvertible {
 /// Resource amounts held by a placement reservation: what a VM being scheduled
 /// will consume on its agent before the agent's own resource reports reflect it.
 struct ReservationAmounts: Sendable, Equatable {
-    let cpu: Int
+    let cpuMicroUnits: Int64
+    var cpu: Int { Int(cpuMicroUnits / 1_000_000 + (cpuMicroUnits % 1_000_000 == 0 ? 0 : 1)) }
     let memory: Int64
     let disk: Int64
+
+    init(cpu: Int = 0, memory: Int64, disk: Int64, cpuMicroUnits: Int64? = nil) {
+        self.cpuMicroUnits = max(0, cpuMicroUnits ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: cpu))
+        self.memory = memory
+        self.disk = disk
+    }
 
     static let zero = ReservationAmounts(cpu: 0, memory: 0, disk: 0)
 }
@@ -155,7 +163,11 @@ struct ValkeyCoordinationStore: CoordinationStore {
             if value == false then
                 redis.call('SREM', index, id)
             elseif id ~= vmId then
-                local c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                local c, m, d = string.match(value, '^u:(%d+):(%d+):(%d+)$')
+                if not c then
+                    c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                    if c then c = tonumber(c) * 1000000 end
+                end
                 if c then
                     usedCpu = usedCpu + tonumber(c)
                     usedMem = usedMem + tonumber(m)
@@ -166,7 +178,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
         if usedCpu + cpu > capCpu or usedMem + mem > capMem or usedDisk + disk > capDisk then
             return 0
         end
-        redis.call('SET', prefix .. vmId, cpu .. ':' .. mem .. ':' .. disk, 'EX', ttl)
+        redis.call('SET', prefix .. vmId, 'u:' .. cpu .. ':' .. mem .. ':' .. disk, 'EX', ttl)
         redis.call('SADD', index, vmId)
         redis.call('EXPIRE', index, ttl * 2)
         return 1
@@ -183,7 +195,11 @@ struct ValkeyCoordinationStore: CoordinationStore {
             if value == false then
                 redis.call('SREM', index, id)
             else
-                local c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                local c, m, d = string.match(value, '^u:(%d+):(%d+):(%d+)$')
+                if not c then
+                    c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                    if c then c = tonumber(c) * 1000000 end
+                end
                 if c then
                     usedCpu = usedCpu + tonumber(c)
                     usedMem = usedMem + tonumber(m)
@@ -261,10 +277,10 @@ struct ValkeyCoordinationStore: CoordinationStore {
             args: [
                 Self.vmKeyPrefix(agentKey),
                 vmId,
-                String(amounts.cpu),
+                String(amounts.cpuMicroUnits),
                 String(amounts.memory),
                 String(amounts.disk),
-                String(capacity.cpu),
+                String(capacity.cpuMicroUnits),
                 String(capacity.memory),
                 String(capacity.disk),
                 String(max(1, ttlSeconds)),
@@ -338,7 +354,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
         guard let values = try? response.decode(as: [Int].self), values.count == 3 else {
             throw CoordinationStoreError.unexpectedResponse
         }
-        return ReservationAmounts(cpu: values[0], memory: Int64(values[1]), disk: Int64(values[2]))
+        return ReservationAmounts(memory: Int64(values[1]), disk: Int64(values[2]), cpuMicroUnits: Int64(values[0]))
     }
 }
 
@@ -433,13 +449,13 @@ actor InMemoryCoordinationStore: CoordinationStore {
     ) -> Bool {
         let active = activeReservations(agentKey: agentKey)
         let others = active.filter { $0.key != vmId }
-        let usedCPU = others.values.reduce(0) { $0 + $1.amounts.cpu }
-        let usedMemory = others.values.reduce(Int64(0)) { $0 + $1.amounts.memory }
-        let usedDisk = others.values.reduce(Int64(0)) { $0 + $1.amounts.disk }
+        let usedCPU = others.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.cpuMicroUnits) }
+        let usedMemory = others.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.memory) }
+        let usedDisk = others.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.disk) }
 
-        guard usedCPU + amounts.cpu <= capacity.cpu,
-            usedMemory + amounts.memory <= capacity.memory,
-            usedDisk + amounts.disk <= capacity.disk
+        guard usedCPU <= capacity.cpuMicroUnits, amounts.cpuMicroUnits <= capacity.cpuMicroUnits - usedCPU,
+            usedMemory <= capacity.memory, amounts.memory <= capacity.memory - usedMemory,
+            usedDisk <= capacity.disk, amounts.disk <= capacity.disk - usedDisk
         else {
             return false
         }
@@ -461,12 +477,17 @@ actor InMemoryCoordinationStore: CoordinationStore {
         Array(activeReservations(agentKey: agentKey).keys)
     }
 
+    private static func saturatedSum(_ lhs: Int64, _ rhs: Int64) -> Int64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? .max : sum
+    }
+
     func reservedTotal(agentKey: String) -> ReservationAmounts {
         let active = activeReservations(agentKey: agentKey)
         return ReservationAmounts(
-            cpu: active.values.reduce(0) { $0 + $1.amounts.cpu },
-            memory: active.values.reduce(Int64(0)) { $0 + $1.amounts.memory },
-            disk: active.values.reduce(Int64(0)) { $0 + $1.amounts.disk }
+            memory: active.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.memory) },
+            disk: active.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.disk) },
+            cpuMicroUnits: active.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.cpuMicroUnits) }
         )
     }
 

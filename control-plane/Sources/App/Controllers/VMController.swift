@@ -693,6 +693,8 @@ struct VMController: RouteCollection {
                     cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
                 _ = try await Self.applyMetadataUpdate(
                     updateRequest.metadataEnabled, to: existingVM, on: db)
+                try WorkloadResourceClassService.requireGrowthAvailable(
+                    vm: existingVM, cpu: lockedCPU, memory: lockedMemory)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
                     vcpuDelta: lockedCPU - committed.cpu,
@@ -794,6 +796,8 @@ struct VMController: RouteCollection {
             let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
             try Self.validateSizing(
                 cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
+            try WorkloadResourceClassService.requireGrowthAvailable(
+                vm: existingVM, cpu: lockedCPU, memory: lockedMemory)
             try await QuotaEnforcementService.reserveVMResize(
                 for: project, environment: existingVM.environment,
                 vcpuDelta: lockedCPU - committed.cpu,
@@ -920,6 +924,7 @@ struct VMController: RouteCollection {
     private static func requirePlacedResizeCapacity(
         vm: VM, newCPU: Int, newMemory: Int64, on req: Request
     ) async throws {
+        try WorkloadResourceClassService.requireGrowthAvailable(vm: vm, cpu: newCPU, memory: newMemory)
         guard let agentIDString = vm.hypervisorId else {
             // A stopped, unplaced VM is sized before placement and relies on
             // the scheduler. A running VM without a placement is inconsistent
@@ -976,11 +981,17 @@ struct VMController: RouteCollection {
         let active =
             await req.application.coordination.activeReservations(agentIds: [agentIDString])[
                 agentIDString] ?? .zero
-        let reservedCPU = max(0, active.cpu)
+        let reservedCPU = active.cpuMicroUnits
         let reservedMemory = max(Int64(0), active.memory)
-        let effectiveCPU = reservedCPU >= agent.availableCPU ? 0 : agent.availableCPU - reservedCPU
+        let availableCPU =
+            agent.availableCPUMicroUnits
+            ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: agent.availableCPU)
+        let effectiveCPUMicroUnits = reservedCPU >= availableCPU ? 0 : availableCPU - reservedCPU
+        let effectiveCPU = Int(effectiveCPUMicroUnits / 1_000_000)
         let effectiveMemory = reservedMemory >= agent.availableMemory ? 0 : agent.availableMemory - reservedMemory
-        guard cpuGrowth <= effectiveCPU, memoryGrowth <= effectiveMemory else {
+        guard WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: cpuGrowth) <= effectiveCPUMicroUnits,
+            memoryGrowth <= effectiveMemory
+        else {
             throw Abort(
                 .conflict,
                 reason: "Agent `\(agent.name)` has \(effectiveCPU) vCPUs and "

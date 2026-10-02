@@ -5,38 +5,45 @@ import StratoShared
 /// malformed or extreme inventory must make the host look full, never wrap it
 /// back into available capacity.
 public struct HostReservation: Sendable, Equatable, Hashable {
-    public var cpus: Int
+    public var cpuMicroUnits: Int64
+    public var cpus: Int {
+        get {
+            cpuMicroUnits == Int64.max
+                ? Int.max : Int(cpuMicroUnits / 1_000_000 + (cpuMicroUnits % 1_000_000 == 0 ? 0 : 1))
+        }
+        set { cpuMicroUnits = WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: newValue) }
+    }
     public var memoryBytes: Int64
     public var diskBytes: Int64
 
-    public init(cpus: Int = 0, memoryBytes: Int64 = 0, diskBytes: Int64 = 0) {
-        self.cpus = max(0, cpus)
+    public init(cpus: Int = 0, memoryBytes: Int64 = 0, diskBytes: Int64 = 0, cpuMicroUnits: Int64? = nil) {
+        self.cpuMicroUnits = max(0, cpuMicroUnits ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: cpus))
         self.memoryBytes = max(0, memoryBytes)
         self.diskBytes = max(0, diskBytes)
     }
 
     public static func positiveDelta(from current: HostReservation, to desired: HostReservation) -> HostReservation {
         HostReservation(
-            cpus: desired.cpus > current.cpus ? desired.cpus - current.cpus : 0,
             memoryBytes: desired.memoryBytes > current.memoryBytes ? desired.memoryBytes - current.memoryBytes : 0,
-            diskBytes: desired.diskBytes > current.diskBytes ? desired.diskBytes - current.diskBytes : 0)
+            diskBytes: desired.diskBytes > current.diskBytes ? desired.diskBytes - current.diskBytes : 0,
+            cpuMicroUnits: desired.cpuMicroUnits > current.cpuMicroUnits
+                ? desired.cpuMicroUnits - current.cpuMicroUnits : 0)
     }
 
     public func addingSaturating(_ other: HostReservation) -> HostReservation {
-        let (cpu, cpuOverflow) = cpus.addingReportingOverflow(other.cpus)
+        let (cpu, cpuOverflow) = cpuMicroUnits.addingReportingOverflow(other.cpuMicroUnits)
         let (memory, memoryOverflow) = memoryBytes.addingReportingOverflow(other.memoryBytes)
         let (disk, diskOverflow) = diskBytes.addingReportingOverflow(other.diskBytes)
         return HostReservation(
-            cpus: cpuOverflow ? Int.max : cpu,
             memoryBytes: memoryOverflow ? Int64.max : memory,
-            diskBytes: diskOverflow ? Int64.max : disk)
+            diskBytes: diskOverflow ? Int64.max : disk, cpuMicroUnits: cpuOverflow ? Int64.max : cpu)
     }
 
     public func subtractingSaturating(_ other: HostReservation) -> HostReservation {
         HostReservation(
-            cpus: other.cpus >= cpus ? 0 : cpus - other.cpus,
             memoryBytes: other.memoryBytes >= memoryBytes ? 0 : memoryBytes - other.memoryBytes,
-            diskBytes: other.diskBytes >= diskBytes ? 0 : diskBytes - other.diskBytes)
+            diskBytes: other.diskBytes >= diskBytes ? 0 : diskBytes - other.diskBytes,
+            cpuMicroUnits: other.cpuMicroUnits >= cpuMicroUnits ? 0 : cpuMicroUnits - other.cpuMicroUnits)
     }
 }
 
@@ -64,6 +71,36 @@ public struct HypervisorReservationInventory: Sendable, Equatable {
         self.workloadIDs = workloadReservations.map { Set($0.keys) } ?? workloadIDs
     }
 
+    /// Replaces only owned, bounded raw commitments; unknown or oversized
+    /// backend processes retain their full physical reservation.
+    public func accountingForAdmittedWorkloads(_ admitted: [String: WorkloadAdmittedReservation]) -> Self {
+        guard let exact = workloadReservations else { return self }
+        var rawTotal = HostReservation()
+        var accountedTotal = HostReservation()
+        var accounted: [String: HostReservation] = [:]
+        for (id, raw) in exact {
+            rawTotal = rawTotal.addingSaturating(raw)
+            let commitment: HostReservation
+            if let grant = admitted[id], raw.cpus <= grant.grantedCPUs,
+                raw.memoryBytes
+                    <= WorkloadMemoryReservation(
+                        guestBytes: grant.guestCommitmentBytes, backendOverheadBytes: grant.backendOverheadBytes
+                    ).effectiveBytes
+            {
+                commitment = HostReservation(
+                    memoryBytes: grant.effectiveMemoryBytes, diskBytes: raw.diskBytes,
+                    cpuMicroUnits: grant.cpuMicroUnits)
+            } else {
+                commitment = raw
+            }
+            accounted[id] = commitment
+            accountedTotal = accountedTotal.addingSaturating(commitment)
+        }
+        return Self(
+            reservation: reservation.subtractingSaturating(rawTotal).addingSaturating(accountedTotal),
+            workloadReservations: accounted)
+    }
+
     /// Reconciles durable manifest reservations with the backend inventory.
     /// Exact per-workload sizing takes the larger value in each dimension, so
     /// a cached pre-resize aggregate cannot hide a newer manifest grant. With
@@ -75,9 +112,9 @@ public struct HypervisorReservationInventory: Sendable, Equatable {
             for (id, durable) in workloads {
                 let observed = reconciled[id] ?? HostReservation()
                 reconciled[id] = HostReservation(
-                    cpus: max(observed.cpus, durable.cpus),
                     memoryBytes: max(observed.memoryBytes, durable.memoryBytes),
-                    diskBytes: max(observed.diskBytes, durable.diskBytes))
+                    diskBytes: max(observed.diskBytes, durable.diskBytes),
+                    cpuMicroUnits: max(observed.cpuMicroUnits, durable.cpuMicroUnits))
             }
             return reconciled.values.reduce(HostReservation()) { total, workload in
                 total.addingSaturating(workload)
@@ -127,10 +164,11 @@ public struct HostCapacitySnapshot: Sendable, Equatable {
 
     public var available: HostReservation {
         return HostReservation(
-            cpus: !inventoryKnown || reserved.cpus >= total.cpus ? 0 : total.cpus - reserved.cpus,
             memoryBytes: memoryAccounting.remainingAllocatableBytes,
             diskBytes: !diskInventoryKnown || reserved.diskBytes >= total.diskBytes
-                ? 0 : total.diskBytes - reserved.diskBytes)
+                ? 0 : total.diskBytes - reserved.diskBytes,
+            cpuMicroUnits: !inventoryKnown || reserved.cpuMicroUnits >= total.cpuMicroUnits
+                ? 0 : total.cpuMicroUnits - reserved.cpuMicroUnits)
     }
 }
 
@@ -239,7 +277,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
             let observed = claim.workloadID.flatMap { workloads[$0] } ?? HostReservation()
             let growth = HostReservation.positiveDelta(from: claim.baseline, to: observed)
             let unobserved = claim.reservation.subtractingSaturating(
-                HostReservation(cpus: growth.cpus, memoryBytes: growth.memoryBytes))
+                HostReservation(memoryBytes: growth.memoryBytes, cpuMicroUnits: growth.cpuMicroUnits))
             return total.addingSaturating(unobserved)
         }
     }
@@ -251,7 +289,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
         agentName: String,
         workloadID: String? = nil
     ) throws -> HostCapacityClaim? {
-        guard requested.cpus > 0 || requested.memoryBytes > 0 || requested.diskBytes > 0 else { return nil }
+        guard requested.cpuMicroUnits > 0 || requested.memoryBytes > 0 || requested.diskBytes > 0 else { return nil }
         guard snapshot.inventoryKnown else {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .inventory, available: HostReservation(), required: requested)
@@ -262,7 +300,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
         // the desired footprint directly: adding positive growth to the current
         // reservation would retain old values in dimensions this same resize
         // shrinks, and could make a corrective mixed resize look impossible.
-        if desiredWorkloadReservation.cpus > snapshot.total.cpus {
+        if desiredWorkloadReservation.cpuMicroUnits > snapshot.total.cpuMicroUnits {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .cpu, available: snapshot.total,
                 required: desiredWorkloadReservation, failureClassification: .permanent)
@@ -290,7 +328,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
             diskInventoryKnown: true, hostReservedMemoryBytes: snapshot.hostReservedMemoryBytes,
             qemuOverheadBytes: snapshot.qemuOverheadBytes
         ).available
-        guard requested.cpus <= effective.cpus else {
+        guard requested.cpuMicroUnits <= effective.cpuMicroUnits else {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .cpu, available: effective, required: requested)
         }
@@ -328,7 +366,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
                 agentName: agentName, resource: .inventory, available: HostReservation(),
                 required: HostReservation())
         }
-        if currentWorkloadReservation.cpus > snapshot.total.cpus {
+        if currentWorkloadReservation.cpuMicroUnits > snapshot.total.cpuMicroUnits {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .cpu, available: snapshot.total,
                 required: currentWorkloadReservation, failureClassification: .permanent)
@@ -351,7 +389,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
         }
         let used = snapshot.reserved.addingSaturating(
             provisionalReservation(excludingObserved: snapshot.workloadReservations))
-        if used.cpus > snapshot.total.cpus {
+        if used.cpuMicroUnits > snapshot.total.cpuMicroUnits {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .cpu, available: HostReservation(),
                 required: HostReservation(cpus: used.cpus - snapshot.total.cpus))
@@ -386,10 +424,16 @@ public enum VMHostReservation {
         _ spec: VMSpec, hypervisorType: HypervisorType, architecture: CPUArchitecture,
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
+        if let admitted = spec.admittedReservation {
+            return HostReservation(memoryBytes: admitted.effectiveMemoryBytes, cpuMicroUnits: admitted.cpuMicroUnits)
+        }
         let memory = WorkloadMemoryReservation.vm(
             memoryBytes: spec.memoryBytes, maxMemoryBytes: spec.maxMemoryBytes,
             hypervisorType: hypervisorType, architecture: architecture, qemuOverheadBytes: qemuOverheadBytes)
-        return HostReservation(cpus: spec.cpus, memoryBytes: memory.effectiveBytes)
+        let policy = spec.resourceClass?.policy ?? .guaranteed
+        return HostReservation(
+            memoryBytes: policy.memoryReservation(memory).effectiveBytes,
+            cpuMicroUnits: policy.cpuMicroUnits(cpus: spec.cpus))
     }
 
     /// Reservation carried by the durable manifest. A QEMU entry written by a
@@ -401,6 +445,11 @@ public enum VMHostReservation {
         _ entry: VMManifestEntry, architecture: CPUArchitecture,
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
+        if entry.spec.admittedReservation != nil {
+            return forSpec(
+                entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture,
+                qemuOverheadBytes: qemuOverheadBytes)
+        }
         guard entry.hypervisorType == .qemu else {
             return forSpec(
                 entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture,
@@ -422,8 +471,12 @@ public enum VMHostReservation {
 /// same reservation semantics as heartbeat accounting.
 public enum SandboxHostReservation {
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
-        HostReservation(
-            cpus: spec.cpus,
-            memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: spec.memoryBytes).effectiveBytes)
+        if let admitted = spec.admittedReservation {
+            return HostReservation(memoryBytes: admitted.effectiveMemoryBytes, cpuMicroUnits: admitted.cpuMicroUnits)
+        }
+        let policy = spec.resourceClass?.policy ?? .guaranteed
+        return HostReservation(
+            memoryBytes: policy.memoryReservation(.sandbox(memoryBytes: spec.memoryBytes)).effectiveBytes,
+            cpuMicroUnits: policy.cpuMicroUnits(cpus: spec.cpus))
     }
 }

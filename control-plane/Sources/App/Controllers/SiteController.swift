@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -280,7 +281,25 @@ struct SiteController: RouteCollection {
         site.locationLabel = Self.normalized(update.locationLabel)
         site.regionCode = Self.normalized(update.regionCode)
         site.labels = labels ?? [:]
-        try await site.save(on: req.db)
+        try await req.db.transaction { db in
+            guard let sql = db as? SQLDatabase else { throw Abort(.internalServerError) }
+            let siteID = try site.requireID()
+            try await sql.raw("SELECT id FROM sites WHERE id = \(bind: siteID) FOR UPDATE").run()
+            guard let fresh = try await Site.find(siteID, on: db) else { throw Abort(.notFound) }
+            if update.status == nil { site.status = fresh.status }
+            site.burstableResourceClass = fresh.burstableResourceClass
+            if let policy = update.burstableResourcePolicy {
+                let old = try fresh.resourceClasses()[1]
+                if old.policy != policy {
+                    guard old.revision < Int64.max else {
+                        throw Abort(.conflict, reason: "Resource class revision exhausted")
+                    }
+                    site.burstableResourceClass = try WorkloadResourceClassSnapshot(
+                        classID: old.classID, siteID: siteID, revision: old.revision + 1, policy: policy)
+                }
+            }
+            try await site.save(on: db)
+        }
 
         // Topology authority may have moved: the old controller must stop
         // reconciling (and gets networksAuthoritative=false on its next sync)

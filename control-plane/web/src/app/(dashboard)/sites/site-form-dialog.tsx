@@ -68,6 +68,32 @@ export function SiteFormDialog({
               <Input id="site-name" placeholder="us-east-1" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} disabled={mutationPending || !!editingSite} />
               {editingSite && <p className="text-xs text-muted-foreground">Site names cannot be changed after creation.</p>}
             </div>
+            {editingSite && (
+              <fieldset className="space-y-3 rounded-md border p-4">
+                <legend className="px-1 text-sm font-medium">Workload resource classes</legend>
+                <p className="text-sm">Guaranteed is the immutable default with 1:1 CPU and memory accounting.</p>
+                <p className="text-xs text-muted-foreground">Burstable assignment is unavailable until runtime enforcement is verified. These bounds limit policy configuration; they do not recommend safe overcommit. Policy changes apply to new placement and growth, preserving existing grants.</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {([
+                    ["cpuAllocationRatio", "CPU allocation ratio", 1, 64, "any"],
+                    ["memoryAllocationRatio", "Memory allocation ratio", 1, 16, "any"],
+                    ["cpuWeight", "CPU weight", 1, 10000, 1],
+                    ["memoryHighPercent", "Memory high (% of guest grant)", 1, 99, 1],
+                    ["maxCPUPressure10", "Maximum CPU PSI (10 s)", 0, 100, "any"],
+                    ["maxMemoryPressure10", "Maximum memory PSI (10 s)", 0, 100, "any"],
+                    ["maxTelemetryAgeSeconds", "Maximum telemetry age (seconds)", 15, 300, 1],
+                  ] as const).map(([key, label, min, max, step]) => (
+                    <div key={key} className="space-y-1">
+                      <Label htmlFor={`resource-class-${key}`}>{label}</Label>
+                      <Input id={`resource-class-${key}`} type="number" required min={min} max={max} step={step}
+                        value={form.burstablePolicy[key]} disabled={mutationPending}
+                        onChange={(event) => setForm((current) => ({ ...current,
+                          burstablePolicy: { ...current.burstablePolicy, [key]: Number(event.target.value) } }))} />
+                    </div>
+                  ))}
+                </div>
+              </fieldset>
+            )}
             <div className="space-y-2">
               <Label htmlFor="site-description">Description</Label>
               <Input id="site-description" placeholder="Primary east coast availability zone" value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} disabled={mutationPending} />

@@ -158,6 +158,10 @@ export function VMDetailPage({ id }: { id: string }) {
         <TabsContent value="overview" className="space-y-6 mt-6">
           {/* Resources */}
           <DetailGrid>
+            <StatCard title="Resource class" icon={<Cpu className="h-4 w-4" />}>
+              <div className="text-xl font-bold capitalize">{vm.resourceClassKind ?? "guaranteed"}</div>
+              <p className="text-xs text-muted-foreground">{vm.resourceClass ? `Admitted revision ${vm.resourceClass.revision}` : "Immutable default · 1:1"}</p>
+            </StatCard>
             <StatCard title="CPU" icon={<Cpu className="h-4 w-4" />}>
                 <div className="text-xl font-bold text-foreground">
                   {vm.cpu} / {vm.maxCpu}

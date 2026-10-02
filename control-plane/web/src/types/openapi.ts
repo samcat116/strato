@@ -5831,6 +5831,7 @@ export interface components {
         /** @enum {string} */
         CPUArchitecture: "x86_64" | "arm64";
         CreateVMRequest: {
+            resourceClass?: components["schemas"]["WorkloadResourceClassReference"];
             name: string;
             /** @description The VM's DNS label. Defaults to a slugified `name`, disambiguated with a numeric suffix against whatever already registers into the target network's primary zone. An explicit value is instead held to strict uniqueness and answers `409` on a collision. */
             hostname?: string;
@@ -5946,6 +5947,18 @@ export interface components {
             sshAuthorizedKeys?: string[];
         };
         VMDetail: {
+            admittedReservation?: components["schemas"]["WorkloadAdmittedReservation"];
+            /**
+             * Format: int64
+             * @description Durable physical memory commitment; absent for historical guaranteed accounting.
+             */
+            effectiveMemoryReservationBytes?: number | null;
+            resourceClass?: components["schemas"]["WorkloadResourceClassSnapshot"];
+            /**
+             * @description Missing historical references resolve to guaranteed.
+             * @enum {string}
+             */
+            resourceClassKind?: "guaranteed" | "burstable";
             /** Format: uuid */
             id?: string;
             name: string;
@@ -6148,6 +6161,7 @@ export interface components {
             prefixLength?: number;
         };
         CreateSandboxRequest: {
+            resourceClass?: components["schemas"]["WorkloadResourceClassReference"];
             name: string;
             /** @description OCI image reference. */
             image?: string;
@@ -6210,6 +6224,18 @@ export interface components {
             ttlSeconds?: number;
         };
         SandboxDetail: {
+            admittedReservation?: components["schemas"]["WorkloadAdmittedReservation"];
+            /**
+             * Format: int64
+             * @description Durable physical memory commitment; absent for historical guaranteed accounting.
+             */
+            effectiveMemoryReservationBytes?: number | null;
+            resourceClass?: components["schemas"]["WorkloadResourceClassSnapshot"];
+            /**
+             * @description Missing historical references resolve to guaranteed.
+             * @enum {string}
+             */
+            resourceClassKind?: "guaranteed" | "burstable";
             /** Format: uuid */
             id?: string;
             name: string;
@@ -8702,6 +8728,11 @@ export interface components {
         AgentStatus: "online" | "offline" | "connecting" | "error";
         /** @description Capacity reported by the agent host. */
         AgentResources: {
+            /**
+             * Format: int64
+             * @description Physical CPU capacity after inventory and provisional commitments; one CPU is 1000000 units.
+             */
+            availableCPUMicroUnits?: number;
             /** @description Total vCPUs on the host. */
             totalCPU: number;
             availableCPU: number;
@@ -9099,6 +9130,9 @@ export interface components {
         StoragePoolMode: "local" | "replicated" | "ceph";
         /** @description An availability zone: the agents that share one OVN deployment, so a logical network pinned to the site can span its nodes. */
         SiteDetail: {
+            resourceClasses?: components["schemas"]["WorkloadResourceClassSnapshot"][];
+            /** @description False until verified STR272 runtime enforcement is available. */
+            burstableAdmissionAvailable?: boolean;
             /** Format: uuid */
             id: string;
             name: string;
@@ -9167,6 +9201,7 @@ export interface components {
         };
         /** @description Full-replace (PUT) semantics for descriptive fields: omitting one clears it (labels omitted → empty map). `status` is the exception — an omitted status leaves the current lifecycle unchanged. */
         UpdateSiteRequest: {
+            burstableResourcePolicy?: components["schemas"]["WorkloadResourceClassPolicy"];
             description?: string | null;
             /** Format: uuid */
             networkControllerAgentId?: string | null;
@@ -10444,6 +10479,52 @@ export interface components {
             labels: {
                 [key: string]: string;
             };
+        };
+        /** @description Site-scoped class selection. Omission preserves guaranteed placement; burstable assignment currently fails closed. */
+        WorkloadResourceClassReference: {
+            /** Format: uuid */
+            siteID: string;
+            /** Format: uuid */
+            classID: string;
+        };
+        /** @description Configuration ceilings are policy bounds, not recommendations for safe overcommit. Guaranteed is immutable at 1:1; burstable is explicit and requires verified runtime enforcement. Catalog changes affect new placement and growth only, never existing grants or generations. */
+        WorkloadResourceClassPolicy: {
+            /** @enum {string} */
+            kind: "guaranteed" | "burstable";
+            /** Format: double */
+            cpuAllocationRatio: number;
+            /** Format: double */
+            memoryAllocationRatio: number;
+            cpuWeight: number;
+            /** @description Guaranteed requires 100; burstable requires 1 through 99. Denominator is current guest grant, before backend overhead. */
+            memoryHighPercent: number;
+            /** @enum {string} */
+            hardLimitPolicy: "guestAndBackend";
+            /** Format: double */
+            maxCPUPressure10: number;
+            /** Format: double */
+            maxMemoryPressure10: number;
+            maxTelemetryAgeSeconds: number;
+        };
+        WorkloadResourceClassSnapshot: components["schemas"]["WorkloadResourceClassPolicy"] & {
+            /** Format: uuid */
+            classID: string;
+            /** Format: uuid */
+            siteID: string;
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @description Durable admitted physical commitment; growth preserves previous pricing. */
+        WorkloadAdmittedReservation: {
+            grantedCPUs: number;
+            /** Format: int64 */
+            guestCommitmentBytes: number;
+            /** Format: int64 */
+            cpuMicroUnits: number;
+            /** Format: int64 */
+            discountedGuestBytes: number;
+            /** Format: int64 */
+            backendOverheadBytes: number;
         };
     };
     responses: {

@@ -382,3 +382,13 @@ use in code, tests, docs, and review. Architecture-level maps live in
   `primaryDNSZone` already means "the zone this network's VMs register into", and
   "and resolve through" is the same intent; making the operator say it twice is
   what left a correctly realized zone inert.
+
+### Workload resource class
+
+A site-scoped admitted CPU/memory policy. `guaranteed` is the immutable default
+with 1:1 physical accounting; `burstable` is explicit and requires verified
+backend reclaim, fair-share, containment, and readback. Catalog revisions do
+not reprice existing grants. `admittedReservation` persists the physical
+commitment, including growth admitted under a different revision. Ratio bounds
+are policy ceilings, not recommendations for safe overcommit. See
+[the class contract](docs/architecture/resource-classes-contract.md).

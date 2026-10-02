@@ -1,6 +1,6 @@
-# Workload resource classes: STR267 / STR272 contract proposal
+# Workload resource classes: STR267 / STR272 contract
 
-Status: shared wire v67 and ratio bounds accepted by parent; implementation in progress. No capability may be
+Status: shared wire v67 and ratio bounds accepted by parent; gated model implemented. No capability may be
 advertised and no burstable workload may be admitted until STR272 has complete
 runtime enforcement and effective readback for the selected backend.
 
@@ -165,8 +165,8 @@ or setting one backend flag cannot enable placement.
   specs and QEMU's realized hotplug reservation.
 - `agent/Sources/StratoAgentCore/HostCapacityAdmission.swift` owns host claims,
   positive deltas, identity-based provisional de-duplication, and manifest
-  accounting; it currently uses integer CPU reservations and requires the
-  coordinated fractional-capacity update.
+  accounting; it uses CPU micro-unit reservations and retains the coordinated
+  fractional-capacity accounting.
 - `control-plane/Sources/App/Services/SchedulerService.swift` owns candidate
   requirements and ratio-aware physical reservation diagnostics.
 - `control-plane/Sources/App/Services/WorkloadPlacementService.swift` builds
@@ -175,3 +175,24 @@ or setting one backend flag cannot enable placement.
   fractional CPU commitments and atomic reservation behavior.
 - `control-plane/Sources/App/Services/DesiredStateAssembler.swift` must read
   persisted admitted snapshots instead of repricing from the mutable catalog.
+
+## Gated implementation and activation boundary
+
+The site API exposes immutable guaranteed and configurable burstable catalog
+entries through the existing site permissions. Class references in VM/sandbox
+creation are site-scoped and checked against the project's root organization.
+`strato resource-class list/configure --site <UUID>` uses this catalog; creation
+commands accept `--resource-class-site` and `--resource-class-id` together. The
+UI exposes catalog configuration and guaranteed selection, and disables
+burstable selection. Both detail views expose the admitted class revision.
+
+Migration columns are optional, with no workload backfill or repricing. API
+assignment, scheduler placement, positive VM growth, and agent realization each
+refuse burstable. The class snapshot and aggregate ledger round-trip through
+models, canonical specs, and manifests. No enabled path admits a discounted
+commitment. Mixed-revision growth arithmetic is defined and tested in
+`WorkloadAdmittedReservation.growing`; activating admission must wire current
+catalog resolution and atomic ledger persistence into placement/growth only
+after complete backend enforcement and pressure gates have been validated.
+This draft does not claim that runtime activation or full #1246 acceptance
+criteria are complete. STR272 remains the activation dependency.

@@ -601,6 +601,10 @@ extension Agent: ReconcileActuator {
             return
         }
         do {
+            if step != .shutdown && step != .delete, item.desired?.spec.resourceClass?.policy.kind == .burstable {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "Burstable workloads require verified STR272 runtime enforcement")
+            }
             switch step {
             case .adopt:
                 // Adoption flows through adoptVM (the reconciler needs the

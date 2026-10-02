@@ -9990,6 +9990,8 @@ components:
       type: object
       required: [name, projectId]
       properties:
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassReference"
         name:
           type: string
         hostname:
@@ -10253,6 +10255,20 @@ components:
         - networkInterfaces
         - conditions
       properties:
+        admittedReservation:
+          $ref: "#/components/schemas/WorkloadAdmittedReservation"
+        effectiveMemoryReservationBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Durable physical memory commitment; absent for historical guaranteed accounting.
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        resourceClassKind:
+          type: string
+          enum: [guaranteed, burstable]
+          description: Missing historical references resolve to guaranteed.
         id:
           type: string
           format: uuid
@@ -10626,6 +10642,8 @@ components:
       type: object
       required: [name, projectId]
       properties:
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassReference"
         name:
           type: string
         image:
@@ -10756,6 +10774,20 @@ components:
         - status
         - conditions
       properties:
+        admittedReservation:
+          $ref: "#/components/schemas/WorkloadAdmittedReservation"
+        effectiveMemoryReservationBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Durable physical memory commitment; absent for historical guaranteed accounting.
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        resourceClassKind:
+          type: string
+          enum: [guaranteed, burstable]
+          description: Missing historical references resolve to guaranteed.
         id:
           type: string
           format: uuid
@@ -15649,6 +15681,11 @@ components:
         - availableDisk
         - physicalFreeDisk
       properties:
+        availableCPUMicroUnits:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Physical CPU capacity after inventory and provisional commitments; one CPU is 1000000 units.
         totalCPU:
           type: integer
           description: Total vCPUs on the host.
@@ -16483,6 +16520,14 @@ components:
         logical network pinned to the site can span its nodes.
       required: [id, name, status, labels]
       properties:
+        resourceClasses:
+          type: array
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        burstableAdmissionAvailable:
+          type: boolean
+          description: False until verified STR272 runtime enforcement is available.
         id:
           type: string
           format: uuid
@@ -16619,6 +16664,8 @@ components:
         it (labels omitted → empty map). `status` is the exception — an omitted
         status leaves the current lifecycle unchanged.
       properties:
+        burstableResourcePolicy:
+          $ref: "#/components/schemas/WorkloadResourceClassPolicy"
         description:
           type: string
           maxLength: 4096
@@ -19239,3 +19286,55 @@ components:
           description: The Loki stream labels attached to this entry.
           additionalProperties:
             type: string
+
+    WorkloadResourceClassReference:
+      type: object
+      description: Site-scoped class selection. Omission preserves guaranteed placement; burstable assignment currently fails closed.
+      required: [siteID, classID]
+      properties:
+        siteID: { type: string, format: uuid }
+        classID: { type: string, format: uuid }
+
+    WorkloadResourceClassPolicy:
+      type: object
+      description: >-
+        Configuration ceilings are policy bounds, not recommendations for safe
+        overcommit. Guaranteed is immutable at 1:1; burstable is explicit and
+        requires verified runtime enforcement. Catalog changes affect new
+        placement and growth only, never existing grants or generations.
+      required: [kind, cpuAllocationRatio, memoryAllocationRatio, cpuWeight, memoryHighPercent, hardLimitPolicy, maxCPUPressure10, maxMemoryPressure10, maxTelemetryAgeSeconds]
+      properties:
+        kind: { type: string, enum: [guaranteed, burstable] }
+        cpuAllocationRatio: { type: number, format: double, minimum: 1, maximum: 64 }
+        memoryAllocationRatio: { type: number, format: double, minimum: 1, maximum: 16 }
+        cpuWeight: { type: integer, minimum: 1, maximum: 10000 }
+        memoryHighPercent:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Guaranteed requires 100; burstable requires 1 through 99. Denominator is current guest grant, before backend overhead.
+        hardLimitPolicy: { type: string, enum: [guestAndBackend] }
+        maxCPUPressure10: { type: number, format: double, minimum: 0, maximum: 100 }
+        maxMemoryPressure10: { type: number, format: double, minimum: 0, maximum: 100 }
+        maxTelemetryAgeSeconds: { type: integer, minimum: 15, maximum: 300 }
+
+    WorkloadResourceClassSnapshot:
+      allOf:
+        - $ref: "#/components/schemas/WorkloadResourceClassPolicy"
+        - type: object
+          required: [classID, siteID, revision]
+          properties:
+            classID: { type: string, format: uuid }
+            siteID: { type: string, format: uuid }
+            revision: { type: integer, format: int64, minimum: 1 }
+
+    WorkloadAdmittedReservation:
+      type: object
+      description: Durable admitted physical commitment; growth preserves previous pricing.
+      required: [grantedCPUs, guestCommitmentBytes, cpuMicroUnits, discountedGuestBytes, backendOverheadBytes]
+      properties:
+        grantedCPUs: { type: integer, minimum: 0 }
+        guestCommitmentBytes: { type: integer, format: int64, minimum: 0 }
+        cpuMicroUnits: { type: integer, format: int64, minimum: 0 }
+        discountedGuestBytes: { type: integer, format: int64, minimum: 0 }
+        backendOverheadBytes: { type: integer, format: int64, minimum: 0 }

@@ -305,7 +305,8 @@ actor WorkloadPlacementService {
                     requiresInterVMNetworking: !nic.isEmpty,
                     siteID: sandboxSiteID,
                     requiresSandboxRuntime: true,
-                    requiresSandboxNetworking: !nic.isEmpty
+                    requiresSandboxNetworking: !nic.isEmpty,
+                    resourceClass: sandbox.resourceClass
                 ),
                 vmId: sandboxId,
                 from: schedulableAgents,
@@ -457,7 +458,8 @@ actor WorkloadPlacementService {
                     supportsSandboxWorkloads: agent.sandboxCapable,
                     supportsSandboxNetworking: agent.effectiveSandboxNetworkingCapable(at: instant),
                     supportsVTPM: agent.tpmCapable,
-                    supportsVsock: agent.supportsVsock
+                    supportsVsock: agent.supportsVsock,
+                    availableCPUMicroUnits: agent.availableCPUMicroUnits
                 )
             }
         } catch {
