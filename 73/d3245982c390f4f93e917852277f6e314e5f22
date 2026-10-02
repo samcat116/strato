@@ -1,0 +1,18 @@
+control-plane/Sources/App/Services/RateLimitService.swift
+  h_a84d4ff76cadd1 247-250,286,299-303
+control-plane/Tests/AppPlatformTests/CoordinationFailureGateTests.swift
+  h_a84d4ff76cadd1 119-120,122-125
+docs/architecture/multi-replica.md
+  h_a84d4ff76cadd1 255-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "73d3245982c390f4f93e917852277f6e314e5f22",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
