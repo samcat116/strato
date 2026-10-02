@@ -64,6 +64,7 @@ struct VMGuestConfigMutation {
             let previousGeneration = vm.generation
             var scope = try await ResourceEvent.scope(of: .virtualMachine, id: id, on: db)
             vm.guestConfig = requested
+            vm.guestConfigRealizedGeneration = nil
             guard
                 case .applied = try await vm.advanceDesiredStateGeneration(
                     expectedGeneration: previousGeneration, on: db)

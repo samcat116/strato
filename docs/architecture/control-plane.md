@@ -849,6 +849,15 @@ only an explicit newer generation can retry it. File identity/content and
 normalized sysctl facts compare as UTF-8 bytes, preserving Linux path/hash
 semantics instead of Swift canonical Unicode equality.
 
+The VM also retains a terminal guest failure generation when a channel failure
+prevents any read-back. This creates no observed item facts. Guest request
+completion/failure is appended to the existing resource event ledger, with the
+requested intent generation. The first realization's actual VM generation is
+retained separately: a failure at that same generation overrides completion,
+while a later unrelated VM goal cannot rewrite the completed request. Explicit
+retry creates another request; the earlier failure remains failed. Operation
+history resolves these outcomes in one query bounded by the requested targets.
+
 GET projects desired and observed values independently, with matched/drift/unknown/
 stale/failed item states. Only `failedItem` marks a failed row; missing facts can be
 unattempted. Guest-chosen diagnostics remain in the redacted record. Operator

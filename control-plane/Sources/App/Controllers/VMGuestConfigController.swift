@@ -58,7 +58,7 @@ extension VMController {
             status: VMGuestConfigPresentation.status(vm, agentOnline: online),
             observedGeneration: vm.guestConfigEvidence?.observation.generation,
             reportReceivedAt: vm.guestConfigEvidence?.receivedAt,
-            failureGeneration: vm.failedGeneration
+            failureGeneration: vm.failedGeneration ?? vm.guestConfigFailedGeneration
                 ?? (vm.guestConfigEvidence?.observation.status == .failed
                     ? vm.guestConfigEvidence?.observation.generation : nil),
             error: vm.failedGeneration == vm.generation

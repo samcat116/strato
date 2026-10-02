@@ -39,8 +39,9 @@ extension ObservedStateApplier {
         var guestEvidenceChanged = false
         if let config = vm.guestConfig, !config.isEmpty {
             let terminalGuestFailure =
-                vm.guestConfigEvidence?.observation.generation == vm.generation
-                && vm.guestConfigEvidence?.observation.status == .failed
+                vm.guestConfigFailedGeneration == vm.generation
+                || (vm.guestConfigEvidence?.observation.generation == vm.generation
+                    && vm.guestConfigEvidence?.observation.status == .failed)
             if let report = observed.guestConfigObservation,
                 report.status == .failed || observed.status == .running,
                 (try? VMGuestConfigPresentation.validate(report, config: config, generation: vm.generation)) != nil,
@@ -58,15 +59,30 @@ extension ObservedStateApplier {
                 guestEvidenceChanged = true
             }
         }
-        let guestFailed =
+        let failedGuestReport =
             vm.guestConfigEvidence?.observation.generation == vm.generation
             && vm.guestConfigEvidence?.observation.status == .failed
+        // STR-91's terminal nonblocked failures also include loss of the
+        // guest channel before read-back. Never synthesize a report for that.
+        if vm.guestConfig?.isEmpty == false,
+            failedGuestReport
+                || (vm.desiredStatus == .running && observed.lastError != nil
+                    && observed.failedGeneration == vm.generation && observed.failureClassification != .blocked),
+            vm.guestConfigFailedGeneration != vm.generation
+        {
+            vm.guestConfigFailedGeneration = vm.generation
+            guestEvidenceChanged = true
+        }
+        let guestFailed =
+            vm.guestConfig?.isEmpty == false && vm.guestConfigFailedGeneration == vm.generation
         // Guest-chosen errors must not flow into generic VM status, logging,
         // audit or webhooks. Retain detailed facts only in the redacted record.
         let effectiveError =
             guestFailed
             ? VMGuestConfigPresentation.safeFailure(vm.guestConfigEvidence?.observation.error)
-            : (vm.guestConfig?.isEmpty == false && observed.lastError != nil
+            : ((vm.guestConfig?.isEmpty == false || observed.guestConfigObservation != nil
+                || observed.failedGeneration.map { $0 == vm.guestConfigFailedGeneration } == true)
+                && observed.lastError != nil
                 ? VMGuestConfigPresentation.failure : observed.lastError)
         let effectiveFailedGeneration = guestFailed ? vm.generation : observed.failedGeneration
 
@@ -136,7 +152,7 @@ extension ObservedStateApplier {
                 && !(effectiveError != nil && effectiveFailedGeneration == vm.generation)
                 && !VMGuestConfigPresentation.converged(vm)
             ? "waiting for current guest configuration read-back" : nil
-        let effectivePhase = guestPhase ?? observed.convergencePhase ?? bootVolumePhase
+        let effectivePhase = observed.convergencePhase ?? bootVolumePhase ?? guestPhase
         var changed = vm.recordTimestampedConvergence(
             phase: effectivePhase,
             lastError: effectiveError,
@@ -151,6 +167,7 @@ extension ObservedStateApplier {
             if changed {
                 try await vm.save(on: db)
             }
+            try await recordGuestConfigurationOutcome(vm: vm, on: db)
             app.logger.debug(
                 "VM converging on agent",
                 metadata: [
@@ -227,6 +244,7 @@ extension ObservedStateApplier {
             if changed {
                 try await vm.save(on: db)
             }
+            try await recordGuestConfigurationOutcome(vm: vm, on: db)
             await emitVMStatusTransition(statusTransition, vm: vm, on: db)
             return
         }
@@ -251,11 +269,50 @@ extension ObservedStateApplier {
                 Telemetry.vmEnteredError(reason: "convergence_failed")
             },
             on: db)
+        try await recordGuestConfigurationOutcome(vm: vm, on: db)
         await emitVMStatusTransition(statusTransition, vm: vm, on: db)
         if case .failed(.recorded) = settlement, enteredError {
             await WebhookEvents.emitVMStateChanged(
                 vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
         }
+    }
+
+    /// Guest failures are terminal, unlike generic host repair. Preserve
+    /// the request's outcome in the existing append-only ledger so another
+    /// VM goal or explicit retry cannot rewrite historical operation status.
+    /// Called under the VM row lock, in the observation transaction.
+    func recordGuestConfigurationOutcome(vm: VM, on db: Database) async throws {
+        let id = try vm.requireID()
+        guard
+            let request = try await ResourceEvent.query(on: db)
+                .filter(\.$resourceKind == .virtualMachine).filter(\.$resourceID == id)
+                .filter(\.$mutation == .guestConfig).filter(\.$phase == .requested)
+                .sort(\.$targetGeneration, .descending).first(),
+            let target = request.targetGeneration
+        else { return }
+        let outcomes = try await ResourceEvent.query(on: db)
+            .filter(\.$resourceKind == .virtualMachine).filter(\.$resourceID == id)
+            .filter(\.$mutation == .guestConfig).filter(\.$targetGeneration == target)
+            .filter(\.$phase != .requested).all()
+        guard !outcomes.contains(where: { $0.phase == .failed }) else { return }
+        let completed = outcomes.contains { $0.phase == .completed }
+        let failed = vm.guestConfig?.isEmpty == false && vm.guestConfigFailedGeneration == vm.generation
+        let phase: ResourceEventPhase
+        if failed && (!completed || vm.guestConfigRealizedGeneration == vm.generation) {
+            phase = .failed
+        } else if !completed && vm.convergencePhase == nil && vm.isConverged && VMGuestConfigPresentation.converged(vm)
+        {
+            phase = .completed
+            vm.guestConfigRealizedGeneration = vm.generation
+            try await vm.save(on: db)
+        } else {
+            return
+        }
+        _ = try await ResourceEvent.record(
+            .guestConfig, resourceKind: .virtualMachine, resourceID: id, actor: .system, phase: phase,
+            scope: .init(
+                organizationID: request.organizationID, projectID: request.projectID,
+                resourceName: request.resourceName, generation: target), on: db)
     }
 
     /// The control-plane half of the managed boot-volume dependency (STR-242).

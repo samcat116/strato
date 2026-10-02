@@ -376,6 +376,84 @@ struct VMGuestConfigurationTests {
         }
     }
 
+    @Test("A terminal guest-channel failure without read-back survives restart and withdrawal redacts late errors")
+    func terminalChannelFailure() async throws {
+        try await withFixture { app, user, vm, _ in
+            vm.hypervisorId = "config-node"
+            vm.setFixtureDesiredStatus(.running)
+            vm.generation = 3
+            vm.guestConfig = GuestConfig(packages: [.init(name: "curl", state: .present)])
+            try await vm.save(on: app.db)
+            let applier = ObservedStateApplier(app: app)
+            let instant = try await ClusterClock.read(on: app.db)
+            let failed = ObservedVMState(
+                vmId: try vm.requireID(), status: .running, observedGeneration: 3,
+                lastError: "STR92_SECRET_SENTINEL", failedGeneration: 3)
+            _ = try await applier.withLockedCurrent(vm, reportedBy: "config-node", on: app.db) { vm, db in
+                try await applier.applyObservedVMState(
+                    vm: vm, observed: failed, interfaces: [], bootVolumes: nil, at: instant, on: db)
+            }
+            #expect(vm.guestConfigFailedGeneration == 3)
+            #expect(vm.guestConfigEvidence == nil)
+            let restarted = try #require(try await VM.find(vm.id!, on: app.db))
+            let good = try observation(["packages": [["name": "curl", "version": "1"]]])
+            try await apply(good, vm: restarted, app: app)
+            try await apply(good, vm: restarted, app: app)
+            #expect(restarted.failedGeneration == 3)
+            #expect(!restarted.isConverged)
+            #expect(restarted.guestConfigEvidence == nil)
+            let mutation = VMGuestConfigMutation(dispatch: FakeAgentDispatch(), logger: app.logger)
+            _ = try await mutation.replace(
+                nil, on: restarted, actor: .user(user.id!), context: nil, db: app.db, app: app)
+            let late = try observation(["status": "failed", "error": "STR92_SECRET_SENTINEL"])
+            try await apply(late, vm: restarted, app: app)
+            #expect(restarted.lastError == VMGuestConfigPresentation.failure)
+            #expect(!String(describing: restarted.conditions).contains("STR92_SECRET_SENTINEL"))
+        }
+    }
+
+    @Test("Guest operation outcomes survive retries and unrelated VM goals")
+    func durableGuestOperationOutcomes() async throws {
+        try await withFixture { app, user, vm, _ in
+            vm.hypervisorId = "config-node"
+            vm.setFixtureDesiredStatus(.running)
+            vm.generation = 2
+            try await vm.save(on: app.db)
+            let mutation = VMGuestConfigMutation(dispatch: FakeAgentDispatch(), logger: app.logger)
+            let config = GuestConfig(packages: [.init(name: "curl", state: .present)])
+            let accepted = try #require(
+                try await mutation.replace(config, on: vm, actor: .user(user.id!), context: nil, db: app.db, app: app))
+            let request = try #require(try await ResourceEvent.find(accepted.mutationID, on: app.db))
+            let good = try observation(["packages": [["name": "curl", "version": "1"]]])
+            try await apply(good, vm: vm, app: app)
+            #expect(try await OperationFacade.response(for: request, on: app.db).status == .succeeded)
+            // The same actual generation can subsequently fail. That failure is permanent for its request.
+            let bad = try observation([
+                "status": "failed", "error": "guest convergence interrupted; submit a new VM generation to retry",
+            ])
+            try await apply(bad, vm: vm, app: app)
+            #expect(try await OperationFacade.response(for: request, on: app.db).status == .failed)
+            let retry = try #require(
+                try await mutation.replace(
+                    config, retry: true, on: vm, actor: .user(user.id!), context: nil, db: app.db, app: app))
+            let retryRequest = try #require(try await ResourceEvent.find(retry.mutationID, on: app.db))
+            let retryGood = try observation(["generation": 4, "packages": [["name": "curl", "version": "1"]]])
+            try await apply(retryGood, vm: vm, app: app)
+            #expect(try await OperationFacade.response(for: request, on: app.db).status == .failed)
+            #expect(try await OperationFacade.response(for: retryRequest, on: app.db).status == .succeeded)
+            // A subsequent host goal must not retroactively fail a completed guest operation.
+            vm.generation = 5
+            try await vm.save(on: app.db)
+            let laterBad = try observation(["generation": 5, "status": "failed", "error": "failure"])
+            try await apply(laterBad, vm: vm, app: app)
+            #expect(try await OperationFacade.response(for: retryRequest, on: app.db).status == .succeeded)
+            let history = try await OperationFacade.history(
+                resourceKind: .virtualMachine, resourceID: vm.id!, limit: 100, on: app.db)
+            #expect(history.first { $0.id == accepted.mutationID }?.status == .failed)
+            #expect(history.first { $0.id == retry.mutationID }?.status == .succeeded)
+        }
+    }
+
     @Test("Foreign placement, future generation and foreign identities never become current evidence")
     func rejectedObservationEvidence() async throws {
         try await withFixture { app, _, vm, _ in

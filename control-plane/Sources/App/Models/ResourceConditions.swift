@@ -464,6 +464,8 @@ extension VM: ConvergingResource {
         // *edge*, and no later sync re-derives it.
         guestConfig = committed.guestConfig
         guestConfigEvidence = committed.guestConfigEvidence
+        guestConfigFailedGeneration = committed.guestConfigFailedGeneration
+        guestConfigRealizedGeneration = committed.guestConfigRealizedGeneration
         rebootGeneration = committed.rebootGeneration
         restoreGeneration = committed.restoreGeneration
         restoreSnapshotID = committed.restoreSnapshotID
