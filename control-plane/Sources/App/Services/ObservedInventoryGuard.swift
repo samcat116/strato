@@ -109,11 +109,14 @@ struct ObservedInventoryGuard {
 extension AgentService {
     /// Reset per connection. A replica restart also starts with no accepted
     /// baseline; losing coordination must never authorize deletion.
-    func beginObservedInventorySession(for agentKey: String) async throws {
+    func beginObservedInventorySession(
+        for agentKey: String, sessionID: UUID = UUID(), expectation: InventorySessionExpectation? = nil
+    ) async throws {
         try await withCheckedThrowingContinuation { continuation in
             enqueueInventoryOperation(for: agentKey) {
                 do {
-                    try await self.rotateObservedInventorySession(for: agentKey)
+                    try await self.rotateObservedInventorySession(
+                        for: agentKey, sessionID: sessionID, expectation: expectation)
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -122,13 +125,20 @@ extension AgentService {
         }
     }
 
-    private func rotateObservedInventorySession(for agentKey: String) async throws {
+    private func rotateObservedInventorySession(
+        for agentKey: String, sessionID: UUID, expectation: InventorySessionExpectation?
+    ) async throws {
         guard let id = await agentId(forKey: agentKey), let agentID = UUID(uuidString: id) else {
             throw Abort(.notFound, reason: "Cannot register inventory session for an unknown agent")
         }
-        let session = UUID()
+        let session = sessionID
         try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
             try await db.transaction { tx in
+                if case .matches(let expected) = expectation,
+                    try await InventorySessionFence.current(agentID: agentID, on: tx) != expected
+                {
+                    throw Abort(.conflict, reason: "Agent registration was superseded while in flight")
+                }
                 try await InventorySessionFence.replace(session, agentID: agentID, on: tx)
                 try await ResourceAdmissionService.invalidateSession(agentID: agentID, on: tx)
             }

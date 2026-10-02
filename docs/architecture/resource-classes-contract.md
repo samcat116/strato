@@ -303,12 +303,28 @@ Accounting checks are compatible with its fractional CPU and host-memory
 projection. Consumer transaction-failure tests prove that rejected persistence
 retains durable and coordination commitments.
 
-Registration-time binding of `agentBootID` remains a proposed shared addition,
-awaiting coordinator agreement. Current registration does not carry that ID;
-the first observed report supplies it. Proposed optional registration field
-must bind the boot to the authenticated inventory session and refuse unknown or
-mismatched enforcement reports. No shared type was edited during this review.
-The producer must also filter running, error-free and phase-free observed
-entries consistently with the consumer; observed generation alone does not
-certify a successful active workload. Both producer changes are coordinated
-through the parent. Activation remains disabled.
+Socket registration provenance now supplies boot-binding authority without an
+additional wire field. Each authenticated socket receives a locally generated
+immutable inventory-session UUID. Registration is awaited by the serial frame
+handler and persists that exact token. Report and heartbeat dispatch retain the
+socket token through deferred tasks rather than looking up a successor's token
+by shared identity. Actor and PostgreSQL ownership checks reject stale tokens.
+Network registration captures its predecessor session at the first database
+read; comparison under the inventory fence rejects a late completion if another
+replica has changed that session. This prevents an in-flight predecessor
+registration from replacing a successor's binding.
+A successor drains predecessor registration before activating; a superseded
+socket cannot start registration. Existing revocation/EOF cleanup remains
+unchanged, and #1448's administrative holds/save guards must be preserved by
+coordinator integration.
+
+The first coherent report from the correctly fenced session establishes boot
+identity. Same-boot reconnects preserve the sequence cursor and remain invalid
+until a higher coherent sequence arrives. Restart permits a new boot/sequence
+space only in the successor session; no acknowledgement is emitted before
+fresh adoption/readback. The deterministic S1/B1/101 regression delays enqueue
+until after S2 registers: it cannot restore predecessor capacity, release
+pending charges or poison S2's boot binding. A stale S1 heartbeat is rejected
+as well. STR272 producer correction `8ab18dda` now filters running, error-free and
+phase-free observed entries consistently with the consumer. The receipt-time
+provenance correction adds no shared fields. Activation remains disabled.

@@ -27,14 +27,16 @@ extension AgentService {
         trustDomain: String = PlatformTrustDomain.current,
         identityOrganizationID: UUID? = nil,
         siteID: UUID? = nil,
-        organizationScope: OrganizationScope? = nil
+        organizationScope: OrganizationScope? = nil,
+        inventorySessionID: UUID? = nil
     ) async throws -> UUID {
         try await registerAgent(
             message,
             identity: AgentIdentity(trustDomain: trustDomain, name: agentName),
             identityOrganizationID: identityOrganizationID,
             siteID: siteID,
-            organizationScope: organizationScope
+            organizationScope: organizationScope,
+            inventorySessionID: inventorySessionID
         )
     }
 
@@ -52,7 +54,8 @@ extension AgentService {
         identity: AgentIdentity,
         identityOrganizationID: UUID? = nil,
         siteID: UUID? = nil,
-        organizationScope: OrganizationScope? = nil
+        organizationScope: OrganizationScope? = nil,
+        inventorySessionID: UUID? = nil
     ) async throws -> UUID {
         let agentName = identity.name
         let agentKey = identity.key
@@ -67,6 +70,20 @@ extension AgentService {
         }
 
         let db = app.db
+        // Capture the predecessor at the first registration DB read. A late
+        // completion on another replica cannot replace a session that changed
+        // while enrollment/resource work was in flight.
+        let registrationExpectation: InventorySessionExpectation?
+        if inventorySessionID != nil {
+            guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
+            let predecessor = try await sql.raw(
+                "SELECT inventory_session_id FROM agents WHERE trust_domain = \(bind: trustDomain) AND name = \(bind: agentName)"
+            ).first()
+            let token = try predecessor?.decode(column: "inventory_session_id", as: UUID?.self)
+            registrationExpectation = .matches(token ?? nil)
+        } else {
+            registrationExpectation = nil
+        }
         var organizationScope = organizationScope
         var siteID = siteID
         let dependencyObservations = normalizedDependencyObservations(
@@ -279,7 +296,8 @@ extension AgentService {
         // Attach the UUID to the live socket so local routing (console and
         // exec streams) can resolve it without a database read. No-op when no
         // socket exists (tests).
-        try await beginObservedInventorySession(for: agentKey)
+        try await beginObservedInventorySession(
+            for: agentKey, sessionID: inventorySessionID ?? UUID(), expectation: registrationExpectation)
         app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
 
         // Publish presence to the coordination store so every control-plane
@@ -545,8 +563,18 @@ extension AgentService {
     /// the claimed `agentId` must belong to it, so one agent cannot drive another
     /// agent's resource tracking or VM reconciliation.
     func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
-        guard let agentID = UUID(uuidString: message.agentId) else { return }
         let session = observedInventorySessions[agentKey]
+        try await updateAgentHeartbeat(message, fromAgentKey: agentKey, inventorySession: session)
+    }
+
+    /// Network callers supply the immutable session captured by their socket,
+    /// never a fresh lookup using the identity shared by successor connections.
+    func updateAgentHeartbeat(
+        _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, inventorySession session: UUID?
+    ) async throws {
+        guard let agentID = UUID(uuidString: message.agentId), observedInventorySessions[agentKey] == session else {
+            return
+        }
         try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
             guard try await InventorySessionFence.current(agentID: agentID, on: db) == session else { return }
             try await self.applyFencedHeartbeat(message, fromAgentKey: agentKey, on: db)

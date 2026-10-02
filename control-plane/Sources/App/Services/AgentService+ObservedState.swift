@@ -22,7 +22,16 @@ extension AgentService {
     /// agent's own send order.
     @discardableResult
     func enqueueObservedStateReport(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) -> Task<Void, Never> {
-        let session = observedInventorySessions[agentKey]
+        enqueueObservedStateReport(
+            envelope, fromAgentKey: agentKey, inventorySession: observedInventorySessions[agentKey])
+    }
+
+    /// Network frames retain their socket's token even if enqueue is delayed
+    /// beyond a successor registration. Both actor and SQL ownership are checked.
+    @discardableResult
+    func enqueueObservedStateReport(
+        _ envelope: MessageEnvelope, fromAgentKey agentKey: String, inventorySession session: UUID?
+    ) -> Task<Void, Never> {
         return enqueueInventoryOperation(for: agentKey) { [weak self] in
             await self?.applyQueuedObservedStateReport(envelope, fromAgentKey: agentKey, inventorySession: session)
         }

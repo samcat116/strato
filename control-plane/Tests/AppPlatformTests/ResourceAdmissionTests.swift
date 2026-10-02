@@ -431,6 +431,129 @@ struct ResourceAdmissionTests {
         }
     }
 
+    @Test func delayedPredecessorReportCannotSpendSuccessorSession() async throws {
+        try await withTestApp { app in
+            let f = try await fixture(app)
+            let key = f.agent.identity.key
+            let s1 = UUID(), s2 = UUID(), b1 = UUID(), b2 = UUID()
+            try await app.agentService.beginObservedInventorySession(for: key, sessionID: s1)
+            let baseline = try report(f, boot: b1, sequence: 100, acknowledgements: [])
+            await app.agentService.enqueueObservedStateReport(
+                try MessageEnvelope(message: baseline), fromAgentKey: key, inventorySession: s1
+            ).value
+            // Capture the predecessor frame and its socket token before S2,
+            // then deterministically enqueue it only after S2 owns the row.
+            let delayed = try MessageEnvelope(
+                message: report(f, boot: b1, sequence: 101, acknowledgements: [try ack(f)]))
+            try await app.agentService.beginObservedInventorySession(for: key, sessionID: s2)
+            await app.agentService.enqueueObservedStateReport(delayed, fromAgentKey: key, inventorySession: s1).value
+            let refused = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(refused.state.sequence == 100)
+            #expect(refused.state.bootID == b1)
+            #expect(refused.state.pending.map(\.reservationID) == [f.key])
+            #expect(ResourceAdmissionService.capacity(agent: f.agent, state: refused.state) == .zero)
+            // The new boot initially has no adoption/readback acknowledgements.
+            let restarted = try report(f, boot: b2, sequence: 0, acknowledgements: [])
+            await app.agentService.enqueueObservedStateReport(
+                try MessageEnvelope(message: restarted), fromAgentKey: key, inventorySession: s2
+            ).value
+            let adopted = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(adopted.state.bootID == b2 && adopted.state.sequence == 0)
+            #expect(adopted.state.pending.map(\.reservationID) == [f.key])
+            // A late heartbeat from S1 cannot overwrite S2's resources either.
+            try await app.agentService.updateAgentHeartbeat(
+                .init(
+                    agentId: try f.agent.requireID().uuidString,
+                    resources: f.agent.resources), fromAgentKey: key, inventorySession: s1)
+            let agent = try #require(try await Agent.find(try f.agent.requireID(), on: app.db))
+            #expect(agent.availableCPUMicroUnits == 15_500_000)
+            let freshEvidence = try report(f, boot: b2, sequence: 1, acknowledgements: [try ack(f)])
+            await app.agentService.enqueueObservedStateReport(
+                try MessageEnvelope(message: freshEvidence), fromAgentKey: key, inventorySession: s2
+            ).value
+            let confirmed = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(confirmed.state.pending.isEmpty)
+        }
+    }
+
+    @Test func sameBootReconnectPreservesCursorUntilFreshHigherSequence() async throws {
+        try await withTestApp { app in
+            let f = try await fixture(app)
+            let key = f.agent.identity.key, boot = UUID(), first = UUID(), second = UUID()
+            try await app.agentService.beginObservedInventorySession(for: key, sessionID: first)
+            await app.agentService.enqueueObservedStateReport(
+                try MessageEnvelope(message: report(f, boot: boot, sequence: 100, acknowledgements: [])),
+                fromAgentKey: key, inventorySession: first
+            ).value
+            try await app.agentService.beginObservedInventorySession(for: key, sessionID: second)
+            await app.agentService.enqueueObservedStateReport(
+                try MessageEnvelope(message: report(f, boot: boot, sequence: 99, acknowledgements: [try ack(f)])),
+                fromAgentKey: key, inventorySession: second
+            ).value
+            let old = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(old.state.sequence == 100 && old.state.inventoryComplete == false)
+            #expect(old.state.pending.map(\.reservationID) == [f.key])
+            await app.agentService.enqueueObservedStateReport(
+                try MessageEnvelope(message: report(f, boot: boot, sequence: 101, acknowledgements: [try ack(f)])),
+                fromAgentKey: key, inventorySession: second
+            ).value
+            let fresh = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(fresh.state.bootID == boot && fresh.state.sequence == 101)
+            #expect(fresh.state.inventoryComplete == true && fresh.state.pending.isEmpty)
+        }
+    }
+
+    @Test func successorRegistrationWaitsForPredecessorFrameDrain() async throws {
+        try await withTestApp { app in
+            let f = try await fixture(app)
+            let key = f.agent.identity.key, predecessor = UUID(), successor = UUID()
+            let entered = SocketRegistrationLatch(), release = SocketRegistrationLatch(),
+                finished = SocketRegistrationLatch()
+            let processor = AgentWebSocketFrameProcessor { _ in
+                await entered.signal()
+                await release.wait()
+                do { try await app.agentService.beginObservedInventorySession(for: key, sessionID: predecessor) } catch
+                { Issue.record("Predecessor registration failed: \(error)") }
+            }
+            #expect(processor.enqueue("register") == .accepted)
+            await entered.wait()
+            let next = Task {
+                await processor.finishAndDrain()
+                try await app.agentService.beginObservedInventorySession(for: key, sessionID: successor)
+                await finished.signal()
+            }
+            #expect(await app.agentService.observedInventorySessions[key] == nil)
+            #expect(!(await finished.signaled))
+            await release.signal()
+            try await next.value
+            #expect(await app.agentService.observedInventorySessions[key] == successor)
+            let sqlSession = try await InventorySessionFence.current(agentID: try f.agent.requireID(), on: app.db)
+            #expect(sqlSession == successor)
+            #expect(processor.enqueue("late register") == .closed)
+        }
+    }
+
+    @Test func lateRegistrationCannotReplaceSuccessorAcrossReplicas() async throws {
+        try await withTestApp { app in
+            let f = try await fixture(app)
+            let key = f.agent.identity.key, prior = UUID(), late = UUID(), successor = UUID()
+            try await app.agentService.beginObservedInventorySession(for: key, sessionID: prior)
+            let otherReplica = AgentService(app: app)
+            try await otherReplica.beginObservedInventorySession(
+                for: key, sessionID: successor, expectation: .matches(prior))
+            do {
+                try await app.agentService.beginObservedInventorySession(
+                    for: key, sessionID: late, expectation: .matches(prior))
+                Issue.record("Late predecessor registration replaced successor")
+            } catch let error as Abort { #expect(error.status == .conflict) }
+            let current = try await InventorySessionFence.current(agentID: try f.agent.requireID(), on: app.db)
+            #expect(current == successor)
+            #expect(await app.agentService.observedInventorySessions[key] == prior)
+            #expect(await otherReplica.observedInventorySessions[key] == successor)
+            await otherReplica.shutdown()
+        }
+    }
+
 }
 
 private enum InjectedResourceSaveFailure: Error { case expected }
@@ -438,5 +561,19 @@ private struct RejectAcknowledgedResourceSave: AsyncModelMiddleware {
     func update(model: Agent, on db: any Database, next: any AnyAsyncModelResponder) async throws {
         if model.availableCPUMicroUnits == 15_500_000 { throw InjectedResourceSaveFailure.expected }
         try await next.update(model, on: db)
+    }
+}
+
+private actor SocketRegistrationLatch {
+    private(set) var signaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func signal() {
+        signaled = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+    func wait() async {
+        if signaled { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }
