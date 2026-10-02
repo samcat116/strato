@@ -128,7 +128,10 @@ extension AgentService {
         }
         let session = UUID()
         try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
-            try await InventorySessionFence.replace(session, agentID: agentID, on: db)
+            try await db.transaction { tx in
+                try await InventorySessionFence.replace(session, agentID: agentID, on: tx)
+                try await ResourceAdmissionService.invalidateSession(agentID: agentID, on: tx)
+            }
         }
         observedInventorySessions[agentKey] = session
         acceptedInventorySections.removeValue(forKey: agentKey)
@@ -148,7 +151,10 @@ extension AgentService {
             try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
                 // A delayed disconnect from an old replica cannot revoke its successor.
                 if try await InventorySessionFence.current(agentID: agentID, on: db) == session {
-                    try await InventorySessionFence.replace(UUID(), agentID: agentID, on: db)
+                    try await db.transaction { tx in
+                        try await InventorySessionFence.replace(UUID(), agentID: agentID, on: tx)
+                        try await ResourceAdmissionService.invalidateSession(agentID: agentID, on: tx)
+                    }
                 }
             }
         } catch {

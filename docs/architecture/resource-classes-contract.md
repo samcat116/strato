@@ -255,8 +255,10 @@ Rollback removes the staged durable change along with the mutation.
 The existing authenticated inventory-session fence binds report and heartbeat
 processing to the current connection across replicas. The durable cursor
 accepts strictly increasing nonnegative sequences; a different boot ID is
-permitted only across a session transition. Restart must invalidate producer
-acknowledgements until fresh adoption/readback. Once coherent reporting is
+permitted only across a session transition. Rotation and revocation atomically
+invalidate predecessor capacity while preserving durable pending charges; a
+fresh coherent report is required before placement resumes. Restart must
+invalidate producer acknowledgements until fresh adoption/readback. Once coherent reporting is
 established, heartbeat resource fields cannot overwrite it. Agent wall-clock
 `sampledAt` is diagnostic, never a replacement for receiver freshness time.
 
@@ -291,3 +293,22 @@ rollback of snapshot/ledger/sizing/generation, catalog lock serialization,
 unchanged/shrinking grants, a missing historical ledger, and concurrent
 sandbox placement with a single retained owner/claim. These are transaction
 proofs rather than evidence of runtime enforcement.
+
+### Integration review of STR272 producer
+
+Producer `3a63040f3376c3ebb999ca4fcdc333a0285789fb` uses the canonical
+wire67 fields, generation-bound success records, current backend evidence,
+versioned identity/accounting fences and explicit incomplete snapshots.
+Accounting checks are compatible with its fractional CPU and host-memory
+projection. Consumer transaction-failure tests prove that rejected persistence
+retains durable and coordination commitments.
+
+Registration-time binding of `agentBootID` remains a proposed shared addition,
+awaiting coordinator agreement. Current registration does not carry that ID;
+the first observed report supplies it. Proposed optional registration field
+must bind the boot to the authenticated inventory session and refuse unknown or
+mismatched enforcement reports. No shared type was edited during this review.
+The producer must also filter running, error-free and phase-free observed
+entries consistently with the consumer; observed generation alone does not
+certify a successful active workload. Both producer changes are coordinated
+through the parent. Activation remains disabled.

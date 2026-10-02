@@ -84,7 +84,8 @@ struct ResourceAdmissionTests {
         let memory = HostMemoryAccounting(
             physicalBytes: f.agent.totalMemory, hostReservedBytes: 0,
             workloadEffectiveBytes: accountingFlaw == "accounting" ? 0 : f.current.effectiveMemoryBytes)
-        let cpu: Int64 = accountingFlaw == "cpuBudget" ? 16_000_000 : 14_000_000
+        let total = WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: f.agent.totalCPU)
+        let cpu: Int64 = accountingFlaw == "cpuBudget" ? total : total - f.current.cpuMicroUnits
         let resources = AgentResources(
             totalCPU: f.agent.totalCPU, availableCPU: Int(cpu / 1_000_000),
             totalMemory: f.agent.totalMemory, availableMemory: memory.remainingAllocatableBytes,
@@ -349,7 +350,7 @@ struct ResourceAdmissionTests {
                     agentId: try f.agent.requireID().uuidString,
                     resources: f.agent.resources), fromAgentKey: f.agent.identity.key)
             let persisted = try #require(try await Agent.find(try f.agent.requireID(), on: app.db))
-            #expect(persisted.availableCPUMicroUnits == 14_000_000)
+            #expect(persisted.availableCPUMicroUnits == 15_500_000)
             let row = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
             #expect(row.state.pending.isEmpty)
         }
@@ -377,4 +378,65 @@ struct ResourceAdmissionTests {
         }
     }
 
+    @Test func reconnectAndRevocationInvalidateCapacityWithoutLosingPendingCharges() async throws {
+        try await withTestApp { app in
+            let f = try await fixture(app)
+            let boot = UUID()
+            _ = try await ResourceAdmissionService.accept(
+                try report(f, boot: boot, sequence: 1, acknowledgements: []),
+                agentID: try f.agent.requireID(), sessionID: UUID(), inventoryComplete: true, on: app.db)
+            let initial = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(ResourceAdmissionService.capacity(agent: f.agent, state: initial.state).cpuMicroUnits > 0)
+            try await app.agentService.beginObservedInventorySession(for: f.agent.identity.key)
+            let rotated = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(ResourceAdmissionService.capacity(agent: f.agent, state: rotated.state) == .zero)
+            #expect(rotated.state.pending.map(\.reservationID) == [f.key])
+            let fresh = try report(f, boot: boot, sequence: 2, acknowledgements: [])
+            await app.agentService.applyObservedStateReport(
+                try MessageEnvelope(message: fresh), fromAgentKey: f.agent.identity.key)
+            let restored = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(ResourceAdmissionService.capacity(agent: f.agent, state: restored.state).cpuMicroUnits > 0)
+            #expect(restored.state.pending.map(\.reservationID) == [f.key])
+            await app.agentService.endObservedInventorySession(for: f.agent.identity.key)
+            let revoked = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
+            #expect(ResourceAdmissionService.capacity(agent: f.agent, state: revoked.state) == .zero)
+            #expect(revoked.state.pending.map(\.reservationID) == [f.key])
+        }
+    }
+
+    @Test func failedNetResourceCommitCannotReleaseDurableOrCoordinationClaims() async throws {
+        try await withTestApp { app in
+            let f = try await fixture(app)
+            let id = try f.agent.requireID()
+            let reserved = await app.coordination.reserveCapacity(
+                agentId: id.uuidString, vmId: f.key,
+                amounts: .init(memory: 16384, disk: 0, cpuMicroUnits: 250_000),
+                capacity: .init(memory: f.agent.availableMemory, disk: 0, cpuMicroUnits: 16_000_000))
+            #expect(reserved)
+            app.databases.middleware.use(RejectAcknowledgedResourceSave())
+            do {
+                _ = try await ResourceAdmissionService.accept(
+                    try report(f, boot: UUID(), sequence: 1, acknowledgements: [try ack(f)]),
+                    agentID: id, sessionID: UUID(), inventoryComplete: true, on: app.db)
+                Issue.record("Injected report commit failure did not abort")
+            } catch InjectedResourceSaveFailure.expected {}
+            let row = try #require(try await AgentResourceAdmission.find(id, on: app.db))
+            #expect(row.state.pending.map(\.reservationID) == [f.key])
+            #expect(row.state.resources == nil)
+            #expect(row.state.bootID == nil)
+            let active = await app.coordination.activeReservations(agentIds: [id.uuidString])
+            #expect(active[id.uuidString]?.cpuMicroUnits == 250_000)
+            let reloaded = try #require(try await Agent.find(id, on: app.db))
+            #expect(ResourceAdmissionService.capacity(agent: reloaded, state: row.state).cpuMicroUnits == 15_750_000)
+        }
+    }
+
+}
+
+private enum InjectedResourceSaveFailure: Error { case expected }
+private struct RejectAcknowledgedResourceSave: AsyncModelMiddleware {
+    func update(model: Agent, on db: any Database, next: any AnyAsyncModelResponder) async throws {
+        if model.availableCPUMicroUnits == 15_500_000 { throw InjectedResourceSaveFailure.expected }
+        try await next.update(model, on: db)
+    }
 }

@@ -15,6 +15,16 @@ enum ResourceAdmissionService {
         return (agent, row)
     }
 
+    /// Session rotation/revocation must not leave the predecessor's coherent
+    /// capacity usable. Pending commitments survive until fresh proof arrives.
+    /// Legacy agents without this feature have no row and retain their path.
+    static func invalidateSession(agentID: UUID, on db: any Database) async throws {
+        guard try await AgentResourceAdmission.find(agentID, on: db) != nil else { return }
+        let (_, row) = try await lockedState(agentID: agentID, on: db)
+        row.state.inventoryComplete = false
+        try await row.save(on: db)
+    }
+
     static func capacity(agent: Agent, state: ResourceAdmissionState) -> ReservationAmounts {
         guard agent.manifestInventoryComplete != false, state.inventoryComplete != false else { return .zero }
         let raw = state.resources ?? agent.resources
