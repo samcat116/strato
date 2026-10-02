@@ -80,6 +80,9 @@ extension AgentService {
                 "SELECT inventory_session_id FROM agents WHERE trust_domain = \(bind: trustDomain) AND name = \(bind: agentName)"
             ).first()
             let token = try predecessor?.decode(column: "inventory_session_id", as: UUID?.self)
+            if observedInventorySessions[agentKey] == inventorySessionID, token ?? nil != inventorySessionID {
+                throw Abort(.conflict, reason: "The registered socket was superseded by another replica")
+            }
             registrationExpectation = .matches(token ?? nil)
         } else {
             registrationExpectation = nil

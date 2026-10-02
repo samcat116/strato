@@ -312,7 +312,8 @@ by shared identity. Actor and PostgreSQL ownership checks reject stale tokens.
 Network registration captures its predecessor session at the first database
 read; comparison under the inventory fence rejects a late completion if another
 replica has changed that session. This prevents an in-flight predecessor
-registration from replacing a successor's binding.
+registration from replacing a successor's binding. A socket already registered
+on an older replica cannot re-register over a different current SQL session.
 A successor drains predecessor registration before activating; a superseded
 socket cannot start registration. Existing revocation/EOF cleanup remains
 unchanged, and #1448's administrative holds/save guards must be preserved by

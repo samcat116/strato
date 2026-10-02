@@ -546,6 +546,16 @@ struct ResourceAdmissionTests {
                     for: key, sessionID: late, expectation: .matches(prior))
                 Issue.record("Late predecessor registration replaced successor")
             } catch let error as Abort { #expect(error.status == .conflict) }
+            // The old socket is also forbidden to re-register after observing
+            // the successor, rather than treating that successor as its predecessor.
+            do {
+                _ = try await app.agentService.registerAgent(
+                    AgentRegisterMessage(
+                        agentId: f.agent.name, hostname: f.agent.hostname,
+                        version: f.agent.version, resources: f.agent.resources),
+                    identity: f.agent.identity, inventorySessionID: prior)
+                Issue.record("Superseded socket re-registered over the successor")
+            } catch let error as Abort { #expect(error.status == .conflict) }
             let current = try await InventorySessionFence.current(agentID: try f.agent.requireID(), on: app.db)
             #expect(current == successor)
             #expect(await app.agentService.observedInventorySessions[key] == prior)
