@@ -470,6 +470,7 @@ extension ObservedStateApplier {
         try logSupersededFailureReport(sandbox, reportedGeneration: observed.failedGeneration)
         let wasConverged = sandbox.isConverged
         let failedBefore = sandbox.failedGeneration
+        let suspensionChanged = try await SandboxSuspensionService.apply(observed, to: sandbox, on: db)
 
         var resourceTelemetryChanged = false
         if let telemetry = observed.resourceTelemetry, sandbox.resourceTelemetry != telemetry {
@@ -493,7 +494,7 @@ extension ObservedStateApplier {
             failedGeneration: observed.failedGeneration,
             at: instant
         )
-        changed = resourceTelemetryChanged || changed
+        changed = suspensionChanged || resourceTelemetryChanged || changed
 
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {

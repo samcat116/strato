@@ -42,6 +42,9 @@ extension SandboxController {
             request = try req.content.decodeValidated(CreateSandboxSnapshotRequest.self)
         }
         let stopAfterSnapshot = request.stop ?? false
+        guard request.suspend != true || stopAfterSnapshot else {
+            throw Abort(.badRequest, reason: "suspend requires stop=true")
+        }
 
         // Only a sandbox with live guest state can be checkpointed: it must
         // be placed, confirmed by its agent, and not mid-transition.
@@ -54,7 +57,7 @@ extension SandboxController {
         switch sandbox.status {
         case .running, .stopped, .exited:
             break
-        case .starting, .stopping, .error, .unknown:
+        case .suspended, .starting, .stopping, .error, .unknown:
             throw Abort(
                 .conflict,
                 reason: "Sandbox cannot be snapshotted in state '\(sandbox.status.rawValue)'")
@@ -74,7 +77,7 @@ extension SandboxController {
 
         let userID = try user.requireID()
         let snapshot = SandboxSnapshot(
-            name: name,
+            id: UUID(), name: name,
             sandboxID: sandboxID,
             projectID: sandbox.$project.id,
             environment: sandbox.environment,
@@ -85,7 +88,8 @@ extension SandboxController {
         // Admission estimate: the memory file dominates and is bounded by
         // guest RAM. Replaced by the agent's actual sizes once its observed
         // report carries them.
-        snapshot.size = sandbox.memory
+        snapshot.size =
+            request.suspend == true ? max(sandbox.memory, sandbox.suspensionStorageEstimateBytes ?? 0) : sandbox.memory
         // The source host's CPU model, recorded now rather than on completion:
         // it is a fact about the *agent*, which the agent's own report has no
         // reason to carry, and an un-templated snapshot needs it to be mobile
@@ -94,14 +98,12 @@ extension SandboxController {
             (await req.application.agentService.getAgentInfo(agentId))?
             .hostInfo?.cpuModel
         let environment = sandbox.environment
-        let memory = sandbox.memory
+        let memory = snapshot.size ?? sandbox.memory
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             try await IdempotencyService.reserve(
                 req.idempotencyContext, actor: .user(userID), on: db)
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
-            try await QuotaEnforcementService.reserveSnapshotStorage(
-                for: project, environment: environment, size: memory, on: db)
             if stopAfterSnapshot {
                 // Checkpoint-and-stop has two halves and they live in two
                 // places on purpose. The *capture* leaves the microVM paused,
@@ -114,7 +116,13 @@ extension SandboxController {
                     throw Abort(.notFound, reason: "Sandbox no longer exists")
                 }
                 let expectedGeneration = sandbox.generation
-                sandbox.setDesiredStatus(.stopped)
+                if request.suspend == true {
+                    try await SandboxSuspensionService.admitSuspension(sandbox, on: db)
+                    sandbox.suspensionAfterSnapshotId = try snapshot.requireID()
+                    sandbox.setDesiredStatus(.suspended)
+                } else {
+                    sandbox.setDesiredStatus(.stopped)
+                }
                 guard
                     case .applied = try await sandbox.advanceDesiredStateGeneration(
                         expectedGeneration: expectedGeneration, on: db)
@@ -125,6 +133,8 @@ extension SandboxController {
                 }
                 try await sandbox.save(on: db)
             }
+            try await QuotaEnforcementService.reserveSnapshotStorage(
+                for: project, environment: environment, size: memory, on: db)
             // The optional sandbox row lock above can wait behind another
             // mutation. Start both artifact clocks only after it completes.
             let acceptedAt = try await ClusterClock.read(on: db)
@@ -341,6 +351,7 @@ extension SandboxController {
             // Bumps the restore nonce and sets desired `.running` — the restored
             // guest resumes, so desired state has to agree or the next sync
             // would stop it right back.
+            try await SandboxSuspensionService.admitWake(sandbox, on: db)
             sandbox.requestRestore(snapshotID: snapshotID)
         }
 

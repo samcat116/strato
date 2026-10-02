@@ -398,8 +398,15 @@ public actor Reconciler {
             $0.laneKeys.count == 1 || $0.steps.contains(.create)
                 || ($0.steps.contains(.resize) && bootVolumeIDs.contains($0.id))
         }
+        let captureBeforeSuspension = Set(
+            message.sandboxes.compactMap {
+                $0.desiredStatus == .suspended ? $0.suspensionAfterSnapshotId?.uuidString : nil
+            })
+        let (requiredCaptures, remainingSnapshots) = snapshotPlan.items.partitioned {
+            captureBeforeSuspension.contains($0.id) && $0.steps.contains(.create)
+        }
         plan.items =
-            volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items + snapshotPlan.items
+            volumeData + vmPlan.items + volumeAttachment + requiredCaptures + sandboxPlan.items + remainingSnapshots
 
         // Wholesale replacement, including the sandbox half's absence when the
         // control plane doesn't speak sandbox sync: the report must describe

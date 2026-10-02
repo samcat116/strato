@@ -88,6 +88,21 @@ final class Sandbox: Model, @unchecked Sendable {
     @Children(for: \.$sandbox)
     var networkInterfaces: [SandboxNetworkInterface]
 
+    @Field(key: "suspension_compute_reserved")
+    var suspensionComputeReserved: Bool
+
+    @Field(key: "suspension_storage_bytes")
+    var suspensionStorageBytes: Int64
+
+    @OptionalField(key: "suspension_storage_estimate_bytes")
+    var suspensionStorageEstimateBytes: Int64?
+
+    @OptionalField(key: "suspension_after_snapshot_id")
+    var suspensionAfterSnapshotId: UUID?
+
+    @OptionalField(key: "suspension_evidence")
+    var suspensionEvidence: SandboxSuspensionEvidence?
+
     // Observed state, written only from agent reports (plus the diagnostic
     // escalations in the sweeps).
     @Enum(key: "status")
@@ -184,7 +199,10 @@ final class Sandbox: Model, @unchecked Sendable {
     @Timestamp(key: "updated_at", on: .update)
     var updatedAt: Date?
 
-    init() {}
+    init() {
+        self.suspensionComputeReserved = true
+        self.suspensionStorageBytes = 0
+    }
 
     init(
         id: UUID? = nil,
@@ -216,6 +234,8 @@ final class Sandbox: Model, @unchecked Sendable {
         self.ttlSeconds = ttlSeconds
         self.restoredFromSnapshotId = restoredFromSnapshotId
         self.cpuTemplate = cpuTemplate
+        self.suspensionComputeReserved = true
+        self.suspensionStorageBytes = 0
         // A fresh sandbox exists but is not running, mirroring VM creation:
         // the create operation materializes it agent-side, and the user
         // starts it explicitly. `.stopped` here means "not yet confirmed by
@@ -242,7 +262,7 @@ extension Sandbox {
     /// launch. `.error` is included so an operator can recover a sandbox
     /// whose state could not be confirmed.
     var canStart: Bool {
-        status == .stopped || status == .exited || status == .error
+        status == .stopped || status == .suspended || status == .exited || status == .error
     }
 
     /// `.error` is stoppable for the same reason it is startable, and the
@@ -319,6 +339,8 @@ extension Sandbox {
         switch status {
         case .running, .starting:
             resting = .running
+        case .suspended:
+            resting = .suspended
         case .stopped, .stopping, .exited, .error, .unknown:
             resting = .stopped
         }
@@ -478,11 +500,13 @@ struct SandboxDetailResponse: Content {
     let securityGroupsEnforced: Bool?
     /// How far the sandbox is from the state the API was last asked to put it
     /// in (STR-142) — same contract as the VM's; see `ResourceConditions`.
+    let suspension: SandboxSuspensionEvidence?
     let conditions: ResourceConditions
     let createdAt: Date?
     let updatedAt: Date?
 
     init(from sandbox: Sandbox, securityGroupsEnforced: Bool? = nil) {
+        self.suspension = sandbox.suspensionEvidence
         self.id = sandbox.id
         self.name = sandbox.name
         self.projectId = sandbox.$project.id

@@ -23,6 +23,10 @@ extension FirecrackerSandboxRuntime {
             return
         }
 
+        guard try loadSuspensionRecord(sandboxId: sandboxId) == nil else {
+            throw SandboxRuntimeError.notSnapshottable("durable guest state requires adoption, not cold recreation")
+        }
+
         guard !requiresJailUID || jailUIDs.uid(for: sandboxId) != nil else {
             throw SandboxRuntimeError.jailIdentityUnavailable(
                 "sandbox \(sandboxId) has no exclusive allocation; persist a fresh jailUID before creating it")
@@ -1307,9 +1311,7 @@ extension FirecrackerSandboxRuntime {
 
     func getSandboxStatus(sandboxId: String) async throws -> SandboxStatus {
         if try loadSuspensionRecord(sandboxId: sandboxId)?.phase == .suspended {
-            // Shared Suspended representation is pending parent wire allocation.
-            // This local observation does not itself activate stop semantics.
-            return .stopped
+            return .suspended
         }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)

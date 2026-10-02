@@ -586,7 +586,14 @@ extension VM {
 }
 
 extension Sandbox {
-    var desiredSatisfied: Bool { desiredStatus.isSatisfied(by: status) }
+    var desiredSatisfied: Bool {
+        guard desiredStatus.isSatisfied(by: status) else { return false }
+        guard desiredStatus == .suspended else { return true }
+        return !suspensionComputeReserved && suspensionEvidence?.verified == true
+            && suspensionEvidence?.vmmDestroyed == true
+            && suspensionEvidence?.generation == generation
+            && (suspensionEvidence?.storageBytes ?? 0) > 0
+    }
 }
 
 extension Volume {

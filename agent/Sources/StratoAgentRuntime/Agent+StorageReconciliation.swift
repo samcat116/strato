@@ -175,7 +175,10 @@ extension Agent {
             volumeStorage: desired.kind == .volumeSnapshot ? desired.volumeStorage : nil,
             reservedDiskBytes: reservedDiskBytes,
             facts: facts)
-        persistSnapshotRecords()
+        guard snapshotRecordStore.save(snapshotRecords) else {
+            snapshotRecords.removeValue(forKey: desired.snapshotId)
+            throw ConvergenceError.sourceNotReady("could not durably record captured snapshot")
+        }
         logger.info(
             "Snapshot artifact captured",
             metadata: [
