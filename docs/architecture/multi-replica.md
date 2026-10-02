@@ -248,8 +248,9 @@ records keep their existing terminal-event/deadline contract. Ordinary EOF still
 drains accepted final frames. Identity-keyed cleanup runs even after row deletion;
 an unacknowledged remote close returns 503 rather than claiming success.
 
-Each WebSocket frame rechecks durable agent/enrollment authority. A deregistered
-agent's still-valid SVID cannot recreate its workload registration: authentication
+Live sockets periodically recheck durable agent/enrollment authority; operator
+teardown stops queued frame processing before acknowledging revocation. A
+deregistered agent's still-valid SVID cannot recreate its workload registration: authentication
 requires a surviving agent or enrollment and holds a shared row lock while
 establishing the registry mapping. Forwarded leaf certificates also schedule
 socket close at `notValidAfter`, allowing the agent's ordinary reconnect to

@@ -291,7 +291,6 @@ struct AgentWebSocketController: RouteCollection {
         }
 
         do {
-            try await WorkloadRegistry.requireAgentRegistration(identity: agent.identity, on: req.db)
             let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
             // Streaming frames are logged by length alone, mirroring the
             // agent's send path. Decode first: JSONEncoder does not guarantee

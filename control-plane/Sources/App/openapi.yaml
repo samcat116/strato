@@ -5888,7 +5888,8 @@ paths:
         "503":
           description: >-
             SPIRE entries for this agent cannot be revoked because the SPIRE
-            server API is not configured.
+            server API is not configured, or the durable deregistration completed
+            but the owning replica did not acknowledge socket teardown.
           content:
             application/json:
               schema:
@@ -5912,6 +5913,12 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: The offline hold is durable but socket teardown was not acknowledged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/agents/{agentId}/actions/resume:
     parameters:
       - $ref: "#/components/parameters/AgentID"

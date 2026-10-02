@@ -17850,7 +17850,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured. */
+            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured, or the durable deregistration completed but the owning replica did not acknowledge socket teardown. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -17909,6 +17909,15 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            /** @description The offline hold is durable but socket teardown was not acknowledged. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     resumeAgent: {
