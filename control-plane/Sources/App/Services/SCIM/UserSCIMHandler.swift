@@ -128,14 +128,23 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
-        let username = try validateIdentity { try UserController.validateUsername(resource.userName) }
-        let displayName = try validateIdentity {
-            try UserController.validateDisplayName(resource.displayName ?? resource.name?.formatted ?? username)
-        }
+        // PATCH replays the stored resource through replace. Unchanged historic
+        // identities must not block offboarding or become dirty model fields.
+        let username =
+            resource.userName == user.username
+            ? user.username
+            : try validateIdentity { try UserController.validateUsername(resource.userName) }
+        let proposedDisplayName = resource.displayName ?? resource.name?.formatted ?? username
+        let displayName =
+            proposedDisplayName == user.displayName
+            ? user.displayName
+            : try validateIdentity { try UserController.validateDisplayName(proposedDisplayName) }
         let email = try
             (resource.emails?.first(where: { $0.primary == true })?.value
             ?? resource.emails?.first?.value).map { value in
-                try validateIdentity { try UserController.validateEmail(value) }
+                value == user.email
+                    ? user.email
+                    : try validateIdentity { try UserController.validateEmail(value) }
             }
 
         // Check if new username is already taken by another user
@@ -150,8 +159,8 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
         }
 
         // Update user fields
-        user.username = username
-        user.displayName = displayName
+        if user.username != username { user.username = username }
+        if user.displayName != displayName { user.displayName = displayName }
         let wasActive = user.scimActive
         user.scimActive = resource.active ?? true
 
@@ -169,7 +178,7 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             user.disabledAt = nil
         }
 
-        if let email {
+        if let email, email != user.email {
             if try await User.query(on: db).filter(\.$email == email).filter(\.$id != uuid).first() != nil {
                 throw SCIMServerError.conflict(detail: "Email already belongs to an account")
             }
