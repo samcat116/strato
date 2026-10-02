@@ -133,7 +133,7 @@ It must not own desired status, stop policy, quota, or a parallel resume path.
 
 ## Integration update against STR-312 draft #1447
 
-Stacked on STR-312 head `0d77008c4333ffed1ac3b7098bb4a642421d3477`.
+Integrated STR-312 head `54cd69a246ff19fa84b52db688f1767eddf4bb92`.
 `restoreSandboxArchive` now calls a cancellation-aware memory preparation step
 in both jailed and unjailed branches, after staging and before snapshot/load.
 The result is structurally File-only with an explicit disabled reason. There is
@@ -148,9 +148,12 @@ memory. It does not track guest writes, persist artifacts, handle UFFD events,
 or prove physical sharing. Swift tests cover private data, digest/trust/bounds,
 delta exhaustion, cancellation and production File fallback.
 
-STR-312's agent-local implementation removes the missing-hook blocker, but its
-shared desired/observed Suspended representation, control-plane quota/readmission,
-wake integration and live lifecycle proof remain pending. Backend implementation
+STR-312 now adds opt-in desired/observed Suspended evidence, control-plane
+quota/storage readmission and exec wake at owner-allocated wire version 68.
+Its API/control-plane implementation removes those missing-code blockers; its
+real checkpoint/destroy/restore and continuity acceptance remain unproven here.
+STR-273 owns no shared allocation and preserves the dependency's version 68.
+Backend implementation
 still needs the concrete descriptor/region receiver, seccomp-reviewed UFFD
 transport/watchdog process adapter, actual dirty capture, scoped live proof and
 lifecycle cleanup integration. Local supervision, durable artifacts and negative
@@ -233,23 +236,16 @@ separate source cache from guest pages. Only then run disposable 1/10/100 restor
 benchmarks with latency p50/p95/p99, fault latency, handler CPU, disk reads and
 host PSS; cap admission/resources before increasing concurrency.
 
-Missing today: complete STR-312 cross-service integration and live proof,
-approved Firecracker/jailer pin and host
-matrix, permitted KVM/UFFD fixture, compatible verified snapshots, end-to-end
+Missing today: STR-312 live lifecycle acceptance and final coordinated dependency
+integration, approved Firecracker/jailer pin and host matrix, permitted KVM/UFFD fixture, compatible verified snapshots, end-to-end
 restore proof, physical-sharing strategy/proof and fault-injection benchmarks.
 STR-273 remains blocked and incomplete.
 
-Validation of the stacked update: Linux x86_64 Swift 6.4.0 compiled the
-changed agent core/runtime and all test products. Four SandboxLazyMemoryTests
-passed; 27 SandboxSuspensionTests/SandboxCheckpointManifestTests passed. Seven
-Python tests, C probe compilation, strict Swift formatting and whitespace checks
-passed. This was focused validation, not a full agent test run or live VM test.
-
-Final kernel-independent progress validation: the full Linux x86_64 Swift 6.4.0
-agent suite passed all five products (920 + 344 + 70 + 45 + 531 = **1910 tests**).
-This includes native storage/supervision/candidate-proof fixtures and the final
-close-on-exec regression check. The initially timing-sensitive two-child fixture
-was changed to trigger exit only after admission; the complete final rerun
-passed. Seven Python tests, strict formatting, whitespace checks and C probe
-compilation passed. Both UFFD syscall variants still returned ENOSYS. No full
-Firecracker restore, guest-sharing/PSS or benchmark acceptance is established.
+Validation of the combined draft against STR-312 head `54cd69a2`: the full
+Linux x86_64 Swift 6.4.0 agent suite passed all five products
+(921 + 344 + 70 + 45 + 531 = **1911 tests**). The full shared suite passed
+**274 tests**. Seven Python tests, strict Swift formatting, whitespace checks
+and C probe compilation passed. Both UFFD syscall variants still returned ENOSYS.
+The initially timing-sensitive two-child fixture now triggers exit only after
+admission; the complete final runs passed. These local tests do not establish
+actual Firecracker restore, guest-sharing/PSS or benchmark acceptance.
