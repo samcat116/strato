@@ -1613,7 +1613,7 @@ final class GuestExecTests {
             }
         }
     }
-    @Test("Identity-key disconnect releases pending and attached leases without an agent row")
+    @Test("Repeated revocation releases interactive leases without an agent row and preserves recorded commands")
     func agentDisconnectReleasesAllVMLeases() async throws {
         try await withSandboxTestApp { app, user, project, _, _ in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "disconnect-vm", project: project)
@@ -1621,8 +1621,14 @@ final class GuestExecTests {
             let userID = try user.requireID()
             let manager = app.guestExecSessionManager
             let key = agentKey("missing-revoked-agent")
+            let identity = try #require(AgentIdentity(key: key))
+            let recorded = VMCommandExecution(
+                vmID: vmID, actorID: userID, agentKey: key, deadline: Date().addingTimeInterval(300))
+            try await recorded.create(command: ["true"], on: app.db)
+            let recordedID = try recorded.requireID()
+            let originalDeadline = try #require(try await VMCommandExecution.find(recordedID, on: app.db)).deadline
             var ids: [UUID] = []
-            for index in 0..<GuestExecLimits.maxSessionsPerVM {
+            for index in 0..<GuestExecLimits.maxSessionsPerVM - 1 {
                 let id = UUID()
                 ids.append(id)
                 try await VMExecSessionLimits.reserve(
@@ -1644,7 +1650,7 @@ final class GuestExecTests {
                     id: UUID(), vmID: vmID, userID: userID, username: user.username, on: app.db)
             }
             for _ in 0..<2 {
-                await manager.closeAllSessions(forAgent: key, reason: "Agent administratively offline")
+                try await app.agentService.forceUnregisterAgent(identity)
             }
             for id in ids {
                 #expect(!manager.hasPendingSession(sessionId: id.uuidString))
@@ -1656,6 +1662,9 @@ final class GuestExecTests {
                 try await sql.raw("SELECT count(*)::int AS count FROM vm_exec_sessions WHERE vm_id = \(bind: vmID)")
                     .first(decoding: Count.self))
             #expect(remaining.count == 0)
+            let storedCommand = try #require(try await VMCommandExecution.find(recordedID, on: app.db))
+            #expect(storedCommand.status == .pending)
+            #expect(storedCommand.deadline == originalDeadline)
             try await VMExecSessionLimits.reserve(
                 id: UUID(), vmID: vmID, userID: userID, username: user.username, on: app.db)
         }

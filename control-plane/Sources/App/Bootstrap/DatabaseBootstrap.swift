@@ -229,5 +229,6 @@ extension Application {
         migrations.add(CreateVMFleetRuns())
         migrations.add(AddVMFleetPreviewExpiryIndex())
         migrations.add(CreateGuestExecSessionLimits())
+        migrations.add(AddAgentAdministrativeOffline())
     }
 }

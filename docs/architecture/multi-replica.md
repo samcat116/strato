@@ -275,3 +275,31 @@ pump, ordered after start delivery and before disconnect cleanup, and append one
 `vm.exec.ended` fact. Existing agent socket loss still closes interactive guest
 channels. These defaults are shared constants rather than deployment settings;
 no Valkey coordination, authentication, or guest wire protocol changes are needed.
+
+### Administrative agent revocation
+
+Force-offline persists `agents.administratively_offline` before disconnecting;
+only `POST /api/agents/{id}/actions/resume` releases the hold. Registration,
+periodic reports, HTTP mTLS authorization, and presence refresh refuse held
+agents. Resume permits normal reconnect but does not assert online status.
+Report saves recheck the hold under a PostgreSQL row lock so an in-flight report
+cannot overwrite the operator's status transition.
+
+Operator teardown captures the socket replica route and sends an acknowledged
+revocation RPC before clearing claims. The owner detaches outbound delivery,
+stops the frame processor, discards queued frames, and closes the socket on its
+event loop. It waits for the active handler before clearing presence, routes,
+inventory sessions, and interactive console/exec sessions. Captured command
+records keep their existing terminal-event/deadline contract. Ordinary EOF still
+drains accepted final frames. Identity-keyed cleanup runs even after row deletion;
+an unacknowledged remote close returns 503 rather than claiming success.
+
+Live sockets periodically recheck durable agent/enrollment authority; operator
+teardown stops queued frame processing before acknowledging revocation. A
+deregistered agent's still-valid SVID cannot recreate its workload registration: authentication
+requires a surviving agent or enrollment and holds a shared row lock while
+establishing the registry mapping. Forwarded leaf certificates also schedule
+socket close at `notValidAfter`, allowing the agent's ordinary reconnect to
+present its rotated SVID. URI-only Envoy forwarding retains its existing trust
+model and revalidates durable registration and trust-domain authority every 20
+seconds, including idle connections whose route was unavailable during teardown.

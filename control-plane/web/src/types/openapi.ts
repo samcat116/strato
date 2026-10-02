@@ -4111,9 +4111,32 @@ export interface paths {
         put?: never;
         /**
          * Force an agent offline
-         * @description Drops the agent from the in-memory registry and marks it `offline` in the database. Requires `manage` on the agent, and falls back to system-admin only while the agent hosts another organization's workloads.
+         * @description Persists an administrative offline hold and closes the owning agent socket across replicas. Heartbeats and reconnects cannot clear the hold; use the resume action to release it. Requires `manage` on the agent, and falls back to system-admin only while the agent hosts another organization's workloads.
          */
         post: operations["forceAgentOffline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agentId}/actions/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release an agent's administrative offline hold
+         * @description Allows authenticated reconnect and registration again. Does not mark the agent online until it reports in. Requires manage on the agent, with the same system-admin requirement for foreign workloads as force-offline.
+         */
+        post: operations["resumeAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8741,6 +8764,8 @@ export interface components {
             /** @description The agent build currently running on the node. */
             version: string;
             status: components["schemas"]["AgentStatus"];
+            /** @description Operator hold that only the resume action clears. */
+            administrativelyOffline: boolean;
             resources: components["schemas"]["AgentResources"];
             architecture?: components["schemas"]["AgentCPUArchitecture"];
             operatingSystem?: components["schemas"]["AgentOperatingSystem"];
@@ -17950,7 +17975,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured. */
+            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured, or the durable deregistration completed but the owning replica did not acknowledge socket teardown. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -17993,6 +18018,34 @@ export interface operations {
         };
     };
     forceAgentOffline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The offline hold is durable but socket teardown was not acknowledged. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    resumeAgent: {
         parameters: {
             query?: never;
             header?: never;
