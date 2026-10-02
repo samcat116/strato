@@ -384,7 +384,8 @@ extension FirecrackerSandboxRuntime {
             // or failed health check must never rewind it to the checkpoint.
             try Task.checkCancellation()
             guard let resumeGeneration else { throw SandboxSuspensionGuard.GateError.stale }
-            try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].validateResumeGeneration(resumeGeneration)
+            try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].validateResumeGeneration(
+                resumeGeneration)
             record.phase = .resuming
             try saveSuspension(record)
             try await newManager.resume()

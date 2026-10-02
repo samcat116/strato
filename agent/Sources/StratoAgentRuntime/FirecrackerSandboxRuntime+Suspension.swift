@@ -256,7 +256,8 @@ extension FirecrackerSandboxRuntime {
             guard let managed = sandboxes[sandboxId] else { throw SandboxSuspensionGuard.GateError.stale }
             let info = try await managed.manager.getInstanceInfo()
             if info.state == .paused {
-                try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].validateResumeGeneration(resumeGeneration)
+                try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].validateResumeGeneration(
+                    resumeGeneration)
                 try await managed.manager.resume()
             }
             let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
