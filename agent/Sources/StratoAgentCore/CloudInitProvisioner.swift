@@ -11,6 +11,9 @@ import StratoShared
 /// lets each driver opt into the provisioning mechanism it actually needs.
 public struct CloudInitProvisioner {
     let logger: Logger
+    var runISO: @Sendable (URL, [String]) async throws -> ProcessResult = { executable, arguments in
+        try await ProcessRunner.run(executableURL: executable, arguments: arguments)
+    }
 
     /// Password set on the guest image's default user for serial-console login.
     /// This is a development/test convenience for user-mode-networked VMs that
@@ -59,14 +62,22 @@ public struct CloudInitProvisioner {
         networkAttachments: [ResolvedNetworkAttachment] = []
     ) async -> Bool {
         let fileManager = FileManager.default
-        let tempDir = (NSTemporaryDirectory() as NSString).appendingPathComponent("cloud-init-\(vmId)")
-
-        // Clean up any existing temp directory
-        try? fileManager.removeItem(atPath: tempDir)
+        let vmDirectory = (isoPath as NSString).deletingLastPathComponent
+        let tempDir = (vmDirectory as NSString).appendingPathComponent(".cloud-init-staging")
+        let stagedISO = (tempDir as NSString).appendingPathComponent("cloud-init.iso")
+        let documentsDirectory = (tempDir as NSString).appendingPathComponent("documents")
 
         do {
-            // Create temp directory structure
-            try fileManager.createDirectory(atPath: tempDir, withIntermediateDirectories: true, attributes: nil)
+            try ManagedStatePermissions.prepareVMDirectory(at: vmDirectory)
+            try ManagedStatePermissions.requireRegularOrMissing(at: isoPath)
+            let staging = try CloudInitStaging(vmDirectory: vmDirectory, vmID: vmId)
+            defer {
+                do { try staging.cleanup() } catch {
+                    logger.warning("Failed to remove owned cloud-init staging at \(tempDir): \(error)")
+                }
+            }
+
+            try ManagedStatePermissions.createFreshDirectory(at: documentsDirectory)
 
             if metadataSource == .iso {
                 // The warning fires on exactly the condition the full renderer
@@ -104,8 +115,8 @@ public struct CloudInitProvisioner {
                 networkAttachments: networkAttachments,
                 guestAgentRelease: guestAgentRelease)
             for (filename, contents) in documents.sorted(by: { $0.key < $1.key }) {
-                let path = (tempDir as NSString).appendingPathComponent(filename)
-                try contents.write(toFile: path, atomically: true, encoding: .utf8)
+                let path = (documentsDirectory as NSString).appendingPathComponent(filename)
+                try DurableFileWriter().write(Data(contents.utf8), to: path, permissions: 0o600)
             }
 
             // Create ISO using hdiutil (macOS) or genisoimage/mkisofs (Linux)
@@ -117,9 +128,9 @@ public struct CloudInitProvisioner {
                 "makehybrid",
                 "-iso",
                 "-joliet",
-                "-o", isoPath,
+                "-o", stagedISO,
                 "-default-volume-name", "cidata",
-                tempDir,
+                documentsDirectory,
             ]
             #else
             // Try genisoimage first, then mkisofs
@@ -129,20 +140,21 @@ public struct CloudInitProvisioner {
                 fileURLWithPath:
                     fileManager.fileExists(atPath: genisoimagePath) ? genisoimagePath : mkisofsPath)
             arguments = [
-                "-output", isoPath,
+                "-output", stagedISO,
                 "-volid", "cidata",
                 "-joliet",
                 "-rock",
-                tempDir,
+                documentsDirectory,
             ]
             #endif
 
-            let result = try await ProcessRunner.run(executableURL: executableURL, arguments: arguments)
-
-            // Clean up temp directory
-            try? fileManager.removeItem(atPath: tempDir)
+            try staging.generatorWillStart()
+            let result = try await runISO(executableURL, arguments)
+            try staging.generatorDidFinish()
 
             if result.terminationStatus == 0 {
+                try ManagedStatePermissions.restrictFile(at: stagedISO)
+                try DurableFileWriter().publish(stagingPath: stagedISO, to: isoPath)
                 logger.debug("Created cloud-init ISO at: \(isoPath)")
                 return true
             } else {
@@ -151,7 +163,6 @@ public struct CloudInitProvisioner {
             }
         } catch {
             logger.warning("Failed to create cloud-init ISO: \(error.localizedDescription)")
-            try? fileManager.removeItem(atPath: tempDir)
             return false
         }
     }
