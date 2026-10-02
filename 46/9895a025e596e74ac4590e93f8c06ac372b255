@@ -1,0 +1,52 @@
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  h_a84d4ff76cadd1 230
+control-plane/Sources/App/Controllers/AgentController.swift
+  h_a84d4ff76cadd1 26,1074,1095-1100,1112-1123
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  h_a84d4ff76cadd1 2,294,570-573,631-640,664-698,700-701,723,726
+control-plane/Sources/App/Migrations/AddAgentAdministrativeOffline.swift
+  h_a84d4ff76cadd1 1-14
+control-plane/Sources/App/Models/Agent.swift
+  h_a84d4ff76cadd1 32-35,305,463,502,621,700,818
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  h_a84d4ff76cadd1 130-131,199,204
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  h_a84d4ff76cadd1 87-89,240,409,411,442,444-454,456-462,464,466-471,477-478,482,586,589,597-615,626,738-743
+control-plane/Sources/App/Services/AgentWebSocketFrameProcessor.swift
+  h_a84d4ff76cadd1 92-101
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  h_a84d4ff76cadd1 18-19,122-123,178-191,197,234-240
+control-plane/Sources/App/Services/SPIFFE/WorkloadRegistry.swift
+  h_a84d4ff76cadd1 3,130-159
+control-plane/Sources/App/Services/WebSocketManager.swift
+  h_a84d4ff76cadd1 39,87-96,98,105
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 5903-5905,5915-5931,15529,15556-15558
+control-plane/Tests/AppIdentityTests/OrgTrustDomainTests.swift
+  h_a84d4ff76cadd1 477
+control-plane/Tests/AppIdentityTests/WorkloadPrincipalTests.swift
+  h_a84d4ff76cadd1 411-413
+control-plane/Tests/AppPlatformTests/AgentRevocationTests.swift
+  h_a84d4ff76cadd1 1-129
+control-plane/Tests/AppPlatformTests/AgentWebSocketFrameProcessorTests.swift
+  h_a84d4ff76cadd1 56-76
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  h_a84d4ff76cadd1 2-3,74-172,477-480,482-484,783-798
+control-plane/Tests/AppPlatformTests/ReplicaMessageBridgeTests.swift
+  h_a84d4ff76cadd1 11-14
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 4067,4076-4098,8708-8709,17907-17925
+docs/architecture/multi-replica.md
+  h_a84d4ff76cadd1 232-258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "469895a025e596e74ac4590e93f8c06ac372b255",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
