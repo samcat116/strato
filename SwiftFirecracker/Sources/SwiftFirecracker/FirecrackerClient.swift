@@ -505,6 +505,13 @@ public actor FirecrackerClient {
         try await adoptVM(vmId: vmId, jail: nil)
     }
 
+    /// A control handle for durable suspended context. Creates no process,
+    /// connects to nothing, and provides no observation or health evidence.
+    /// The caller must restore before using it for a guest operation.
+    public func disconnectedManager(vmId: String, jail: JailerOptions?) -> FirecrackerManager {
+        FirecrackerManager(socketPath: self.socketPath(vmId: vmId, jail: jail), logger: logger)
+    }
+
     /// Jail-aware re-adoption (issue #425): pass the same `JailerOptions` the
     /// VM was created with so the API socket is looked up inside its chroot.
     /// Jailed processes share one in-chroot socket path, so the surviving

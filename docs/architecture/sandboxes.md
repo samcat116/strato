@@ -22,6 +22,9 @@ entrypoint/cmd/env/workdir.
 
 ## Lifecycle and data model
 
+STR-312 suspension work is tracked in [the suspension implementation boundary](./sandbox-suspension.md).
+The local checkpoint integrity foundation does not yet replace paused stop semantics.
+
 ### Workload shape
 
 A sandbox is described by `SandboxSpec`

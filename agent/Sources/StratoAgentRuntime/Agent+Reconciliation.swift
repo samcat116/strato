@@ -330,9 +330,15 @@ extension Agent: ReconcileActuator {
             try await sandboxReconcileCreate(item)
             return .stopped
         }
-        managedSandboxes[item.id] = entry
+        var adoptedEntry = entry
+        adoptedEntry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+        managedSandboxes[item.id] = adoptedEntry
         orphanedSandboxes.removeValue(forKey: item.id)
-        persistManifest()
+        guard persistManifest() else {
+            managedSandboxes.removeValue(forKey: item.id)
+            orphanedSandboxes[item.id] = entry
+            throw SandboxRuntimeError.snapshotIOFailed("could not persist adopted suspension reservations")
+        }
 
         logger.info(
             "Orphaned sandbox re-adopted and managed again",

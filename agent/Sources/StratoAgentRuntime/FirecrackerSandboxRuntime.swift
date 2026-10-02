@@ -213,6 +213,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// poll open a connection between the drain and the pause, which
     /// Firecracker rejects a vsock snapshot over.
     var checkpointing: Set<String> = []
+    var suspensionGuards: [String: SandboxSuspensionGuard] = [:]
+    var suspending: Set<String> = []
+    var suspensionRecords: [String: SandboxSuspensionRecord] = [:]
+    var restoreAdmission = SandboxRestoreAdmission()
+    let suspensionRestoreTimeoutSeconds: Int
+    var suspensionStore: SandboxSuspensionStore {
+        SandboxSuspensionStore(directory: sandboxStoragePath + "/suspension-records")
+    }
 
     // MARK: Exec/log state (issue #423)
 
@@ -276,8 +284,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         jailerBlockedReason: String? = nil,
         warmStartEnabled: Bool = true,
         warmCacheBudgetBytes: Int64? = nil,
-        snapshotTransfer: SnapshotArtifactTransfer? = nil
-    ) {
+        snapshotTransfer: SnapshotArtifactTransfer? = nil,
+        suspensionRestoreLimit: Int = 2,
+        suspensionRestoreTimeoutSeconds: Int = StageBudget.checkpointSeconds
+    ) throws {
+        guard (5...StageBudget.checkpointSeconds).contains(suspensionRestoreTimeoutSeconds) else {
+            throw SandboxSuspensionGuard.GateError.stale
+        }
+        self.suspensionRestoreTimeoutSeconds = suspensionRestoreTimeoutSeconds
+        self.restoreAdmission = try SandboxRestoreAdmission(limit: suspensionRestoreLimit)
         self.logger = logger
         self.client = client
         self.imageService = imageService

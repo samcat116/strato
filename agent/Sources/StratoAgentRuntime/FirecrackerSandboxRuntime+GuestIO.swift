@@ -17,10 +17,12 @@ extension FirecrackerSandboxRuntime {
         request: SandboxExecRequest,
         events: @escaping @Sendable (SandboxExecEvent) -> Void
     ) async throws {
+        let activity = suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].beginActivity()
+        defer { suspensionGuards[sandboxId]?.endActivity(activity) }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         guard execSessions[sessionId] == nil else {

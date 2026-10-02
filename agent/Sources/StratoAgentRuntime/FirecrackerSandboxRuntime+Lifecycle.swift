@@ -823,10 +823,19 @@ extension FirecrackerSandboxRuntime {
     /// mismatch is terminal rather than another warm-launch attempt — a
     /// structural bound on the demote/boot recursion.
     func bootSandbox(sandboxId: String, allowWarmLaunch: Bool) async throws {
+        guard !suspending.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
+        if let record = try loadSuspensionRecord(sandboxId: sandboxId),
+            [.suspended, .restoring, .resuming, .destroying, .verified].contains(record.phase)
+        {
+            try await resumeSuspendedSandbox(sandboxId: sandboxId)
+            return
+        }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         let bootStarted = Date()
@@ -1080,7 +1089,7 @@ extension FirecrackerSandboxRuntime {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         // A paused guest can't serve exec sessions or the log follow stream:
@@ -1111,7 +1120,7 @@ extension FirecrackerSandboxRuntime {
         // leave the restore's freshly spawned process untracked. Refuse as
         // transient; the reconciler re-drives the delete once the
         // checkpoint/restore finishes.
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         logger.info("Deleting sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
@@ -1124,6 +1133,11 @@ extension FirecrackerSandboxRuntime {
         // The caller may release the durable UID immediately after this
         // returns, so teardown is deliberately not best effort.
         try await prepareJailUIDRelease(for: sandboxId, jailUID: jailUID)
+        if let id = UUID(uuidString: sandboxId) {
+            try suspensionStore.remove(sandboxId: id)
+            suspensionRecords.removeValue(forKey: sandboxId)
+            suspensionGuards.removeValue(forKey: sandboxId)
+        }
     }
 
     func adoptSandbox(sandboxId: String, spec: SandboxSpec) async throws -> SandboxStatus {
@@ -1191,6 +1205,9 @@ extension FirecrackerSandboxRuntime {
             candidates.append((nil, nil, flatSocketPath))
         }
         guard !candidates.isEmpty else {
+            if try loadSuspensionRecord(sandboxId: sandboxId) != nil {
+                return try await recoverSuspendedContext(sandboxId: sandboxId, jailUID: jailUID)
+            }
             try await confirmNoSandboxProcessBeforeReportingGone(
                 sandboxId, jailUID: jailUID)
             throw SandboxRuntimeError.adoptionTargetGone(
@@ -1219,6 +1236,9 @@ extension FirecrackerSandboxRuntime {
             }
         }
         guard let (manager, info, jailPlan) = adoption else {
+            if try loadSuspensionRecord(sandboxId: sandboxId) != nil {
+                return try await recoverSuspendedContext(sandboxId: sandboxId, jailUID: jailUID)
+            }
             // An absent or unconnectable socket is not process-death proof.
             try await confirmNoSandboxProcessBeforeReportingGone(
                 sandboxId, jailUID: jailUID)
@@ -1277,6 +1297,11 @@ extension FirecrackerSandboxRuntime {
     }
 
     func getSandboxStatus(sandboxId: String) async throws -> SandboxStatus {
+        if try loadSuspensionRecord(sandboxId: sandboxId)?.phase == .suspended {
+            // Shared Suspended representation is pending parent wire allocation.
+            // This local observation does not itself activate stop semantics.
+            return .stopped
+        }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
