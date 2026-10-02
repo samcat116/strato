@@ -133,13 +133,18 @@ It must not own desired status, stop policy, quota, or a parallel resume path.
 
 ## Integration update against STR-312 draft #1447
 
-Integrated STR-312 head `54cd69a246ff19fa84b52db688f1767eddf4bb92`.
+Integrated final STR-312 head `c57da019760db5af37b428087e3c775ccacef419`.
 `restoreSandboxArchive` now calls a cancellation-aware memory preparation step
 in both jailed and unjailed branches, after staging and before snapshot/load.
 The result is structurally File-only with an explicit disabled reason. There is
 no UFFD constructor, configuration switch or advertised capability to accidentally
 enable a partial backend. STR-312 retains checkpoint, admission, generation,
-resume, process teardown and quota ownership.
+resume, process teardown, deadlines, cancellation, journal, identity, retention
+and quota ownership. Wake/restore binds expectedGeneration before load awaits,
+then validates before durable resuming and the resume RPC. Superseding stop/delete
+prevents resume; post-destruction recovery stays within the original generation.
+Queued-restore retry and both fleet/suspension migration catalog round trips are
+preserved from the dependency. Wire version remains 68.
 
 `SandboxLazyMemoryPages` adds a native Swift page-source contract with a copied,
 digest-verified immutable base, explicit trust class, bounded private delta,
@@ -265,19 +270,21 @@ separate source cache from guest pages. Only then run disposable 1/10/100 restor
 benchmarks with latency p50/p95/p99, fault latency, handler CPU, disk reads and
 host PSS; cap admission/resources before increasing concurrency.
 
-Missing today: STR-312 live lifecycle acceptance and final coordinated dependency
-integration, approved Firecracker/jailer pin and host matrix, permitted KVM/UFFD fixture, compatible verified snapshots, end-to-end
+Missing today: STR-312 live lifecycle acceptance, approved Firecracker/jailer pin
+and host matrix, permitted KVM/UFFD fixture, compatible verified snapshots, end-to-end
 restore proof, physical-sharing strategy/proof and fault-injection benchmarks.
-STR-273 remains blocked and incomplete. The dependency branch was observed at
-`093b841d5c08eb44e3079e0b4cb971695e1572ba` after this draft's incorporated
-`54cd69a2` boundary; final stack reconciliation remains parent-owned.
+STR-273 remains blocked and incomplete. The draft is reconciled onto the final
+STR-312 `c57da019` boundary; activation remains blocked on actual disposable
+KVM/UFFD lifecycle acceptance and the other live proofs above.
 
-Validation of the combined draft against STR-312 head `54cd69a2`: the full
+Validation of the combined draft against final STR-312 head `c57da019`: the full
 Linux x86_64 Swift 6.4.0 agent suite passed all five products
-(928 + 344 + 70 + 45 + 531 = **1918 tests**, including seven new transport fixtures). The full shared suite passed
-**274 tests**. Seven Python tests, strict Swift formatting, whitespace checks
-and C probe/transport compilation passed. The shared suite result precedes the
-transport addition, which changes no shared source. Both UFFD syscall variants still returned ENOSYS.
+(929 + 348 + 70 + 45 + 531 = **1923 tests**, including seven transport fixtures and the dependency regression additions). The full shared suite passed
+**274 tests**. The current-schema baseline suite passed **10 tests** against
+disposable local PostgreSQL 15, including the preserved fleet and suspension
+revert/reapply catalog round trips; its container was removed afterwards.
+Seven Python tests, strict Swift formatting, whitespace checks
+and C probe/transport compilation passed. Both UFFD syscall variants still returned ENOSYS.
 The initially timing-sensitive two-child fixture now triggers exit only after
 admission; the complete final runs passed. These local tests do not establish
 actual Firecracker restore, guest-sharing/PSS or benchmark acceptance.
