@@ -88,13 +88,28 @@ actor LokiService {
         request.method = .POST
         request.headers.add(name: "Content-Type", value: "application/json")
         request.body = .bytes(ByteBuffer(data: body))
-        let response = try await httpClient.execute(request, timeout: .seconds(2))
-        guard (200..<300).contains(Int(response.status.code)) else {
-            throw LokiError.pushFailed("HTTP \(response.status.code)")
+        let httpClient = self.httpClient
+        let requestToSend = request
+        // AsyncHTTPClient's execute deadline ends when response headers arrive.
+        // Keep a deadline around body consumption too: a trickling/missing body
+        // must release the serial worker and trip its outage gate. Cancellation
+        // of the body iterator cancels the underlying HTTP transaction.
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                let response = try await httpClient.execute(requestToSend, timeout: .seconds(2))
+                guard (200..<300).contains(Int(response.status.code)) else {
+                    throw LokiError.pushFailed("HTTP \(response.status.code)")
+                }
+                // Consume small replies for connection reuse, with a hard cap.
+                _ = try await response.body.collect(upTo: 64 * 1024)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(2))
+                throw HTTPClientError.deadlineExceeded
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
         }
-        // Consume the response so the HTTP connection is reusable. Never
-        // retain an unbounded backend error body in the control plane.
-        _ = try await response.body.collect(upTo: 64 * 1024)
     }
 
     // MARK: - Query Logs from Loki

@@ -9,6 +9,7 @@ import StratoShared
 struct LokiPushTests {
     private func withOrigin(
         status: HTTPResponseStatus = .noContent, delay: Duration = .zero, bodyBytes: Int = 0,
+        bodyDelay: Duration = .zero,
         test: (LokiService, NIOLockedValueBox<Int>) async throws -> Void
     ) async throws {
         var environment = Environment.testing
@@ -20,6 +21,14 @@ struct LokiPushTests {
             requests.withLockedValue { $0 += 1 }
             #expect(request.headers.first(name: "Content-Type") == "application/json")
             try await Task.sleep(for: delay)
+            if bodyDelay > .zero {
+                return Response(
+                    status: status,
+                    body: .init(managedAsyncStream: { writer in
+                        try await writer.write(.buffer(ByteBuffer(string: "prefix")))
+                        try await Task.sleep(for: bodyDelay)
+                    }))
+            }
             return Response(status: status, body: .init(string: String(repeating: "x", count: bodyBytes)))
         }
         func teardown() async {
@@ -56,6 +65,18 @@ struct LokiPushTests {
     @Test("Hung Loki fails within the push deadline")
     func deadline() async throws {
         try await withOrigin(delay: .seconds(5)) { service, requests in
+            let start = ContinuousClock.now
+            await #expect(throws: (any Error).self) {
+                try await service.pushSandboxLogs([SandboxLogMessage(sandboxId: "s", stream: "stdout", message: "x")])
+            }
+            #expect(start.duration(to: .now) < .seconds(4))
+            #expect(requests.withLockedValue { $0 } == 1)
+        }
+    }
+
+    @Test("Successful headers cannot hide a stalled response body from the deadline")
+    func stalledResponseBody() async throws {
+        try await withOrigin(status: .ok, bodyDelay: .seconds(5)) { service, requests in
             let start = ContinuousClock.now
             await #expect(throws: (any Error).self) {
                 try await service.pushSandboxLogs([SandboxLogMessage(sandboxId: "s", stream: "stdout", message: "x")])

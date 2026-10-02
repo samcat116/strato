@@ -874,7 +874,8 @@ The worker flushes at 256 lines / 256 KiB or within 100 ms (size pressure is
 checked every 5 ms), grouping complete Loki label sets in one HTTP request and
 preserving each stream's arrival order. The active batch is separately bounded;
 a single oversize line can occupy up to the FIFO budget. HTTP push has a
-2-second deadline and a 64 KiB response-body cap. Transport/non-2xx failures
+2-second deadline covering both response headers and body consumption, plus
+a 64 KiB response-body cap. Transport/non-2xx failures
 reach the ingestor, which sheds the failed batch and queued backlog and rejects
 new lines for 30 seconds. The next arrival after cooldown permits one serial
 probe; success resumes delivery. Failed telemetry is never retried. Outage
