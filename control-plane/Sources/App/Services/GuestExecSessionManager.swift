@@ -321,10 +321,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         reason: String,
         timestamp: Date? = nil
     ) async {
-        let closed: [RemovedExecSession] = lock.withLock {
-            let pendingSessionIds = pendingSessions.values
-                .filter { $0.agentKey == agentKey }
-                .map(\.sessionId)
+        let (closed, pendingVMIds): ([RemovedExecSession], [UUID]) = lock.withLock {
+            let pending = pendingSessions.values.filter { $0.agentKey == agentKey }
+            let pendingSessionIds = pending.map(\.sessionId)
+            let pendingVMIds = pending.filter { $0.resourceKind == .virtualMachine }
+                .compactMap { UUID(uuidString: $0.sessionId) }
             for sessionId in pendingSessionIds {
                 pendingSessions.removeValue(forKey: sessionId)
             }
@@ -339,7 +340,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
                     closed.append(removed)
                 }
             }
-            return closed
+            return (closed, pendingVMIds)
         }
 
         // User-facing teardown is independent of audit availability. Close every
@@ -359,6 +360,13 @@ final class GuestExecSessionManager: @unchecked Sendable {
         }
         for removed in closed {
             await recordEnded(removed, outcome: .disconnected, reason: reason)
+        }
+        // Pending tokens never reached the lifecycle audit path, but their
+        // admission leases must be released on an explicit disconnect too.
+        for id in pendingVMIds {
+            do { try await VMExecSessionLimits.remove(id: id, on: app.db) } catch {
+                app.logger.warning("Could not remove pending VM exec presence: \(error)")
+            }
         }
     }
 

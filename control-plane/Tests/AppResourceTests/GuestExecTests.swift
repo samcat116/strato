@@ -1543,6 +1543,54 @@ final class GuestExecTests {
             }
         }
     }
+    @Test("Identity-key disconnect releases pending and attached leases without an agent row")
+    func agentDisconnectReleasesAllVMLeases() async throws {
+        try await withSandboxTestApp { app, user, project, _, _ in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "disconnect-vm", project: project)
+            let vmID = try vm.requireID()
+            let userID = try user.requireID()
+            let manager = app.guestExecSessionManager
+            let key = agentKey("missing-revoked-agent")
+            var ids: [UUID] = []
+            for index in 0..<GuestExecLimits.maxSessionsPerVM {
+                let id = UUID()
+                ids.append(id)
+                try await VMExecSessionLimits.reserve(
+                    id: id, vmID: vmID, userID: userID, username: user.username, on: app.db)
+                let pending = manager.createPendingSession(
+                    sessionId: id.uuidString, resourceKind: .virtualMachine, resourceId: vmID.uuidString,
+                    agentKey: key, userId: userID.uuidString, command: ["/bin/sh"], env: nil,
+                    workingDir: nil, tty: false, rows: nil, cols: nil)
+                if index.isMultiple(of: 2) {
+                    _ = try manager.attachSession(
+                        sessionId: pending.sessionId, resourceKind: pending.resourceKind,
+                        resourceId: pending.resourceId, userId: pending.userId, websocket: nil)
+                    try await VMExecSessionLimits.attach(id: id, on: app.db)
+                }
+            }
+            #expect(try await Agent.query(on: app.db).count() == 0)
+            await #expect(throws: Abort.self) {
+                try await VMExecSessionLimits.reserve(
+                    id: UUID(), vmID: vmID, userID: userID, username: user.username, on: app.db)
+            }
+            for _ in 0..<2 {
+                await manager.closeAllSessions(forAgent: key, reason: "Agent administratively offline")
+            }
+            for id in ids {
+                #expect(!manager.hasPendingSession(sessionId: id.uuidString))
+                #expect(manager.getSession(sessionId: id.uuidString) == nil)
+            }
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct Count: Decodable { let count: Int }
+            let remaining = try #require(
+                try await sql.raw("SELECT count(*)::int AS count FROM vm_exec_sessions WHERE vm_id = \(bind: vmID)")
+                    .first(decoding: Count.self))
+            #expect(remaining.count == 0)
+            try await VMExecSessionLimits.reserve(
+                id: UUID(), vmID: vmID, userID: userID, username: user.username, on: app.db)
+        }
+    }
+
     @Test("Shared VM admission includes pending interactive and recorded sessions and releases expired slots")
     func sharedSessionCap() async throws {
         try await withSandboxTestApp { app, user, project, _, _ in

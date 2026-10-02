@@ -256,8 +256,11 @@ become explicit skipped children.
 Interactive presence uses PostgreSQL leases. Pending reservations expire after
 60 seconds. The socket owner renews attached leases every maintenance tick
 (normally 30 seconds); presence expires within 60 seconds after a replica crash.
-A renewal refusal or database failure requests guest teardown rather than
-resurrecting an expired reservation. `GET /api/vms/:id/exec-sessions` requires
+Explicit agent disconnect releases both pending and attached interactive leases
+by identity key, even when no agent row remains. Repeated cleanup is harmless;
+recorded command deadlines remain governed by the operation service. A renewal
+refusal or database failure requests guest teardown rather than resurrecting an
+expired reservation. `GET /api/vms/:id/exec-sessions` requires
 `vm:read` and returns attached user attribution without argv or environment.
 `POST /api/vms/:id/exec-sessions/:sessionID/terminate` requires `vm:exec` on that
 VM and sets an idempotent termination request; the owner handles it on its next
