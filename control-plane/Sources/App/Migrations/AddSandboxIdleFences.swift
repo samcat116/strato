@@ -25,7 +25,8 @@ struct AddSandboxIdleFences: AsyncMigration {
             CREATE FUNCTION invalidate_sandbox_idle_fence() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_TABLE_NAME = 'agents' THEN
-                    IF NEW.inventory_session_id IS DISTINCT FROM OLD.inventory_session_id THEN
+                    IF NEW.inventory_session_id IS DISTINCT FROM OLD.inventory_session_id
+                        OR NEW.administratively_offline IS DISTINCT FROM OLD.administratively_offline THEN
                         UPDATE sandbox_idle_fences SET activity_revision = activity_revision + 1,
                             valid = false, report = NULL, received_at = NULL
                         WHERE lower(agent_key) = NEW.id::text;
@@ -50,7 +51,7 @@ struct AddSandboxIdleFences: AsyncMigration {
         ).run()
         try await sql.raw(
             """
-            CREATE TRIGGER invalidate_agent_sandbox_idle_fences AFTER UPDATE OF inventory_session_id ON agents
+            CREATE TRIGGER invalidate_agent_sandbox_idle_fences AFTER UPDATE OF inventory_session_id, administratively_offline ON agents
             FOR EACH ROW EXECUTE FUNCTION invalidate_sandbox_idle_fence()
             """
         ).run()

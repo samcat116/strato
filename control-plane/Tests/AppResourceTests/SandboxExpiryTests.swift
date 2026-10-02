@@ -728,6 +728,21 @@ final class SandboxExpiryTests {
                 try await SandboxIdleFenceService.validate(
                     id: id, owner: owner.uuidString, fence: wrongToken, on: app.db)
             }
+            // A durable administrative hold invalidates the old token even if
+            // the last inventory session remains unchanged. Resuming cannot
+            // resurrect that old admission or trust its old idle samples.
+            try await Agent.query(on: app.db).filter(\.$id == owner)
+                .set(\.$administrativelyOffline, to: true).update()
+            #expect(try await SandboxIdleFenceService.state(id: id, on: app.db)?.valid == false)
+            #expect(try await SandboxIdleFenceService.state(id: id, on: app.db)?.decodedReport == nil)
+            await #expect(throws: Abort.self) {
+                try await SandboxIdleFenceService.validate(id: id, owner: owner.uuidString, fence: fence, on: app.db)
+            }
+            try await Agent.query(on: app.db).filter(\.$id == owner)
+                .set(\.$administrativelyOffline, to: false).update()
+            await #expect(throws: Abort.self) {
+                try await SandboxIdleFenceService.validate(id: id, owner: owner.uuidString, fence: fence, on: app.db)
+            }
             // Source replacement revokes persisted ownership independently of
             // an old replica or agent's cached activity revision.
             try await InventorySessionFence.replace(UUID(), agentID: owner, on: app.db)

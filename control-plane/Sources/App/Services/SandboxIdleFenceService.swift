@@ -74,7 +74,7 @@ enum SandboxIdleFenceService {
             guest.sampleSequence > oldGuest.sampleSequence,
             report.activeExecSessionIds?.isEmpty == true, report.hostPendingCommandCount == 0,
             report.snapshotOrRestoreInProgress == false,
-            let agent = try await Agent.find(ownerID, on: db)
+            let agent = try await Agent.find(ownerID, on: db), !agent.administrativelyOffline
         {
             struct Released: Decodable { let id: UUID }
             let ended = try await sql.raw(
@@ -190,6 +190,7 @@ enum SandboxIdleFenceService {
                 let report = state.decodedReport,
                 state.agent_key == sandbox.hypervisorId, state.inventory_session_id != nil,
                 let ownerID = UUID(uuidString: state.agent_key),
+                let owner = try await Agent.find(ownerID, on: db), !owner.administrativelyOffline,
                 state.inventory_session_id == (try await InventorySessionFence.current(agentID: ownerID, on: db)),
                 report.generation == sandbox.generation, report.controlPlaneActivityRevision == state.activity_revision,
                 report.isCompleteQuiet, let received = state.received_at,
@@ -232,6 +233,7 @@ enum SandboxIdleFenceService {
                 let state = try await state(id: id, on: db), state.agent_key == owner,
                 state.valid, state.decodedFence == fence, state.activity_revision == fence.activityRevision,
                 let session = state.inventory_session_id, let ownerID = UUID(uuidString: owner),
+                let agent = try await Agent.find(ownerID, on: db), !agent.administrativelyOffline,
                 session == (try await InventorySessionFence.current(agentID: ownerID, on: db)),
                 state.expires_at.map({ $0 > now.date }) == true,
                 !(try await SandboxActivityService.hasAdmittedActivity(id: id, at: now, on: db))
