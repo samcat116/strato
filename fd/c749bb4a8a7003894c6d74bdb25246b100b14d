@@ -1,0 +1,58 @@
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  h_a84d4ff76cadd1 157-159
+control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
+  h_a84d4ff76cadd1 47-49
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  h_a84d4ff76cadd1 77,120,160
+control-plane/Sources/App/Controllers/HealthController.swift
+  h_a84d4ff76cadd1 113-115,117-118
+control-plane/Sources/App/Services/CoordinationFailureGate.swift
+  h_a84d4ff76cadd1 1-96
+control-plane/Sources/App/Services/CoordinationService.swift
+  h_a84d4ff76cadd1 49,107-112,209-221,391-395,600-601,603-606,609-623,650,656,665,669,678,683,704,709,723,727,738,742,754,759,774-776,779,790-802,814,819,834,838,859,863,892,902,917,922,941,951,1003,1009,1037,1046
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  h_a84d4ff76cadd1 51,183,451,494
+control-plane/Sources/App/Services/RateLimitService.swift
+  h_a84d4ff76cadd1 31-37,49,54-55,60-66,70-80,84-100,104-110,114-118,120-121,123,227,241-243,258-262,268-277,280,282-284,293-294
+control-plane/Sources/App/Services/SchedulerService.swift
+  h_a84d4ff76cadd1 167
+control-plane/Sources/App/Services/StorageCarrierAssembler.swift
+  h_a84d4ff76cadd1 116-124,190
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  h_a84d4ff76cadd1 15-16,25-30,35,37-38,41-60,62-72,74-81,83-101,103-125,127-139,141-167,208,211-216,423
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  h_a84d4ff76cadd1 16-25
+control-plane/Tests/AppPlatformTests/CoordinationBlackholeTests.swift
+  h_a84d4ff76cadd1 1-49
+control-plane/Tests/AppPlatformTests/CoordinationFailureGateTests.swift
+  h_a84d4ff76cadd1 1-123
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  h_a84d4ff76cadd1 10-39
+control-plane/Tests/AppPlatformTests/RateLimitTests.swift
+  h_a84d4ff76cadd1 223,232-235
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  h_a84d4ff76cadd1 11-23
+control-plane/Tests/AppResourceTests/CoordinationFixtureStore.swift
+  h_a84d4ff76cadd1 1-50
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  h_a84d4ff76cadd1 2,45-101
+deploy/compose/docker-compose.yml
+  h_a84d4ff76cadd1 269
+docs/architecture/multi-replica.md
+  h_a84d4ff76cadd1 232-262
+helm/strato-control-plane/templates/deployment.yaml
+  h_a84d4ff76cadd1 188-189
+helm/strato-control-plane/values.yaml
+  h_a84d4ff76cadd1 946-949
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fdc749bb4a8a7003894c6d74bdb25246b100b14d",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
