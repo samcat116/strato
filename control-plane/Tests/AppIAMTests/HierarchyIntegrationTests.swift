@@ -15,6 +15,7 @@ final class HierarchyIntegrationTests {
         let app = try await Application.makeForTesting()
 
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
 
             let builder = TestDataBuilder(db: app.db)
@@ -28,8 +29,10 @@ final class HierarchyIntegrationTests {
 
             let authToken = try await testUser.generateAPIKey(on: app.db)
 
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app, builder, testUser, testOrganization, authToken)
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }

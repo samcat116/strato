@@ -77,15 +77,21 @@ package actor PostgresTestDatabases {
 
     /// Mint a fresh clone of the migrated template for one test.
     package func createDatabaseForTest() async throws -> String {
-        if template == nil {
-            template = Task { try await self.buildTemplate() }
-        }
-        try await template!.value
+        let started = ContinuousClock().now
+        do {
+            if template == nil {
+                template = Task { try await self.buildTemplate() }
+            }
+            try await template!.value
 
-        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        let name = "strato_test_db_\(testProcessID)_\(suffix)"
-        try await run(#"CREATE DATABASE "\#(name)" TEMPLATE "\#(templateName)""#)
-        return name
+            let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            let name = "strato_test_db_\(testProcessID)_\(suffix)"
+            try await run(#"CREATE DATABASE "\#(name)" TEMPLATE "\#(templateName)""#)
+            return name
+        } catch {
+            TestFixtureDiagnostics.shared.reportCloneFailure(error, started: started)
+            throw error
+        }
     }
 
     /// Mint an EMPTY database (no migrations applied) for tests that need to
@@ -289,6 +295,7 @@ extension Application {
         owningDatabase: Bool = true,
         maxConnectionsPerEventLoop: Int = 2
     ) async throws -> Application {
+        let fixtureStarted = ContinuousClock().now
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
         app.logger.logLevel = .debug
         app.databases.use(
@@ -300,6 +307,13 @@ extension Application {
         if owningDatabase {
             app.storage[TestDatabaseNameKey.self] = databaseName
         }
+        TestFixtureDiagnostics.shared.register(
+            app, started: fixtureStarted, poolLimitPerLoop: maxConnectionsPerEventLoop)
+        // Storage shutdown follows Fluent's pool shutdown lifecycle handler,
+        // including tests that call asyncShutdown directly rather than our helper.
+        await app.storage.setWithAsyncShutdown(
+            TestFixtureDiagnosticKey.self, to: ObjectIdentifier(app),
+            onShutdown: { TestFixtureDiagnostics.shared.finished($0) })
         return app
     }
 }
@@ -309,13 +323,23 @@ package struct TestDatabaseNameKey: StorageKey {
     package typealias Value = String
 }
 
+private struct TestFixtureDiagnosticKey: StorageKey {
+    typealias Value = ObjectIdentifier
+}
+
 extension Application {
     /// Tear down an app made by `makeForTesting`: shut Vapor down (closing its
     /// database pool), then destroy the test's database clone.
     package func shutdownForTesting() async throws {
         let databaseName = storage[TestDatabaseNameKey.self]
-
-        try await asyncShutdown()
+        TestFixtureDiagnostics.shared.closing(self)
+        do {
+            try await asyncShutdown()
+        } catch {
+            TestFixtureDiagnostics.shared.report(error, on: self)
+            throw error
+        }
+        TestFixtureDiagnostics.shared.finished(self)
 
         if let databaseName {
             await PostgresTestDatabases.shared.dropDatabase(databaseName)
@@ -359,12 +383,15 @@ package func withTestApp(
     let app = try await Application.makeForTesting()
 
     do {
+        TestFixtureDiagnostics.shared.configuring(app)
         try await configureApp(app)
         if let analyzer {
             app.guardrailAnalyzer = analyzer
         }
+        TestFixtureDiagnostics.shared.running(app)
         try await test(app)
     } catch {
+        TestFixtureDiagnostics.shared.report(error, on: app)
         try? await app.shutdownForTesting()
         throw error
     }
