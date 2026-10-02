@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import StratoAPIClient
 @testable import StratoCLICore
 
 @Suite("Guest configuration input")
@@ -37,4 +38,25 @@ struct GuestConfigurationInputTests {
             try GuestConfigurationInput.decode(Data(repeating: 65, count: GuestConfigurationInput.maxDocumentBytes + 1))
         }
     }
+    @Test func retryIsExplicitOnTheWire() throws {
+        var request = try GuestConfigurationInput.withdrawal()
+        request.retry = true
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        #expect(object["retry"] as? Bool == true)
+        #expect(object["guestConfig"] != nil)
+    }
+
+    @Test func outputSeparatesDesiredObservedAndFailureWithoutFileContents() throws {
+        let json =
+            #"{"vmId":"vm-1","desiredGeneration":5,"observedGeneration":4,"status":"stale","failureGeneration":4,"guestConfig":{"packages":[],"files":[{"path":"/etc/app","content":"STR92_SECRET_SENTINEL","mode":"0600"}],"services":[],"sysctls":[]},"items":[{"section":"files","identity":"/etc/app","desired":"sha256 abc; mode 0600","observed":"sha256 old; mode 0644","state":"stale"}]}"#
+        let value = try JSONDecoder().decode(Components.Schemas.VMGuestConfiguration.self, from: Data(json.utf8))
+        let output = GuestConfigurationOutput.table(value).render()
+        #expect(output.contains("DESIRED"))
+        #expect(output.contains("OBSERVED"))
+        #expect(output.contains("stale"))
+        #expect(output.contains("older"))
+        #expect(!output.contains("STR92_SECRET_SENTINEL"))
+    }
+
 }

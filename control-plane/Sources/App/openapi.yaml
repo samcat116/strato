@@ -10158,19 +10158,19 @@ components:
     ReplaceVMGuestConfigurationRequest:
       type: object
       additionalProperties: false
-      required:
-      - guestConfig
+      required: [guestConfig]
       properties:
         guestConfig:
           allOf:
-          - $ref: '#/components/schemas/GuestConfig'
+            - $ref: '#/components/schemas/GuestConfig'
           nullable: true
+        retry:
+          type: boolean
+          description: Explicitly retry a failed generation, even when intent is unchanged.
     VMGuestConfiguration:
       type: object
       additionalProperties: false
-      required:
-      - vmId
-      - desiredGeneration
+      required: [vmId, desiredGeneration, status, items]
       properties:
         vmId:
           type: string
@@ -10180,7 +10180,54 @@ components:
           format: int64
         guestConfig:
           allOf:
-          - $ref: '#/components/schemas/GuestConfig'
+            - $ref: '#/components/schemas/GuestConfig'
+          nullable: true
+        status:
+          type: string
+          enum: [unmanaged, pending, deferred, unavailable, stale, converged, failed]
+        observedGeneration:
+          type: integer
+          format: int64
+          nullable: true
+        reportReceivedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the control plane received the retained report; not a guest measurement timestamp.
+        failureGeneration:
+          type: integer
+          format: int64
+          nullable: true
+        error:
+          type: string
+          nullable: true
+          description: Safe operator-facing reason, never guest-chosen error text.
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/VMGuestConfigurationItem'
+    VMGuestConfigurationItem:
+      type: object
+      additionalProperties: false
+      required: [section, identity, desired, state]
+      properties:
+        section:
+          type: string
+          enum: [packages, files, services, sysctls]
+        identity:
+          type: string
+        desired:
+          type: string
+          description: Desired value or file hash/mode; never file contents.
+        observed:
+          type: string
+          nullable: true
+          description: Last-known fact, which can be stale. Missing facts are unknown.
+        state:
+          type: string
+          enum: [matched, drift, unknown, stale, failed]
+        error:
+          type: string
           nullable: true
     CreateVMRequest:
       type: object

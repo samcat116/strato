@@ -463,6 +463,7 @@ extension VM: ConvergingResource {
         // reboot would not merely drop a generation bump, it would drop the
         // *edge*, and no later sync re-derives it.
         guestConfig = committed.guestConfig
+        guestConfigEvidence = committed.guestConfigEvidence
         rebootGeneration = committed.rebootGeneration
         restoreGeneration = committed.restoreGeneration
         restoreSnapshotID = committed.restoreSnapshotID

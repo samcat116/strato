@@ -21,8 +21,17 @@ struct VMGuestConfigMutation {
             sysctls: config.sysctls.sorted { $0.key < $1.key })
     }
 
+    static func equivalent(_ lhs: GuestConfig?, _ rhs: GuestConfig?) throws -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        // Swift String equality treats canonical Unicode spellings as equal.
+        // Guest file bytes and hashes do not, so compare deterministic wire
+        // bytes after sorting identities rather than synthesized Equatable.
+        return try encoder.encode(normalized(lhs)) == encoder.encode(normalized(rhs))
+    }
+
     func replace(
-        _ config: GuestConfig?, on vm: VM, actor: MutationActor,
+        _ config: GuestConfig?, retry: Bool = false, on vm: VM, actor: MutationActor,
         context: IdempotencyRequestContext?, db: any Database, app: Application
     ) async throws -> ResourceMutation.Accepted? {
         try config?.validate()
@@ -42,7 +51,11 @@ struct VMGuestConfigMutation {
                         .conflict, reason: "Guest configuration requires a QEMU VM with the guest agent enabled")
                 }
             }
-            guard Self.normalized(vm.guestConfig) != requested else {
+            if retry && vm.failedGeneration != vm.generation {
+                throw Abort(.conflict, reason: "Only a failed generation can be explicitly retried")
+            }
+            let unchanged = try Self.equivalent(vm.guestConfig, requested)
+            guard retry || !unchanged else {
                 try await IdempotencyService.completeSynchronousResponse(
                     context, actor: actor, resourceKind: .virtualMachine, resourceID: id,
                     responseStatus: .ok, on: db)
@@ -57,9 +70,14 @@ struct VMGuestConfigMutation {
             else {
                 throw Abort(.conflict, reason: "VM changed while applying guest configuration")
             }
-            vm.extendConvergenceDeadline(
-                by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .guestConfig),
-                from: try await ClusterClock.read(on: db))
+            // A stopped/paused VM deliberately performs no guest work. Keep
+            // any existing host transition budget, but do not invent a guest
+            // deadline while realization is deferred until a later boot.
+            if requested == nil || vm.desiredStatus == .running {
+                vm.extendConvergenceDeadline(
+                    by: OperationResourceKind.virtualMachine.completionBudgetSeconds(for: .guestConfig),
+                    from: try await ClusterClock.read(on: db))
+            }
             try await vm.save(on: db)
             scope.generation = vm.generation
             let event = try await ResourceEvent.record(

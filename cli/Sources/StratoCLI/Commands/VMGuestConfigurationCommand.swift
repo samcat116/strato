@@ -18,24 +18,7 @@ extension VMCommand {
                     let env = try CLIEnvironment.resolve(global)
                     let value = try await env.makeClient().getVMGuestConfiguration(path: .init(vmID: id)).ok.body.json
                     try printResult(value, format: global.output) {
-                        var table = TextTable(headers: ["item", "desired"])
-                        table.addRow(["generation", String(value.desiredGeneration)])
-                        for item in value.guestConfig?.value1.packages ?? [] {
-                            table.addRow(["package \(item.name)", item.state.rawValue])
-                        }
-                        for item in value.guestConfig?.value1.files ?? [] {
-                            table.addRow(["file \(item.path)", "managed; mode \(item.mode)"])
-                        }
-                        for item in value.guestConfig?.value1.services ?? [] {
-                            table.addRow([
-                                "service \(item.name)", item.enabled ? "enabled at boot" : "disabled at boot",
-                            ])
-                        }
-                        for item in value.guestConfig?.value1.sysctls ?? [] {
-                            table.addRow(["sysctl \(item.key)", item.value])
-                        }
-                        table.addRow(["observed", "not available; desired state does not imply convergence"])
-                        return table
+                        GuestConfigurationOutput.table(value)
                     }
                 }
             }
@@ -48,9 +31,11 @@ extension VMCommand {
             @Argument(help: "VM id.") var id: String
             @Option(name: .long, help: "Path to a STR-90 guest configuration JSON document.") var file: String
             @Flag(name: .long, help: "Return the mutation id without waiting.") var noWait = false
+            @Flag(name: .long, help: "Retry a failed generation even when intent is unchanged.") var retry = false
             func run() async throws {
                 try await runHandlingCLIErrors {
-                    let request = try GuestConfigurationInput.read(file: file)
+                    var request = try GuestConfigurationInput.read(file: file)
+                    request.retry = retry
                     try await GuestConfiguration.replace(id: id, request: request, global: global, noWait: noWait)
                 }
             }

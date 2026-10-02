@@ -349,6 +349,9 @@ final class VM: Model, @unchecked Sendable {
         set { storedGuestConfig = newValue.map(StoredGuestConfig.init) }
     }
 
+    @OptionalField(key: "guest_config_evidence")
+    var guestConfigEvidence: StoredGuestConfigEvidence?
+
     // Graphics console (issue #566): whether the guest boots with a display
     // device and a VNC server for the web UI to attach to. Like the machine
     // profile above, the control plane records only the intent — the agent

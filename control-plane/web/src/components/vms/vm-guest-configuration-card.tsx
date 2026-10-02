@@ -54,6 +54,10 @@ export function VMGuestConfigurationCard({ vm }: { vm: VM }) {
     // Preserve the exact body on ambiguous retries. Do not copy it into toast
     // text or logs; file contents are visible only inside the privileged editor.
     const body = { guestConfig };
+    await replace(body);
+  }
+
+  async function replace(body: { guestConfig: GuestConfig | null; retry?: boolean }) {
     await mutation.run({
       intentKey: `PUT:/api/vms/${vm.id}/guest-config:${JSON.stringify(body)}`,
       request: (key) => vmsApi.replaceGuestConfiguration(vm.id, body, key),
@@ -70,6 +74,11 @@ export function VMGuestConfigurationCard({ vm }: { vm: VM }) {
       <CardTitle>Guest configuration</CardTitle>
       {permissions.configure && <Button variant="outline" onClick={beginEdit}
         disabled={!vm.guestAgentEnabled || !config.data || mutation.isLoading}>Edit configuration</Button>}
+      {permissions.configure && config.data?.status === "failed" && <Button
+        disabled={mutation.isLoading} onClick={() => {
+          setError(null);
+          void replace({ guestConfig: desired ?? null, retry: true });
+        }}>Retry failed generation</Button>}
     </CardHeader>
     <CardContent className="space-y-3">
       {!vm.guestAgentEnabled && <p>The guest agent was not enabled for this VM.</p>}
@@ -78,13 +87,27 @@ export function VMGuestConfigurationCard({ vm }: { vm: VM }) {
       {config.isError && <p role="alert">Unable to load desired configuration.</p>}
       {permissions.configure && config.data && <>
         <p>Desired generation {config.data.desiredGeneration}</p>
+        <p>Guest configuration: {config.data.status}</p>
+        {config.data.observedGeneration != null && <p>Observed generation {config.data.observedGeneration}</p>}
+        {config.data.reportReceivedAt && <p>Report received {new Date(config.data.reportReceivedAt).toLocaleString()}</p>}
+        {config.data.failureGeneration != null && config.data.failureGeneration !== config.data.desiredGeneration &&
+          <p>Previous failure belongs to generation {config.data.failureGeneration}.</p>}
+        {config.data.error && <p role="alert">{config.data.error}</p>}
         {!desired && <p>No guest items are managed.</p>}
-        {desired?.packages.map((item) => <p key={`package:${item.name}`}>Package {item.name}: desired {item.state}</p>)}
-        {desired?.files.map((item) => <p key={`file:${item.path}`}>File {item.path}: desired managed, mode {item.mode}</p>)}
-        {desired?.services.map((item) => <p key={`service:${item.name}`}>Service {item.name}: desired {item.enabled ? "enabled" : "disabled"} at boot</p>)}
-        {desired?.sysctls.map((item) => <p key={`sysctl:${item.key}`}>Sysctl {item.key}: desired {item.value}</p>)}
+        {(config.data.items ?? []).length > 0 && <table className="w-full text-sm text-left">
+          <thead><tr><th>Item</th><th>Desired</th><th>Observed</th><th>State</th></tr></thead>
+          <tbody>{config.data.items.map((item) => <tr key={`${item.section}:${item.identity}`}>
+            <td className="break-all">{item.section}: {item.identity}</td>
+            <td className="break-all">{item.desired}</td><td className="break-all">{item.observed ?? "Unknown"}</td>
+            <td>{item.state}{item.error && <p>{item.error}</p>}</td>
+          </tr>)}</tbody>
+        </table>}
+        {config.data.status === "deferred" && <p>Guest changes are deferred until this VM is running.</p>}
+        {config.data.status === "stale" && <p>Retained observations are stale; they do not prove this generation converged.</p>}
+        {config.data.status === "unavailable" && <p>Guest or node is unreachable. Last-known facts are not current proof.</p>}
+        {(config.data.status === "pending" || !config.data.status) && <p>Awaiting current guest read-back. Desired state does not imply convergence.</p>}
       </>}
-      <p className="text-sm text-muted-foreground">Observed guest configuration is unavailable until a report is received. Desired state does not imply convergence.</p>
+      {error && !open && <p role="alert">{error}</p>}
       <Dialog open={permissions.configure && open} onOpenChange={(value) => { if (!mutation.isLoading) setOpen(value); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Edit desired guest configuration</DialogTitle>

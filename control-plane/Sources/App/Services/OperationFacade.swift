@@ -110,14 +110,52 @@ enum OperationFacade {
         let conditions: ResourceConditions?
         /// The newest terminal event, if the deletion has been recorded.
         let terminal: ResourceEvent?
+        var guestConfiguration: GuestConfigurationVerdict? = nil
+    }
+
+    struct GuestConfigurationVerdict {
+        let generation: Int64
+        let managed: Bool
+        let converged: Bool
+        var intentGeneration: Int64? = nil
     }
 
     static func view(
         of kind: OperationResourceKind, id: UUID, on db: any Database
     ) async throws -> ResourceView {
         let conditions: ResourceConditions?
+        var guestConfiguration: GuestConfigurationVerdict?
         switch kind {
-        case .virtualMachine: conditions = try await VM.find(id, on: db)?.conditions
+        case .virtualMachine:
+            let vm = try await VM.find(id, on: db)
+            conditions = vm?.conditions
+            if let vm {
+                let managed = vm.guestConfig?.isEmpty == false
+                let lastIntent = try await ResourceEvent.query(on: db)
+                    .filter(\.$resourceKind == .virtualMachine)
+                    .filter(\.$resourceID == id)
+                    .filter(\.$phase == .requested)
+                    .filter(\.$mutation == .guestConfig)
+                    .sort(\.$targetGeneration, .descending)
+                    .first()
+                var online = true
+                if managed {
+                    let instant = try await ClusterClock.read(on: db)
+                    if let agentID = vm.hypervisorId.flatMap(UUID.init(uuidString:)),
+                        let agent = try await Agent.find(agentID, on: db)
+                    {
+                        online = agent.isOnline(at: instant)
+                    } else {
+                        online = false
+                    }
+                }
+                guestConfiguration = .init(
+                    generation: vm.generation, managed: managed,
+                    converged: VMGuestConfigPresentation.converged(vm) && online
+                        && vm.guestAgentObservation?.reachable != false
+                        && vm.status == .running && vm.desiredStatus == .running,
+                    intentGeneration: lastIntent?.targetGeneration)
+            }
         case .sandbox: conditions = try await Sandbox.find(id, on: db)?.conditions
         case .volume: conditions = try await Volume.find(id, on: db)?.conditions
         case .volumeSnapshot: conditions = try await VolumeSnapshot.find(id, on: db)?.conditions
@@ -130,7 +168,7 @@ enum OperationFacade {
             conditions == nil
             ? try await ResourceEvent.latest(.completed, resourceKind: kind, resourceID: id, on: db)
             : nil
-        return ResourceView(conditions: conditions, terminal: terminal)
+        return ResourceView(conditions: conditions, terminal: terminal, guestConfiguration: guestConfiguration)
     }
 
     /// Synthesizes the operation view of one recorded mutation.
@@ -209,11 +247,20 @@ enum OperationFacade {
         if let degraded = conditions.degraded, degraded.sinceGeneration == target {
             return Verdict(status: .failed, error: degraded.reason, completedAt: nil)
         }
-        // STR-92 is stacked on STR-90 while STR-91 report evidence is pending.
-        // Lifecycle acknowledgement alone cannot attest to in-guest convergence.
-        // Replace this guard only when the exact guest-report contract is integrated.
         if event.mutation == .guestConfig {
-            return Verdict(status: .pending, error: nil, completedAt: nil)
+            guard let guest = view.guestConfiguration else {
+                return Verdict(status: .pending, error: nil, completedAt: nil)
+            }
+            // A boot can advance the enclosing generation while retaining
+            // deferred guest intent. Only another config edit supersedes it.
+            if (guest.intentGeneration ?? guest.generation) > target {
+                return Verdict(
+                    status: .failed, error: "This guest configuration request was superseded by a newer generation",
+                    completedAt: nil)
+            }
+            if guest.managed && !guest.converged {
+                return Verdict(status: .pending, error: nil, completedAt: nil)
+            }
         }
         if conditions.observedGeneration >= target,
             conditions.converged || conditions.targetGeneration > target

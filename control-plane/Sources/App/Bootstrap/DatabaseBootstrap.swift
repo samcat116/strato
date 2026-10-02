@@ -227,5 +227,6 @@ extension Application {
 
         migrations.add(AddAgentInventorySession())
         migrations.add(AddVMGuestConfig())
+        migrations.add(AddVMGuestConfigEvidence())
     }
 }

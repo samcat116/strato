@@ -4,7 +4,9 @@ import StratoShared
 
 /// Uses the shared STR-90 validator rather than defining a second CLI schema.
 public enum GuestConfigurationInput {
-    public static let maxDocumentBytes = 1_048_576
+    // Allows the shared model's maximum payload even with escaped JSON, while
+    // bounding file reads and matching the endpoint's transport limit.
+    public static let maxDocumentBytes = 8 * 1_048_576
 
     /// Empty intent withdraws management. The generated Swift encoder omits a
     /// nil nullable property, which would violate the required request envelope.
@@ -14,7 +16,7 @@ public enum GuestConfigurationInput {
 
     public static func decode(_ data: Data) throws -> Components.Schemas.ReplaceVMGuestConfigurationRequest {
         guard data.count <= maxDocumentBytes else {
-            throw CLIError.config("Guest configuration JSON exceeds 1 MiB")
+            throw CLIError.config("Guest configuration JSON exceeds 8 MiB")
         }
         do {
             let config = try JSONDecoder().decode(GuestConfig.self, from: data)

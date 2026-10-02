@@ -33,6 +33,43 @@ extension ObservedStateApplier {
         let wasConverged = vm.isConverged
         let failedBefore = vm.failedGeneration
 
+        // This runs under withLockedCurrent's placement and row-generation
+        // guard. Keep last-known facts when a report is missing, but withdraw
+        // their availability so an old success cannot attest to a disconnect.
+        var guestEvidenceChanged = false
+        if let config = vm.guestConfig, !config.isEmpty {
+            let terminalGuestFailure =
+                vm.guestConfigEvidence?.observation.generation == vm.generation
+                && vm.guestConfigEvidence?.observation.status == .failed
+            if let report = observed.guestConfigObservation,
+                report.status == .failed || observed.status == .running,
+                (try? VMGuestConfigPresentation.validate(report, config: config, generation: vm.generation)) != nil,
+                report.status == .failed
+                    || VMGuestConfigPresentation.matches(report, config: config, generation: vm.generation)
+            {
+                if !terminalGuestFailure || report.status == .failed {
+                    vm.guestConfigEvidence = StoredGuestConfigEvidence(
+                        observation: report, agentID: vm.hypervisorId ?? "", receivedAt: instant.date, available: true)
+                    guestEvidenceChanged = true
+                }
+            } else if var retained = vm.guestConfigEvidence, retained.available {
+                retained.available = false
+                vm.guestConfigEvidence = retained
+                guestEvidenceChanged = true
+            }
+        }
+        let guestFailed =
+            vm.guestConfigEvidence?.observation.generation == vm.generation
+            && vm.guestConfigEvidence?.observation.status == .failed
+        // Guest-chosen errors must not flow into generic VM status, logging,
+        // audit or webhooks. Retain detailed facts only in the redacted record.
+        let effectiveError =
+            guestFailed
+            ? VMGuestConfigPresentation.safeFailure(vm.guestConfigEvidence?.observation.error)
+            : (vm.guestConfig?.isEmpty == false && observed.lastError != nil
+                ? VMGuestConfigPresentation.failure : observed.lastError)
+        let effectiveFailedGeneration = guestFailed ? vm.generation : observed.failedGeneration
+
         // The guest-agent view (issue #563) is orthogonal to convergence and
         // operation completion, so record it up front — before the converging
         // early-return below. A present `guestInfo` is persisted; a nil one on a
@@ -94,14 +131,19 @@ extension ObservedStateApplier {
         } else {
             bootVolumePhase = nil
         }
-        let effectivePhase = observed.convergencePhase ?? bootVolumePhase
+        let guestPhase =
+            vm.guestConfig?.isEmpty == false && vm.desiredStatus == .running
+                && !(effectiveError != nil && effectiveFailedGeneration == vm.generation)
+                && !VMGuestConfigPresentation.converged(vm)
+            ? "waiting for current guest configuration read-back" : nil
+        let effectivePhase = guestPhase ?? observed.convergencePhase ?? bootVolumePhase
         var changed = vm.recordTimestampedConvergence(
             phase: effectivePhase,
-            lastError: observed.lastError,
-            failedGeneration: observed.failedGeneration,
+            lastError: effectiveError,
+            failedGeneration: effectiveFailedGeneration,
             at: instant
         )
-        changed = resourceTelemetryChanged || changed
+        changed = guestEvidenceChanged || resourceTelemetryChanged || changed
 
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
@@ -168,7 +210,7 @@ extension ObservedStateApplier {
         }
 
         let failedCurrentGeneration =
-            observed.lastError != nil && observed.failedGeneration == vm.generation
+            effectiveError != nil && effectiveFailedGeneration == vm.generation
         // A blocked refusal is both an actionable error and an unfinished
         // convergence attempt. The agent will re-drive it at this generation,
         // so retain desired state and the deadline while persisting the
@@ -194,8 +236,8 @@ extension ObservedStateApplier {
             vm,
             wasConverged: wasConverged,
             changed: changed,
-            reportedError: observed.lastError,
-            reportedFailedGeneration: observed.failedGeneration,
+            reportedError: effectiveError,
+            reportedFailedGeneration: effectiveFailedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .boot,
             at: instant,

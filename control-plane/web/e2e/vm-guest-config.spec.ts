@@ -23,7 +23,7 @@ async function fixture(page: Page, allowed = true) {
         return;
       }
       reads++;
-      data = { vmId: vm.id, desiredGeneration: 4, guestConfig: config };
+      data = { vmId: vm.id, desiredGeneration: 4, guestConfig: config, status: "pending", items: [] };
     } else if (path === "/api/vms/vm-1") {
       data = vm;
     } else if (path === "/api/organizations") {
@@ -66,5 +66,5 @@ test("a lost acceptance retries with the same key and never claims observed conv
   expect(state.writes()).toBe(2);
   expect(state.keys[0]).toBeTruthy();
   expect(state.keys[1]).toBe(state.keys[0]);
-  await expect(page.getByText(/Observed guest configuration is unavailable/)).toBeVisible();
+  await expect(page.getByText(/Awaiting current guest read-back/)).toBeVisible();
 });

@@ -314,7 +314,7 @@ export function VMDetailPage({ id }: { id: string }) {
 
           <VMIdentityCard vm={vm} />
           <VMMetadataCard vm={vm} onUpdated={invalidateVMs} />
-          <VMGuestConfigurationCard vm={vm} />
+          <VMGuestConfigurationCard key={vm.id} vm={vm} />
 
           {/* Attached volumes */}
           <VMVolumesCard vm={vm} />

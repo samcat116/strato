@@ -5889,6 +5889,8 @@ export interface components {
         };
         ReplaceVMGuestConfigurationRequest: {
             guestConfig: components["schemas"]["GuestConfig"] | null;
+            /** @description Explicitly retry a failed generation, even when intent is unchanged. */
+            retry?: boolean;
         };
         VMGuestConfiguration: {
             /** Format: uuid */
@@ -5896,6 +5898,32 @@ export interface components {
             /** Format: int64 */
             desiredGeneration: number;
             guestConfig?: components["schemas"]["GuestConfig"] | null;
+            /** @enum {string} */
+            status: "unmanaged" | "pending" | "deferred" | "unavailable" | "stale" | "converged" | "failed";
+            /** Format: int64 */
+            observedGeneration?: number | null;
+            /**
+             * Format: date-time
+             * @description When the control plane received the retained report; not a guest measurement timestamp.
+             */
+            reportReceivedAt?: string | null;
+            /** Format: int64 */
+            failureGeneration?: number | null;
+            /** @description Safe operator-facing reason, never guest-chosen error text. */
+            error?: string | null;
+            items: components["schemas"]["VMGuestConfigurationItem"][];
+        };
+        VMGuestConfigurationItem: {
+            /** @enum {string} */
+            section: "packages" | "files" | "services" | "sysctls";
+            identity: string;
+            /** @description Desired value or file hash/mode; never file contents. */
+            desired: string;
+            /** @description Last-known fact, which can be stale. Missing facts are unknown. */
+            observed?: string | null;
+            /** @enum {string} */
+            state: "matched" | "drift" | "unknown" | "stale" | "failed";
+            error?: string | null;
         };
         CreateVMRequest: {
             name: string;

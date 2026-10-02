@@ -36,7 +36,7 @@ function mount() {
 
 beforeEach(() => {
   mocks.allowed = true;
-  mocks.read.mockReset().mockResolvedValue({ vmId: vm.id, desiredGeneration: 4, guestConfig });
+  mocks.read.mockReset().mockResolvedValue({ vmId: vm.id, desiredGeneration: 4, guestConfig, status: "pending", items: [{ section: "services", identity: "sshd.service", desired: "enabled at boot", state: "unknown" }] });
   mocks.replace.mockReset();
   mocks.watch.mockReset();
 });
@@ -52,8 +52,8 @@ describe("guest configuration editor", () => {
   it("shows desired state as unconfirmed and keeps file content out of status", async () => {
     mount();
     expect(await screen.findByText("Desired generation 4")).toBeInTheDocument();
-    expect(screen.getByText(/Observed guest configuration is unavailable/)).toBeInTheDocument();
-    expect(screen.getByText(/Service sshd.service: desired enabled at boot/)).toBeInTheDocument();
+    expect(screen.getByText(/Awaiting current guest read-back/)).toBeInTheDocument();
+    expect(screen.getByText("enabled at boot")).toBeInTheDocument();
     expect(screen.queryByText("STR92_SECRET_SENTINEL")).not.toBeInTheDocument();
   });
 
@@ -108,4 +108,50 @@ describe("guest configuration editor", () => {
     expect(mocks.replace.mock.calls[0][2]).toEqual(mocks.replace.mock.calls[1][2]);
     expect(mocks.replace.mock.calls[0][1]).toEqual({ guestConfig: null });
   });
+  it("shows only the identified failed row and retries unchanged intent explicitly", async () => {
+    mocks.read.mockResolvedValue({ vmId: vm.id, desiredGeneration: 4, observedGeneration: 4, guestConfig,
+      status: "failed", error: "Repair the guest then retry", items: [
+        { section: "packages", identity: "curl", desired: "present", observed: "absent", state: "failed" },
+        { section: "services", identity: "sshd.service", desired: "enabled at boot", state: "unknown" },
+      ] });
+    mocks.replace.mockResolvedValue({ resource: vm, mutationId: "retry-mutation", targetGeneration: 5 });
+    mount();
+    expect(await screen.findByText("Guest configuration: failed")).toBeInTheDocument();
+    expect(screen.getByText("unknown")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed generation" }));
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith(vm.id, { guestConfig, retry: true }, expect.any(String)));
+    expect(mocks.watch).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates same-generation success to failure and disconnect without overwriting a dirty editor", async () => {
+    const client = mount();
+    const edit = await screen.findByRole("button", { name: "Edit configuration" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit);
+    fireEvent.change(screen.getByLabelText("Configuration JSON"), { target: { value: "null" } });
+    for (const status of ["converged", "failed", "unavailable", "converged"]) {
+      await act(async () => { client.setQueryData(["vm-guest-config", vm.id], {
+        vmId: vm.id, desiredGeneration: 4, observedGeneration: 4, guestConfig, status, items: [],
+      }); });
+      expect(await screen.findByText(`Guest configuration: ${status}`)).toBeInTheDocument();
+      expect(screen.getByLabelText("Configuration JSON")).toHaveValue("null");
+    }
+  });
+
+  it("labels stale observations, older failures and deferred work distinctly", async () => {
+    const client = mount();
+    await screen.findByText("Desired generation 4");
+    await act(async () => { client.setQueryData(["vm-guest-config", vm.id], {
+      vmId: vm.id, desiredGeneration: 5, observedGeneration: 4, failureGeneration: 4,
+      guestConfig, status: "stale", items: [],
+    }); });
+    expect(await screen.findByText(/Previous failure belongs to generation 4/)).toBeInTheDocument();
+    expect(screen.getByText(/Retained observations are stale/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry failed generation" })).not.toBeInTheDocument();
+    await act(async () => { client.setQueryData(["vm-guest-config", vm.id], {
+      vmId: vm.id, desiredGeneration: 5, guestConfig, status: "deferred", items: [],
+    }); });
+    expect(await screen.findByText(/deferred until this VM is running/)).toBeInTheDocument();
+  });
+
 });

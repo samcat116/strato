@@ -839,8 +839,33 @@ a desired-state doorbell. An unchanged request returns the VM without incrementi
 generation or creating an event; it does not imply convergence. Raw config
 contents are omitted from audit events and generic status responses.
 
-Observed guest convergence is a separate STR-91 contract. These controls must
-remain a dependent draft until its generation/failure evidence is connected to
-status and mutation completion. Host lifecycle success alone cannot prove that
-packages, files, services or sysctls converged.
+`StoredGuestConfigEvidence` persists the STR-91 shared observation, reporting
+placement, control-plane receipt timestamp and current availability as redacted
+JSON. The observed-state applier validates current generation/managed identities
+under the existing placement lock and also compares file content hashes before
+accepting success. Missing/invalid reports retain last-known facts but withdraw
+current proof. Same-generation guest failure remains terminal across reloads;
+only an explicit newer generation can retry it. File identity/content and
+normalized sysctl facts compare as UTF-8 bytes, preserving Linux path/hash
+semantics instead of Swift canonical Unicode equality.
 
+GET projects desired and observed values independently, with matched/drift/unknown/
+stale/failed item states. Only `failedItem` marks a failed row; missing facts can be
+unattempted. Guest-chosen diagnostics remain in the redacted record. Operator
+errors use a small exact-message allowlist and a safe fallback, including in
+ordinary VM status and operation outcomes. Host/guest disconnection makes retained
+facts unavailable as current proof. The timestamp is report receipt, not a guest
+measurement timestamp.
+
+A `guest_config` operation requires both the enclosing host verdict and matching
+current guest read-back. Clearing intent succeeds from host acknowledgement alone.
+Stopped/paused desired VMs defer guest work and receive no new guest deadline.
+A later boot can realize unchanged deferred intent; a newer configuration mutation
+supersedes the earlier request. PUT's optional `retry: true` creates a new generation
+only when the current generation failed, even when intent is unchanged. Ordinary
+unchanged writes remain no-ops. No operation resubmits desired state when polling
+is interrupted.
+
+The request transport and CLI file read are bounded at 8 MiB, allowing escaped JSON
+for the shared model's bounded content/path payload; semantic limits still come
+from STR-90's shared validator.
