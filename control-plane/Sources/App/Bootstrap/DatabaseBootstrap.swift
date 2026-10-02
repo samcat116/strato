@@ -229,5 +229,6 @@ extension Application {
         migrations.add(CreateVMFleetRuns())
         migrations.add(AddSandboxSuspension())
         migrations.add(AddSandboxIdleActivity())
+        migrations.add(AddSandboxIdleFences())
     }
 }

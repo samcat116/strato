@@ -63,8 +63,14 @@ extension FirecrackerSandboxRuntime {
         // confirmation, so early output is picked up by the reader below
         // without having to be handed across explicitly.
         do {
+            let original = request.guestRequest
+            let guestRequest = GuestControlProtocol.ExecRequest(
+                argv: original.argv, env: original.env,
+                cwd: original.cwd, tty: original.tty, rows: original.rows, cols: original.cols,
+                sessionId: managed.guestControlProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion
+                    ? UUID(uuidString: sessionId) : nil)
             try await Self.awaitExecStarted(
-                .exec(request.guestRequest), on: connection, timeout: Self.execConnectTimeout)
+                .exec(guestRequest), on: connection, timeout: Self.execConnectTimeout)
         } catch {
             await connection.close()
             throw error
@@ -240,6 +246,9 @@ extension FirecrackerSandboxRuntime {
     // MARK: - Control-plane connectivity (issue #423)
 
     func controlPlaneDisconnected() async {
+        idleConnectionEpoch = UUID()
+        idleSamplers.removeAll()
+        idleControlPlane.removeAll()
         // Reconnect cannot reuse a proof of absent user streams or guest activity.
         idleActivityObservations.removeAll()
         idleSuspensionAdmissions.removeAll()

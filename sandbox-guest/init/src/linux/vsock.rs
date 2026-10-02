@@ -51,6 +51,7 @@ pub type SharedStatus = Arc<Mutex<Status>>;
 
 /// Everything a vsock connection may need, shared across connection threads.
 pub struct GuestState {
+    pub idle: Arc<Mutex<strato_sandbox_init::idle::Monitor>>,
     /// Live workload status, updated by the reaper.
     pub status: SharedStatus,
     /// The workload's resolved process — exec sessions inherit its env, cwd,
@@ -170,12 +171,17 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
     match decode_request(&first) {
         Ok(
             req @ (Request::Ping
+            | Request::GetIdleActivity { .. }
+            | Request::PrepareIdle { .. }
+            | Request::QueryIdle { .. }
+            | Request::ReleaseIdle { .. }
             | Request::GetStatus
             | Request::SyncClock { .. }
             | Request::Launch { .. }
             | Request::Reidentify { .. }),
         ) => serve_control(req, reader, writer, state),
         Ok(Request::Exec {
+            session_id,
             argv,
             env,
             cwd,
@@ -187,6 +193,7 @@ fn handle_connection(conn: OwnedFd, state: &GuestState) -> std::io::Result<()> {
                 reader,
                 writer,
                 ExecRequest {
+                    session_id,
                     argv,
                     env,
                     cwd,
@@ -244,7 +251,11 @@ fn serve_control(
         let response = match decode_request(&line) {
             Ok(
                 req @ (Request::Ping
-                | Request::GetStatus
+                | Request::GetIdleActivity { .. }
+            | Request::PrepareIdle { .. }
+            | Request::QueryIdle { .. }
+            | Request::ReleaseIdle { .. }
+            | Request::GetStatus
                 | Request::SyncClock { .. }
                 | Request::Launch { .. }
                 | Request::Reidentify { .. }),
@@ -267,6 +278,10 @@ fn serve_control(
 
 fn control_response(request: Request, state: &GuestState) -> Response {
     match request {
+        req @ (Request::GetIdleActivity { .. }
+        | Request::PrepareIdle { .. }
+        | Request::QueryIdle { .. }
+        | Request::ReleaseIdle { .. }) => idle_response(req, state),
         // Clock sync is stateless — no status lock needed.
         Request::SyncClock { unix_nanos } => match set_realtime_clock(unix_nanos) {
             Ok(()) => Response::ClockSynced {
@@ -335,7 +350,11 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             Response::Pong {
                 sandbox_id: s.sandbox_id.clone(),
                 nonce: s.nonce.clone(),
-                control_protocol_version: CONTROL_PROTOCOL_VERSION,
+                control_protocol_version: if state.idle.lock().expect("idle poisoned").supported() {
+                    5
+                } else {
+                    CONTROL_PROTOCOL_VERSION
+                },
             }
         }
     }
@@ -652,5 +671,91 @@ fn set_realtime_clock(unix_nanos: i64) -> Result<(), String> {
         Ok(())
     } else {
         Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+fn idle_response(request: Request, state: &GuestState) -> Response {
+    // Lock templates before the monitor, matching workload admission order.
+    let trusted = state.process.lock().expect("process poisoned").uid != 0;
+    let no_nic = state.network.lock().expect("network poisoned").is_none();
+    let (sandbox_id, nonce) = {
+        let status = state.status.lock().expect("status poisoned");
+        (status.sandbox_id.clone(), status.nonce.clone())
+    };
+    let mut monitor = state.idle.lock().expect("idle poisoned");
+    let error = |message| Response::IdleError {
+        sandbox_id: sandbox_id.clone(),
+        nonce: nonce.clone(),
+        message,
+    };
+    if !monitor.supported() {
+        return error("idle monitor unsupported".into());
+    }
+    match request {
+        Request::GetIdleActivity { probe_id } => {
+            if !strato_sandbox_init::idle::valid_id(&probe_id) {
+                return error("invalid probe identity".into());
+            }
+            Response::IdleActivity {
+                sandbox_id: sandbox_id.clone(),
+                nonce: nonce.clone(),
+                activity: monitor.activity(&sandbox_id, &nonce, &probe_id, trusted, no_nic),
+            }
+        }
+        Request::PrepareIdle {
+            operation_id,
+            admission_token,
+            expected_activity_epoch,
+            minimum_quiet_milliseconds,
+        } => {
+            if let Err(e) = monitor.prepare(
+                &operation_id,
+                &admission_token,
+                expected_activity_epoch,
+                minimum_quiet_milliseconds,
+                &sandbox_id,
+                &nonce,
+                trusted,
+                no_nic,
+            ) {
+                return error(e);
+            }
+            Response::IdleFence {
+                sandbox_id: sandbox_id,
+                nonce: nonce,
+                operation_id,
+                admission_token,
+                state: "prepared".into(),
+            }
+        }
+        Request::QueryIdle {
+            operation_id,
+            admission_token,
+        } => match monitor.query(&operation_id, &admission_token) {
+            Ok(result) => Response::IdleFence {
+                sandbox_id: sandbox_id,
+                nonce: nonce,
+                operation_id,
+                admission_token,
+                state: result.into(),
+            },
+            Err(e) => error(e),
+        },
+        Request::ReleaseIdle {
+            operation_id,
+            admission_token,
+        } => {
+            if let Err(e) = monitor.release(&operation_id, &admission_token) {
+                return error(e);
+            }
+            Response::IdleFence {
+                sandbox_id: sandbox_id,
+                nonce: nonce,
+                operation_id,
+                admission_token,
+                state: "released".into(),
+            }
+        }
+        _ => error("invalid idle request".into()),
     }
 }

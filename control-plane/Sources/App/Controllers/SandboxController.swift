@@ -301,6 +301,7 @@ struct SandboxController: RouteCollection {
                 sandbox.ttlSeconds = ttl
             }
 
+            try await SandboxIdleFenceService.cancelForUserActivity(sandbox, on: db)
             SandboxActivityService.touch(sandbox, at: try await ClusterClock.read(on: db))
             try await sandbox.save(on: db)
         }

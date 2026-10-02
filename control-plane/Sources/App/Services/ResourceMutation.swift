@@ -234,6 +234,9 @@ struct ResourceMutation {
                 by: R.operationResourceKind.completionBudgetSeconds(for: kind),
                 from: acceptedAt)
             try await resource.save(on: db)
+            if actor.type == .system, let sandbox = resource as? Sandbox {
+                try await SandboxIdleFenceService.finalizePendingAdmission(sandbox, on: db)
+            }
             if kind == .delete {
                 try await ResourceFinalizerService.stampOrphanReapAge(for: resource, on: db)
             }

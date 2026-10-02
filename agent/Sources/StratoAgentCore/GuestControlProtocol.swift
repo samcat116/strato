@@ -157,6 +157,7 @@ public enum GuestControlProtocol {
     /// workload's container context, plus optional environment overrides,
     /// working directory, and PTY geometry.
     public struct ExecRequest: Codable, Equatable, Sendable {
+        public let sessionId: UUID?
         /// The command to run. Required, non-empty.
         public let argv: [String]
         /// Extra variables merged OVER the workload's resolved environment
@@ -177,8 +178,10 @@ public enum GuestControlProtocol {
             cwd: String? = nil,
             tty: Bool = false,
             rows: Int? = nil,
-            cols: Int? = nil
+            cols: Int? = nil,
+            sessionId: UUID? = nil
         ) {
+            self.sessionId = sessionId
             self.argv = argv
             self.env = env
             self.cwd = cwd
@@ -320,6 +323,7 @@ public enum GuestControlProtocol {
         /// byte-exact v1 lines in `GuestControlProtocolTests`.
         private struct RawRequest: Encodable {
             let type: String
+            var sessionId: UUID?
             var argv: [String]?
             var env: [String: String]?
             var cwd: String?
@@ -332,6 +336,7 @@ public enum GuestControlProtocol {
 
             enum CodingKeys: String, CodingKey {
                 case type
+                case sessionId = "session_id"
                 case argv
                 case env
                 case cwd
@@ -428,6 +433,7 @@ public enum GuestControlProtocol {
                 raw = RawRequest(type: "get_status")
             case .exec(let request):
                 raw = RawRequest(type: "exec")
+                raw.sessionId = request.sessionId
                 raw.argv = request.argv
                 raw.env = request.env
                 raw.cwd = request.cwd
@@ -738,7 +744,7 @@ public enum GuestControlProtocol {
                 throw GuestControlError.fieldOutOfRange(
                     field: "control_protocol_version", value: String(controlProtocolVersion))
             }
-            guard controlProtocolVersion == SandboxGuestControlProtocol.currentVersion else {
+            guard SandboxGuestControlProtocol.supports(controlProtocolVersion) else {
                 throw GuestControlError.unsupportedProtocolVersion(controlProtocolVersion)
             }
             return controlProtocolVersion

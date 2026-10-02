@@ -214,7 +214,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Firecracker rejects a vsock snapshot over.
     var checkpointing: Set<String> = []
     var suspensionGuards: [String: SandboxSuspensionGuard] = [:]
+    let idlePolicy: SandboxIdlePolicy
     let idleActivityIncarnation = UUID()
+    var idleConnectionEpoch = UUID()
+    var idleSamplers: [String: SandboxIdleSampler] = [:]
+    var idleSampling: Set<String> = []
+    var idleControlPlane: [String: DesiredSandboxState] = [:]
     var idleActivityObservations: [String: SandboxIdleActivityObservation] = [:]
     var idleLastActivity: [String: Date] = [:]
     var idleResidentSince: [String: Date] = [:]
@@ -293,11 +298,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         snapshotTransfer: SnapshotArtifactTransfer? = nil,
         suspensionRestoreLimit: Int = 2,
         suspensionRestoreTimeoutSeconds: Int = StageBudget.checkpointSeconds,
+        idlePolicy: SandboxIdlePolicy = SandboxIdlePolicy(),
         automaticSuspensionTransport: (any SandboxAutomaticSuspensionTransport)? = nil
     ) throws {
         guard (5...StageBudget.checkpointSeconds).contains(suspensionRestoreTimeoutSeconds) else {
             throw SandboxSuspensionGuard.GateError.stale
         }
+        self.idlePolicy = idlePolicy
         self.suspensionRestoreTimeoutSeconds = suspensionRestoreTimeoutSeconds
         self.automaticSuspensionTransport = automaticSuspensionTransport
         self.restoreAdmission = try SandboxRestoreAdmission(limit: suspensionRestoreLimit)

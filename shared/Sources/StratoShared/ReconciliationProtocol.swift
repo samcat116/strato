@@ -177,6 +177,9 @@ public struct DesiredSandboxState: Codable, Sendable {
     public let suspensionAfterSnapshotId: UUID?
     /// Existing durable guest state must never be replaced by a cold OCI create.
     public let suspensionCheckpointId: UUID?
+    public let automaticSuspensionFence: SandboxAutomaticSuspensionFence?
+    public let idleControlPlaneRevision: Int64?
+    public let idlePendingCommandCount: Int?
 
     public init(
         sandboxId: UUID,
@@ -187,7 +190,10 @@ public struct DesiredSandboxState: Codable, Sendable {
         restore: DesiredRestore? = nil,
         suspensionStorageBudgetBytes: Int64? = nil,
         suspensionAfterSnapshotId: UUID? = nil,
-        suspensionCheckpointId: UUID? = nil
+        suspensionCheckpointId: UUID? = nil,
+        automaticSuspensionFence: SandboxAutomaticSuspensionFence? = nil,
+        idleControlPlaneRevision: Int64? = nil,
+        idlePendingCommandCount: Int? = nil
     ) {
         self.sandboxId = sandboxId
         self.spec = spec
@@ -198,6 +204,9 @@ public struct DesiredSandboxState: Codable, Sendable {
         self.suspensionStorageBudgetBytes = suspensionStorageBudgetBytes
         self.suspensionAfterSnapshotId = suspensionAfterSnapshotId
         self.suspensionCheckpointId = suspensionCheckpointId
+        self.automaticSuspensionFence = automaticSuspensionFence
+        self.idleControlPlaneRevision = idleControlPlaneRevision
+        self.idlePendingCommandCount = idlePendingCommandCount
     }
 }
 
@@ -1400,6 +1409,7 @@ public struct ObservedSandboxState: Codable, Sendable {
     public let exitCode: Int?
     /// Last host-side contention sample for this sandbox.
     public let resourceTelemetry: WorkloadResourceTelemetry?
+    public let idleActivity: SandboxIdleActivityReport?
     public let suspension: SandboxSuspensionEvidence?
     public let suspensionStorageReservedBytes: Int64?
     /// Next capture estimate, based on actual local files; nil means unsupported/unavailable.
@@ -1415,6 +1425,7 @@ public struct ObservedSandboxState: Codable, Sendable {
         failureClassification: ObservedFailureClassification? = nil,
         exitCode: Int? = nil,
         resourceTelemetry: WorkloadResourceTelemetry? = nil,
+        idleActivity: SandboxIdleActivityReport? = nil,
         suspension: SandboxSuspensionEvidence? = nil,
         suspensionStorageReservedBytes: Int64? = nil,
         suspensionStorageEstimateBytes: Int64? = nil
@@ -1428,6 +1439,7 @@ public struct ObservedSandboxState: Codable, Sendable {
         self.failureClassification = failureClassification
         self.exitCode = exitCode
         self.resourceTelemetry = resourceTelemetry
+        self.idleActivity = idleActivity
         self.suspension = suspension
         self.suspensionStorageReservedBytes = suspensionStorageReservedBytes
         self.suspensionStorageEstimateBytes = suspensionStorageEstimateBytes

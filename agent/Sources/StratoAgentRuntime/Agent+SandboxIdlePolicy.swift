@@ -3,13 +3,8 @@ import StratoAgentCore
 import StratoShared
 
 extension Agent {
-    /// Called on the sandbox's existing reconciliation lane by the future
-    /// coordinated policy consumer. No timer, wire capability or activation is
-    /// installed here until quota/wake and authoritative activity are complete.
-    /// The control plane must first admit checkpoint storage and publish the
-    /// suspended goal for this generation. Automatic provenance/dispatch is not
-    /// installed; explicit opt-in stop keeps STR-312's separate manual path.
-    /// Automatic callers always retain STR-312's host admission and reservations.
+    /// Runs on the sandbox reconciliation lane. CP provenance/storage, root
+    /// opt-in and fresh runtime eligibility precede STR-312's host admission.
     func sandboxReconcileIdleSuspend(
         _ item: ReconcileWorkItem, policy suppliedPolicy: SandboxIdlePolicy? = nil,
         dependenciesReady: Bool = false
@@ -19,12 +14,26 @@ extension Agent {
         guard item.kind == .sandbox, let desired = item.desiredSandbox,
             desired.desiredStatus == .suspended, desired.generation == item.generation,
             UUID(uuidString: item.id) == desired.sandboxId,
-            let admittedBytes = desired.suspensionStorageBudgetBytes, admittedBytes > 0
+            let admittedBytes = desired.suspensionStorageBudgetBytes, admittedBytes > 0,
+            let fence = desired.automaticSuspensionFence, fence.isValid, fence.generation == item.generation
         else { return .unknownActivity }
         let runtime = try requireSandboxRuntime()
         let verdict = await runtime.prepareIdleSuspension(sandboxId: item.id, policy: policy)
         guard verdict == .eligible else { return verdict }
-        try await sandboxReconcileSuspend(item, automatic: true)
+        try await sandboxReconcileSuspend(item, automatic: true, fence: fence)
         return .eligible
     }
 }
+
+#if os(Linux)
+extension Agent {
+    func exchangeSandboxIdleFence(_ context: SandboxSuspensionFenceContext, request: SandboxIdleGuestRequest)
+        async throws -> SandboxIdleGuestResponse
+    {
+        guard let runtime = sandboxRuntime as? FirecrackerSandboxRuntime else {
+            throw SandboxSuspensionGuard.GateError.stale
+        }
+        return try await runtime.exchangeIdleFence(context, request: request)
+    }
+}
+#endif

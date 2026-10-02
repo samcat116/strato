@@ -1,24 +1,8 @@
 import Foundation
 
-/// Host-local contract. STR-313 owns its wire encoding and v5 implementation.
-public struct SandboxAutomaticSuspensionFence: Codable, Sendable, Equatable {
-    public let operationId: UUID
-    public let generation: Int64
-    public let activityRevision: Int64
-    public let admissionToken: UUID
-    public let guestProtocolVersion: Int
+import StratoShared
 
-    public init(
-        operationId: UUID, generation: Int64, activityRevision: Int64, admissionToken: UUID,
-        guestProtocolVersion: Int
-    ) {
-        self.operationId = operationId
-        self.generation = generation
-        self.activityRevision = activityRevision
-        self.admissionToken = admissionToken
-        self.guestProtocolVersion = guestProtocolVersion
-    }
-}
+public typealias SandboxAutomaticSuspensionFence = StratoShared.SandboxAutomaticSuspensionFence
 
 public struct SandboxSuspensionGuestFence: Codable, Sendable, Equatable {
     public enum State: String, Codable, Sendable { case preparePending, prepared, releasePending, released }

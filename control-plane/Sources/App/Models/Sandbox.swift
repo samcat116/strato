@@ -310,10 +310,10 @@ extension Sandbox {
     /// Updates the observed status, starts a fresh divergence episode, and
     /// stamps the change time for reconciliation sweeps. Does not persist —
     /// call `save(on:)` afterwards.
-    func setStatus(_ newStatus: SandboxStatus, at instant: ClusterInstant) {
+    func setStatus(_ newStatus: SandboxStatus, at instant: ClusterInstant, recordsActivity: Bool = true) {
         status = newStatus
         statusChangedAt = instant.date
-        SandboxActivityService.touch(self, at: instant)
+        if recordsActivity { SandboxActivityService.touch(self, at: instant) }
         divergenceDetectedAt = nil
     }
 

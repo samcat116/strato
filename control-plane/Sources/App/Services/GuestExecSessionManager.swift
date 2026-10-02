@@ -365,6 +365,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         fromAgentKey agentKey: String,
         timestamp: Date? = nil
     ) async {
+        if let id = UUID(uuidString: sessionId) {
+            do {
+                try await SandboxActivityService.startedFromAgent(sessionID: id, agentKey: agentKey, on: app.db)
+            } catch { app.logger.warning("Could not persist sandbox exec start evidence: \(error)") }
+        }
         let transition = claimAgentConfirmedStart(
             sessionId: sessionId, fromAgentKey: agentKey, timestamp: timestamp)
         switch transition {

@@ -59,7 +59,10 @@ struct SandboxIdlePolicyIntegrationTests {
         await agent.installIdlePolicyTestRuntime()
         let desired = DesiredSandboxState(
             sandboxId: UUID(), spec: SandboxSpec(image: "test", cpus: 1, memoryBytes: 128 * 1024 * 1024),
-            desiredStatus: .suspended, generation: 1, suspensionStorageBudgetBytes: 256 * 1024 * 1024)
+            desiredStatus: .suspended, generation: 1, suspensionStorageBudgetBytes: 256 * 1024 * 1024,
+            automaticSuspensionFence: SandboxAutomaticSuspensionFence(
+                operationId: UUID(), generation: 1,
+                activityRevision: 0, admissionToken: UUID(), guestProtocolVersion: 5))
         let item = ReconcileWorkItem(
             kind: .sandbox, id: desired.sandboxId.uuidString, generation: 1,
             steps: [.shutdown], target: .sandbox(desired))

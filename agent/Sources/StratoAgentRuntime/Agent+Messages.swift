@@ -118,6 +118,7 @@ extension Agent {
                 // Invalidate a stale suspension admission before network or
                 // reconciliation work can suspend this message's caller.
                 for desired in message.sandboxes {
+                    await sandboxRuntime?.noteSandboxIdleControlPlane(desired)
                     await sandboxRuntime?.noteSandboxIntent(
                         sandboxId: desired.sandboxId.uuidString, generation: desired.generation,
                         desiredRunning: desired.desiredStatus == .running)

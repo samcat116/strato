@@ -104,6 +104,10 @@ info:
       Returns `200` with a `MessageEnvelope` wrapping a `DesiredStateMessage`
       and an `ETag`, or `304` when the agent's `If-None-Match` still matches
       after the server's hold window. See `docs/architecture/wire-protocol.md`.
+    - `POST /agent/sandboxes/{sandboxID}/idle-admission` — validates an exact,
+      generation-bound automatic-suspension token for the hosting agent (SPIFFE
+      mTLS). Returns `204` only while durable ownership remains valid; it never
+      contacts the guest, which may be paused for checkpoint validation.
     - `POST /agent/vms/{vmID}/jwt-svid` — placement-checked guest JWT-SVID
       issuance for the hosting agent (SPIFFE mTLS).
     - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).

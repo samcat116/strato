@@ -384,7 +384,20 @@ extension Agent {
                     warmStartEnabled: configuration.sandboxWarmStart,
                     warmCacheBudgetBytes: configuration.sandboxWarmCacheMaxSizeBytes,
                     snapshotTransfer: snapshotTransfer,
-                    suspensionRestoreTimeoutSeconds: configuration.sandboxSuspensionRestoreTimeoutSeconds
+                    suspensionRestoreTimeoutSeconds: configuration.sandboxSuspensionRestoreTimeoutSeconds,
+                    idlePolicy: configuration.sandboxIdlePolicy,
+                    automaticSuspensionTransport: SandboxIdleFenceTransport(
+                        minimumQuietMilliseconds: UInt64(
+                            min(configuration.sandboxIdlePolicy.idleSeconds, 86_400) * 1000),
+                        exchange: { [weak self] context, request in
+                            guard let self else { throw SandboxSuspensionGuard.GateError.stale }
+                            return try await self.exchangeSandboxIdleFence(context, request: request)
+                        },
+                        validate: { context in
+                            try await snapshotDownloader.validateSandboxIdleAdmission(
+                                controlPlaneBaseURL: self.controlPlaneHTTPBase,
+                                sandboxId: context.sandboxId, fence: context.fence.request)
+                        })
                 )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")

@@ -1,8 +1,8 @@
 import Foundation
 import StratoShared
 
-/// Trusted local observation, deliberately not a wire message. A future source
-/// must establish BOTH guest/network coverage and user stream coverage; internal
+/// Trusted local observation, deliberately not a wire message. The sampler
+/// must establish both guest/network coverage and user stream coverage; internal
 /// log forwarding does not establish either and never increments user streams.
 public struct SandboxIdleActivityObservation: Sendable {
     public let observedAt: Date
@@ -78,6 +78,17 @@ public struct SandboxIdleSuspensionAdmission: Sendable {
         let verdict = policy.evaluate(evidence, at: now)
         if verdict == .eligible { claimed = evidence }
         return verdict
+    }
+
+    /// Only used after STR-312 proves a prepared v5 freeze and validates CP
+    /// ownership. Snapshot time is not new workload activity; epochs still bind.
+    public func permitsFrozenDestruction(evidence: SandboxIdlePolicy.Evidence?) -> Bool {
+        guard let claimed, let evidence else { return false }
+        return claimed.sandboxID == evidence.sandboxID && claimed.agentIncarnation == evidence.agentIncarnation
+            && claimed.activityGeneration == evidence.activityGeneration
+            && claimed.lastActiveAt == evidence.lastActiveAt && claimed.residentSince == evidence.residentSince
+            && evidence.activeSessions == 0 && evidence.pendingCommands == 0
+            && evidence.guestAndNetworkActivityKnown
     }
 
     public func permitsDestruction(evidence: SandboxIdlePolicy.Evidence?, at now: Date) -> Bool {

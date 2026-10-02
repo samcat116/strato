@@ -21,6 +21,7 @@ struct ControlPlaneConfigurationEntry: Equatable, Sendable {
 }
 
 enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
+    case sandboxIdleSuspendEnabled = "SANDBOX_IDLE_SUSPEND_ENABLED"
     case observedInventoryAllowBulkLoss = "OBSERVED_INVENTORY_ALLOW_BULK_LOSS"
     case requestLogging = "REQUEST_LOGGING"
     case httpTLSEnabled = "HTTP_TLS_ENABLED"
@@ -60,7 +61,8 @@ enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
             .auditEnabled, .otelMetricsEnabled, .otelLogsEnabled, .otelTracesEnabled,
             .spireLegacyEnrollments:
             true
-        case .observedInventoryAllowBulkLoss, .httpTLSEnabled, .auditIncludeReads, .ssfAllowUnverifiedTokens,
+        case .sandboxIdleSuspendEnabled, .observedInventoryAllowBulkLoss, .httpTLSEnabled, .auditIncludeReads,
+            .ssfAllowUnverifiedTokens,
             .imageS3VirtualHostStyle, .spireEnabled, .spireOrgTrustDomainsEnabled,
             .spiffeJWTSVIDAuthEnabled:
             false

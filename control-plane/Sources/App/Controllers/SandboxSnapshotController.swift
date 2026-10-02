@@ -107,6 +107,7 @@ extension SandboxController {
             guard try await sandbox.lockAndRefresh(on: db), sandbox.desiredStatus != .absent else {
                 throw Abort(.conflict, reason: "Sandbox is being deleted")
             }
+            try await SandboxIdleFenceService.cancelForUserActivity(sandbox, on: db)
             SandboxActivityService.touch(sandbox, at: try await ClusterClock.read(on: db))
             try await sandbox.save(on: db)
             if stopAfterSnapshot {
@@ -271,7 +272,7 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot cannot be restored in status '\(snapshot.status.rawValue)'")
         }
-        guard snapshot.guestControlProtocolVersion == SandboxGuestControlProtocol.currentVersion else {
+        guard snapshot.guestControlProtocolVersion.map(SandboxGuestControlProtocol.supports) == true else {
             throw Abort(
                 .conflict,
                 reason: Self.unsupportedGuestProtocolReason(snapshot.guestControlProtocolVersion))
@@ -337,8 +338,7 @@ extension SandboxController {
                 throw Abort(.conflict, reason: "Snapshot is no longer restorable")
             }
             guard
-                current.guestControlProtocolVersion
-                    == SandboxGuestControlProtocol.currentVersion
+                current.guestControlProtocolVersion.map(SandboxGuestControlProtocol.supports) == true
             else {
                 throw Abort(
                     .conflict,
@@ -443,7 +443,7 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot was not captured in a fork-compatible jailed layout")
         }
-        guard snapshot.guestControlProtocolVersion == SandboxGuestControlProtocol.currentVersion else {
+        guard snapshot.guestControlProtocolVersion.map(SandboxGuestControlProtocol.supports) == true else {
             throw Abort(
                 .conflict,
                 reason: unsupportedGuestProtocolReason(snapshot.guestControlProtocolVersion))

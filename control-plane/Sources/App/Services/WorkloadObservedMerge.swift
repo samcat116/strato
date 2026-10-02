@@ -518,7 +518,11 @@ extension ObservedStateApplier {
 
         if sandbox.status != observed.status, observed.status != .unknown || sandbox.status.isTransitional {
             let previous = sandbox.status
-            sandbox.setStatus(observed.status, at: instant)
+            let idleFence = try await SandboxIdleFenceService.state(id: sandboxID, on: db)
+            let automatic =
+                observed.status == .suspended && sandbox.desiredStatus == .suspended
+                && idleFence?.decodedFence?.generation == sandbox.generation
+            sandbox.setStatus(observed.status, at: instant, recordsActivity: !automatic)
             changed = true
 
             // A workload finishing on its own (`.exited`) is the normal end

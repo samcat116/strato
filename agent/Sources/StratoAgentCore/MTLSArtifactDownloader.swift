@@ -287,6 +287,27 @@ public struct MTLSArtifactDownloader: Sendable {
         }
     }
 
+    /// CP-only validation: the guest VMM may already be paused.
+    public func validateSandboxIdleAdmission(
+        controlPlaneBaseURL: String, sandboxId: UUID,
+        fence: SandboxAutomaticSuspensionFence
+    ) async throws {
+        let url = controlPlaneBaseURL + "/agent/sandboxes/\(sandboxId.uuidString)/idle-admission"
+        try await withClient(readTimeout: .seconds(5), purpose: "sandbox idle admission") { client in
+            var request = HTTPClientRequest(url: url)
+            request.method = .POST
+            request.headers.add(name: "Content-Type", value: "application/json")
+            let bytes = try WireProtocol.makeEncoder().encode(fence)
+            var buffer = ByteBufferAllocator().buffer(capacity: bytes.count)
+            buffer.writeBytes(bytes)
+            request.body = .bytes(buffer)
+            let response = try await client.execute(request, deadline: .now() + .seconds(10), logger: logger)
+            guard response.status == .noContent else {
+                throw DownloadFailure(reason: "sandbox idle admission rejected", isTransient: false)
+            }
+        }
+    }
+
     private func pollWithClient(
         _ client: HTTPClient, url: URL, ifNoneMatch: String?, maximumBodyBytes: Int
     ) async throws -> DesiredStatePollResponse {

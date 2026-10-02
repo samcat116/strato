@@ -71,6 +71,9 @@ public protocol SandboxRuntimeService: Sendable {
     /// Stale generations never invalidate a newer suspension admission.
     func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async
 
+    func noteSandboxIdleControlPlane(_ desired: DesiredSandboxState) async
+    func sampleSandboxIdleActivity(sandboxId: String) async -> SandboxIdleActivityReport?
+
     /// Prepare an automatic-policy claim from runtime-authoritative evidence.
     /// This does not suspend; the host-admitted Agent wrapper must perform it.
     func prepareIdleSuspension(sandboxId: String, policy: SandboxIdlePolicy) async -> SandboxIdlePolicy.Verdict
@@ -216,6 +219,8 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public func noteSandboxIdleControlPlane(_ desired: DesiredSandboxState) async {}
+    public func sampleSandboxIdleActivity(sandboxId: String) async -> SandboxIdleActivityReport? { nil }
     public func prepareIdleSuspension(
         sandboxId: String, policy: SandboxIdlePolicy
     ) async -> SandboxIdlePolicy.Verdict {

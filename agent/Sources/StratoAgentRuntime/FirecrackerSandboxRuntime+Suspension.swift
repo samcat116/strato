@@ -148,8 +148,9 @@ extension FirecrackerSandboxRuntime {
             }
         }
         if automatic {
-            guard idleSuspensionAdmissions[sandboxId]?.permitsDestruction(
-                evidence: idleSuspensionEvidence(sandboxId: sandboxId), at: Date()) == true
+            guard
+                idleSuspensionAdmissions[sandboxId]?.permitsDestruction(
+                    evidence: idleSuspensionEvidence(sandboxId: sandboxId), at: Date()) == true
             else { throw SandboxSuspensionGuard.GateError.stale }
         }
         defer { if automatic { idleSuspensionAdmissions.removeValue(forKey: sandboxId) } }
@@ -242,8 +243,8 @@ extension FirecrackerSandboxRuntime {
             // write. Activity after this point requests restore, not rollback.
             if automatic {
                 guard
-                    idleSuspensionAdmissions[sandboxId]?.permitsDestruction(
-                        evidence: idleSuspensionEvidence(sandboxId: sandboxId), at: Date()) == true
+                    idleSuspensionAdmissions[sandboxId]?.permitsFrozenDestruction(
+                        evidence: idleSuspensionEvidence(sandboxId: sandboxId)) == true
                 else { throw SandboxSuspensionGuard.GateError.stale }
             }
             try suspensionGuards[sandboxId]?.commitDestruction(ticket)

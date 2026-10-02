@@ -2,7 +2,7 @@ import Foundation
 
 /// STR-313 eligibility only. The suspended lifecycle owns checkpoint durability,
 /// stopping, restoration, and artifact retention; this value never performs them.
-public struct SandboxIdlePolicy: Sendable, Equatable {
+public struct SandboxIdlePolicy: Codable, Sendable, Equatable {
     public var enabled = false
     public var idleSeconds: TimeInterval = 300
     public var minimumResidencySeconds: TimeInterval = 60

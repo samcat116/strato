@@ -5,13 +5,15 @@ import StratoShared
 #if os(Linux)
 extension FirecrackerSandboxRuntime {
     func noteIdleActivity(sandboxId: String, at now: Date = Date()) {
-        idleLastActivity[sandboxId] = max(idleLastActivity[sandboxId] ?? now, now)
+        if idleLastActivity[sandboxId].map({ now > $0 }) ?? true {
+            idleSamplers[sandboxId]?.noteActivity()
+            idleLastActivity[sandboxId] = now
+        }
     }
 
-    /// No producer is enabled until the coordinated activity contract lands.
-    /// An absent observation remains unknown; API silence and internal log
-    /// followers cannot manufacture it. Updates also invalidate STR-312's
-    /// activity ticket before any await, including transitions back to idle.
+    /// Fresh v5 sampling establishes coverage. Absent evidence remains unknown;
+    /// API silence and internal log followers cannot manufacture it. Transitions
+    /// invalidate STR-312's activity ticket before any await.
     func observeIdleActivity(sandboxId: String, observation: SandboxIdleActivityObservation) {
         if let previous = idleActivityObservations[sandboxId], observation.observedAt < previous.observedAt {
             return
@@ -44,6 +46,7 @@ extension FirecrackerSandboxRuntime {
     }
 
     func invalidateIdleActivity(sandboxId: String) {
+        idleSamplers.removeValue(forKey: sandboxId)
         idleActivityObservations.removeValue(forKey: sandboxId)
         idleSuspensionAdmissions.removeValue(forKey: sandboxId)
         noteIdleActivity(sandboxId: sandboxId)
@@ -61,8 +64,8 @@ extension FirecrackerSandboxRuntime {
             localResidentSince: idleResidentSince[sandboxId],
             activeExecSessions: execCount, pendingCommands: activity.pendingActivityCount,
             supportsFullSnapshot: managed.jail != nil && managed.warmHeldIdentity == nil
-                && managed.guestControlProtocolVersion != nil
-                && (managed.spec.network == nil || networkOverridesSupport == true),
+                && managed.guestControlProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion
+                && managed.spec.network == nil,
             snapshotOrRestoreInProgress: checkpointing.contains(sandboxId))
     }
 
@@ -77,10 +80,7 @@ extension FirecrackerSandboxRuntime {
             idleSuspensionAdmissions.removeValue(forKey: sandboxId)
             return .unknownActivity
         }
-        if managed.spec.network != nil {
-            guard let supported = await probeNetworkOverridesSupport() else { return .unknownActivity }
-            guard supported else { return .unsupportedBackend }
-        }
+        guard managed.spec.network == nil else { return .unknownActivity }
         do {
             guard try await managed.manager.getInstanceInfo().state == .running else { return .unknownActivity }
         } catch {

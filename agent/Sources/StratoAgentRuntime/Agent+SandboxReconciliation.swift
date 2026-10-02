@@ -127,7 +127,12 @@ extension Agent {
             try await sandboxReconcileBoot(item)
         case .shutdown:
             if item.desiredSandbox?.desiredStatus == .suspended {
-                try await sandboxReconcileSuspend(item)
+                if item.desiredSandbox?.automaticSuspensionFence != nil {
+                    let verdict = try await sandboxReconcileIdleSuspend(item, dependenciesReady: true)
+                    guard verdict == .eligible else { throw SandboxSuspensionGuard.GateError.stale }
+                } else {
+                    try await sandboxReconcileSuspend(item)
+                }
             } else {
                 try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
             }
@@ -821,6 +826,7 @@ extension Agent {
                     failureClassification: facts.failureClassification,
                     exitCode: exitCode,
                     resourceTelemetry: workloadResourceTelemetry[sandboxId],
+                    idleActivity: await sandboxRuntime?.sampleSandboxIdleActivity(sandboxId: sandboxId),
                     suspension: evidence,
                     suspensionStorageReservedBytes: record.map {
                         max($0.checkpointBytes, $0.storageReservationBytes ?? 0)

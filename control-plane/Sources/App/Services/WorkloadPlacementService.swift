@@ -207,8 +207,7 @@ actor WorkloadPlacementService {
                     "the restore snapshot is unavailable or not ready")
             }
             guard
-                snapshot.guestControlProtocolVersion
-                    == SandboxGuestControlProtocol.currentVersion
+                snapshot.guestControlProtocolVersion.map(SandboxGuestControlProtocol.supports) == true
             else {
                 throw AgentServiceError.schedulingFailed(
                     "snapshot uses unsupported guest control protocol "

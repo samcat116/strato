@@ -58,6 +58,7 @@ nix::ioctl_write_ptr_bad!(tiocswinsz, libc::TIOCSWINSZ, Winsize);
 /// The decoded fields of a [`Request::Exec`], handed over by the vsock
 /// connection dispatcher.
 pub struct ExecRequest {
+    pub session_id: Option<String>,
     pub argv: Vec<String>,
     pub env: Option<BTreeMap<String, String>>,
     pub cwd: Option<String>,
@@ -77,7 +78,15 @@ pub fn run_exec_session(
     nonce: String,
 ) {
     let writer = Arc::new(Mutex::new(writer));
-    if let Err(message) = session(reader, &writer, req, state, &nonce) {
+    let admission = match IdleAdmission::new(state, req.session_id.clone()) {
+        Ok(admission) => admission,
+        Err(message) => {
+            send_response(&writer, &Response::Error { nonce, message });
+            return;
+        }
+    };
+    let result = session(reader, &writer, req, state, &nonce, admission);
+    if let Err(message) = result {
         eprintln!("[sandbox-init] exec session failed: {message}");
         send_response(&writer, &Response::Error { nonce, message });
     }
@@ -92,6 +101,7 @@ fn session(
     req: ExecRequest,
     state: &GuestState,
     nonce: &str,
+    mut admission: IdleAdmission,
 ) -> Result<(), String> {
     let Some((program, args)) = req.argv.split_first() else {
         return Err("exec argv must not be empty".to_string());
@@ -185,11 +195,16 @@ fn session(
         }
     }
 
+    let idle_enabled = state.idle.lock().expect("idle poisoned").supported();
+    unsafe {
+        cmd.pre_exec(move || strato_sandbox_init::idle::join_child(idle_enabled));
+    }
     let mut child = cmd.spawn().map_err(|e| format!("spawn {program}: {e}"))?;
     // Drop the Command now: it still holds the PTY slave Stdio handles, and
     // the master would never report EIO (child gone) while they linger here.
     drop(cmd);
 
+    admission.spawned = true;
     let pid = child.id() as i32;
     // Register with the central reaper before anything else; the registry's
     // unclaimed map covers an exit racing this registration.
@@ -265,6 +280,7 @@ fn session(
         exited.clone(),
         writer.clone(),
         nonce.to_string(),
+        admission,
     );
 
     // Host-input loop: stdin/stdin_eof/resize until the host closes the
@@ -409,6 +425,7 @@ fn spawn_exit_waiter(
     exited: Arc<AtomicBool>,
     writer: Arc<Mutex<File>>,
     nonce: String,
+    mut admission: IdleAdmission,
 ) {
     let spawned = std::thread::Builder::new()
         .name("exec-wait".to_string())
@@ -420,6 +437,7 @@ fn spawn_exit_waiter(
             for pump in pumps {
                 let _ = pump.join();
             }
+            admission.finish();
             exited.store(true, Ordering::SeqCst);
             send_response(&writer, &Response::ExecExit { nonce, exit_code });
             shutdown_connection(&writer);
@@ -452,5 +470,40 @@ fn shutdown_connection(writer: &Mutex<File>) {
     // SAFETY: shutdown(2) on our own connected socket fd.
     unsafe {
         libc::shutdown(w.as_raw_fd(), libc::SHUT_RDWR);
+    }
+}
+
+/// An interrupted spawned exec remains unknown until terminal reaping. A
+/// failed waiter never clears the ledger merely because the stream vanished.
+pub(super) struct IdleAdmission {
+    monitor: Arc<Mutex<strato_sandbox_init::idle::Monitor>>,
+    id: Option<u64>,
+    spawned: bool,
+}
+impl IdleAdmission {
+    pub(super) fn new(state: &GuestState, session: Option<String>) -> Result<Self, String> {
+        let mut monitor = state.idle.lock().expect("idle poisoned");
+        let id = if monitor.supported() {
+            Some(monitor.begin_exec(session)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            monitor: state.idle.clone(),
+            id,
+            spawned: false,
+        })
+    }
+    fn finish(&mut self) {
+        if let Some(id) = self.id.take() {
+            self.monitor.lock().expect("idle poisoned").end_exec(id);
+        }
+    }
+}
+impl Drop for IdleAdmission {
+    fn drop(&mut self) {
+        if !self.spawned {
+            self.finish();
+        }
     }
 }

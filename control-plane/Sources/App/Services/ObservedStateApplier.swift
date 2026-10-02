@@ -446,6 +446,8 @@ struct ObservedStateApplier {
             if let observed = reportedSandboxes[sandboxID] {
                 try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
                     sandbox, tx in
+                    try await SandboxIdleFenceService.observe(
+                        observed.idleActivity, sandbox: sandbox, at: instant, on: tx)
                     try await applyObservedSandboxState(
                         sandbox: sandbox, observed: observed, at: instant, on: tx)
                 }
