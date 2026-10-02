@@ -33,7 +33,6 @@ struct OpenAPISpecDriftTests {
         "GET /api/vms/{}/console",
         "POST /api/vms/{}/console/vnc",
         "GET /api/vms/{}/console/vnc/{}/attach",
-        "POST /api/vms/{}/exec",
         "GET /api/vms/{}/exec/{}/attach",
         "GET /api/sandboxes/{}/exec/{}/attach",
     ]
