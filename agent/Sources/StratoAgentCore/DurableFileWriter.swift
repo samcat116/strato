@@ -228,6 +228,10 @@ struct DurableFileWriter: Sendable {
         try synchronizeParentDirectory(of: path)
     }
 
+    func synchronizeRemoval(at path: String) throws {
+        try synchronizeParentDirectory(of: path)
+    }
+
     private func synchronizeParentDirectory(of path: String) throws {
         try synchronizeDirectory(at: parentDirectory(of: path))
     }

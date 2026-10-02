@@ -67,6 +67,20 @@ public protocol SandboxRuntimeService: Sendable {
 
     func shutdownSandbox(sandboxId: String) async throws
 
+    /// Publish current intent before reconciliation awaits network/storage.
+    /// Stale generations never invalidate a newer suspension admission.
+    func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async
+
+    /// STR-312's sole suspension entry point. Automatic callers must have
+    /// supplied known eligibility and admitted no commands/sessions. Unsupported
+    /// runtimes fail; mock lifecycle is not evidence of memory reclamation.
+    func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws
+
+    /// Durable local evidence; consumers cannot infer suspension from Stopped.
+    func suspensionRecord(sandboxId: String) async throws -> SandboxSuspensionRecord?
+    func suspensionStorageEstimate(sandboxId: String) async throws -> Int64
+    func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment]) async throws
+
     /// Gracefully stop (best effort) and remove the sandbox from this host.
     func deleteSandbox(sandboxId: String) async throws
 
@@ -187,6 +201,17 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async {}
+    public func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws {
+        throw SandboxRuntimeError.notSnapshottable("this runtime does not implement durable suspension")
+    }
+    public func suspensionRecord(sandboxId: String) async throws -> SandboxSuspensionRecord? { nil }
+    public func suspensionStorageEstimate(sandboxId: String) async throws -> Int64 {
+        throw SandboxRuntimeError.notSnapshottable("this runtime cannot size a durable suspension")
+    }
+    public func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment]) async throws {
+        throw SandboxRuntimeError.notSnapshottable("this runtime cannot resume a durable suspension")
+    }
     public var requiresJailUID: Bool { false }
     public func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease? { nil }
     public func commitJailUID(_ lease: SandboxJailUIDLease) async {}

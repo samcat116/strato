@@ -26,6 +26,64 @@ extension Agent {
         return sandboxRuntime
     }
 
+    /// STR-312/313 entry point. The runtime guard owns lifecycle serialization;
+    /// this wrapper owns host admission, including the paused validation VMM
+    /// and durable checkpoint bytes. Policy must never call the driver directly.
+    func sandboxReconcileSuspend(_ item: ReconcileWorkItem, automatic: Bool = false) async throws {
+        guard let desired = item.desiredSandbox,
+            var entry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
+        else { throw SandboxSuspensionGuard.GateError.unknownIntent }
+        let runtime = try requireSandboxRuntime()
+        if let record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase == .suspended {
+            entry.sandboxSuspension = record
+            managedSandboxes[item.id] = entry
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist suspended sandbox reservations")
+            }
+            if let retained = retainedSuspensionClaims.removeValue(forKey: item.id) {
+                capacityAdmissionLedger.release(retained)
+            }
+            return
+        }
+        let estimate = try await runtime.suspensionStorageEstimate(sandboxId: item.id)
+        let current = SandboxHostReservation.forManifestEntry(entry)
+        let spec = entry.sandboxSpec ?? desired.spec
+        let extra = HostReservation(
+            cpus: spec.cpus, memoryBytes: spec.memoryBytes, diskBytes: estimate)
+        let raw = await rawHostCapacitySnapshot()
+        let claim =
+            try retainedSuspensionClaims[item.id]
+            ?? capacityAdmissionLedger.claim(
+                extra, desiredWorkloadReservation: current.addingSaturating(extra),
+                snapshot: raw, agentName: initialAgentID)
+        var mayReleaseClaim = false
+        defer {
+            if mayReleaseClaim {
+                retainedSuspensionClaims.removeValue(forKey: item.id)
+                capacityAdmissionLedger.release(claim)
+            } else {
+                retainedSuspensionClaims[item.id] = claim
+            }
+        }
+        do {
+            try await runtime.suspendSandbox(
+                sandboxId: item.id, generation: desired.generation, automatic: automatic)
+        } catch {
+            entry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            managedSandboxes[item.id] = entry
+            mayReleaseClaim = persistManifest()
+            // A failed durable reservation update retains the admission claim
+            // in this agent life rather than lending those bytes to another VM.
+            throw error
+        }
+        entry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+        managedSandboxes[item.id] = entry
+        guard persistManifest() else {
+            throw SandboxRuntimeError.snapshotIOFailed("could not persist suspended sandbox reservations")
+        }
+        mayReleaseClaim = true
+    }
+
     func performSandbox(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
         switch step {
         case .adopt:
@@ -84,9 +142,35 @@ extension Agent {
                 sandboxId: item.id, jailUID: jailUID, existingJail: true)
         let attachments = try await networkOrchestrator.prepareAttachments(
             vmId: item.id, networks: networks, placement: placement)
-        try await requireSandboxRuntime().restoreSandbox(
+        let runtime = try requireSandboxRuntime()
+        var entry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
+        var claim: HostCapacityClaim?
+        if var record = try await runtime.suspensionRecord(sandboxId: item.id), let existing = entry {
+            let current = SandboxHostReservation.forManifestEntry(existing)
+            let target = SandboxHostReservation.forSpec(record.spec).addingSaturating(
+                HostReservation(diskBytes: current.diskBytes))
+            claim = try capacityAdmissionLedger.claim(
+                .positiveDelta(from: current, to: target), desiredWorkloadReservation: target,
+                snapshot: await rawHostCapacitySnapshot(), agentName: initialAgentID)
+            record.phase = .restoring
+            entry?.sandboxSuspension = record
+            if let entry { managedSandboxes[item.id] = entry }
+            guard persistManifest() else {
+                if let claim { capacityAdmissionLedger.release(claim) }
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist explicit restore reservations")
+            }
+        }
+        defer { if let claim { capacityAdmissionLedger.release(claim) } }
+        try await runtime.restoreSandbox(
             sandboxId: item.id, snapshotId: restore.snapshotId.uuidString,
             artifacts: restore.artifacts, networkAttachments: attachments)
+        if entry?.sandboxSuspension != nil {
+            entry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            if let entry { managedSandboxes[item.id] = entry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist explicit restore completion")
+            }
+        }
     }
 
     /// Where this host realizes a sandbox's NIC (issue STR-100).
@@ -320,18 +404,46 @@ extension Agent {
         let runtime = try requireSandboxRuntime()
 
         let raw = await rawHostCapacitySnapshot()
-        let growth = HostReservation.positiveDelta(
-            from: SandboxHostReservation.forSpec(currentSpec),
-            to: SandboxHostReservation.forSpec(desired.spec))
+        var manifestEntry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
+        let currentReservation =
+            manifestEntry.map(SandboxHostReservation.forManifestEntry)
+            ?? SandboxHostReservation.forSpec(currentSpec)
+        let targetReservation = SandboxHostReservation.forSpec(desired.spec).addingSaturating(
+            HostReservation(diskBytes: currentReservation.diskBytes))
+        let growth = HostReservation.positiveDelta(from: currentReservation, to: targetReservation)
         try capacityAdmissionLedger.validateExistingReservation(
-            SandboxHostReservation.forSpec(currentSpec),
+            currentReservation,
             snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
-            growth, desiredWorkloadReservation: SandboxHostReservation.forSpec(desired.spec),
+            growth, desiredWorkloadReservation: targetReservation,
             snapshot: raw, agentName: initialAgentID)
         defer { capacityAdmissionLedger.release(claim) }
 
-        try await runtime.bootSandbox(sandboxId: item.id)
+        if var record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase != .resumed {
+            // Reacquire the durable reservation before any restore side effect.
+            record.phase = .restoring
+            manifestEntry?.sandboxSuspension = record
+            if let manifestEntry { managedSandboxes[item.id] = manifestEntry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist restore reservations")
+            }
+            let networks = currentSpec.network.map { [$0] } ?? []
+            let placement =
+                networks.isEmpty
+                ? NICPlacement.hostNamespace
+                : try sandboxNICPlacement(
+                    sandboxId: item.id, jailUID: manifestEntry?.jailUID, existingJail: true)
+            let attachments = try await networkOrchestrator.prepareAttachments(
+                vmId: item.id, networks: networks, placement: placement)
+            try await runtime.resumeSuspension(sandboxId: item.id, networkAttachments: attachments)
+            manifestEntry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            if let manifestEntry { managedSandboxes[item.id] = manifestEntry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist resumed sandbox reservations")
+            }
+        } else {
+            try await runtime.bootSandbox(sandboxId: item.id)
+        }
     }
 
     func sandboxReconcileDelete(_ item: ReconcileWorkItem) async throws {

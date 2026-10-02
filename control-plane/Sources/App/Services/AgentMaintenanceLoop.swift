@@ -266,6 +266,7 @@ actor AgentMaintenanceLoop {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
         await app.vmCommandExecutionService.sweepStuck(at: instant)
+        await VMFleetRunDispatcher.sweep(app: app)
     }
 
     /// Grace before a resting desired/observed mismatch becomes divergent.

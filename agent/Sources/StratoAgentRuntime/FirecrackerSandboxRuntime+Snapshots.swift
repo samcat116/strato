@@ -32,6 +32,13 @@ extension FirecrackerSandboxRuntime {
     func snapshotSandbox(
         sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode
     ) async throws -> SandboxSnapshotResult {
+        guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
+        return try await captureSandboxSnapshot(sandboxId: sandboxId, snapshotId: snapshotId, mode: mode)
+    }
+
+    func captureSandboxSnapshot(
+        sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode, internalArchive: Bool = false
+    ) async throws -> SandboxSnapshotResult {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
@@ -91,7 +98,10 @@ extension FirecrackerSandboxRuntime {
 
         // Stage the archive directory before touching the guest, so a
         // filesystem failure here cannot leave the sandbox paused.
-        let archiveDir = snapshotDirectory(sandboxId, snapshotId: snapshotId)
+        let archiveDir =
+            internalArchive
+            ? suspensionArchive(sandboxId: sandboxId, snapshotId: snapshotId)
+            : snapshotDirectory(sandboxId, snapshotId: snapshotId)
         // A leftover from a failed earlier attempt must not pollute this one.
         try? FileManager.default.removeItem(atPath: archiveDir)
         try FileManager.default.createDirectory(atPath: archiveDir, withIntermediateDirectories: true)
@@ -137,6 +147,17 @@ extension FirecrackerSandboxRuntime {
             // support it and a full copy otherwise.
             try await reflinkCopy(from: managed.rootfsPath, to: archiveRootfs)
             try await reflinkCopy(from: managed.configPath, to: archiveConfig)
+
+            // Local checkpoints need durability/integrity evidence before any
+            // future STR-312 suspend can consume them. Hashing guest memory is
+            // blocking I/O; keep it off this actor's cooperative executor.
+            // This evidence is not a Firecracker restore-validation proof.
+            _ = try await Task.detached {
+                try SandboxCheckpointManifest.publish(
+                    directory: archiveDir, sandboxId: sandboxId, snapshotId: snapshotId,
+                    identityNonce: managed.identityNonce, firecrackerVersion: info.vmlinuxVersion,
+                    guestControlProtocolVersion: guestControlProtocolVersion)
+            }.value
         } catch {
             // Failed checkpoint: drop partial artifacts and put the guest
             // back the way it was found.
@@ -180,6 +201,17 @@ extension FirecrackerSandboxRuntime {
         artifacts: [SandboxSnapshotArtifactDescriptor]?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
+        guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
+        try await restoreSandboxArchive(
+            sandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts,
+            networkAttachments: networkAttachments)
+    }
+
+    func restoreSandboxArchive(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?,
+        networkAttachments: [ResolvedNetworkAttachment], internalArchive: Bool = false
+    ) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
@@ -209,8 +241,11 @@ extension FirecrackerSandboxRuntime {
         // snapshot, otherwise a verified download of the exported copy
         // (issue #428). Either way every required file exists before the
         // live VM is destroyed, not after.
-        let archiveDir = try await stageSnapshotArchive(
-            sourceSandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts)
+        let archiveDir =
+            internalArchive
+            ? suspensionArchive(sandboxId: sandboxId, snapshotId: snapshotId)
+            : try await stageSnapshotArchive(
+                sourceSandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts)
         let archiveMemory = archiveDir + "/" + SnapshotFile.memory
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
@@ -224,6 +259,17 @@ extension FirecrackerSandboxRuntime {
             throw GuestControlError.identityMismatch(
                 expected: sandboxId, got: archivedConfig.sandboxId)
         }
+        _ = try await Task.detached {
+            try SandboxCheckpointManifest.verifyIfPresent(
+                directory: archiveDir, sandboxId: sandboxId, snapshotId: snapshotId,
+                identityNonce: archivedConfig.identityNonce)
+        }.value
+        let currentSuspension = try loadSuspensionRecord(sandboxId: sandboxId)
+        let suspensionManagedRestore = internalArchive || currentSuspension != nil
+        if !internalArchive, var record = currentSuspension {
+            record.phase = .restoring
+            try saveSuspension(record)
+        }
 
         logger.info(
             "Restoring sandbox from snapshot",
@@ -236,7 +282,17 @@ extension FirecrackerSandboxRuntime {
         // Tear down the current Firecracker process. For a jailed sandbox
         // this removes the whole chroot subtree, which the staging below
         // rebuilds from the archive.
-        try? await client.destroyVM(vmId: sandboxId)
+        // The client's process-identity checks and bounded exit wait are the
+        // teardown proof. Never stage or spawn a replacement when they fail.
+        do {
+            try await client.destroyVM(vmId: sandboxId)
+        } catch FirecrackerError.vmNotFound {
+            // A retry after failed staging can have no registered VMM. That
+            // is not itself process-death evidence: scan both the id and the
+            // recorded jail identity before permitting a replacement.
+            try await confirmNoSandboxProcessBeforeReportingGone(
+                sandboxId, jailUID: managed.jail?.uid)
+        }
 
         let newManager: FirecrackerManager
         if let plan = managed.jail {
@@ -275,7 +331,7 @@ extension FirecrackerSandboxRuntime {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: true,
+                    resumeVM: !suspensionManagedRestore,
                     networkOverrides: overrides))
         } else {
             // Unjailed: replace the live rootfs with the checkpointed copy
@@ -294,7 +350,7 @@ extension FirecrackerSandboxRuntime {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: archiveVmstate,
                     memFilePath: archiveMemory,
-                    resumeVM: true,
+                    resumeVM: !suspensionManagedRestore,
                     networkOverrides: overrides))
         }
 
@@ -302,6 +358,18 @@ extension FirecrackerSandboxRuntime {
         // Whatever exit the pre-restore guest reported no longer describes
         // this guest; the restored one re-reports over vsock.
         sandboxes[sandboxId]?.lastExitCode = nil
+
+        if suspensionManagedRestore {
+            guard var record = try loadSuspensionRecord(sandboxId: sandboxId) else {
+                throw SandboxSuspensionGuard.GateError.stale
+            }
+            // After this durable commit the guest may have advanced. A timeout
+            // or failed health check must never rewind it to the checkpoint.
+            record.phase = .resuming
+            try saveSuspension(record)
+            try Task.checkCancellation()
+            try await newManager.resume()
+        }
 
         // Health check: the restored guest must answer with this sandbox's
         // identity (the checkpointed memory carries the original nonce).
@@ -311,6 +379,11 @@ extension FirecrackerSandboxRuntime {
                 expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
         }
         sandboxes[sandboxId]?.guestControlProtocolVersion = response.controlProtocolVersion
+        if !internalArchive, var record = try loadSuspensionRecord(sandboxId: sandboxId) {
+            record.phase = .resumed
+            record.lastRestoreFailure = nil
+            try saveSuspension(record)
+        }
 
         // Best-effort clock resync: the restored guest's wall clock froze at
         // checkpoint time.

@@ -364,7 +364,7 @@ extension Agent {
                         try await snapshotDownloader.uploadFile(url: url, fromFile: source)
                     }
                 )
-                sandboxRuntime = FirecrackerSandboxRuntime(
+                sandboxRuntime = try FirecrackerSandboxRuntime(
                     logger: logger,
                     client: firecrackerClient,
                     imageService: SandboxImageService(

@@ -815,3 +815,44 @@ replica-local attachment is retried; a started process is never replayed.
 Cancellation and termination signals close the socket and restore terminal
 settings, including externally delivered SIGINT. Typed Ctrl-C in a raw PTY
 is forwarded as guest input.
+
+## Recorded fleet commands (STR-85)
+
+`strato vm run --selector 'project=<uuid>,environment=production,tag:role=web' -- <argv>`
+resolves an intersection of filters. `ids=<uuid;uuid>` selects an explicit list.
+Environment and tag filters require a project; unknown, empty, duplicate and
+oversized selectors fail closed. Resolution is capped at 100 targets and filters
+tags in PostgreSQL. Tags narrow a query and confer no permission.
+
+`POST /api/vm-fleet-runs` saves an immutable command and target snapshot for ten
+minutes, without starting anything. The CLI prints the snapshot and asks for
+`yes` (automation can explicitly pass `--yes`); `/vms/run` displays it before a
+separate confirmation. `POST /api/vm-fleet-runs/:id/confirm` requires the exact
+resolved ID list and rechecks **`vm:runCommand` for each VM**, using the same
+acceptance path as a single recorded command. It also rechecks VM read access,
+running state, opt-in guest-agent enablement and agent support. Inaccessible,
+denied and ineligible VMs become explicit skipped entries. No `vm:exec` grant
+is substituted. A newly matching VM never joins an already prepared run.
+
+The parent and accepted children commit atomically. Repeat confirmations return
+the same children. A run belongs to its initiating user and exact API key (or
+browser session credential class); another key cannot confirm or read it.
+Per-child requested/completed audit events retain the existing guest command
+contract. Environment overrides and working directories are not fleet options.
+
+The maintenance loop drains a durable queue. A PostgreSQL parent row lock
+serializes competing replicas and allows at most eight pending dispatched
+children **per fleet**, not merely eight concurrent delivery calls. Each claim
+commits before socket delivery. Lost responses, cancellations and crashes never
+return a claimed child to the queue: its result or the recorded-command timeout
+releases the slot. An unclaimed queue survives replica restart; its two-hour
+budget bounds deferred dispatch. Definitive delivery failures are ordinary
+child failures. Queued commands are authorized at confirmation, the acceptance
+boundary, rather than carrying credentials into an asynchronous worker.
+
+Client interruption after confirmation leaves accepted work running. Save the
+printed run ID and use `strato vm run-results <id>` or load it at `/vms/run`.
+Fleet polls expose per-VM status, exit code and at most 4 KiB from each stream;
+individual operation reads retain the full bounded recorded output. Partial
+failure completes the fleet normally; CLI waiting returns a failure exit status
+when a VM is skipped, a child fails, or a command exits nonzero.

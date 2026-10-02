@@ -416,11 +416,11 @@ extension Agent {
         // and the manifest entry is authoritative for the workload's sizing.
         for entry in managedSandboxes.values {
             reserved = reserved.addingSaturating(
-                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
+                SandboxHostReservation.forManifestEntry(entry))
         }
         for entry in orphanedSandboxes.values {
             reserved = reserved.addingSaturating(
-                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
+                SandboxHostReservation.forManifestEntry(entry))
         }
 
         // Workloads whose manifest entry this build cannot route (STR-138) are
