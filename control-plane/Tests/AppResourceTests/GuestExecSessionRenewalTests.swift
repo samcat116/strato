@@ -215,6 +215,11 @@ struct GuestExecSessionRenewalTests {
                 if !blocked { try await Task.sleep(for: .milliseconds(10)) }
             } while !blocked && ContinuousClock.now < deadline
             #expect(blocked)
+            // A renewal at the start of the old general-maintenance pass must
+            // not satisfy this assertion: require another renewal after it stalls.
+            try await sql.raw(
+                "UPDATE vm_exec_sessions SET expires_at = clock_timestamp() + interval '30 seconds' WHERE id = \(bind: leases[0].id)"
+            ).run()
             await loop.start()
             struct Remaining: Decodable { let seconds: Double }
             var renewed = false
