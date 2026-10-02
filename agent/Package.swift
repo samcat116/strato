@@ -78,6 +78,7 @@ let package = Package(
             url: "https://github.com/samcat116/swift-libvirt.git", .upToNextMinor(from: "0.1.1")),
     ],
     targets: [
+        .target(name: "CSandboxUFFD", path: "Sources/CSandboxUFFD", publicHeadersPath: "include"),
         // Small, dependency-light values shared by the agent's domain,
         // networking, storage, and runtime layers.
         .target(
@@ -101,10 +102,11 @@ let package = Package(
             path: "Sources/StratoAgentDomainXML",
             swiftSettings: swiftSettings
         ),
-        // Core library with testable code (no native-library dependencies)
+        // Core library with testable code (no external native-library dependencies)
         .target(
             name: "StratoAgentCore",
             dependencies: [
+                "CSandboxUFFD",
                 "StratoAgentKit",
                 "StratoAgentDomainXML",
                 .product(name: "StratoShared", package: "shared"),

@@ -65,7 +65,7 @@ uses snapshot format **8.0.0**, anonymous guest memory, missing-page registratio
 It sends a descriptor via SCM_RIGHTS plus JSON region mappings over a Unix socket.
 Region fields include host address, size, backing offset and page size; the legacy
 `page_size_kib` field contains bytes in this reference. Recheck these details
-against the approved binary source before implementing the receiver.
+against the approved binary source before activating the reference receiver.
 
 The [kernel API documentation](https://docs.kernel.org/admin-guide/mm/userfaultfd.html)
 requires negotiating UFFDIO_API features and per-range UFFDIO_REGISTER ioctl
@@ -154,12 +154,41 @@ Its API/control-plane implementation removes those missing-code blockers; its
 real checkpoint/destroy/restore and continuity acceptance remain unproven here.
 STR-273 owns no shared allocation and preserves the dependency's version 68.
 Backend implementation
-still needs the concrete descriptor/region receiver, seccomp-reviewed UFFD
-transport/watchdog process adapter, actual dirty capture, scoped live proof and
+now has the isolated v1.13.1-reference descriptor/region receiver below, but
+still needs approved-binary validation, a seccomp-reviewed retained-process
+watchdog adapter, actual dirty capture, scoped live proof and
 lifecycle cleanup integration. Local supervision, durable artifacts and negative
 proof logic are described below. The environment limitations above remain.
 
 ## Additional kernel-independent implementation
+
+`SandboxUffdTransport` and the local `CSandboxUFFD` shim implement a connected
+Unix-socket receiver for the upstream **v1.13.1 reference protocol**, not a
+verified Strato deployment pin. Exact SO_PEERCRED checks, atomically CLOEXEC
+SCM_RIGHTS receipt, exactly one descriptor, bounded fragmented JSON, checked
+4 KiB mappings and descriptor type/nonblocking checks precede readiness. The
+shim reads Linux UAPI events and issues UFFDIO_COPY; EEXIST and EAGAIN are
+explicit results. REMOVE, other lifecycle events, WP/minor faults and unsupported
+layouts fail closed. This prototype requires no ballooning and no huge pages.
+It must not be enabled for snapshots without verified matching metadata.
+
+Eventfd cancellation wakes pollers. Each operation pins descriptor duplicates
+and the lease bounds concurrent operations, preventing close/reuse across
+leases. Cancellation cannot interrupt an ioctl already in flight and is **not**
+process-death proof: STR-312 must retain ownership until outstanding work and
+owned-process teardown are proven. A dedicated killable helper/watchdog adapter,
+private socket binding/ownership, dirty capture and live evidence runner remain
+unimplemented. Production restore is still structurally File-only and never
+constructs this transport or advertises UFFD capability.
+
+Seven transport tests use actual local Unix sockets, peer credentials,
+SCM_RIGHTS, cancellation eventfds and a negative ioctl on `/dev/null`. Raw
+32-byte Linux UAPI event fixtures test decoding, short reads, idle timeout and
+cancellation; they **are not** valid UFFD descriptors or kernel fault evidence.
+Tests reject wrong peer/type, absent/excess/truncated/extra descriptors, malformed
+or overflowing mappings, incomplete messages, timeout and cancellation. No
+successful UFFDIO_COPY, fault handling, snapshot restore or sharing is claimed.
+
 
 `SandboxPageServerSupervisor` owns a single transport lease. It bounds pending
 faults (including the active fault), serializes service, runs transport work
@@ -239,13 +268,16 @@ host PSS; cap admission/resources before increasing concurrency.
 Missing today: STR-312 live lifecycle acceptance and final coordinated dependency
 integration, approved Firecracker/jailer pin and host matrix, permitted KVM/UFFD fixture, compatible verified snapshots, end-to-end
 restore proof, physical-sharing strategy/proof and fault-injection benchmarks.
-STR-273 remains blocked and incomplete.
+STR-273 remains blocked and incomplete. The dependency branch was observed at
+`093b841d5c08eb44e3079e0b4cb971695e1572ba` after this draft's incorporated
+`54cd69a2` boundary; final stack reconciliation remains parent-owned.
 
 Validation of the combined draft against STR-312 head `54cd69a2`: the full
 Linux x86_64 Swift 6.4.0 agent suite passed all five products
-(921 + 344 + 70 + 45 + 531 = **1911 tests**). The full shared suite passed
+(928 + 344 + 70 + 45 + 531 = **1918 tests**, including seven new transport fixtures). The full shared suite passed
 **274 tests**. Seven Python tests, strict Swift formatting, whitespace checks
-and C probe compilation passed. Both UFFD syscall variants still returned ENOSYS.
+and C probe/transport compilation passed. The shared suite result precedes the
+transport addition, which changes no shared source. Both UFFD syscall variants still returned ENOSYS.
 The initially timing-sensitive two-child fixture now triggers exit only after
 admission; the complete final runs passed. These local tests do not establish
 actual Firecracker restore, guest-sharing/PSS or benchmark acceptance.
