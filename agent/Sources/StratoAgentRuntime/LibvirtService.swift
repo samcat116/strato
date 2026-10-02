@@ -2378,10 +2378,8 @@ actor LibvirtService: HypervisorService {
     }
 
     private func makeVMDirectory(_ path: String, vmId: String) throws {
-        guard !FileManager.default.fileExists(atPath: path) else { return }
         do {
-            try FileManager.default.createDirectory(
-                atPath: path, withIntermediateDirectories: true, attributes: nil)
+            try ManagedStatePermissions.prepareVMDirectory(at: path)
         } catch {
             throw HypervisorServiceError.diskError(
                 "failed to create VM directory \(path) for VM \(vmId): \(error.localizedDescription)")

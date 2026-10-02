@@ -967,7 +967,10 @@ install_unit() {
     USE_SYSTEMD=0
     return 0
   fi
-  install -d "$STRATO_CONF_DIR" "$STRATO_STATE_DIR"
+  install -d "$STRATO_CONF_DIR"
+  # Shared traversal for jailed sandbox identities; secret-bearing children
+  # are private to the agent/QEMU account. Do not recursively chmod storage.
+  install -d -m 0711 "$STRATO_STATE_DIR"
   log "Installing $UNIT_FILE"
   # The agent's mTLS credential comes from spire-agent's Workload API, so it
   # must not start without it.

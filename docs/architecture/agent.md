@@ -555,6 +555,29 @@ supported case rather than a stale one.
 
 ## Guest provisioning (cloud-init)
 
+The workload manifest (including corrupt preservation copies), snapshot records,
+and metadata snapshots use `0600` from creation. The durable writer defaults to
+`0600` files and `0700` newly created directories. Startup tightens existing
+bookkeeping files and UUID directories identified by QEMU manifest entries, seed or NVRAM artifacts;
+only the seed ISO is chmod'ed inside those directories. Disk images, NVRAM, backing
+chains, sockets, sandbox directories, operator files, and existing ancestors retain
+their modes. Manifest staging leftovers (the legacy fixed name and UUID names) are also
+restricted without deleting their contents. Legacy `cloud-init-<UUID>` directories
+in the system temporary directory are migrated only when owned by the current
+agent account; their known seed documents become `0600`, with other contents
+preserved. Foreign legacy staging for a known VM and symlinks or hardlinks at
+managed secret paths abort startup. Unmanaged UUID files and links are preserved.
+
+QEMU VM directories are created or tightened to `0700`. This relies on the
+supported installer contract that QEMU and the agent share an account, with
+libvirt DAC and AppArmor still enabled. The shared installation state root is
+`0711` for traversal by sandbox identities; it is never recursively chmod'ed.
+NoCloud generation exclusively creates `.cloud-init-staging` inside the private
+VM directory, refusing stale directories or symlinks. Documents are created `0600`;
+the ISO tool writes into that private staging tree. The finished regular ISO is
+restricted to `0600`, synchronized, and renamed into place, preserving the previous
+ISO on generation failure. Cleanup removes only staging owned by the current call.
+
 `StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO
 QEMU disk-boot VMs consume. `VMSpec.metadataSource` (wire v48) selects its
 shape at creation:
