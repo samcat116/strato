@@ -45,22 +45,29 @@ struct SandboxPageServerSupervisorTests {
     }
     @Test func faultTimeoutDoesNotWaitForCooperativeCancellation() async throws {
         let stops = Stops()
-        // Detached transport work deliberately outlives its cancellation. The
-        // independent deadline must resolve the caller before it finishes.
+        // Hold detached transport work independently of cancellation. Prove
+        // the deadline returns before completion without a scheduler deadline.
+        let (blocked, release) = AsyncStream<Void>.makeStream()
+        let finished = Mutex(false)
+        let failsafe = Task.detached {
+            try await Task.sleep(for: .seconds(5))
+            release.finish()
+        }
+        defer { release.finish(); failsafe.cancel() }
         let server = try supervisor(
             stops: stops,
             read: { _ in
                 let operation = Task.detached {
-                    try await Task.sleep(for: .milliseconds(200))
+                    for await _ in blocked { break }
+                    finished.withLock { $0 = true }
                     return Data(repeating: 1, count: 4096)
                 }
                 return try await operation.value
             })
         try await server.start()
-        let clock = ContinuousClock()
-        let before = clock.now
         await #expect(throws: SandboxPageServerSupervisor.Failure.deadline) { try await server.request(page: 0) }
-        #expect(before.duration(to: clock.now) < .milliseconds(180))
+        #expect(finished.withLock { $0 } == false)
+        release.finish()
         #expect(await server.state == .failed)
         #expect(stops.count == 1)
     }

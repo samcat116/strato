@@ -225,7 +225,7 @@ struct SandboxSuspensionTests {
         var entry = VMManifestEntry(sandboxSpec: spec, jailUID: 60_001, jailerUsed: true)
         entry.sandboxSuspension = reopened
         let reservation = SandboxHostReservation.forManifestEntry(entry)
-        #expect(reservation.memoryBytes == (phase == .suspended ? 0 : spec.memoryBytes))
+        #expect(reservation.memoryBytes == (phase == .suspended ? 0 : spec.memoryBytes + 128 * 1024 * 1024))
         #expect(reservation.cpus == (phase == .suspended ? 0 : spec.cpus))
         #expect(reservation.diskBytes == 512 * 1024 * 1024)
         // Without a larger admitted staging plan, File restore still reserves
@@ -238,6 +238,6 @@ struct SandboxSuspensionTests {
         // Corrupt/legacy host identity cannot authorize releasing RAM.
         var legacy = VMManifestEntry(sandboxSpec: spec)
         legacy.sandboxSuspension = reopened
-        #expect(SandboxHostReservation.forManifestEntry(legacy).memoryBytes == spec.memoryBytes)
+        #expect(SandboxHostReservation.forManifestEntry(legacy).memoryBytes == spec.memoryBytes + 128 * 1024 * 1024)
     }
 }

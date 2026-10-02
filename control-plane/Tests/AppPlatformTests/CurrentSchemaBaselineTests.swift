@@ -21,7 +21,7 @@ struct CurrentSchemaBaselineTests {
     // The combined catalog was measured from PostgreSQL, not inferred from migration text.
     // Historical catalogs and the frozen baseline remain
     // independently asserted below.
-    private static let expectedCurrentCatalogMD5 = "PENDING_FINAL"
+    private static let expectedCurrentCatalogMD5 = "4bd921c32dce26b3108987ba0a16649e"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -106,10 +106,10 @@ struct CurrentSchemaBaselineTests {
             let suspension = AddSandboxSuspension()
             try await fences.revert(on: app.db)
             let preFence = try await catalogMD5(on: app.db)
-            #expect(preFence == "PENDING_PREFENCE", "Observed pre-fence catalog: \(preFence)")
+            #expect(preFence == "d1918b26c924f4de5c0dd1296f3b1c48", "Observed pre-fence catalog: \(preFence)")
             try await idle.revert(on: app.db)
             let preIdle = try await catalogMD5(on: app.db)
-            #expect(preIdle == "PENDING_PREIDLE", "Observed pre-idle catalog: \(preIdle)")
+            #expect(preIdle == "ec7d172d5d95506a75ac34ed58ca8d92", "Observed pre-idle catalog: \(preIdle)")
             try await suspension.revert(on: app.db)
             #expect(try await catalogMD5(on: app.db) == "163841899e9673b6aca5ceb50ce96b5a")
             try await suspension.prepare(on: app.db)
