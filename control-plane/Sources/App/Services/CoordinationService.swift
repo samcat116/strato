@@ -856,20 +856,21 @@ actor CoordinationService {
     /// physical-capacity authority.
     /// A growth generation has its own claim: rolling back a later mutation
     /// cannot delete an earlier unobserved commitment for the same workload.
-    static func growthReservationID(workloadID: UUID, generation: Int64) -> String {
-        "\(workloadID.uuidString):growth:\(generation)"
+    static func growthReservationID(workloadID: UUID, generation: Int64, mutationID: UUID? = nil) -> String {
+        let base = "\(workloadID.uuidString):growth:\(generation)"
+        return mutationID.map { "\(base):\($0.uuidString)" } ?? base
     }
 
     /// This primitive does not enable burstable admission. Its production use
     /// also requires the agreed runtime acknowledgement/resource-report contract.
     func reserveGrowthCapacity(
-        agentId: String, workloadID: UUID, generation: Int64,
+        agentId: String, workloadID: UUID, generation: Int64, mutationID: UUID,
         amounts: ReservationAmounts, capacity: ReservationAmounts
     ) async -> Bool {
         guard generation > 0 else { return false }
         return await reserveCapacity(
             agentId: agentId,
-            vmId: Self.growthReservationID(workloadID: workloadID, generation: generation),
+            vmId: Self.growthReservationID(workloadID: workloadID, generation: generation, mutationID: mutationID),
             amounts: amounts, capacity: capacity)
     }
 

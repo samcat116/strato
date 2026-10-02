@@ -142,6 +142,54 @@ struct ResourceClassTransactionTests {
         }
     }
 
+    @Test func rollbackCleanupPreservesAnotherAttemptAndCommittedClaims() async throws {
+        try await withTestApp { app in
+            let (_, vm) = try await fixture(app)
+            let vmID = try vm.requireID()
+            let agentID = UUID().uuidString
+            let firstNonce = UUID()
+            let secondNonce = UUID()
+            let quarter = ReservationAmounts(memory: 0, disk: 0, cpuMicroUnits: 250_000)
+            let capacity = ReservationAmounts(memory: 4096, disk: 0, cpuMicroUnits: 1_000_000)
+            #expect(
+                await app.coordination.reserveGrowthCapacity(
+                    agentId: agentID, workloadID: vmID, generation: 1, mutationID: firstNonce, amounts: quarter,
+                    capacity: capacity))
+            #expect(
+                await app.coordination.reserveGrowthCapacity(
+                    agentId: agentID, workloadID: vmID, generation: 1, mutationID: secondNonce, amounts: quarter,
+                    capacity: capacity))
+            let failed = WorkloadResourceClassService.GrowthClaim(
+                agentID: agentID,
+                reservationID: CoordinationService.growthReservationID(
+                    workloadID: vmID, generation: 1, mutationID: firstNonce), generation: 1)
+            await WorkloadResourceClassService.releaseRolledBackGrowth(
+                failed, vmID: vmID, coordination: app.coordination, on: app.db)
+            let remaining = await app.coordination.activeReservations(agentIds: [agentID])
+            #expect(remaining[agentID]?.cpuMicroUnits == 250_000)
+            try await app.db.transaction { tx in
+                #expect(try await vm.lockAndRefresh(on: tx))
+                vm.cpu = 2
+                vm.admittedReservation = try #require(vm.admittedReservation).growing(
+                    cpus: 2, memory: .init(guestBytes: vm.memory, backendOverheadBytes: 64), policy: .burstable)
+                _ = try await vm.advanceDesiredStateGeneration(expectedGeneration: vm.generation, on: tx)
+                try await vm.save(on: tx)
+            }
+            let committed = WorkloadResourceClassService.GrowthClaim(
+                agentID: agentID,
+                reservationID: CoordinationService.growthReservationID(
+                    workloadID: vmID, generation: 1, mutationID: secondNonce), generation: 1)
+            await WorkloadResourceClassService.releaseRolledBackGrowth(
+                committed, vmID: vmID, coordination: app.coordination, on: app.db)
+            let retained = await app.coordination.activeReservations(agentIds: [agentID])
+            #expect(retained[agentID]?.cpuMicroUnits == 250_000)
+            // Ordinary ID heartbeats cannot acknowledge a generation's admitted footprint.
+            await app.coordination.releaseReservations(agentId: agentID, vmIds: [vmID.uuidString])
+            let unacknowledged = await app.coordination.activeReservations(agentIds: [agentID])
+            #expect(unacknowledged[agentID]?.cpuMicroUnits == 250_000)
+        }
+    }
+
     @Test func missingLedgerCannotInferAndRepriceHistoricalBurstableGrant() async throws {
         try await withTestApp { app in
             let (_, vm) = try await fixture(app)

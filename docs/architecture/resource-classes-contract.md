@@ -212,11 +212,15 @@ enforcement or a workload's applied limits. The runtime owner must specify
 backend evidence lifetime/invalidation and its generation-guarded workload
 application/readback contract before activation.
 
-Generation-specific growth claims use `<workload UUID>:growth:<generation>`,
-so retries replace the same claim and rollback cannot remove an earlier
-unobserved mutation. The delta is the positive increase over the persisted
-admitted aggregate. Production growth claim submission and acknowledgement
-remain unwired while admission is disabled. Releasing a growth claim requires
+Generation-specific growth claims use
+`<workload UUID>:growth:<generation>:<mutation UUID>`, so a retry within an
+attempt replaces its own claim. Mutation identity protects another writer
+when an aborted transaction's next generation is reused. The delta is the positive increase over the persisted
+admitted aggregate. The producer reserves the positive delta inside the locked mutation before
+committing sizing, snapshot, ledger, quota and generation. Rollback cleanup
+only targets its mutation-owned claim; uncertain commit outcomes retain it.
+This producer is behind the unchanged burstable gate. Acknowledgement remains
+unwired while admission is disabled. Releasing a growth claim requires
 a runtime observation that proves the admitted footprint for that applied
 generation is included in the same host net-resource report. A manifest target
 generation, an ordinary workload-ID heartbeat or a readiness boolean is not

@@ -66,14 +66,35 @@ enum WorkloadResourceClassService {
             snapshot: current, reservation: admitted.growing(cpus: cpus, memory: memory, policy: current.policy))
     }
 
-    static func prepareVMResize(_ vm: VM, cpu: Int, memory: Int64, on db: any Database) async throws {
+    struct GrowthClaim: Sendable {
+        let agentID: String
+        let reservationID: String
+        let generation: Int64
+    }
+
+    /// A commit whose outcome cannot be proven failed keeps its claim until
+    /// acknowledgement/TTL; rollback cleanup never deletes another mutation's claim.
+    static func releaseRolledBackGrowth(
+        _ claim: GrowthClaim?, vmID: UUID, coordination: CoordinationService, on db: any Database
+    ) async {
+        guard let claim else { return }
+        do {
+            let committed = try await VM.find(vmID, on: db)
+            if let committed, committed.generation >= claim.generation { return }
+            await coordination.releaseReservation(agentId: claim.agentID, vmId: claim.reservationID)
+        } catch { /* Ambiguous commit: retain the conservative reservation. */  }
+    }
+
+    static func prepareVMResize(
+        _ vm: VM, cpu: Int, memory: Int64, mutationID: UUID, coordination: CoordinationService, on db: any Database
+    ) async throws -> GrowthClaim? {
         guard vm.resourceClass != nil, let agentID = vm.hypervisorId.flatMap(UUID.init(uuidString:)),
             let agent = try await Agent.find(agentID, on: db),
             let committed = try await VM.find(vm.id, on: db)
-        else { return }
+        else { return nil }
         try requireGrowthAvailable(vm: committed, cpu: cpu, memory: memory)
         if committed.resourceClass?.policy.kind == .burstable, cpu <= committed.cpu, memory <= committed.memory {
-            return
+            return nil
         }
         guard vm.resourceClass?.policy.kind != .burstable || vm.hypervisorType != .qemu || agent.cpuArchitecture != nil
         else {
@@ -98,9 +119,40 @@ enum WorkloadResourceClassService {
             currentCPUs: committed.cpu, currentMemory: footprint(committed.memory, maximum: committed.maxMemory),
             cpus: cpu, memory: footprint(memory, maximum: max(committed.maxMemory, memory)), on: db)
         {
+            var claim: GrowthClaim?
+            if admission.snapshot.policy.kind == .burstable, let previous = committed.admittedReservation {
+                let additional = admission.additionalReservation(over: previous)
+                if additional.cpuMicroUnits > 0 || additional.memory > 0 {
+                    guard committed.generation < Int64.max else {
+                        throw Abort(.conflict, reason: "Workload generation exhausted")
+                    }
+                    let generation = committed.generation + 1
+                    let agentID = try agent.requireID().uuidString
+                    let capacity = ReservationAmounts(
+                        memory: agent.availableMemory, disk: 0,
+                        cpuMicroUnits: agent.availableCPUMicroUnits
+                            ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: agent.availableCPU))
+                    guard
+                        await coordination.reserveGrowthCapacity(
+                            agentId: agentID, workloadID: try committed.requireID(),
+                            generation: generation, mutationID: mutationID, amounts: additional, capacity: capacity)
+                    else {
+                        throw Abort(
+                            .conflict,
+                            reason: "Additional class commitment does not fit the host after in-flight claims")
+                    }
+                    claim = GrowthClaim(
+                        agentID: agentID,
+                        reservationID: CoordinationService.growthReservationID(
+                            workloadID: try committed.requireID(), generation: generation, mutationID: mutationID),
+                        generation: generation)
+                }
+            }
             vm.resourceClass = admission.snapshot
             vm.admittedReservation = admission.reservation
+            return claim
         }
+        return nil
     }
 
     /// Host readiness is necessary evidence, not proof of a workload's applied limits.

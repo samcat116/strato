@@ -84,8 +84,10 @@ struct ResourceClassPlacementTests {
     @Test func generationClaimsReplaceRetriesButRollbackOnlyTheirOwnDelta() async throws {
         let store = InMemoryCoordinationStore()
         let id = UUID()
-        let first = CoordinationService.growthReservationID(workloadID: id, generation: 1)
-        let second = CoordinationService.growthReservationID(workloadID: id, generation: 2)
+        let first = CoordinationService.growthReservationID(workloadID: id, generation: 1, mutationID: UUID())
+        // An aborted transaction's generation may be reused by another writer.
+        let second = CoordinationService.growthReservationID(workloadID: id, generation: 1, mutationID: UUID())
+        #expect(first != second)
         let capacity = ReservationAmounts(memory: 4096, disk: 0, cpuMicroUnits: 500_000)
         let quarter = ReservationAmounts(memory: 1024, disk: 0, cpuMicroUnits: 250_000)
         #expect(
