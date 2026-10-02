@@ -4,13 +4,8 @@ import StratoShared
 /// Backend controls computed from an admitted class snapshot. This is an
 /// agent-local enforcement plan, not a resource-class or wire model.
 public struct BurstableResourceLimits: Sendable, Equatable {
-    public enum InvalidLimits: Error, Equatable {
-        case overflow
-        case pageSize
-        case kernelGranularity
-    }
-
     private let intent: WorkloadRuntimeLimits
+    public var desired: WorkloadRuntimeLimits { intent }
     public var memoryHighBytes: Int64 { intent.memoryHighBytes }
     public var memoryMaxBytes: Int64 { intent.memoryMaxBytes }
     public var cpuWeight: Int { intent.cpuWeight }
@@ -41,14 +36,8 @@ public struct BurstableResourceLimits: Sendable, Equatable {
     /// The earlier high threshold and extra hard-limit headroom are each less
     /// than one page. Never saturate an overflowing hard limit to infinity.
     public func kernelMemoryBytes(pageSize: Int64) throws -> (high: Int64, maximum: Int64) {
-        guard pageSize >= 1024, pageSize.nonzeroBitCount == 1 else { throw InvalidLimits.pageSize }
-        let high = (memoryHighBytes / pageSize) * pageSize
-        let remainder = memoryMaxBytes % pageSize
-        let padding = remainder == 0 ? 0 : pageSize - remainder
-        let (maximum, overflow) = memoryMaxBytes.addingReportingOverflow(padding)
-        guard !overflow else { throw InvalidLimits.overflow }
-        guard high > 0, high < maximum else { throw InvalidLimits.kernelGranularity }
-        return (high, maximum)
+        let aligned = try intent.aligned(pageSizeBytes: pageSize)
+        return (aligned.memoryHighBytes, aligned.memoryMaxBytes)
     }
 
     /// Page-aligned bytes are exactly representable in libvirt's KiB units.

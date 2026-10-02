@@ -17,6 +17,7 @@ extension FirecrackerSandboxRuntime {
         registryCredential: RegistryCredential?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         // Idempotent: a replayed create for an already-defined sandbox is a
         // no-op (the Firecracker process is already configured).
         if sandboxes[sandboxId] != nil {
@@ -826,6 +827,7 @@ extension FirecrackerSandboxRuntime {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
+        try BurstableRuntimeGate.requireSupport(resourceClass: managed.spec.resourceClass)
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
@@ -1134,6 +1136,7 @@ extension FirecrackerSandboxRuntime {
     func adoptSandbox(
         sandboxId: String, spec: SandboxSpec, jailUID: UInt32?
     ) async throws -> SandboxStatus {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         if let managed = sandboxes[sandboxId] {
             // A replayed sync can race adoption; if already managed, adoption is
             // satisfied only after a running guest has passed the strict

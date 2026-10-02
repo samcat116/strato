@@ -183,6 +183,7 @@ extension FirecrackerSandboxRuntime {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
+        try BurstableRuntimeGate.requireSupport(resourceClass: managed.spec.resourceClass)
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }

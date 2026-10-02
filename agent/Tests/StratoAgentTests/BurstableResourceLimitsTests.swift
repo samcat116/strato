@@ -86,7 +86,7 @@ struct BurstableResourceLimitsTests {
             try BurstableResourceLimits(
                 guestGrantBytes: 1, backendOverheadBytes: 0, memoryHighPercent: 80, cpuWeight: 100)
         }
-        #expect(throws: BurstableResourceLimits.InvalidLimits.kernelGranularity) {
+        #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) {
             try BurstableResourceLimits(
                 guestGrantBytes: 1024, backendOverheadBytes: 0, memoryHighPercent: 80, cpuWeight: 100
             )
@@ -115,10 +115,10 @@ struct BurstableResourceLimitsTests {
             #expect(ordinary.memoryHighBytes - effective.high < pageSize)
             #expect(effective.maximum - ordinary.memoryMaxBytes < pageSize)
         }
-        #expect(throws: BurstableResourceLimits.InvalidLimits.pageSize) {
+        #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) {
             try ordinary.kernelMemoryBytes(pageSize: 3072)
         }
-        #expect(throws: BurstableResourceLimits.InvalidLimits.overflow) {
+        #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) {
             try BurstableResourceLimits(
                 guestGrantBytes: .max, backendOverheadBytes: 0, memoryHighPercent: 99, cpuWeight: 100
             )

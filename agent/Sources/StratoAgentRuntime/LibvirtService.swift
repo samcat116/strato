@@ -580,6 +580,7 @@ actor LibvirtService: HypervisorService {
         metadata: InstanceMetadata? = nil,
         vsockCID: UInt32? = nil
     ) async throws {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         try await perform("create", vmId: vmId) {
             logger.info("Creating libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
 
@@ -851,6 +852,7 @@ actor LibvirtService: HypervisorService {
     /// Required boot-time convergence, separate from best-effort widening.
     /// The inactive definition is the source the next QEMU process reads.
     func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         do {
             try await perform("memory-ceiling", vmId: vmId) {
                 let dom = try await domain(vmId)
@@ -1107,6 +1109,7 @@ actor LibvirtService: HypervisorService {
     /// the manifest spec — a define over the VM's existing disks, which is
     /// exactly the right recovery.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         do {
             let dom = try await domain(vmId)
             let status = LibvirtDomain.vmStatus(forRawState: try await state(of: dom, vmId: vmId))
@@ -1776,6 +1779,7 @@ actor LibvirtService: HypervisorService {
     ///   the guest may ignore, and `domainMemoryStats`' `actualBalloon` on the
     ///   next poll is what says whether memory came back.
     func resizeVM(vmId: String, spec: VMSpec) async throws {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         try await perform("resize", vmId: vmId) {
             let dom = try await domain(vmId)
             let info = try await call(
