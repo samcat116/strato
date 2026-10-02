@@ -11,9 +11,12 @@ final class HierarchyPathResolverTests {
     func withApp(_ test: (Application, TestDataBuilder) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app, TestDataBuilder(db: app.db))
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }

@@ -35,9 +35,12 @@ final class ListAuthorizationScalingTests {
     private func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app)
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }
