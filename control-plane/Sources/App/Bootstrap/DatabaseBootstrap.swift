@@ -239,5 +239,8 @@ extension Application {
 
         // STR-324: bound account identities without rewriting historic values.
         migrations.add(AddUserIdentityLengthConstraints())
+        migrations.add(AddSandboxSuspension())
+        migrations.add(AddSandboxIdleActivity())
+        migrations.add(AddSandboxIdleFences())
     }
 }

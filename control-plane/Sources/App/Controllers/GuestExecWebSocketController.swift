@@ -181,7 +181,18 @@ struct GuestExecWebSocketController: RouteCollection {
             // Consume the pending session: it must exist, be unexpired, target
             // this resource, and have been minted for this user.
             let session: GuestExecSessionManager.PendingExecSession
+            var activatedAdmission: UUID?
             do {
+                if resource.kind == .sandbox {
+                    try manager.validatePendingSandboxSession(
+                        sessionId: sessionId, resourceId: resourceId, userId: userId)
+                    guard let leaseID = UUID(uuidString: sessionId)
+                    else {
+                        throw Abort(.conflict, reason: "Command admission is unavailable")
+                    }
+                    try await SandboxActivityService.activate(id: resourceId, sessionID: leaseID, on: req.db)
+                    activatedAdmission = leaseID
+                }
                 session = try manager.attachSession(
                     sessionId: sessionId,
                     resourceKind: resource.kind,
@@ -197,6 +208,12 @@ struct GuestExecWebSocketController: RouteCollection {
                     }
                 }
             } catch {
+                // No start could be dispatched before attach succeeded. This
+                // process can release its own rejected claim; crash/reconnect
+                // without such proof retains unknown activity instead.
+                if let leaseID = activatedAdmission {
+                    try? await SandboxActivityService.end(id: resourceId, sessionID: leaseID, on: req.db)
+                }
                 let rejectionStatus = Self.attachRejectionStatus(for: error)
                 req.logger.warning(
                     "\(resource.logName) exec attach rejected: \(error)",

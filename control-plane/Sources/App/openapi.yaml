@@ -104,6 +104,10 @@ info:
       Returns `200` with a `MessageEnvelope` wrapping a `DesiredStateMessage`
       and an `ETag`, or `304` when the agent's `If-None-Match` still matches
       after the server's hold window. See `docs/architecture/wire-protocol.md`.
+    - `POST /agent/sandboxes/{sandboxID}/idle-admission` — validates an exact,
+      generation-bound automatic-suspension token for the hosting agent (SPIFFE
+      mTLS). Returns `204` only while durable ownership remains valid; it never
+      contacts the guest, which may be paused for checkpoint validation.
     - `POST /agent/vms/{vmID}/jwt-svid` — placement-checked guest JWT-SVID
       issuance for the hosting agent (SPIFFE mTLS).
     - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).
@@ -1123,6 +1127,18 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       summary: Stop a sandbox
+      description: >-
+        Empty requests preserve pause behavior. With suspend=true, reserves
+        internal checkpoint storage and converges to Suspended only after a
+        verified durable checkpoint and VMM destruction. Start readmits compute.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                suspend: { type: boolean, default: false }
       tags: [Sandboxes]
       responses:
         "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
@@ -1154,6 +1170,8 @@ paths:
       operationId: createSandboxExecSession
       summary: Create a sandbox exec session
       description: >-
+        Suspended sandboxes first return 202 with a quota-admitted wake mutation.
+        Retry exec after that generation converges. No session exists during wake.
         Mints a short-lived, single-use session. Attach the authenticated
         WebSocket at `websocketPath` before `expiresAt` to start the command.
       tags: [Sandboxes]
@@ -1164,6 +1182,7 @@ paths:
             schema:
               $ref: "#/components/schemas/GuestExecRequest"
       responses:
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "201":
           description: The pending exec session.
           content:
@@ -10899,6 +10918,8 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
         networkId:
           type: string
           format: uuid
@@ -10984,6 +11005,8 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
     SandboxDetail:
       type: object
       required:
@@ -11045,9 +11068,16 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
         expiresAt:
           type: string
           format: date-time
+          description: Earliest idle deadline. Active or unknown activity prevents deletion beyond this time.
+        lastActiveAt:
+          type: string
+          format: date-time
+          description: Last admitted activity, initially creation; monotonically advances.
         hypervisorId:
           type: string
         restoredFromSnapshotId:
@@ -11089,6 +11119,8 @@ components:
             to judge — not a claim that they are unenforced. False today for
             every networked sandbox: sandbox guest networking is not yet
             enabled, so no OVN port exists to join the groups' port groups.
+        suspension:
+          $ref: "#/components/schemas/SandboxSuspensionEvidence"
         conditions:
           $ref: "#/components/schemas/ResourceConditions"
         createdAt:
@@ -11150,9 +11182,19 @@ components:
         securityGroupLastErrorAt:
           type: string
           format: date-time
+    SandboxSuspensionEvidence:
+      type: object
+      required: [checkpointId, generation, storageBytes, vmmDestroyed, verified]
+      properties:
+        checkpointId: { type: string, format: uuid }
+        generation: { type: integer, format: int64 }
+        storageBytes: { type: integer, format: int64 }
+        vmmDestroyed: { type: boolean }
+        verified: { type: boolean }
+        restoreDurationMilliseconds: { type: integer, format: int64 }
     SandboxStatus:
       type: string
-      enum: [Stopped, Running, Exited, Starting, Stopping, Error, Unknown]
+      enum: [Stopped, Suspended, Running, Exited, Starting, Stopping, Error, Unknown]
 
     CreateSandboxSnapshotRequest:
       type: object
@@ -11162,6 +11204,9 @@ components:
         stop:
           type: boolean
           description: When true, checkpoint and stop; defaults to false.
+        suspend:
+          type: boolean
+          description: Requires stop=true; opt into durable suspension after the user snapshot is recorded.
         ttlSeconds:
           type: integer
           description: >-

@@ -420,6 +420,13 @@ struct DesiredStateAssembler {
                     generation: sandbox.restoreGeneration, snapshotId: snapshotID, artifacts: artifacts)
             }
 
+            let idle = try await SandboxIdleFenceService.state(id: sandboxId, on: db)
+            if idle?.fence != nil, idle?.decodedFence == nil {
+                throw Abort(.conflict, reason: "Automatic suspension provenance is unreadable")
+            }
+            let idleFence = idle?.decodedFence.flatMap { $0.generation == sandbox.generation ? $0 : nil }
+            let idleBusy = try await SandboxActivityService.hasAdmittedActivity(
+                id: sandboxId, at: try await ClusterClock.read(on: db), on: db)
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,
@@ -427,7 +434,13 @@ struct DesiredStateAssembler {
                     desiredStatus: sandbox.desiredStatus,
                     generation: sandbox.generation,
                     registryCredential: registryCredential,
-                    restore: restore
+                    restore: restore,
+                    suspensionStorageBudgetBytes: sandbox.suspensionStorageBytes,
+                    suspensionAfterSnapshotId: sandbox.suspensionAfterSnapshotId,
+                    suspensionCheckpointId: sandbox.suspensionEvidence?.checkpointId,
+                    automaticSuspensionFence: idleFence,
+                    idleControlPlaneRevision: idle?.activity_revision,
+                    idlePendingCommandCount: idleBusy ? 1 : 0
                 ))
         }
 

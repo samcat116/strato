@@ -253,8 +253,20 @@ extension Agent: ReconcileActuator {
                 presence[sandboxId] = .managed(.unknown)
                 continue
             }
-            let status = (try? await runtime.getSandboxStatus(sandboxId: sandboxId)) ?? .unknown
-            presence[sandboxId] = .managed(status)
+            do {
+                let record = try await runtime.suspensionRecord(sandboxId: sandboxId)
+                if record?.requiresOriginalGuestRollback == true {
+                    // The VMM may still run while its workload is frozen. Keep
+                    // Start level-triggered until original-guest rollback has
+                    // durably released the interrupted preparation fence.
+                    presence[sandboxId] = .managed(.starting)
+                } else {
+                    let status = try await runtime.getSandboxStatus(sandboxId: sandboxId)
+                    presence[sandboxId] = .managed(status)
+                }
+            } catch {
+                presence[sandboxId] = .managed(.unknown)
+            }
         }
         for sandboxId in orphanedSandboxes.keys where presence[sandboxId] == nil {
             presence[sandboxId] = .orphaned
@@ -323,6 +335,10 @@ extension Agent: ReconcileActuator {
             }
         } catch SandboxRuntimeError.adoptionTargetGone(let reason) {
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
+            guard entry.sandboxSuspension == nil, item.desiredSandbox?.suspensionCheckpointId == nil else {
+                throw ConvergenceError.sourceNotReady(
+                    "checkpoint-backed guest state cannot be replaced by an OCI create")
+            }
             try await runtime.prepareJailUIDRelease(for: item.id, jailUID: jailUID)
             logger.warning(
                 "Orphaned sandbox has no live process; re-creating it from the desired entry",
@@ -330,9 +346,15 @@ extension Agent: ReconcileActuator {
             try await sandboxReconcileCreate(item)
             return .stopped
         }
-        managedSandboxes[item.id] = entry
+        var adoptedEntry = entry
+        adoptedEntry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+        managedSandboxes[item.id] = adoptedEntry
         orphanedSandboxes.removeValue(forKey: item.id)
-        persistManifest()
+        guard persistManifest() else {
+            managedSandboxes.removeValue(forKey: item.id)
+            orphanedSandboxes[item.id] = entry
+            throw SandboxRuntimeError.snapshotIOFailed("could not persist adopted suspension reservations")
+        }
 
         logger.info(
             "Orphaned sandbox re-adopted and managed again",

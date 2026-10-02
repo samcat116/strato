@@ -287,15 +287,22 @@ struct SandboxController: RouteCollection {
 
         let updateRequest = try req.content.decodeValidated(UpdateSandboxRequest.self)
 
-        // Metadata edits hold the same workload lock as placement so they
-        // cannot overwrite a newly admitted owner, snapshot or commitment.
-        if let ttl = updateRequest.ttlSeconds, ttl <= 0 {
-            throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
-        }
         try await req.db.transaction { db in
-            guard try await sandbox.lockAndRefresh(on: db) else { throw Abort(.notFound) }
-            if let name = updateRequest.name { sandbox.name = name }
-            if let ttl = updateRequest.ttlSeconds { sandbox.ttlSeconds = ttl }
+            guard try await sandbox.lockAndRefresh(on: db), sandbox.desiredStatus != .absent else {
+                throw Abort(.conflict, reason: "Sandbox is being deleted")
+            }
+            if let name = updateRequest.name {
+                sandbox.name = name
+            }
+            if let ttl = updateRequest.ttlSeconds {
+                guard ttl > 0 else {
+                    throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
+                }
+                sandbox.ttlSeconds = ttl
+            }
+
+            try await SandboxIdleFenceService.cancelForUserActivity(sandbox, on: db)
+            SandboxActivityService.touch(sandbox, at: try await ClusterClock.read(on: db))
             try await sandbox.save(on: db)
         }
         return try await Self.detailResponse(for: sandbox, on: req)
@@ -316,7 +323,8 @@ struct SandboxController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .boot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
+            try await SandboxSuspensionService.admitWake(sandbox, on: db)
             sandbox.setDesiredStatus(.running)
         }
 
@@ -332,12 +340,21 @@ struct SandboxController: RouteCollection {
                 .badRequest, reason: "Sandbox cannot be stopped in current state: \(sandbox.status.rawValue)")
         }
 
+        struct StopRequest: Content { let suspend: Bool? }
+        let suspend =
+            (req.body.data?.readableBytes ?? 0) == 0 ? false : try req.content.decode(StopRequest.self).suspend ?? false
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
             .shutdown, on: sandbox, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
-            sandbox.setDesiredStatus(.stopped)
+        ) { @Sendable db in
+            sandbox.suspensionAfterSnapshotId = nil
+            if suspend {
+                try await SandboxSuspensionService.admitSuspension(sandbox, on: db)
+                sandbox.setDesiredStatus(.suspended)
+            } else {
+                sandbox.setDesiredStatus(.stopped)
+            }
         }
 
         return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
@@ -366,7 +383,8 @@ struct SandboxController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .reboot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
+            try await SandboxSuspensionService.admitWake(sandbox, on: db)
             sandbox.setDesiredStatus(.running)
         }
 
@@ -392,6 +410,18 @@ struct SandboxController: RouteCollection {
         let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:exec")
         let sandboxID = try sandbox.requireID()
 
+        if sandbox.status == .suspended || sandbox.desiredStatus == .suspended {
+            let accepted = try await req.resourceMutation.accept(
+                .boot, on: sandbox, actor: .user(try user.requireID()), dispatch: .stateSync,
+                on: req.db, app: req.application
+            ) { @Sendable db in
+                try await SandboxSuspensionService.admitWake(sandbox, on: db)
+                sandbox.setDesiredStatus(.running)
+            }
+            // No session is minted until a healthy restored guest is observed.
+            // The existing accepted-mutation contract provides a durable retry point.
+            return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
+        }
         guard sandbox.isRunning else {
             throw Abort(
                 .badRequest,
@@ -419,7 +449,11 @@ struct SandboxController: RouteCollection {
             )
         }
 
+        let sessionID = UUID()
+        let admittedAt = try await SandboxActivityService.admitPending(
+            id: sandboxID, sessionID: sessionID, agentID: agentId, agentKey: agent.identity.key, on: req.db)
         let session = req.guestExecSessionManager.createPendingSession(
+            sessionId: sessionID.uuidString,
             resourceKind: .sandbox,
             resourceId: sandboxID.uuidString,
             agentKey: agent.identity.key,
@@ -430,7 +464,8 @@ struct SandboxController: RouteCollection {
             tty: execRequest.tty ?? false,
             rows: execRequest.rows,
             cols: execRequest.cols,
-            outputMode: execRequest.outputMode ?? .raw
+            outputMode: execRequest.outputMode ?? .raw,
+            now: admittedAt
         )
 
         let response = Response(status: .created)

@@ -227,10 +227,16 @@ struct ResourceMutation {
             // lock has completed. A lock wait must not consume the agent's
             // opportunity to realize the mutation after this transaction.
             let acceptedAt = try await ClusterClock.read(on: db)
+            if actor.type != .system, let sandbox = resource as? Sandbox {
+                SandboxActivityService.touch(sandbox, at: acceptedAt)
+            }
             resource.extendConvergenceDeadline(
                 by: R.operationResourceKind.completionBudgetSeconds(for: kind),
                 from: acceptedAt)
             try await resource.save(on: db)
+            if actor.type == .system, let sandbox = resource as? Sandbox {
+                try await SandboxIdleFenceService.finalizePendingAdmission(sandbox, on: db)
+            }
             if kind == .delete {
                 try await ResourceFinalizerService.stampOrphanReapAge(for: resource, on: db)
             }

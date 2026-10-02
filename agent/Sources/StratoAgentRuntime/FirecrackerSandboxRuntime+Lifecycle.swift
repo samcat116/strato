@@ -36,6 +36,10 @@ extension FirecrackerSandboxRuntime {
             return
         }
 
+        guard try loadSuspensionRecord(sandboxId: sandboxId) == nil else {
+            throw SandboxRuntimeError.notSnapshottable("durable guest state requires adoption, not cold recreation")
+        }
+
         guard !requiresJailUID || jailUIDs.uid(for: sandboxId) != nil else {
             throw SandboxRuntimeError.jailIdentityUnavailable(
                 "sandbox \(sandboxId) has no exclusive allocation; persist a fresh jailUID before creating it")
@@ -856,12 +860,28 @@ extension FirecrackerSandboxRuntime {
     /// mismatch is terminal rather than another warm-launch attempt — a
     /// structural bound on the demote/boot recursion.
     func bootSandbox(sandboxId: String, allowWarmLaunch: Bool) async throws {
+        invalidateIdleActivity(sandboxId: sandboxId)
+        guard !suspending.contains(sandboxId) else {
+            throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
+        if let record = try loadSuspensionRecord(sandboxId: sandboxId),
+            record.guestFence?.blocksWorkloadAdmission == true,
+            record.phase == .capturing || record.phase == .resumed
+        {
+            try await recoverAutomaticSuspensionRollback(record)
+        }
+        if let record = try loadSuspensionRecord(sandboxId: sandboxId),
+            [.suspended, .restoring, .resuming, .destroying, .verified].contains(record.phase)
+        {
+            try await resumeSuspendedSandbox(sandboxId: sandboxId)
+            return
+        }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         try BurstableRuntimeGate.requireSupport(
             resourceClass: managed.spec.resourceClass, enforcement: burstableEnforcement)
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         try await validateResourceLimits(sandboxId: sandboxId, spec: managed.spec)
@@ -973,6 +993,9 @@ extension FirecrackerSandboxRuntime {
                 "bootMillis": .stringConvertible(Int(Date().timeIntervalSince(bootStarted) * 1000)),
             ])
 
+        if info.state != .running || needsWarmLaunch || idleResidentSince[sandboxId] == nil {
+            recordIdleResidency(sandboxId: sandboxId)
+        }
         // The guest is confirmed up: ship its workload output from here on
         // (resuming from the last seq this host saw, so a pause/resume cycle
         // doesn't drop or duplicate lines).
@@ -1113,10 +1136,11 @@ extension FirecrackerSandboxRuntime {
     }
 
     func shutdownSandbox(sandboxId: String) async throws {
+        invalidateIdleActivity(sandboxId: sandboxId)
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         // A paused guest can't serve exec sessions or the log follow stream:
@@ -1147,7 +1171,7 @@ extension FirecrackerSandboxRuntime {
         // leave the restore's freshly spawned process untracked. Refuse as
         // transient; the reconciler re-drives the delete once the
         // checkpoint/restore finishes.
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         logger.info("Deleting sandbox", metadata: ["strato.sandbox.id": .string(sandboxId)])
@@ -1160,6 +1184,15 @@ extension FirecrackerSandboxRuntime {
         // The caller may release the durable UID immediately after this
         // returns, so teardown is deliberately not best effort.
         try await prepareJailUIDRelease(for: sandboxId, jailUID: jailUID)
+        if let id = UUID(uuidString: sandboxId) {
+            try suspensionStore.remove(sandboxId: id)
+            suspensionRecords.removeValue(forKey: sandboxId)
+            suspensionGuards.removeValue(forKey: sandboxId)
+            idleActivityObservations.removeValue(forKey: sandboxId)
+            idleSuspensionAdmissions.removeValue(forKey: sandboxId)
+            idleLastActivity.removeValue(forKey: sandboxId)
+            idleResidentSince.removeValue(forKey: sandboxId)
+        }
     }
 
     func adoptSandbox(sandboxId: String, spec: SandboxSpec) async throws -> SandboxStatus {
@@ -1227,6 +1260,9 @@ extension FirecrackerSandboxRuntime {
             candidates.append((nil, nil, flatSocketPath))
         }
         guard !candidates.isEmpty else {
+            if try loadSuspensionRecord(sandboxId: sandboxId) != nil {
+                return try await recoverSuspendedContext(sandboxId: sandboxId, jailUID: jailUID)
+            }
             try await confirmNoSandboxProcessBeforeReportingGone(
                 sandboxId, jailUID: jailUID)
             throw SandboxRuntimeError.adoptionTargetGone(
@@ -1260,6 +1296,9 @@ extension FirecrackerSandboxRuntime {
             }
         }
         guard let (manager, info, jailPlan) = adoption else {
+            if try loadSuspensionRecord(sandboxId: sandboxId) != nil {
+                return try await recoverSuspendedContext(sandboxId: sandboxId, jailUID: jailUID)
+            }
             // An absent or unconnectable socket is not process-death proof.
             try await confirmNoSandboxProcessBeforeReportingGone(
                 sandboxId, jailUID: jailUID)
@@ -1318,6 +1357,12 @@ extension FirecrackerSandboxRuntime {
     }
 
     func getSandboxStatus(sandboxId: String) async throws -> SandboxStatus {
+        if try loadSuspensionRecord(sandboxId: sandboxId)?.requiresOriginalGuestRollback == true {
+            return .starting
+        }
+        if try loadSuspensionRecord(sandboxId: sandboxId)?.phase == .suspended {
+            return .suspended
+        }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }

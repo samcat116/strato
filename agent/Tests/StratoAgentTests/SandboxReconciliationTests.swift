@@ -289,6 +289,9 @@ struct SandboxReconciliationTests {
         #expect(Reconciler.sandboxStatusSteps(desired: .stopped, observed: SandboxStatus.running) == [.shutdown])
         #expect(Reconciler.sandboxStatusSteps(desired: .stopped, observed: SandboxStatus.stopped) == [])
         #expect(Reconciler.sandboxStatusSteps(desired: .stopped, observed: SandboxStatus.exited) == [])
+        #expect(Reconciler.sandboxStatusSteps(desired: .suspended, observed: SandboxStatus.stopped) == [.shutdown])
+        #expect(Reconciler.sandboxStatusSteps(desired: .suspended, observed: SandboxStatus.suspended) == [])
+        #expect(Reconciler.sandboxStatusSteps(desired: .running, observed: SandboxStatus.suspended) == [.boot])
         #expect(Reconciler.sandboxStatusSteps(desired: .absent, observed: SandboxStatus.running) == [.delete])
     }
 
@@ -440,4 +443,23 @@ struct SandboxReconciliationTests {
         let generation = await reconciler.observedGeneration(for: sandboxId.uuidString, kind: .sandbox)
         #expect(generation == 1)
     }
+    @Test("A restore permit wait recovers at the same generation without terminal failure or backoff")
+    func restorePermitWaitPreservesGeneration() async {
+        let id = UUID()
+        let actuator = MockActuator(sandboxPresence: [id.uuidString: .managed(.suspended)])
+        await actuator.setFailure(SandboxSuspensionGuard.GateError.busy)
+        let reconciler = makeReconciler(actuator)
+        let message = Self.sync(sandboxes: [Self.desiredSandbox(id, status: .running, generation: 4)])
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(1)
+        #expect(await reconciler.lastError(for: id.uuidString, kind: .sandbox) == nil)
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .sandbox) == 0)
+        // No clock advance or replacement intent is needed when a permit frees.
+        await actuator.setFailure(nil)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(2)
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .sandbox) == 4)
+        #expect(await actuator.sandboxPresence[id.uuidString] == .managed(.running))
+    }
+
 }

@@ -115,6 +115,14 @@ extension Agent {
                 // guest-facing listeners below are driven from the same list,
                 // after the reconciler has run.
                 let derivations = DesiredStateDerivations(message: message)
+                // Invalidate a stale suspension admission before network or
+                // reconciliation work can suspend this message's caller.
+                for desired in message.sandboxes {
+                    await sandboxRuntime?.noteSandboxIdleControlPlane(desired)
+                    await sandboxRuntime?.noteSandboxIntent(
+                        sandboxId: desired.sandboxId.uuidString, generation: desired.generation,
+                        desiredRunning: desired.desiredStatus == .running)
+                }
                 do {
                     // DNS zones (STR-39): nil means this agent is not the
                     // topology authority — leave every managed `DNS` row

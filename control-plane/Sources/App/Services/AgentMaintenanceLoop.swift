@@ -111,6 +111,8 @@ actor AgentMaintenanceLoop {
         try checkTickPreconditions()
         await sweepOrphanedTerminatingResources(at: instant)
         try checkTickPreconditions()
+        await sweepIdleSandboxes(at: instant)
+        try checkTickPreconditions()
         await sweepExpiredSandboxes(at: instant)
         try checkTickPreconditions()
         await SnapshotRetentionSweep.run(app: app, at: instant)

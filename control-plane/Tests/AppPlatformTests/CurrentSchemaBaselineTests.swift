@@ -21,7 +21,7 @@ struct CurrentSchemaBaselineTests {
     // The combined catalog was measured from PostgreSQL, not inferred from migration text.
     // Historical catalogs and the frozen baseline remain
     // independently asserted below.
-    private static let expectedCurrentCatalogMD5 = "163841899e9673b6aca5ceb50ce96b5a"
+    private static let expectedCurrentCatalogMD5 = "4bd921c32dce26b3108987ba0a16649e"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -74,17 +74,50 @@ struct CurrentSchemaBaselineTests {
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Observed current catalog: \(upgradedMD5)")
-            #expect(upgradedCounts.tables == 83)
-            #expect(upgradedCounts.columns == 1070)
-            #expect(upgradedCounts.constraints == 384)
-            #expect(upgradedCounts.indexes == 253)
+            #expect(upgradedCounts.tables == 85)
+            #expect(upgradedCounts.columns == 1090)
+            #expect(upgradedCounts.constraints == 391)
+            #expect(upgradedCounts.indexes == 256)
             #expect(upgradedCounts.enums == baselineCounts.enums)
-            #expect(upgradedCounts.triggers == baselineCounts.triggers)
-            #expect(upgradedCounts.functions == baselineCounts.functions)
+            #expect(upgradedCounts.triggers == baselineCounts.triggers + 3)
+            #expect(upgradedCounts.functions == baselineCounts.functions + 2)
             let logs = try await MigrationLog.query(on: app.db).sort(\.$batch).all()
             #expect(logs.first?.name == CurrentSchemaBaseline().name)
             #expect(logs.count > 1, "the equivalence check must exercise the forward chain")
 
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("Suspension and idle migrations preserve the reviewed current catalog round trip")
+    func suspensionAndIdleCatalogRoundTrip() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            app.migrations.add(CurrentSchemaBaseline())
+            try await app.autoMigrate()
+            app.registerForwardMigrations()
+            try await app.autoMigrate()
+            let full = try await catalogMD5(on: app.db)
+            let fences = AddSandboxIdleFences()
+            let idle = AddSandboxIdleActivity()
+            let suspension = AddSandboxSuspension()
+            try await fences.revert(on: app.db)
+            let preFence = try await catalogMD5(on: app.db)
+            #expect(preFence == "d1918b26c924f4de5c0dd1296f3b1c48", "Observed pre-fence catalog: \(preFence)")
+            try await idle.revert(on: app.db)
+            let preIdle = try await catalogMD5(on: app.db)
+            #expect(preIdle == "ec7d172d5d95506a75ac34ed58ca8d92", "Observed pre-idle catalog: \(preIdle)")
+            try await suspension.revert(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == "163841899e9673b6aca5ceb50ce96b5a")
+            try await suspension.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == preIdle)
+            try await idle.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == preFence)
+            try await fences.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == full)
         } catch {
             try? await app.shutdownForTesting()
             throw error

@@ -387,6 +387,8 @@ struct CreateSandboxSnapshotRequest: Content, ValidatedRequestBody {
     /// `true` checkpoints-and-stops: the sandbox converges to `stopped` after
     /// the snapshot instead of resuming. Defaults to `false` (resume).
     let stop: Bool?
+    /// Opt into durable VMM suspension after the user snapshot is captured.
+    var suspend: Bool? = nil
     /// How long to keep the snapshot, in seconds. Omitted uses the fleet
     /// default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it
     /// until someone deletes it, overriding that default.

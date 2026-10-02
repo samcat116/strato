@@ -22,6 +22,9 @@ entrypoint/cmd/env/workdir.
 
 ## Lifecycle and data model
 
+STR-312 suspension work is tracked in [the suspension implementation boundary](./sandbox-suspension.md).
+The local checkpoint integrity foundation does not yet replace paused stop semantics.
+
 ### Workload shape
 
 A sandbox is described by `SandboxSpec`
@@ -1073,7 +1076,7 @@ snapshots do, from the shared storage pool (see
 **TTL and auto-expiry** (#424): sandboxes are ephemeral, and
 `sweepExpiredSandboxes` (on the `AgentService` heartbeat tick, a
 cluster-singleton under the `sandbox_expiry` sweep lock) is what makes that
-real. It deletes on two clocks: **TTL** — `ttl_seconds` past `created_at`,
+real. It deletes on two clocks: **idle TTL** — `ttl_seconds` past durable `last_active_at` (initially creation),
 surfaced to clients as the derived `expiresAt` and counted down on the
 detail page — and **retention** — an exited or errored sandbox keeps its
 terminal record (status and exit code) for `SANDBOX_RETENTION_HOURS`
@@ -1088,37 +1091,121 @@ identically. Level-triggered like every sweep: marking `.absent` is idempotent,
 so a sandbox the sweep cannot finish this tick is simply re-evaluated next
 tick.
 
-## History
+### Idle reclamation policy (STR-313, integration prerequisite STR-312)
 
-Sandboxes were designed and built as a phased roadmap under umbrella issue
-#410; older issues and PRs still speak in phase numbers, so here is the map:
+`SandboxIdlePolicy` supplies disabled-default eligibility. Wire 69 distinguishes
+explicit suspension from automatic intent and relays ordered, identity-bound
+activity reports. The CP's `SANDBOX_IDLE_SUSPEND_ENABLED` switch defaults false;
+the root agent must independently enable its policy. Nomination takes the sandbox
+row lock, admits checkpoint quota, records system intent through `ResourceMutation`
+and issues a durable, expiring token bound to generation, activity revision,
+placement and the current PostgreSQL inventory session. User admission invalidates
+that token; metadata, log and snapshot activity cancels automatic intent through
+quota-admitted wake. Explicit stop and deletion keep their existing meanings.
 
-- **Phase 1 — model to runtime**: the wire protocol (v5, #411), the
-  generalized operation machinery (#412), the control-plane model/API (#413),
-  registry pull secrets + tag→digest resolution (#414), scheduler gating +
-  quota accounting (#415), the NIC/address model + IPAM integration (#416),
-  the workload-kind generalization of the reconciler and manifest (#417), the
-  OCI client + rootfs materialization (#418), the guest base image (#419),
-  vsock support in SwiftFirecracker (#420), the `FirecrackerSandboxRuntime`
-  driver (#421), and the frontend UI (#422).
-- **Phase 2 — exec/attach, logs, expiry**: exec/attach + workload logs and
-  guest control protocol v2 (#423, wire v8); TTL / auto-expiry (#424).
-- **Phase 3 — jailer hardening** (#425): the chroot/uid/netns/cgroup barrier
-  around untrusted VMMs.
-- **Phase 4 — snapshots**: checkpoint/restore primitives and warm start
-  (#426, warm start folded in from #425's plan; wire v9), fork into a new
-  sandbox (#427, wire v12), and export + cross-agent mobility with CPU
-  templates (#428, wire v14).
+STR-312 owns the entire journaled lifecycle. The STR-313 v5 adapter implements
+prepare/query/release and CP-only admission validation for
+`Agent.sandboxReconcileSuspend(_:automatic:fence:)`. Guest prepare atomically closes
+command admission and freezes the workload cgroup while PID 1 remains responsive.
+Operation IDs make lost replies recoverable; release-before-prepare creates a
+cancellation tombstone. Unknown thaw keeps admission closed. STR-312 persists
+intent before RPCs, validates capture, rechecks CP ownership before destruction,
+and confirms release after rollback or identity-verified restore before exec.
 
-Guest networking was deliberately scoped out — #524 kept the NIC off the wire
-spec — and re-planned as STR-99..104: the measured move-a-TAP failure
-(STR-99), the netns attach path (STR-100), the in-guest network config
-(STR-101, config-drive schema v2), security-group membership assembly
-(STR-102), the per-agent capability gate that put the NIC on the wire
-(STR-103), and networked-snapshot remapping (STR-104, guest control protocol
-v4) are all landed — see [Guest networking](#guest-networking).
+Published/default guest artifacts and bootstrap remain control protocol v4. An
+explicit `idle-policy-v5` Cargo build advertises v5 only if its cgroup monitor is
+available; peers are negotiated from the actual handshake. Initial positive
+eligibility is restricted to no-NIC guests whose non-root workload processes are
+fully contained in the monitored cgroup. CPU and I/O counters, runnable tasks,
+sockets and active/anonymous execs count as activity. Networked, root/privileged,
+unaccounted, unreadable and incomplete workloads remain unknown. No guest artifact
+or deployment policy is published by this change.
 
-### Open threads
+Host sampling uses a monotonic idle/residency window; a guest cannot backdate the
+first host observation. Replay, restart, reconnect, source changes and unknown
+samples reset eligibility. Freshness is established by CP receipt time, not guest
+wall clocks. Reports only nominate: the atomic guest gate, durable CP token and
+STR-312 host generation/activity guard authorize destruction.
+
+Idle TTL advances on API mutations, user log queries, exec admission and
+owning-agent terminal exec evidence. `last_active_at` uses PostgreSQL time and
+never moves backward. Pending exec admissions are persisted before session
+minting and expire after 60 seconds; attachment makes the admission indefinite
+until an authenticated owning-agent terminal event releases it. Interrupted or
+orphaned admissions remain unknown across control-plane restart, not silently
+idle. A v5 guest-started admission can be reconciled only by two ordered
+current-owner proofs of no guest/host sessions or pending handshakes, acknowledging
+the CP revision that recorded the start. Reports collected before dispatch cannot
+clear it. Pending/unacknowledged admissions and CP log queries are excluded from
+that reconciliation. Repeated terminal delivery does not extend TTL. Internal log followers and
+ordinary detail polling do not count as user activity. User log queries hold a
+durable active lease until completion; an interrupted query remains unknown across
+replica restart rather than permitting cleanup midway through the request.
+
+The expiry sweep locks and refreshes each candidate before rechecking expiry,
+admissions and snapshot work, atomically with desired-absent intent and its system
+attribution. Running/unmeasured guests refuse idle deletion. Stale candidates
+cannot delete a sandbox touched by an intervening mutation. Terminal retention
+keeps its independent status-change clock. The API exposes `lastActiveAt` and
+`expiresAt`; the latter is an earliest idle deadline, not a promise of deletion
+while activity is active or unknown.
+
+Agent TOML settings are `sandbox_idle_suspend_enabled` (default false),
+`sandbox_idle_seconds` (positive, default 300),
+`sandbox_minimum_residency_seconds` (positive, default 60), and
+`sandbox_idle_excluded_sandbox_ids` (UUID array). Invalid exclusions refuse
+configuration. `sandbox_suspension_restore_timeout_seconds` (5...1200, default
+1200) reaches the actual bounded STR-312 restore operation. Enabling the local
+idle setting alone cannot bypass the CP switch, negotiated v5 guest or missing evidence.
+
+Eligibility requires fresh, authoritative evidence of zero active sessions and
+pending commands, no snapshot/restore work, full-snapshot backend support, and
+known guest/network activity. Missing counters, unmeasured guest/network activity,
+stale evidence, and invalid or future timestamps deny eligibility. Merely seeing
+no API calls or no telemetry is not proof that a guest is idle. Minimum residency
+starts again after restoration; it does not reset the independent idle TTL clock.
+
+A lifecycle caller must recheck immediately before stopping the VMM, under the
+same guard that admits guest commands. The policy compares sandbox identity,
+agent incarnation, activity generation, last activity, and residency against the
+checkpoint claim and checks current eligibility before guest prepare. After a proved guest freeze,
+CP token ownership and unchanged host activity/generation authorize the destruction
+commit; elapsed snapshot time is not workload activity. The evaluator is not a
+lock: the lifecycle must make recheck and stop atomic with respect to admission,
+or cancel and safely restore when admission wins. Restart/reconnect requires new
+authoritative evidence; a persisted timestamp alone cannot authorize suspension.
+
+The runtime combines pending handshakes registered before their first await,
+established exec sessions, explicit user-stream observations, and guest/network
+coverage. Internal log followers do not enter this evidence. An absent user-stream
+count, queued control-plane command count, or guest/network proof is unknown,
+never zero. Runtime handshakes alone do not prove that no command is waiting on
+the control plane. Exec start and closure advance
+local activity; the clock cannot move backward with an older observation. Snapshot,
+restore, boot, and stop requests invalidate idle proofs. Reconnect clears proofs
+and prepared claims, and a new runtime uses a new activity incarnation. Published
+v4 guests remain ineligible; v5 no-NIC monitor coverage is negotiated explicitly.
+
+`prepareIdleSuspension(sandboxId:policy:)` only prepares eligibility: it never
+calls the runtime's suspend driver. Automatic suspension requires that claim at
+entry and rechecks it immediately before STR-312's synchronous destruction commit.
+A changed activity epoch, fresh user stream, unknown coverage, concurrent snapshot,
+expired pre-prepare observation, or changed residency cancels the automatic capture through
+STR-312's original-guest recovery path. Repeated quiet observations can refresh
+freshness without invalidating the activity epoch. Unsupported runtimes return an
+explicit unsupported-backend verdict through the protocol default.
+
+The combined STR-312 lifecycle supplies desired/observed suspension, checkpoint
+storage admission, retained storage/compute accounting, generation-aware restore,
+and explicit opt-in stop/exec wake. STR-313 adds the wire-69 producer/consumer,
+automatic provenance and durable admission fencing. Terminal retention keeps its
+independent clock; automatic suspension does not itself reset idle TTL. A running
+TTL candidate must first reach authoritative quiescence through this lifecycle;
+unsupported or unknown running guests defer cleanup. Superseded idle checkpoint
+cleanup belongs to STR-312 and must never delete user-created snapshots.
+Real KVM RAM reclamation, full-snapshot continuity, failover/load and latency
+acceptance still require VM validation; pure policy and transport tests do not
+establish those properties.
 
 - The warm-vs-cold boot-latency measurement on strato-dev (the
   `bootPath=warm|cold` / `bootMillis` boot logs are the measurement hook).

@@ -17,8 +17,8 @@ struct WireProtocolTests {
 
     @Test("the current wire contract is exact")
     func currentContractVersion() {
-        // Compute contracts advance the wire; GuestConfig realization remains staged.
-        #expect(WireProtocol.currentVersion == 67)
+        #expect(WireProtocol.currentVersion == 69)
+
     }
     @Test("the sandbox guest control contract is exact")
     func sandboxGuestControlContract() {

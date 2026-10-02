@@ -167,8 +167,7 @@ enum SandboxCreationWorkflow {
                     reason: "Snapshot was not captured in a fork-compatible jailed layout")
             }
             guard
-                snapshot.guestControlProtocolVersion
-                    == SandboxGuestControlProtocol.currentVersion
+                snapshot.guestControlProtocolVersion.map(SandboxGuestControlProtocol.supports) == true
             else {
                 throw Abort(
                     .conflict,

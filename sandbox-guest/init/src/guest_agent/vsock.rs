@@ -152,6 +152,7 @@ fn handle_connection(connection: OwnedFd, identity: &GuestIdentity) -> std::io::
             serve_control(request, reader, writer, identity)
         }
         Ok(Request::Exec {
+            session_id: _,
             argv,
             env,
             cwd,
@@ -367,6 +368,7 @@ mod tests {
         let (mut client, handle) = connection();
         let mut reader = BufReader::new(client.try_clone().expect("clone client"));
         let request = Request::Exec {
+            session_id: None,
             argv: vec![
                 "/bin/sh".into(),
                 "-c".into(),
@@ -427,6 +429,7 @@ mod tests {
         let (mut client, handle) = connection();
         let mut reader = BufReader::new(client.try_clone().expect("clone client"));
         let request = Request::Exec {
+            session_id: None,
             argv: vec![
                 "/bin/sh".into(),
                 "-c".into(),

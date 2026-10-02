@@ -147,6 +147,18 @@ final class GuestExecSessionManager: @unchecked Sendable {
         }
     }
 
+    /// Validate ownership before durable admission without consuming the
+    /// process-local session. attachSession repeats this check after the await.
+    func validatePendingSandboxSession(sessionId: String, resourceId: UUID, userId: String, now: Date = Date()) throws {
+        try lock.withLock {
+            guard let pending = pendingSessions[sessionId], pending.expiresAt > now,
+                pending.resourceKind == .sandbox,
+                UUID(uuidString: pending.resourceId) == resourceId,
+                UUID(uuidString: pending.userId) == UUID(uuidString: userId)
+            else { throw GuestExecSessionError.sessionMismatch(sessionId) }
+        }
+    }
+
     // MARK: - Attach
 
     /// Consume a pending session and bind the browser WebSocket to it.
@@ -437,6 +449,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         fromAgentKey agentKey: String,
         timestamp: Date? = nil
     ) async {
+        if let id = UUID(uuidString: sessionId) {
+            do {
+                try await SandboxActivityService.startedFromAgent(sessionID: id, agentKey: agentKey, on: app.db)
+            } catch { app.logger.warning("Could not persist sandbox exec start evidence: \(error)") }
+        }
         let transition = claimAgentConfirmedStart(
             sessionId: sessionId, fromAgentKey: agentKey, timestamp: timestamp)
         switch transition {
@@ -531,6 +548,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         exitCode: Int,
         timestamp: Date? = nil
     ) async {
+        await releaseSandboxActivity(sessionId: sessionId, agentKey: agentKey)
         switch removeSession(
             sessionId: sessionId, ownedBy: agentKey, timestamp: timestamp)
         {
@@ -565,6 +583,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         reason: String?,
         timestamp: Date? = nil
     ) async {
+        await releaseSandboxActivity(sessionId: sessionId, agentKey: agentKey)
         switch removeSession(
             sessionId: sessionId, ownedBy: agentKey, timestamp: timestamp)
         {
@@ -696,6 +715,16 @@ final class GuestExecSessionManager: @unchecked Sendable {
                     session.resourceId),
             ])
         return RemovedExecSession(session: session, websocket: websocket, endedAt: endedAt)
+    }
+
+    private func releaseSandboxActivity(sessionId: String, agentKey: String) async {
+        guard let id = UUID(uuidString: sessionId), getSession(sessionId: sessionId)?.resourceKind != .virtualMachine
+        else { return }
+        do {
+            try await SandboxActivityService.endFromAgent(sessionID: id, agentKey: agentKey, on: app.db)
+        } catch {
+            app.logger.warning("Could not release sandbox activity admission: \(error)")
+        }
     }
 
     private func recordEnded(

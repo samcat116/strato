@@ -16,6 +16,13 @@ extension FirecrackerSandboxRuntime {
     func mappedStatus(
         instance: InstanceState, udsPath: String, sandboxId: String
     ) async -> SandboxStatus {
+        do {
+            if try loadSuspensionRecord(sandboxId: sandboxId)?.requiresOriginalGuestRollback == true {
+                return .starting
+            }
+        } catch {
+            return .unknown
+        }
         switch instance {
         case .notStarted:
             return .stopped

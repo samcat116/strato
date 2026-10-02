@@ -186,6 +186,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // client certificate in-handler, then performs its own placement and
         // audience-policy checks. A user session is neither accepted nor a
         // substitute for that SVID-mTLS identity.
+        let isAgentIdleAdmission = path.hasPrefix("/agent/sandboxes/") && path.hasSuffix("/idle-admission")
         let isAgentGuestIdentityMint =
             path.hasPrefix("/agent/vms/") && path.hasSuffix("/jwt-svid")
         // Snapshot artifact transfer (issue #428): agents stream exported
@@ -209,7 +210,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             path.hasPrefix(pair.prefix) && path.contains(pair.infix)
         }
         if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) })
-            || isAgentDownload || isAgentGuestIdentityMint || isAgentSnapshotArtifact
+            || isAgentDownload || isAgentGuestIdentityMint || isAgentSnapshotArtifact || isAgentIdleAdmission
             || isPublicPrefixInfix
         {
             return .isPublic

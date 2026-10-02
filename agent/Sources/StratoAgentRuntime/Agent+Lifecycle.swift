@@ -374,7 +374,7 @@ extension Agent {
                         try await snapshotDownloader.uploadFile(url: url, fromFile: source)
                     }
                 )
-                sandboxRuntime = FirecrackerSandboxRuntime(
+                sandboxRuntime = try FirecrackerSandboxRuntime(
                     logger: logger,
                     client: firecrackerClient,
                     imageService: SandboxImageService(
@@ -393,7 +393,21 @@ extension Agent {
                     jailerBlockedReason: sandboxJailCreationBlockedReason,
                     warmStartEnabled: configuration.sandboxWarmStart,
                     warmCacheBudgetBytes: configuration.sandboxWarmCacheMaxSizeBytes,
-                    snapshotTransfer: snapshotTransfer
+                    snapshotTransfer: snapshotTransfer,
+                    suspensionRestoreTimeoutSeconds: configuration.sandboxSuspensionRestoreTimeoutSeconds,
+                    idlePolicy: configuration.sandboxIdlePolicy,
+                    automaticSuspensionTransport: SandboxIdleFenceTransport(
+                        minimumQuietMilliseconds: UInt64(
+                            min(configuration.sandboxIdlePolicy.idleSeconds, 86_400) * 1000),
+                        exchange: { [weak self] context, request in
+                            guard let self else { throw SandboxSuspensionGuard.GateError.stale }
+                            return try await self.exchangeSandboxIdleFence(context, request: request)
+                        },
+                        validate: { context in
+                            try await snapshotDownloader.validateSandboxIdleAdmission(
+                                controlPlaneBaseURL: self.controlPlaneHTTPBase,
+                                sandboxId: context.sandboxId, fence: context.fence.request)
+                        })
                 )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")

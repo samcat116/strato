@@ -292,6 +292,8 @@ private func launchAgent(options: AgentOptions) async throws {
         sandboxJailerUidBase: finalSandboxJailerUidBase,
         legacySandboxJailerUidBase: legacySandboxJailerUidBase,
         sandboxWarmStart: config.sandboxWarmStart ?? true,
+        sandboxSuspensionRestoreTimeoutSeconds: config.sandboxSuspensionRestoreTimeoutSeconds ?? 1200,
+        sandboxIdlePolicy: config.resolvedSandboxIdlePolicy,
         sandboxWarmCacheMaxSizeBytes: config.sandboxWarmCacheMaxSizeBytes,
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,

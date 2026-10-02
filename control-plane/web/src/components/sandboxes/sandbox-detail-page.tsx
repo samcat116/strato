@@ -85,7 +85,7 @@ export function SandboxDetailPage({ id }: { id: string }) {
   const entrypoint = sandbox.entrypoint?.join(" ");
   const cmd = sandbox.cmd?.join(" ");
   const envEntries = Object.entries(sandbox.env ?? {});
-  const isRunning = sandbox.status === "Running";
+  const isRunning = sandbox.status === "Running" || sandbox.status === "Suspended";
 
   return (
     <DetailPageShell>

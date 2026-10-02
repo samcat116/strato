@@ -470,6 +470,32 @@ public enum VMHostReservation {
 /// conversion beside the VM version makes create and boot admission use the
 /// same reservation semantics as heartbeat accounting.
 public enum SandboxHostReservation {
+    public static func forManifestEntry(_ entry: VMManifestEntry) -> HostReservation {
+        let base =
+            entry.sandboxSpec.map(forSpec)
+            ?? HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes)
+        guard let record = entry.sandboxSuspension else { return base }
+        var disk = max(record.checkpointBytes, record.storageReservationBytes ?? 0)
+        if [.restoring, .resuming, .resumed].contains(record.phase) {
+            disk = max(disk, restorationDiskBytes(record))
+        }
+        if record.phase == .suspended, let checkpoint = record.checkpoint, checkpoint.hasValidShape,
+            checkpoint.sandboxId == record.sandboxId.uuidString, checkpoint.snapshotId == record.snapshotId.uuidString,
+            entry.kind == .sandbox, entry.jailerUsed == true, entry.jailUID == record.jailUID,
+            entry.sandboxSpec?.memoryBytes == record.spec.memoryBytes,
+            entry.sandboxSpec?.cpus == record.spec.cpus
+        {
+            return HostReservation(diskBytes: disk)
+        }
+        return base.addingSaturating(HostReservation(diskBytes: disk))
+    }
+
+    /// File restore can need both the retained archive and a fresh jail copy.
+    public static func restorationDiskBytes(_ record: SandboxSuspensionRecord) -> Int64 {
+        let archive = HostReservation(diskBytes: record.checkpointBytes)
+        return archive.addingSaturating(archive).diskBytes
+    }
+
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
         if spec.resourceClass?.policy.kind == .burstable, let admitted = spec.admittedReservation {
             return HostReservation(memoryBytes: admitted.effectiveMemoryBytes, cpuMicroUnits: admitted.cpuMicroUnits)

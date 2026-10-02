@@ -15,6 +15,10 @@ import StratoShared
 /// (issue #423) is stream-shaped instead: sessions are keyed by the control
 /// plane's sessionId and end with exactly one terminal event.
 public protocol SandboxRuntimeService: Sendable {
+    /// Durable shadow VMM capacity, retained until process death is proved.
+    /// Unknown evidence must fail admission closed.
+    func suspensionValidationReservations() async throws -> [String: HostReservation]
+
     /// Local desired/applied evidence; not a capability advertisement.
     func resourceEnforcementEvidence(
         sandboxId: String, application: ResourceEnforcementProducer.Application,
@@ -74,6 +78,33 @@ public protocol SandboxRuntimeService: Sendable {
 
     func shutdownSandbox(sandboxId: String) async throws
 
+    /// Publish current intent before reconciliation awaits network/storage.
+    /// Stale generations never invalidate a newer suspension admission.
+    func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async
+
+    func noteSandboxIdleControlPlane(_ desired: DesiredSandboxState) async
+    func sampleSandboxIdleActivity(sandboxId: String) async -> SandboxIdleActivityReport?
+
+    /// Prepare an automatic-policy claim from runtime-authoritative evidence.
+    /// This does not suspend; the host-admitted Agent wrapper must perform it.
+    func prepareIdleSuspension(sandboxId: String, policy: SandboxIdlePolicy) async -> SandboxIdlePolicy.Verdict
+
+    /// STR-312's sole suspension entry point. Automatic callers must have
+    /// supplied known eligibility and admitted no commands/sessions. Unsupported
+    /// runtimes fail; mock lifecycle is not evidence of memory reclamation.
+    func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws
+
+    /// Disabled-by-default automatic hook; requires a negotiated guest transport
+    /// and durable CP admission fencing. Manual callers use the existing method.
+    func suspendSandbox(sandboxId: String, fence: SandboxAutomaticSuspensionFence) async throws
+
+    /// Durable local evidence; consumers cannot infer suspension from Stopped.
+    func suspensionRecord(sandboxId: String) async throws -> SandboxSuspensionRecord?
+    func suspensionStorageEstimate(sandboxId: String) async throws -> Int64
+    func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment]) async throws
+    func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment], expectedGeneration: Int64)
+        async throws
+
     /// Gracefully stop (best effort) and remove the sandbox from this host.
     func deleteSandbox(sandboxId: String) async throws
 
@@ -127,6 +158,11 @@ public protocol SandboxRuntimeService: Sendable {
         sandboxId: String, snapshotId: String,
         artifacts: [SandboxSnapshotArtifactDescriptor]?,
         networkAttachments: [ResolvedNetworkAttachment]
+    ) async throws
+    func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?, networkAttachments: [ResolvedNetworkAttachment],
+        expectedGeneration: Int64
     ) async throws
 
     /// Stream a snapshot's artifacts to the pre-signed upload targets, one
@@ -194,6 +230,44 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public func suspensionValidationReservations() async throws -> [String: HostReservation] { [:] }
+    public func noteSandboxIdleControlPlane(_ desired: DesiredSandboxState) async {}
+    public func sampleSandboxIdleActivity(sandboxId: String) async -> SandboxIdleActivityReport? { nil }
+    public func prepareIdleSuspension(
+        sandboxId: String, policy: SandboxIdlePolicy
+    ) async -> SandboxIdlePolicy.Verdict {
+        policy.enabled ? .unsupportedBackend : .disabled
+    }
+    public func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?, networkAttachments: [ResolvedNetworkAttachment],
+        expectedGeneration: Int64
+    ) async throws {
+        try await restoreSandbox(
+            sandboxId: sandboxId, snapshotId: snapshotId,
+            artifacts: artifacts, networkAttachments: networkAttachments)
+    }
+    public func resumeSuspension(
+        sandboxId: String, networkAttachments: [ResolvedNetworkAttachment], expectedGeneration: Int64
+    ) async throws {
+        try await resumeSuspension(sandboxId: sandboxId, networkAttachments: networkAttachments)
+    }
+
+    public func suspendSandbox(sandboxId: String, fence: SandboxAutomaticSuspensionFence) async throws {
+        throw SandboxRuntimeError.notSnapshottable("automatic suspension transport is not configured")
+    }
+
+    public func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async {}
+    public func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws {
+        throw SandboxRuntimeError.notSnapshottable("this runtime does not implement durable suspension")
+    }
+    public func suspensionRecord(sandboxId: String) async throws -> SandboxSuspensionRecord? { nil }
+    public func suspensionStorageEstimate(sandboxId: String) async throws -> Int64 {
+        throw SandboxRuntimeError.notSnapshottable("this runtime cannot size a durable suspension")
+    }
+    public func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment]) async throws {
+        throw SandboxRuntimeError.notSnapshottable("this runtime cannot resume a durable suspension")
+    }
     public func resourceEnforcementEvidence(
         sandboxId: String, application: ResourceEnforcementProducer.Application,
         desired: BurstableResourceLimits

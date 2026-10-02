@@ -84,9 +84,28 @@ pub enum Request {
     Ping,
     /// Ask for the workload's current lifecycle state and exit code.
     GetStatus,
+    GetIdleActivity {
+        probe_id: String,
+    },
+    PrepareIdle {
+        operation_id: String,
+        admission_token: String,
+        expected_activity_epoch: u64,
+        minimum_quiet_milliseconds: u64,
+    },
+    QueryIdle {
+        operation_id: String,
+        admission_token: String,
+    },
+    ReleaseIdle {
+        operation_id: String,
+        admission_token: String,
+    },
     /// Start an exec session on this connection (v2). Must be the first
     /// request on the connection.
     Exec {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
         /// The command to run; must be non-empty.
         argv: Vec<String>,
         /// Extra environment merged **over** the workload's resolved env
@@ -115,7 +134,10 @@ pub enum Request {
     /// sessions this only stops writes. Exec sessions only.
     StdinEof,
     /// Resize the exec session's PTY. Ignored for non-tty sessions.
-    Resize { rows: u16, cols: u16 },
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
     /// Start a log follow stream on this connection (v2). Must be the first
     /// request on the connection; the host sends nothing afterwards.
     StreamLogs {
@@ -230,6 +252,23 @@ pub enum WorkloadState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    IdleError {
+        sandbox_id: String,
+        nonce: String,
+        message: String,
+    },
+    IdleActivity {
+        sandbox_id: String,
+        nonce: String,
+        activity: crate::idle::Activity,
+    },
+    IdleFence {
+        sandbox_id: String,
+        nonce: String,
+        operation_id: String,
+        admission_token: String,
+        state: String,
+    },
     /// Reply to [`Request::Ping`].
     Pong {
         sandbox_id: String,
@@ -309,6 +348,9 @@ impl Response {
             | Response::ClockSynced { nonce }
             | Response::Launched { nonce }
             | Response::Reidentified { nonce }
+            | Response::IdleError { nonce, .. }
+            | Response::IdleActivity { nonce, .. }
+            | Response::IdleFence { nonce, .. }
             | Response::Error { nonce, .. } => nonce,
         }
     }
@@ -552,6 +594,7 @@ mod tests {
         assert_eq!(
             req,
             Request::Exec {
+                session_id: None,
                 argv: vec!["/bin/sh".into()],
                 env: Some(env),
                 cwd: Some("/app".into()),
@@ -569,6 +612,7 @@ mod tests {
         assert_eq!(
             req,
             Request::Exec {
+                session_id: None,
                 argv: vec!["/bin/true".into()],
                 env: None,
                 cwd: None,
@@ -582,6 +626,7 @@ mod tests {
     #[test]
     fn exec_round_trips() {
         let req = Request::Exec {
+            session_id: None,
             argv: vec!["/bin/sh".into(), "-c".into(), "id".into()],
             env: None,
             cwd: None,

@@ -349,7 +349,7 @@ export function CreateSandboxDialog({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="ttlSeconds" className="text-foreground">
-                  TTL (seconds){" "}
+                  Idle TTL (seconds){" "}
                   <span className="text-muted-foreground">(optional)</span>
                 </Label>
                 <Input

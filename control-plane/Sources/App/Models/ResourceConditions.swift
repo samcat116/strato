@@ -492,6 +492,16 @@ extension Sandbox: ConvergingResource {
 
     func adoptReconciliationState(from committed: Sandbox) {
         adoptConvergenceBookkeeping(from: committed)
+        lastActiveAt = committed.lastActiveAt
+        createdAt = committed.createdAt
+        updatedAt = committed.updatedAt
+        name = committed.name
+        ttlSeconds = committed.ttlSeconds
+        suspensionComputeReserved = committed.suspensionComputeReserved
+        suspensionStorageBytes = committed.suspensionStorageBytes
+        suspensionStorageEstimateBytes = committed.suspensionStorageEstimateBytes
+        suspensionAfterSnapshotId = committed.suspensionAfterSnapshotId
+        suspensionEvidence = committed.suspensionEvidence
         status = committed.status
         statusChangedAt = committed.statusChangedAt
         desiredStatus = committed.desiredStatus
@@ -597,7 +607,14 @@ extension VM {
 }
 
 extension Sandbox {
-    var desiredSatisfied: Bool { desiredStatus.isSatisfied(by: status) }
+    var desiredSatisfied: Bool {
+        guard desiredStatus.isSatisfied(by: status) else { return false }
+        guard desiredStatus == .suspended else { return true }
+        return !suspensionComputeReserved && suspensionEvidence?.verified == true
+            && suspensionEvidence?.vmmDestroyed == true
+            && suspensionEvidence?.generation == generation
+            && (suspensionEvidence?.storageBytes ?? 0) > 0
+    }
 }
 
 extension Volume {
