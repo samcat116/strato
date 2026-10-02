@@ -199,6 +199,7 @@ extension Agent {
         // heartbeats skip it and a slow probe can never stall the beat.
         if assignedAgentID != nil {
             await refreshGuestInfoCacheIfDue()
+            await refreshGuestAgentCacheIfDue()
         }
 
         // On the same cadence, re-assert full observed state. The heartbeat
