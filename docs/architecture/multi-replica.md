@@ -229,3 +229,39 @@ sessions are pinned to the replica that accepted the frontend's WebSocket and
 the agent socket; with multiple replicas, console connections work when both
 sockets land on the same replica (client retry re-resolves through the
 service), which is a known limitation tracked separately.
+
+### Coordination degradation and recovery
+
+Coordination commands and distributed rate limiting share one process-local
+failure gate per endpoint. Three consecutive command failures open the gate;
+commands then return their existing degraded results immediately. After a
+one-second cooldown, one caller probes the store while other callers continue
+to degrade. Failed recovery probes back off to at most 30 seconds. Only that
+probe closes the gate; late results from pre-outage commands cannot close it.
+`COORDINATION_STORE_DEADLINE_MS` bounds commands and probes (default 2000ms,
+positive integer). Session storage keeps its independent fail-closed contract.
+
+Readiness reads the observed gate state without adding store traffic.
+`strato_coordination_store_unavailable` reports degradation as a gauge and
+`strato_coordination_fail_open_total{operation}` counts degraded operations.
+The gate logs transitions once; individual failures are debug logs.
+
+During an outage, rate limits remain enforced by a bounded local shadow of
+windows and known lockouts. Shared counts and lockout reads are mirrored while
+healthy, and locally armed lockouts are written before contacting Valkey.
+Shadow expiry never slides when another count is observed. Valkey returns its
+precise remaining lifetime and fixed expiry so rollover starts a fresh window;
+late responses from older windows cannot overwrite newer state. Counter loss
+before an active window ends preserves that window's local count and deadline.
+Limits become per-replica (up to N times the fleet-wide allowance); a lockout
+created exclusively on another replica cannot be discovered during a partition.
+Local overflow denies new keys conservatively instead of evicting active
+security state. An overflow lockout retains a single conservative expiry
+horizon for unknown keys, including after capacity becomes available. A restart loses the shadow, as with a Valkey-less deployment.
+
+Desired-state assembly writes the union of VM and volume image grants in one
+TTL-refreshing store script. VM placement reserves capacity before opening its
+row-locked transaction, then revalidates placement requirements and storage
+inputs under the lock. Changed inputs release the reservation and replan with a
+bounded budget. This optimistic replan does not retry database transaction
+errors; database abort retries and idle transaction timeouts are owned by #1418.

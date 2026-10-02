@@ -8,6 +8,19 @@ import Testing
 @Suite("Telemetry support")
 struct TelemetrySupportTests {
 
+    @Test("Coordination gauge clears on recovery and degraded operations are counted")
+    func coordinationDegradationMetrics() throws {
+        let metrics = TestMetrics()
+        Telemetry.coordinationStoreUnavailable(true, factory: metrics)
+        let gauge = try metrics.expectGauge("strato_coordination_store_unavailable", [])
+        #expect(gauge.lastValue == 1)
+        Telemetry.coordinationStoreUnavailable(false, factory: metrics)
+        #expect(gauge.lastValue == 0)
+        Telemetry.coordinationFailOpen(operation: "rateLimit.hit", factory: metrics)
+        let counter = try metrics.expectCounter("strato_coordination_fail_open_total", [("operation", "rateLimit.hit")])
+        #expect(counter.totalValue == 1)
+    }
+
     @Test("inventory refusal gauge distinguishes server refusal and clears on recovery")
     func inventoryRefusalGauge() throws {
         let metrics = TestMetrics()

@@ -943,3 +943,7 @@ spire:
       requests:
         cpu: 100m
         memory: 64Mi
+
+# Shared deadline for coordination and distributed rate-limit operations.
+coordination:
+  storeDeadlineMs: 2000
