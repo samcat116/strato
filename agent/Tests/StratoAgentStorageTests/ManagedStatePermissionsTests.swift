@@ -162,7 +162,9 @@ struct ManagedStatePermissionsTests {
             provisioner.runISO = { _, _ in throw CocoaError(.fileWriteUnknown) }
             #expect(await provisioner.makeNoCloudISO(at: iso, vmId: "fixture") == false)
             #expect(try String(contentsOfFile: iso, encoding: .utf8) == "previous seed")
-            #expect(!FileManager.default.fileExists(atPath: root + "/.cloud-init-staging"))
+            // Without a confirmed generator exit, the stage may still be in
+            // use by a surviving subprocess; retain it and refuse reclamation.
+            #expect(FileManager.default.fileExists(atPath: root + "/.cloud-init-staging/.building"))
         }
     }
 

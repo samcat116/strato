@@ -575,11 +575,21 @@ QEMU VM directories are created or tightened to `0700`. This relies on the
 supported installer contract that QEMU and the agent share an account, with
 libvirt DAC and AppArmor still enabled. The shared installation state root is
 `0711` for traversal by sandbox identities; it is never recursively chmod'ed.
-NoCloud generation exclusively creates `.cloud-init-staging` inside the private
-VM directory, refusing stale directories or symlinks. Documents are created `0600`;
-the ISO tool writes into that private staging tree. The finished regular ISO is
-restricted to `0600`, synchronized, and renamed into place, preserving the previous
-ISO on generation failure. Cleanup removes only staging owned by the current call.
+NoCloud generation leases `.cloud-init-staging` inside the private VM directory.
+A durable marker binds its VM, agent UID, and parent/stage device and inode identities.
+An interrupted stage is recovered only under an exclusive lease, with that exact
+identity and an allowlisted, agent-owned, unlinked tree. Unknown, replaced, foreign,
+linked, or concurrently leased stages are preserved and refused. Documents are
+created `0600`; the ISO tool writes into that private staging tree. A durable
+`.building` indicator is recorded before spawning and removed only after the tool
+returns. A stage retaining that indicator is refused even after the agent's lease
+is released: an orphaned ISO tool can survive an agent crash, so its exit cannot
+be inferred from age or a released lock. Crashes before provenance publication
+also remain refused. Completed/pre-build stages can be reclaimed automatically.
+The finished regular ISO is restricted to `0600`, synchronized, and renamed into
+place, preserving the previous ISO on generation failure. Cleanup validates the
+whole owned tree before descriptor-relative removal; it never recursively removes
+an unrelated or unknown tree.
 
 `StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO
 QEMU disk-boot VMs consume. `VMSpec.metadataSource` (wire v48) selects its

@@ -70,11 +70,9 @@ public struct CloudInitProvisioner {
         do {
             try ManagedStatePermissions.prepareVMDirectory(at: vmDirectory)
             try ManagedStatePermissions.requireRegularOrMissing(at: isoPath)
-            // Exclusive creation refuses stale attempts and planted symlinks.
-            // Cleanup is installed only after this invocation owns the directory.
-            try ManagedStatePermissions.createFreshDirectory(at: tempDir)
+            let staging = try CloudInitStaging(vmDirectory: vmDirectory, vmID: vmId)
             defer {
-                do { try fileManager.removeItem(atPath: tempDir) } catch {
+                do { try staging.cleanup() } catch {
                     logger.warning("Failed to remove owned cloud-init staging at \(tempDir): \(error)")
                 }
             }
@@ -150,7 +148,9 @@ public struct CloudInitProvisioner {
             ]
             #endif
 
+            try staging.generatorWillStart()
             let result = try await runISO(executableURL, arguments)
+            try staging.generatorDidFinish()
 
             if result.terminationStatus == 0 {
                 try ManagedStatePermissions.restrictFile(at: stagedISO)
