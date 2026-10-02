@@ -1088,6 +1088,40 @@ identically. Level-triggered like every sweep: marking `.absent` is idempotent,
 so a sandbox the sweep cannot finish this tick is simply re-evaluated next
 tick.
 
+### Idle reclamation policy (STR-313, integration prerequisite STR-312)
+
+`SandboxIdlePolicy` is the shared, side-effect-free eligibility contract. It
+is disabled by default and has separate idle, minimum-residency, evidence-age,
+and restore-timeout budgets, plus explicit sandbox exclusions. This preparatory
+contract is not yet wired into the expiry sweep or suspended lifecycle. The
+existing creation-anchored TTL behavior remains until that integration lands.
+
+Eligibility requires fresh, authoritative evidence of zero active sessions and
+pending commands, no snapshot/restore work, full-snapshot backend support, and
+known guest/network activity. Missing counters, unmeasured guest/network activity,
+stale evidence, and invalid or future timestamps deny eligibility. Merely seeing
+no API calls or no telemetry is not proof that a guest is idle. Minimum residency
+starts again after restoration; it does not reset the independent idle TTL clock.
+
+A lifecycle caller must recheck immediately before stopping the VMM, under the
+same guard that admits guest commands. The policy compares sandbox identity,
+agent incarnation, activity generation, last activity, and residency against the
+checkpoint claim and reevaluates current eligibility. The evaluator is not a
+lock: the lifecycle must make recheck and stop atomic with respect to admission,
+or cancel and safely restore when admission wins. Restart/reconnect requires new
+authoritative evidence; a persisted timestamp alone cannot authorize suspension.
+
+The pending integration with #1330 must specify the suspend/resume desired-state
+representation, backend capability, command-admission guard, durable activity
+report, and bounded restore entry point before automatic reclamation is enabled.
+It must persist activity monotonically, anchor user-visible `expiresAt` on that
+activity, protect active streams and queued commands during expiry, and keep
+system-attributed deletion on the existing delete path. Terminal-record retention
+remains on its existing clock. Superseded idle checkpoint cleanup belongs to the
+suspended lifecycle and must never delete user-created snapshots. End-to-end RAM,
+full-snapshot restore, failover, and checkpoint/stop race tests require that
+lifecycle; unit eligibility tests do not establish those properties.
+
 ## History
 
 Sandboxes were designed and built as a phased roadmap under umbrella issue
