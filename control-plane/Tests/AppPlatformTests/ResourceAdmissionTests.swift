@@ -533,6 +533,51 @@ struct ResourceAdmissionTests {
         }
     }
 
+    @Test func firstRegistrationCannotAdoptAnotherReplicasNewRow() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "First registration race")
+            let scope = OrganizationScope.organization(try org.requireID())
+            let site = Site(name: "First registration site", organizationScope: scope)
+            try await site.save(on: app.db)
+            let siteID = try site.requireID()
+            let identity = AgentIdentity(trustDomain: PlatformTrustDomain.current, name: "first-registration-race")
+            let resources = AgentResources(
+                totalCPU: 16, availableCPU: 16, totalMemory: 32 << 30, availableMemory: 32 << 30,
+                totalDisk: 1 << 40, availableDisk: 1 << 40)
+            let lateReplica = AgentService(app: app)
+            let entered = SocketRegistrationLatch(), release = SocketRegistrationLatch()
+            let late = Task {
+                do {
+                    let returned = try await lateReplica.registerAgent(
+                        AgentRegisterMessage(
+                            agentId: identity.name, hostname: "late-first", version: "late-first", resources: resources),
+                        identity: identity, siteID: siteID, organizationScope: scope, inventorySessionID: UUID(),
+                        afterCheckingRegistrationPredecessor: {
+                            await entered.signal()
+                            await release.wait()
+                        })
+                    #expect(try await Agent.find(returned, on: app.db) != nil)
+                    Issue.record("First registration adopted a concurrent row and returned \(returned)")
+                } catch let error as Abort { #expect(error.status == .conflict) }
+            }
+            await entered.wait()
+            let session = UUID()
+            let successor = try await app.agentService.registerAgent(
+                AgentRegisterMessage(
+                    agentId: identity.name, hostname: "first-successor", version: "first-successor",
+                    resources: resources),
+                identity: identity, siteID: siteID, organizationScope: scope, inventorySessionID: session)
+            await release.signal()
+            try await late.value
+            let stored = try #require(try await Agent.find(successor, on: app.db))
+            #expect(stored.hostname == "first-successor" && stored.version == "first-successor")
+            #expect(try await InventorySessionFence.current(agentID: successor, on: app.db) == session)
+            #expect(try await Agent.query(on: app.db).filter(\.$name == identity.name).count() == 1)
+            await lateReplica.shutdown()
+        }
+    }
+
     @Test(arguments: [true, false])
     func realLateRegistrationCannotOverwriteSuccessorMetadataOrSite(usesExplicitSession: Bool) async throws {
         try await withTestApp { app in

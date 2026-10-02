@@ -56,7 +56,8 @@ extension AgentService {
         siteID: UUID? = nil,
         organizationScope: OrganizationScope? = nil,
         inventorySessionID: UUID? = nil,
-        afterCapturingInventorySession: (@Sendable () async -> Void)? = nil
+        afterCapturingInventorySession: (@Sendable () async -> Void)? = nil,
+        afterCheckingRegistrationPredecessor: (@Sendable () async -> Void)? = nil
     ) async throws -> UUID {
         let agentName = identity.name
         let agentKey = identity.key
@@ -100,7 +101,8 @@ extension AgentService {
                                 message, identity: identity, identityOrganizationID: identityOrganizationID,
                                 siteID: siteID, organizationScope: organizationScope,
                                 targetAgentID: targetAgentID, capturedAgentID: capturedAgentID,
-                                expectation: registrationExpectation, session: session, on: tx)
+                                expectation: registrationExpectation, session: session,
+                                afterCheckingRegistrationPredecessor: afterCheckingRegistrationPredecessor, on: tx)
                         }
                     }
                     await self.activateRegistrationSession(session, for: agentKey)
@@ -671,7 +673,7 @@ extension AgentService {
         _ message: AgentRegisterMessage, identity: AgentIdentity, identityOrganizationID: UUID?,
         siteID: UUID?, organizationScope: OrganizationScope?, targetAgentID: UUID,
         capturedAgentID: UUID?, expectation: InventorySessionExpectation, session: UUID,
-        on db: any Database
+        afterCheckingRegistrationPredecessor: (@Sendable () async -> Void)?, on db: any Database
     ) async throws -> RegistrationPersistence {
         let agentName = identity.name
         let agentKey = identity.key
@@ -692,6 +694,7 @@ extension AgentService {
         if try current?.decode(column: "administratively_offline", as: Bool.self) == true {
             throw Abort(.forbidden, reason: "Agent is administratively offline")
         }
+        await afterCheckingRegistrationPredecessor?()
         var organizationScope = organizationScope
         var siteID = siteID
         let dependencyObservations = normalizedDependencyObservations(
@@ -704,11 +707,17 @@ extension AgentService {
 
         // Find existing agent or create new one
         let agent: Agent
-        if let existingAgent = try await Agent.query(on: db)
+        let existingAgent = try await Agent.query(on: db)
             .filter(\.$trustDomain == trustDomain)
             .filter(\.$name == agentName)
             .first()
-        {
+        // An absent predecessor locks no row. Under READ COMMITTED this
+        // statement can see another replica's newly inserted agent. Never
+        // adopt that row under our independently generated agent UUID.
+        guard existingAgent?.id == capturedAgentID else {
+            throw Abort(.conflict, reason: "Agent registration identity changed while in flight")
+        }
+        if let existingAgent {
             guard !existingAgent.administrativelyOffline else {
                 throw Abort(.forbidden, reason: "Agent is administratively offline")
             }
