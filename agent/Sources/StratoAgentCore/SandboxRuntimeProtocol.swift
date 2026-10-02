@@ -76,6 +76,10 @@ public protocol SandboxRuntimeService: Sendable {
     /// runtimes fail; mock lifecycle is not evidence of memory reclamation.
     func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws
 
+    /// Disabled-by-default automatic hook; requires a negotiated guest transport
+    /// and durable CP admission fencing. Manual callers use the existing method.
+    func suspendSandbox(sandboxId: String, fence: SandboxAutomaticSuspensionFence) async throws
+
     /// Durable local evidence; consumers cannot infer suspension from Stopped.
     func suspensionRecord(sandboxId: String) async throws -> SandboxSuspensionRecord?
     func suspensionStorageEstimate(sandboxId: String) async throws -> Int64
@@ -221,6 +225,10 @@ extension SandboxRuntimeService {
         sandboxId: String, networkAttachments: [ResolvedNetworkAttachment], expectedGeneration: Int64
     ) async throws {
         try await resumeSuspension(sandboxId: sandboxId, networkAttachments: networkAttachments)
+    }
+
+    public func suspendSandbox(sandboxId: String, fence: SandboxAutomaticSuspensionFence) async throws {
+        throw SandboxRuntimeError.notSnapshottable("automatic suspension transport is not configured")
     }
 
     public func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async {}

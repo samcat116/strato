@@ -25,6 +25,9 @@ extension FirecrackerSandboxRuntime {
         guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
+        guard try loadSuspensionRecord(sandboxId: sandboxId)?.guestFence?.blocksWorkloadAdmission != true else {
+            throw SandboxSuspensionGuard.GateError.busy
+        }
         guard execSessions[sessionId] == nil else {
             // Session ids are minted per attach by the control plane; a
             // duplicate start is a stream replay we must not double-bridge.

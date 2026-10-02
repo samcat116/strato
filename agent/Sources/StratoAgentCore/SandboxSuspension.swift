@@ -137,6 +137,7 @@ public struct SandboxSuspensionRecord: Codable, Sendable {
     public var lastRestoreMillis: Int64?
     public var lastRestoreFailure: String?
     public var storageReservationBytes: Int64?
+    public var guestFence: SandboxSuspensionGuestFence?
 
     public init(
         sandboxId: UUID, snapshotId: UUID, generation: Int64, activityEpoch: UInt64,
@@ -196,6 +197,7 @@ public struct SandboxSuspensionStore: Sendable {
         let record = try JSONDecoder().decode(SandboxSuspensionRecord.self, from: data)
         guard record.version == 1, record.sandboxId == sandboxId, record.generation >= 0,
             record.jailUID != 0, record.jailUID != UInt32.max,
+            record.guestFence.map({ $0.hasValidShape(for: record) }) ?? true,
             record.phase == .capturing || record.checkpoint != nil,
             record.checkpoint.map({
                 $0.hasValidShape && $0.sandboxId == sandboxId.uuidString

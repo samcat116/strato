@@ -66,8 +66,93 @@ extension FirecrackerSandboxRuntime {
         suspensionRecords[record.sandboxId.uuidString] = record
     }
 
+    func automaticFenceLifecycle() throws -> SandboxAutomaticSuspensionLifecycle {
+        guard let transport = automaticSuspensionTransport else {
+            throw SandboxRuntimeError.notSnapshottable("automatic suspension transport is not configured")
+        }
+        return SandboxAutomaticSuspensionLifecycle(store: suspensionStore, transport: transport)
+    }
+
+    func prepareAutomaticSuspensionFence(_ record: SandboxSuspensionRecord) async throws -> SandboxSuspensionRecord {
+        suspensionRecords.removeValue(forKey: record.sandboxId.uuidString)
+        let lifecycle = try automaticFenceLifecycle()
+        let result = try await StageBudget.run(seconds: 20, stage: "automatic-suspension-prepare") {
+            try await lifecycle.prepare(record)
+        }
+        suspensionRecords[result.sandboxId.uuidString] = result
+        return result
+    }
+
+    /// Caller reaches this only after proving the same running guest identity.
+    func releaseAutomaticSuspensionFence(_ record: SandboxSuspensionRecord, restoredCopy: Bool = false)
+        async throws -> SandboxSuspensionRecord
+    {
+        guard let fence = record.guestFence else { return record }
+        guard let managed = sandboxes[record.sandboxId.uuidString] else {
+            throw SandboxSuspensionGuard.GateError.stale
+        }
+        let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
+        guard
+            identityMatches(
+                response, sandboxId: record.sandboxId.uuidString,
+                expectedNonce: fence.identityNonce)
+        else {
+            throw SandboxSuspensionGuard.GateError.stale
+        }
+        suspensionRecords.removeValue(forKey: record.sandboxId.uuidString)
+        let lifecycle = try automaticFenceLifecycle()
+        let result = try await StageBudget.run(seconds: 20, stage: "automatic-suspension-release") {
+            try await lifecycle.release(record, restoredCopy: restoredCopy)
+        }
+        suspensionRecords[result.sandboxId.uuidString] = result
+        return result
+    }
+
+    /// Recover a prepare/release interrupted before any checkpoint commit.
+    /// Never recreate a missing original or infer that it was unfrozen.
+    func recoverAutomaticSuspensionRollback(_ record: SandboxSuspensionRecord) async throws {
+        guard record.phase == .capturing || record.phase == .resumed,
+            record.guestFence?.blocksWorkloadAdmission == true,
+            let managed = sandboxes[record.sandboxId.uuidString]
+        else {
+            throw SandboxSuspensionGuard.GateError.stale
+        }
+        let generation = try suspensionGuards[record.sandboxId.uuidString, default: SandboxSuspensionGuard()]
+            .resumeGeneration()
+        let info = try await managed.manager.getInstanceInfo()
+        guard info.state == .running || info.state == .paused else { throw SandboxSuspensionGuard.GateError.stale }
+        if info.state == .paused {
+            try suspensionGuards[record.sandboxId.uuidString, default: SandboxSuspensionGuard()]
+                .validateResumeGeneration(generation)
+            try await managed.manager.resume()
+        }
+        _ = try await releaseAutomaticSuspensionFence(record)
+    }
+
     func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws {
-        if try loadSuspensionRecord(sandboxId: sandboxId)?.phase == .suspended { return }
+        guard !automatic else {
+            throw SandboxRuntimeError.notSnapshottable("automatic suspension requires a journaled guest fence")
+        }
+        try await suspendSandbox(sandboxId: sandboxId, generation: generation, fence: nil)
+    }
+
+    func suspendSandbox(sandboxId: String, fence: SandboxAutomaticSuspensionFence) async throws {
+        try await suspendSandbox(sandboxId: sandboxId, generation: fence.generation, fence: fence)
+    }
+
+    func suspendSandbox(sandboxId: String, generation: Int64, fence: SandboxAutomaticSuspensionFence?) async throws {
+        let automatic = fence != nil
+        if automatic {
+            guard automaticSuspensionTransport != nil else {
+                throw SandboxRuntimeError.notSnapshottable("automatic suspension transport is not configured")
+            }
+        }
+        if let existing = try loadSuspensionRecord(sandboxId: sandboxId), existing.phase == .suspended {
+            if let fence {
+                guard existing.guestFence?.request == fence else { throw SandboxSuspensionGuard.GateError.stale }
+            }
+            return
+        }
         guard let id = UUID(uuidString: sandboxId), let managed = sandboxes[sandboxId],
             let jail = managed.jail
         else {
@@ -85,12 +170,23 @@ extension FirecrackerSandboxRuntime {
             generation: generation, automatic: automatic)
         defer { suspensionGuards[sandboxId]?.finish(ticket) }
         let previous = try loadSuspensionRecord(sandboxId: sandboxId)
+        guard previous?.guestFence?.blocksWorkloadAdmission != true else {
+            throw SandboxSuspensionGuard.GateError.busy
+        }
         let snapshotId = previous.flatMap { $0.phase == .capturing ? $0.snapshotId : nil } ?? UUID()
         var record = SandboxSuspensionRecord(
             sandboxId: id, snapshotId: snapshotId,
             generation: generation, activityEpoch: ticket.activityEpoch,
             jailUID: jail.uid, spec: managed.spec,
             previousSnapshotId: previous?.phase == .capturing ? previous?.previousSnapshotId : previous?.snapshotId)
+        if let fence {
+            record.guestFence = SandboxSuspensionGuestFence(request: fence, identityNonce: managed.identityNonce)
+            guard record.guestFence?.hasValidShape(for: record) == true,
+                managed.guestControlProtocolVersion == fence.guestProtocolVersion
+            else {
+                throw SandboxRuntimeError.notSnapshottable("automatic suspension requires a no-NIC v5 guest")
+            }
+        }
         let estimate = try await suspensionStorageEstimate(sandboxId: sandboxId)
         record.storageReservationBytes = estimate
         if let old = previous?.checkpointBytes {
@@ -99,10 +195,12 @@ extension FirecrackerSandboxRuntime {
             record.storageReservationBytes = total
         }
         let originalWasRunning = try await managed.manager.getInstanceInfo().state == .running
+        guard !automatic || originalWasRunning else { throw SandboxSuspensionGuard.GateError.stale }
         try saveSuspension(record)
         var committed = false
         var capturePaused = false
         do {
+            if automatic { record = try await prepareAutomaticSuspensionFence(record) }
             _ = try await captureSandboxSnapshot(
                 sandboxId: sandboxId, snapshotId: record.snapshotId.uuidString, mode: .stop, internalArchive: true)
             capturePaused = true
@@ -127,6 +225,13 @@ extension FirecrackerSandboxRuntime {
             record.checkpoint = checkpoint
             record.phase = .verified
             try saveSuspension(record)
+            if automatic {
+                let lifecycle = try automaticFenceLifecycle()
+                let verifiedRecord = record
+                try await StageBudget.run(seconds: 20, stage: "automatic-suspension-admission") {
+                    try await lifecycle.validateDestruction(verifiedRecord)
+                }
+            }
             // No await between this admission commit and the durable journal
             // write. Activity after this point requests restore, not rollback.
             try suspensionGuards[sandboxId]?.commitDestruction(ticket)
@@ -149,6 +254,12 @@ extension FirecrackerSandboxRuntime {
                 if capturePaused && originalWasRunning {
                     try await managed.manager.resume()
                     startLogFollow(sandboxId: sandboxId)
+                }
+                if automatic {
+                    // Resolve a possibly lost prepare response before removing
+                    // the only journal that identifies the frozen guest.
+                    record = try loadSuspensionRecord(sandboxId: sandboxId) ?? record
+                    record = try await releaseAutomaticSuspensionFence(record)
                 }
                 try removeItemIfPresent(
                     atPath: suspensionArchive(sandboxId: sandboxId, snapshotId: record.snapshotId.uuidString))
@@ -264,6 +375,7 @@ extension FirecrackerSandboxRuntime {
             guard identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) else {
                 throw SandboxSuspensionGuard.GateError.stale
             }
+            record = try await releaseAutomaticSuspensionFence(record)
             record.phase = .resumed
             record.lastRestoreFailure = nil
             try saveSuspension(record)
@@ -282,13 +394,16 @@ extension FirecrackerSandboxRuntime {
                     sandboxId: sandboxId, snapshotId: snapshotId, artifacts: nil,
                     networkAttachments: attachments, internalArchive: true, expectedGeneration: resumeGeneration)
             }
+            record = try loadSuspensionRecord(sandboxId: sandboxId) ?? record
             record.phase = .resumed
             let elapsed = began.duration(to: .now).components
             record.lastRestoreMillis = elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000
             try saveSuspension(record)
         } catch {
             if var current = try loadSuspensionRecord(sandboxId: sandboxId), current.phase == .resuming {
-                current.lastRestoreFailure = "resume health unconfirmed"
+                current.lastRestoreFailure =
+                    current.guestFence?.blocksWorkloadAdmission == true
+                    ? "guest fence release unconfirmed" : "resume health unconfirmed"
                 try saveSuspension(current)
                 throw error
             }
