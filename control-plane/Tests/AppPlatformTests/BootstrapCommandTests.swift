@@ -24,12 +24,12 @@ struct BootstrapCommandTests {
             let console = try await runBootstrap(
                 app,
                 arguments: [
-                    "--quiet", "--username", "ci", "--email", "ci@example.com",
+                    "--quiet", "--username", "ci-user", "--email", "ci@example.com",
                     "--org-name", "CI Org", "--project-name", "E2E",
                 ])
 
             let user = try #require(try await User.query(on: app.db).first())
-            #expect(user.username == "ci")
+            #expect(user.username == "ci-user")
             #expect(user.email == "ci@example.com")
             #expect(user.isSystemAdmin)
 
@@ -103,16 +103,25 @@ struct BootstrapCommandTests {
         }
     }
 
-    /// Explicit names are passed through unchanged — including ones the API's
-    /// own validator would reject, which `seedsEverything`'s two-character `ci`
-    /// already relies on. Only derived names are validated.
+    /// Explicit names override derivation and obey the same account grammar.
+    @Test("Explicit bootstrap identifiers follow the shared grammar")
+    func invalidExplicitUsername() async throws {
+        try await withTestApp { app in
+            await #expect(throws: Abort.self) {
+                try await runBootstrap(app, arguments: ["--quiet", "--username", "ci"])
+            }
+            let userCount = try await User.query(on: app.db).count()
+            #expect(userCount == 0)
+        }
+    }
+
     @Test("--username wins over the address-derived name")
     func explicitUsernameOverridesDerivation() async throws {
         try await withTestApp { app in
             try await runBootstrap(
-                app, arguments: ["--quiet", "--admin-email", "ada@example.com", "--username", "ci"])
+                app, arguments: ["--quiet", "--admin-email", "ada@example.com", "--username", "ci-user"])
             let user = try #require(try await User.query(on: app.db).first())
-            #expect(user.username == "ci")
+            #expect(user.username == "ci-user")
         }
     }
 

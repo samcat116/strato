@@ -7,6 +7,7 @@ extension Application {
     /// Configures PostgreSQL, registers the ordered schema history, and runs it
     /// through the control plane's serialized migration runner.
     func bootstrapDatabase() async throws {
+        databases.middleware.use(UserIdentityMiddleware(), on: .psql)
         let databaseStatementTimeouts = try configureDatabaseDriver()
         registerMigrations()
 
@@ -123,6 +124,7 @@ extension Application {
         // STR-256: reject oversized IAM names before their unique btree indexes
         // turn caller input into PostgreSQL 54000 and an API 500.
         migrations.add(AddAdministrativeTextLengthConstraints())
+        migrations.add(AddUserIdentityLengthConstraints())
 
         // STR-79: durable captured VM command state with cold output payloads.
         migrations.add(CreateVMCommandExecutions())

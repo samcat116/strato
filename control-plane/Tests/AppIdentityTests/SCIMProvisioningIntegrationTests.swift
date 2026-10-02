@@ -53,6 +53,25 @@ struct SCIMProvisioningIntegrationTests {
     /// body synthesized from the thrown Abort).
     private let scimErrorSchema = "urn:ietf:params:scim:api:messages:2.0:Error"
 
+    @Test("SCIM rejects malformed identities with protocol invalidValue errors")
+    func invalidIdentity() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeSCIMFixture(app)
+            let orgID = fixture.organization.id!.uuidString
+            for name in ["bad/name", String(repeating: "a", count: 3000)] {
+                let payload = "{\"schemas\":[\"urn:ietf:params:scim:schemas:core:2.0:User\"],\"userName\":\"\(name)\"}"
+                try await app.test(.POST, "/organizations/\(orgID)/scim/v2/Users") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.rawToken)
+                    req.headers.contentType = HTTPMediaType(type: "application", subType: "scim+json")
+                    req.body = ByteBufferAllocator().buffer(string: payload)
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("invalidValue"))
+                }
+            }
+        }
+    }
+
     @Test("Valid scim_ token lists users through the full middleware stack")
     func validTokenListsUsers() async throws {
         try await withTestApp { app in

@@ -17,9 +17,10 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
     // MARK: - Create
 
     func create(_ resource: SCIMUser, context: SCIMRequestContext) async throws -> SCIMUser {
+        let username = try validateIdentity { try UserController.validateUsername(resource.userName) }
         // Check for existing user with same username
         if let _ = try await User.query(on: db)
-            .filter(\.$username == resource.userName)
+            .filter(\.$username == username)
             .first()
         {
             throw SCIMServerError.conflict(detail: "User with username '\(resource.userName)' already exists")
@@ -29,17 +30,22 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
         let email =
             resource.emails?.first(where: { $0.primary == true })?.value
             ?? resource.emails?.first?.value
-            ?? "\(resource.userName)@scim.local"
+            ?? "\(username)@scim.local"
 
         // Create user
         let user = User(
-            username: resource.userName,
-            email: email,
-            displayName: resource.displayName ?? resource.name?.formatted ?? resource.userName,
+            username: username,
+            email: try validateIdentity { try UserController.validateEmail(email) },
+            displayName: try validateIdentity {
+                try UserController.validateDisplayName(resource.displayName ?? resource.name?.formatted ?? username)
+            },
             source: .scim,
             scimProvisioned: true,
             scimActive: resource.active ?? true
         )
+        if try await User.query(on: db).filter(\.$email == user.email).first() != nil {
+            throw SCIMServerError.conflict(detail: "Email already belongs to an account")
+        }
         try await user.save(on: db)
 
         guard let userID = user.id else {
@@ -122,10 +128,20 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             throw SCIMServerError.notFound(resourceType: "User", id: id)
         }
 
+        let username = try validateIdentity { try UserController.validateUsername(resource.userName) }
+        let displayName = try validateIdentity {
+            try UserController.validateDisplayName(resource.displayName ?? resource.name?.formatted ?? username)
+        }
+        let email = try
+            (resource.emails?.first(where: { $0.primary == true })?.value
+            ?? resource.emails?.first?.value).map { value in
+                try validateIdentity { try UserController.validateEmail(value) }
+            }
+
         // Check if new username is already taken by another user
-        if user.username != resource.userName {
+        if user.username != username {
             let existingUser = try await User.query(on: db)
-                .filter(\.$username == resource.userName)
+                .filter(\.$username == username)
                 .filter(\.$id != uuid)
                 .first()
             if existingUser != nil {
@@ -134,8 +150,8 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
         }
 
         // Update user fields
-        user.username = resource.userName
-        user.displayName = resource.displayName ?? resource.name?.formatted ?? resource.userName
+        user.username = username
+        user.displayName = displayName
         let wasActive = user.scimActive
         user.scimActive = resource.active ?? true
 
@@ -153,9 +169,10 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
             user.disabledAt = nil
         }
 
-        if let email = resource.emails?.first(where: { $0.primary == true })?.value
-            ?? resource.emails?.first?.value
-        {
+        if let email {
+            if try await User.query(on: db).filter(\.$email == email).filter(\.$id != uuid).first() != nil {
+                throw SCIMServerError.conflict(detail: "Email already belongs to an account")
+            }
             user.email = email
         }
 
@@ -269,6 +286,12 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
     }
 
     // MARK: - Helpers
+
+    private func validateIdentity(_ validate: () throws -> String) throws -> String {
+        do { return try validate() } catch let error as Abort {
+            throw SCIMServerError.badRequest(detail: error.reason, scimType: .invalidValue)
+        }
+    }
 
     private func userToSCIMUser(_ user: User, context: SCIMRequestContext) async throws -> SCIMUser {
         guard let userID = user.id else {

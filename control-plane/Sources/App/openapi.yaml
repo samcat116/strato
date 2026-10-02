@@ -12946,10 +12946,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
 
     AdminCreateUserRequest:
       type: object
@@ -12958,10 +12961,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
         isSystemAdmin:
           type: boolean
           default: false
@@ -13000,10 +13006,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
 
     SessionResponse:
       type: object
