@@ -125,3 +125,5 @@ percentiles have been demonstrated here. No live infrastructure, credentials,
 security settings, merge, or deployment are changed. The lifecycle must
 be verified on an authorized disposable KVM fixture before this
 issue can be completed or either dependent feature enabled.
+
+Journal-backed wake and explicit restore bind the requested running generation before the first load await and recheck it immediately before the durable resuming commit and resume RPC. A newer stop or delete leaves the replacement paused; activity recovery after committed destruction is permitted only for the original suspension generation.

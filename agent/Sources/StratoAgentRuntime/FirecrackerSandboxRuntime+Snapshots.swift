@@ -207,10 +207,22 @@ extension FirecrackerSandboxRuntime {
             networkAttachments: networkAttachments)
     }
 
+    func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?, networkAttachments: [ResolvedNetworkAttachment],
+        expectedGeneration: Int64
+    ) async throws {
+        guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
+        try await restoreSandboxArchive(
+            sandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts,
+            networkAttachments: networkAttachments, expectedGeneration: expectedGeneration)
+    }
+
     func restoreSandboxArchive(
         sandboxId: String, snapshotId: String,
         artifacts: [SandboxSnapshotArtifactDescriptor]?,
-        networkAttachments: [ResolvedNetworkAttachment], internalArchive: Bool = false
+        networkAttachments: [ResolvedNetworkAttachment], internalArchive: Bool = false,
+        expectedGeneration: Int64? = nil
     ) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
@@ -220,6 +232,13 @@ extension FirecrackerSandboxRuntime {
         }
         checkpointing.insert(sandboxId)
         defer { checkpointing.remove(sandboxId) }
+        let currentSuspension = try loadSuspensionRecord(sandboxId: sandboxId)
+        let suspensionManagedRestore = internalArchive || currentSuspension != nil
+        let resumeGeneration: Int64? =
+            suspensionManagedRestore
+            ? try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].resumeGeneration(
+                expected: expectedGeneration, allowRacedActivity: internalArchive)
+            : nil
 
         // The reconciler re-realized this sandbox's NIC (idempotently) before
         // calling, so the netns, veth, TAP, tc filters and OVS port are all in
@@ -264,8 +283,6 @@ extension FirecrackerSandboxRuntime {
                 directory: archiveDir, sandboxId: sandboxId, snapshotId: snapshotId,
                 identityNonce: archivedConfig.identityNonce)
         }.value
-        let currentSuspension = try loadSuspensionRecord(sandboxId: sandboxId)
-        let suspensionManagedRestore = internalArchive || currentSuspension != nil
         if !internalArchive, var record = currentSuspension {
             record.phase = .restoring
             try saveSuspension(record)
@@ -365,9 +382,11 @@ extension FirecrackerSandboxRuntime {
             }
             // After this durable commit the guest may have advanced. A timeout
             // or failed health check must never rewind it to the checkpoint.
+            try Task.checkCancellation()
+            guard let resumeGeneration else { throw SandboxSuspensionGuard.GateError.stale }
+            try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].validateResumeGeneration(resumeGeneration)
             record.phase = .resuming
             try saveSuspension(record)
-            try Task.checkCancellation()
             try await newManager.resume()
         }
 

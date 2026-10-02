@@ -91,6 +91,24 @@ public struct SandboxSuspensionGuard: Sendable {
             && (epoch != candidate.activityEpoch || (generation != candidate.generation && desiredRunning))
     }
 
+    /// Bind a paused replacement to the requested intent before any load awaits.
+    /// Activity after a committed destruction may require immediate recovery
+    /// while the same suspension ticket still owns the guest.
+    public func resumeGeneration(expected: Int64? = nil, allowRacedActivity: Bool = false) throws -> Int64 {
+        guard let generation else { throw GateError.unknownIntent }
+        guard expected == nil || expected == generation else { throw GateError.stale }
+        let raced =
+            allowRacedActivity && destructionCommitted
+            && ticket?.generation == generation && ticket?.activityEpoch != epoch
+        guard desiredRunning || raced else { throw GateError.stale }
+        return generation
+    }
+
+    /// No await between this check, the durable resuming commit and resume RPC.
+    public func validateResumeGeneration(_ expected: Int64) throws {
+        guard generation == expected else { throw GateError.stale }
+    }
+
     public mutating func finish(_ candidate: Ticket) {
         guard ticket == candidate else { return }
         ticket = nil
