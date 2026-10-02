@@ -25,15 +25,7 @@ public enum ManagedStatePermissions {
         // The storage root can also contain sandbox and operator-managed data;
         // existing ancestors are deliberately not chmod'ed.
         let names = try FileManager.default.contentsOfDirectory(atPath: root)
-        for name in names
-        where ["vm-manifest.json", "snapshot-records.json", "instance-metadata.json"].contains(name)
-            || name == "vm-manifest.json.tmp"
-            || (name.hasPrefix("vm-manifest.json.tmp.")
-                && UUID(uuidString: String(name.dropFirst("vm-manifest.json.tmp.".count))) != nil)
-            || name.hasPrefix("vm-manifest.json.corrupt-")
-        {
-            try restrictFile(name, in: descriptor, path: root + "/" + name)
-        }
+        try migrateRecords(in: descriptor, root: root, names: names)
         var managedVMIds = qemuVMIds
         for name in names where UUID(uuidString: name) != nil {
             let vm = openat(descriptor, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -54,6 +46,22 @@ public enum ManagedStatePermissions {
         }
         if let legacyStagingRoot {
             try migrateLegacyStaging(in: legacyStagingRoot, vmIds: managedVMIds)
+        }
+    }
+
+    // The effective UID parameter lets fixtures exercise foreign ownership
+    // without changing actual file owners. Production always uses geteuid().
+    static func migrateRecords(in descriptor: CInt, root: String, names: [String], effectiveUID: uid_t = geteuid())
+        throws
+    {
+        for name in names {
+            let isStaging =
+                name == "vm-manifest.json.tmp" || OwnedFileCleanup.isStagingName(name, for: "vm-manifest.json")
+            guard
+                isStaging || ["vm-manifest.json", "snapshot-records.json", "instance-metadata.json"].contains(name)
+                    || name.hasPrefix("vm-manifest.json.corrupt-")
+            else { continue }
+            try restrictFile(name, in: descriptor, path: root + "/" + name, ownedBy: isStaging ? effectiveUID : nil)
         }
     }
 
@@ -111,7 +119,21 @@ public enum ManagedStatePermissions {
         try restrictFile((path as NSString).lastPathComponent, in: parent, path: path)
     }
 
-    private static func restrictFile(_ name: String, in parent: CInt, path: String) throws {
+    private static func restrictFile(_ name: String, in parent: CInt, path: String, ownedBy owner: uid_t? = nil) throws
+    {
+        if let owner {
+            var info = stat()
+            guard fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+                throw failure("inspect staging owner", path)
+            }
+            guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_nlink == 1 else {
+                throw DurableFileWriteError(
+                    operation: "refuse non-private regular file", path: path, errorNumber: EINVAL)
+            }
+            // Match the writer's ownership rule, including unreadable foreign
+            // files: do not open or chmod another account's crash candidate.
+            guard info.st_uid == owner else { return }
+        }
         let descriptor = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard descriptor >= 0 else { throw failure("open state file", path) }
         defer { _ = close(descriptor) }
@@ -120,6 +142,7 @@ public enum ManagedStatePermissions {
         guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_nlink == 1 else {
             throw DurableFileWriteError(operation: "refuse non-private regular file", path: path, errorNumber: EINVAL)
         }
+        if let owner, info.st_uid != owner { return }
         try restrict(descriptor, mode: 0o600, path: path)
     }
 

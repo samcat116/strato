@@ -166,6 +166,31 @@ struct ManagedStatePermissionsTests {
         }
     }
 
+    @Test func migrationPreservesForeignManifestStaging() async throws {
+        try await fixture { root async throws in
+            let staging = ["vm-manifest.json.tmp", "vm-manifest.json.tmp." + UUID().uuidString]
+            for name in staging + ["vm-manifest.json"] {
+                try Data("fixture bytes".utf8).write(to: URL(fileURLWithPath: root + "/" + name))
+                try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: root + "/" + name)
+            }
+            let descriptor = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            #expect(descriptor >= 0)
+            defer { _ = close(descriptor) }
+            // Treat the fixture owner as foreign through the same migration
+            // boundary used by startup; no chown or privileged fixture needed.
+            try ManagedStatePermissions.migrateRecords(
+                in: descriptor, root: root, names: staging + ["vm-manifest.json"], effectiveUID: geteuid() ^ 1)
+            for name in staging {
+                #expect(try mode(root + "/" + name) == 0o644)
+                #expect(try String(contentsOfFile: root + "/" + name, encoding: .utf8) == "fixture bytes")
+            }
+            #expect(try mode(root + "/vm-manifest.json") == 0o600)
+            // The actual owner still migrates its own staging normally.
+            try ManagedStatePermissions.migrate(at: root)
+            for name in staging { #expect(try mode(root + "/" + name) == 0o600) }
+        }
+    }
+
     @Test func migrationSecuresCrashLeftoversAndSkipsUnmanagedUUIDFiles() async throws {
         try await fixture { root async throws in
             let legacyRoot = root + "/legacy-tmp"
