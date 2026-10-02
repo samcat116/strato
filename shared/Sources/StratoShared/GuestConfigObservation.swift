@@ -88,3 +88,8 @@ public enum GuestConfigObservationError: Error, LocalizedError, Sendable {
     case invalid
     public var errorDescription: String? { "Invalid guest configuration observation" }
 }
+
+public extension GuestConfig {
+    /// Empty intent withdraws management exactly as nil intent does.
+    var isEmpty: Bool { packages.isEmpty && files.isEmpty && services.isEmpty && sysctls.isEmpty }
+}
