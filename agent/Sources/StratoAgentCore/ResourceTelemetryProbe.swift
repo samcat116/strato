@@ -427,7 +427,7 @@ extension ResourceTelemetryProbe {
                 reason = "thp_unsupported"
             } else if ksmRun == nil {
                 reason = "ksm_unsupported"
-            } else if enabled == nil {
+            } else if enabled == nil && config.tier == .zswap {
                 reason = "zswap_unsupported"
             } else if config.ksm == true && config.tenantClass != .single {
                 reason = "ksm_multitenant_forbidden"

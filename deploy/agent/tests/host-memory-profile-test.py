@@ -85,13 +85,23 @@ class Tests(unittest.TestCase):
         self.assertIn(self.config['nvme_swap'], self.host.swaps())
 
     def test_unsupported_fail_before_mutation(self):
-        for missing in (p.THP, p.KSM + 'run', '/sys/block/zram0/disksize', p.ZSWAP + 'enabled'):
+        for missing in (p.THP, p.KSM + 'run', '/sys/block/zram0/disksize'):
             host = Fixture(self.temp.name)
             host.path(missing).unlink()
             with self.assertRaises(p.ProfileError):
                 p.apply(host, self.config)
             self.assertEqual(host.calls, [])
             self.assertFalse(host.path(p.STATE).exists())
+
+    def test_zram_without_zswap_and_unsupported_zswap(self):
+        self.host.path(p.ZSWAP + 'enabled').unlink()
+        p.apply(self.host, self.config)
+        self.assertIn('/dev/zram0', self.host.swaps())
+        p.disable(self.host)
+        self.config['tier'] = 'zswap'
+        self.host.write(p.THP, 'always [madvise] never')
+        with self.assertRaisesRegex(p.ProfileError, 'unsupported:'):
+            p.apply(self.host, self.config)
 
     def test_disabled_mglru_and_secondary_bits(self):
         self.config['require_mglru'] = True

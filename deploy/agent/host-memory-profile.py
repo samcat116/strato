@@ -127,7 +127,8 @@ def preflight(host, config):
         # Do not load modules or take ownership of an operator's active zram.
         host.read('/sys/block/zram0/disksize')
         host.read('/sys/block/zram0/reset')
-        host.read(ZSWAP + 'enabled')  # Avoid stacking zswap over zram.
+        if host.path(ZSWAP + 'enabled').exists():
+            host.read(ZSWAP + 'enabled')  # Avoid stacking zswap over zram.
     if config.get('ksm', False):
         host.read(KSM + 'pages_to_scan')
         host.read(KSM + 'sleep_millisecs')
@@ -144,10 +145,11 @@ def apply(host, config):
     if not state:
         if config['tier'] == 'zram' and int(host.read('/sys/block/zram0/disksize')) != 0:
             raise ProfileError('operator_zram_in_use')
-        state = {'config': config, 'baseline': {THP: selected(host.read(THP)),
-                 ZSWAP + 'enabled': host.read(ZSWAP + 'enabled')},
+        state = {'config': config, 'baseline': {THP: selected(host.read(THP))},
                  'fallback_owned': config['nvme_swap'] not in host.swaps(),
                  'zram_owned': config['tier'] == 'zram'}
+        if host.path(ZSWAP + 'enabled').exists():
+            state['baseline'][ZSWAP + 'enabled'] = host.read(ZSWAP + 'enabled')
         if config['tier'] == 'zswap':
             state['baseline'][ZSWAP + 'max_pool_percent'] = host.read(ZSWAP + 'max_pool_percent')
         if config.get('ksm', False):
@@ -170,7 +172,8 @@ def apply(host, config):
             raise ProfileError('operator_zram_in_use')
         if '/dev/zram0' in swaps and swaps['/dev/zram0'] != 100:
             raise ProfileError('zram_priority_mismatch')
-        host.write(ZSWAP + 'enabled', 0)
+        if host.path(ZSWAP + 'enabled').exists():
+            host.write(ZSWAP + 'enabled', 0)
         if '/dev/zram0' not in swaps:
             host.write('/sys/block/zram0/disksize', config.get('zram_bytes', 1073741824))
             host.runner(['mkswap', '-L', 'strato-density', '/dev/zram0'])

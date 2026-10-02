@@ -189,6 +189,24 @@ struct HostMemoryProfileObservationTests {
         #expect(host.mglruEnabled == .available(false))
     }
 
+    @Test("zram on a kernel without zswap remains supported")
+    func zramOnlyKernel() {
+        let files: [String: String] = [
+            "/etc/strato/host-memory-profile.json":
+                #"{"tier":"zram","tenant_class":"multi","nvme_swap":"/dev/nvme0n1p1"}"#,
+            "/proc/swaps":
+                "Filename Type Size Used Priority\n/dev/zram0 partition 1024 0 100\n/dev/nvme0n1p1 partition 2048 0 10",
+            "/sys/block/zram0/disksize": "1073741824",
+            "/sys/kernel/mm/transparent_hugepage/enabled": "always [madvise] never",
+            "/sys/kernel/mm/ksm/run": "0",
+            "/sys/kernel/mm/ksm/pages_shared": "0",
+            "/sys/kernel/mm/ksm/pages_sharing": "0",
+        ]
+        let observer = ResourceTelemetryProbe(read: { files[$0] }, listDirectory: { _ in [] })
+        #expect(observer.memoryProfileObservation()?.reason == nil)
+        #expect(observer.memoryProfileObservation()?.effectiveTier == .zram)
+    }
+
     @Test("unsafe tenant and unmerge transition are observable failures")
     func tenantTransition() {
         #expect(
