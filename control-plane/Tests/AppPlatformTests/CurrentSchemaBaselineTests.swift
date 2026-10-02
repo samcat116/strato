@@ -10,6 +10,10 @@ import Vapor
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
     private static let expectedCatalogMD5 = "4164eef002a4bb3f9e26e0738d27bc06"
+    // #1440 adds vm_fleet_runs (eight columns, primary key/constraint),
+    // its queue index, and the VM tag GIN index. The frozen baseline stays fixed.
+    private static let expectedPreFleetCatalogMD5 = "f719976e5b1c327d005f411e78e38144"
+    private static let expectedFleetCatalogMD5 = "39c7c80bcc0b73465f941a6bd5cdc9a1"
     private static let expectedCurrentCatalogMD5 = "97637cbbee5f4eebac8acff5274377ae"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
@@ -73,6 +77,54 @@ struct CurrentSchemaBaselineTests {
             let logs = try await MigrationLog.query(on: app.db).sort(\.$batch).all()
             #expect(logs.first?.name == CurrentSchemaBaseline().name)
             #expect(logs.count > 1, "the equivalence check must exercise the forward chain")
+
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("The fleet migration preserves its reviewed historical catalog round trip")
+    func fleetMigrationPreservesReviewedCatalogDelta() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            app.migrations.add(CurrentSchemaBaseline())
+            try await app.autoMigrate()
+            #expect(try await catalogMD5(on: app.db) == Self.expectedCatalogMD5)
+
+            // Use the real registered prefix so later migrations cannot change
+            // the historical fleet fixture or require their own rollback here.
+            app.registerForwardMigrations()
+            let pending = try await app.migrator.previewPrepareBatch().get()
+            let fleet = CreateVMFleetRuns()
+            let fleetIndex = try #require(pending.firstIndex { $0.0.name == fleet.name })
+            for (migration, _) in pending.prefix(fleetIndex) {
+                try await migration.prepare(on: app.db).get()
+            }
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreFleetCatalogMD5)
+            let before = try await catalogCounts(on: app.db)
+            #expect(before.tables == 79)
+            #expect(before.columns == 1041)
+            #expect(before.constraints == 375)
+            #expect(before.indexes == 243)
+
+            try await fleet.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedFleetCatalogMD5)
+            let after = try await catalogCounts(on: app.db)
+            #expect(after.tables == 80)
+            #expect(after.columns == 1049)
+            #expect(after.constraints == 376)
+            #expect(after.indexes == 246)
+            try await fleet.revert(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreFleetCatalogMD5)
+            let reverted = try await catalogCounts(on: app.db)
+            #expect(reverted.tables == 79)
+            #expect(reverted.columns == 1041)
+            #expect(reverted.constraints == 375)
+            #expect(reverted.indexes == 243)
+            try await fleet.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedFleetCatalogMD5)
         } catch {
             try? await app.shutdownForTesting()
             throw error
