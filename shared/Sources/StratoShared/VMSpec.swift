@@ -22,6 +22,10 @@ public enum MetadataSource: String, Codable, CaseIterable, Sendable {
 /// `HypervisorService` when it translates the spec into its driver-native form
 /// (QEMU arguments, Firecracker API calls, ...).
 public struct VMSpec: Codable, Sendable {
+    /// Nil is the historical immutable guaranteed policy.
+    public private(set) var admittedReservation: WorkloadAdmittedReservation?
+    public private(set) var resourceClass: WorkloadResourceClassSnapshot?
+
     /// Number of vCPUs the VM boots with.
     public private(set) var cpus: Int
     /// Maximum number of vCPUs (for hotplug on backends that support it).
@@ -103,8 +107,12 @@ public struct VMSpec: Codable, Sendable {
         console: ConsoleSpec? = nil,
         sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
-        metadataSource: MetadataSource = .iso
+        metadataSource: MetadataSource = .iso,
+        resourceClass: WorkloadResourceClassSnapshot? = nil,
+        admittedReservation: WorkloadAdmittedReservation? = nil
     ) {
+        self.admittedReservation = admittedReservation
+        self.resourceClass = resourceClass
         self.cpus = cpus
         self.maxCpus = maxCpus ?? cpus
         self.memoryBytes = memoryBytes
@@ -127,7 +135,7 @@ public struct VMSpec: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case cpus, maxCpus, memoryBytes, maxMemoryBytes, balloonTargetBytes, diskBytes
         case sharedMemory, hugepages, boot, machine, guestAgentEnabled
-        case volumes, networks, console, sshAuthorizedKeys, userData, metadataSource
+        case volumes, networks, console, sshAuthorizedKeys, userData, metadataSource, resourceClass, admittedReservation
     }
 
     /// `guestAgentEnabled` and `metadataSource` were added after VMSpec became
@@ -154,7 +162,9 @@ public struct VMSpec: Codable, Sendable {
             console: try c.decodeIfPresent(ConsoleSpec.self, forKey: .console),
             sshAuthorizedKeys: try c.decode([String].self, forKey: .sshAuthorizedKeys),
             userData: try c.decodeIfPresent(String.self, forKey: .userData),
-            metadataSource: try c.decodeIfPresent(MetadataSource.self, forKey: .metadataSource) ?? .iso)
+            metadataSource: try c.decodeIfPresent(MetadataSource.self, forKey: .metadataSource) ?? .iso,
+            resourceClass: try c.decodeIfPresent(WorkloadResourceClassSnapshot.self, forKey: .resourceClass),
+            admittedReservation: try c.decodeIfPresent(WorkloadAdmittedReservation.self, forKey: .admittedReservation))
     }
 
     /// The machine profile to realize. Nil selects the explicit both-off
@@ -179,6 +189,8 @@ public struct VMSpec: Codable, Sendable {
     /// attachment lists already realized by this agent.
     public func withSizing(from desired: VMSpec) -> VMSpec {
         var copy = self
+        copy.admittedReservation = desired.admittedReservation
+        copy.resourceClass = desired.resourceClass
         copy.cpus = desired.cpus
         copy.maxCpus = desired.maxCpus
         copy.memoryBytes = desired.memoryBytes

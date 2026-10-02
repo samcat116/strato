@@ -11,7 +11,8 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 66 carries explicit
+    /// The only wire/schema version this build accepts. Version 67 carries resource-class snapshots and fractional CPU capacity.
+    /// Version 66 carries explicit
     /// host memory accounting and backend allowances (STR-265). Versions 64 and 65
     /// are allocated to GuestConfig and host density respectively. Version 62 carries the
     /// requested and agent-applied QEMU block-device policy. Version 61 adds
@@ -36,7 +37,7 @@ public enum WireProtocol {
     /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
     /// contract (STR-237), and v46's authoritative native-OVN load-balancer
     /// state and observations (STR-28).
-    public static let currentVersion = 66
+    public static let currentVersion = 67
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

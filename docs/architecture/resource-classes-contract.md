@@ -1,13 +1,13 @@
 # Workload resource classes: STR267 / STR272 contract proposal
 
-Status: proposal awaiting parent coordination on wire v67. No capability may be
+Status: shared wire v67 and ratio bounds accepted by parent; implementation in progress. No capability may be
 advertised and no burstable workload may be admitted until STR272 has complete
 runtime enforcement and effective readback for the selected backend.
 
 STR267 is stacked on STR265 PR1444, exact head
 `be5c7f10b2bddc290bd4841c80cb0152ee91d24f`. Issues #1246 and #1251 govern the
 control-plane and runtime halves. Wire v64 is GuestConfig, v65 is host density,
-and v66 is headroom; propose v67 for the coordinated resource-class schema.
+and v66 is headroom; v67 is the coordinated resource-class schema.
 Do not independently allocate another version for STR272 fields while both
 changes remain unmerged. Exact-version agent/control-plane registration remains
 mandatory.
@@ -36,8 +36,8 @@ and manifests resolve to this behavior. They do not imply burstable, and must
 not cause a runtime policy rewrite during adoption. Unknown, corrupt, cross-site,
 or unsupported explicit references fail closed rather than becoming guaranteed.
 Proposed initial burstable defaults are CPU ratio 4, memory ratio 1, weight 100,
-and memory-high percent 80. Ratio bounds above are proposed and await parent
-agreement; apply the settled values consistently to API, clients, persistence,
+and memory-high percent 80. Ratio bounds above are accepted policy ceilings, not safe overcommit recommendations;
+apply the values consistently to API, clients, persistence,
 and wire decoding before accepting configurable policies.
 
 ## Runtime limits and arithmetic
@@ -123,7 +123,23 @@ class identity/revision, effective reservation operands, and the exact refusal.
 - API/generated clients/CLI/UI, schema migrations, manifests, wire round trips,
   scheduler concurrency, and host-local admission cover the same contract.
 
-This proposal changes no executable schema and leaves wire v66 unchanged.
+The executable shared schema uses wire v67. Both specs additionally persist
+`admittedReservation: WorkloadAdmittedReservation?` with `grantedCPUs`,
+`guestCommitmentBytes`, `cpuMicroUnits`, `discountedGuestBytes`, and
+`backendOverheadBytes`; nil denotes the unchanged historical 1:1 path.
+
+`WorkloadResourceClassSnapshot.policy` is the Swift accessor for policy fields;
+JSON flattens the policy fields alongside class/site/revision. Admission gate
+fields are `maxCPUPressure10` (default 10), `maxMemoryPressure10` (default 5),
+and `maxTelemetryAgeSeconds` (default 60, range 15...300). Missing or malformed
+explicit fields fail decoding. Built-in class IDs are UUIDs ending in 0001
+(guaranteed) and 0002 (burstable), scoped by siteID.
+
+For QEMU/libvirt, quantize memory.high **down** to KiB (by at most 1023 bytes)
+and memory.max **up** to KiB. Validate the representable soft limit is positive
+and strictly below the representable hard limit. Jailer cgroup values retain
+exact bytes. Desired/applied diagnostics must distinguish the byte intent from
+backend representable values; readback compares the latter.
 
 ## Exact source integration points
 
