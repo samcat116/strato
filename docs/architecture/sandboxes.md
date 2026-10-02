@@ -1096,8 +1096,13 @@ tick.
 `SandboxIdlePolicy` is the shared, side-effect-free eligibility contract. It
 is disabled by default and has separate idle, minimum-residency, evidence-age,
 and restore-timeout budgets, plus explicit sandbox exclusions. This preparatory
-contract is not yet wired into the expiry sweep or suspended lifecycle. The
-existing creation-anchored TTL behavior remains until that integration lands.
+contract now feeds agent-local automatic suspension through
+`Agent.sandboxReconcileIdleSuspend`, which prepares a runtime eligibility claim
+and calls STR-312's host-admitted `sandboxReconcileSuspend(_:automatic:)` entry
+point. The caller must hold the existing sandbox reconciliation lane. Both the
+policy and dependency readiness gate default off; no automatic timer, capability,
+wire message, or activity producer is activated. The expiry sweep and existing
+creation-anchored TTL remain unchanged until control-plane integration lands.
 
 Eligibility requires fresh, authoritative evidence of zero active sessions and
 pending commands, no snapshot/restore work, full-snapshot backend support, and
@@ -1114,9 +1119,28 @@ lock: the lifecycle must make recheck and stop atomic with respect to admission,
 or cancel and safely restore when admission wins. Restart/reconnect requires new
 authoritative evidence; a persisted timestamp alone cannot authorize suspension.
 
-The pending integration with #1330 must specify the suspend/resume desired-state
-representation, backend capability, command-admission guard, durable activity
-report, and bounded restore entry point before automatic reclamation is enabled.
+The runtime combines pending handshakes registered before their first await,
+established exec sessions, explicit user-stream observations, and guest/network
+coverage. Internal log followers do not enter this evidence. An absent user-stream
+count or guest/network proof is unknown, never zero. Exec start and closure advance
+local activity; the clock cannot move backward with an older observation. Snapshot,
+restore, boot, and stop requests invalidate idle proofs. Reconnect clears proofs
+and prepared claims, and a new runtime uses a new activity incarnation. No current
+wire message supplies complete activity observations, so shipping guests remain
+ineligible even if a caller enables the local policy gate.
+
+`prepareIdleSuspension(sandboxId:policy:)` only prepares eligibility: it never
+calls the runtime's suspend driver. Automatic suspension requires that claim at
+entry and rechecks it immediately before STR-312's synchronous destruction commit.
+A changed activity epoch, fresh user stream, unknown coverage, concurrent snapshot,
+expired observation, or changed residency cancels the automatic capture through
+STR-312's original-guest recovery path. Repeated quiet observations can refresh
+freshness without invalidating the activity epoch. Unsupported runtimes return an
+explicit unsupported-backend verdict through the protocol default.
+
+The pending integration with #1330 must complete the coordinated desired-state
+representation, backend capability, durable activity report, quota/API wake path,
+and timeout-aware restore before automatic reclamation is enabled.
 It must persist activity monotonically, anchor user-visible `expiresAt` on that
 activity, protect active streams and queued commands during expiry, and keep
 system-attributed deletion on the existing delete path. Terminal-record retention

@@ -32,6 +32,7 @@ extension FirecrackerSandboxRuntime {
     func snapshotSandbox(
         sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode
     ) async throws -> SandboxSnapshotResult {
+        invalidateIdleActivity(sandboxId: sandboxId)
         guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
         return try await captureSandboxSnapshot(sandboxId: sandboxId, snapshotId: snapshotId, mode: mode)
     }
@@ -201,6 +202,7 @@ extension FirecrackerSandboxRuntime {
         artifacts: [SandboxSnapshotArtifactDescriptor]?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
+        invalidateIdleActivity(sandboxId: sandboxId)
         guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
         try await restoreSandboxArchive(
             sandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts,
@@ -389,6 +391,7 @@ extension FirecrackerSandboxRuntime {
         // checkpoint time.
         await resyncGuestClock(sandboxId: sandboxId, udsPath: managed.vsockUdsPath)
 
+        recordIdleResidency(sandboxId: sandboxId)
         startLogFollow(sandboxId: sandboxId)
         logger.info(
             "Sandbox restored from snapshot",

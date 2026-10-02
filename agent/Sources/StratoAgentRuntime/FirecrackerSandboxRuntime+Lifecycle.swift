@@ -823,6 +823,7 @@ extension FirecrackerSandboxRuntime {
     /// mismatch is terminal rather than another warm-launch attempt — a
     /// structural bound on the demote/boot recursion.
     func bootSandbox(sandboxId: String, allowWarmLaunch: Bool) async throws {
+        invalidateIdleActivity(sandboxId: sandboxId)
         guard !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
@@ -946,6 +947,9 @@ extension FirecrackerSandboxRuntime {
                 "bootMillis": .stringConvertible(Int(Date().timeIntervalSince(bootStarted) * 1000)),
             ])
 
+        if info.state != .running || needsWarmLaunch || idleResidentSince[sandboxId] == nil {
+            recordIdleResidency(sandboxId: sandboxId)
+        }
         // The guest is confirmed up: ship its workload output from here on
         // (resuming from the last seq this host saw, so a pause/resume cycle
         // doesn't drop or duplicate lines).
@@ -1086,6 +1090,7 @@ extension FirecrackerSandboxRuntime {
     }
 
     func shutdownSandbox(sandboxId: String) async throws {
+        invalidateIdleActivity(sandboxId: sandboxId)
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
@@ -1137,6 +1142,10 @@ extension FirecrackerSandboxRuntime {
             try suspensionStore.remove(sandboxId: id)
             suspensionRecords.removeValue(forKey: sandboxId)
             suspensionGuards.removeValue(forKey: sandboxId)
+            idleActivityObservations.removeValue(forKey: sandboxId)
+            idleSuspensionAdmissions.removeValue(forKey: sandboxId)
+            idleLastActivity.removeValue(forKey: sandboxId)
+            idleResidentSince.removeValue(forKey: sandboxId)
         }
     }
 

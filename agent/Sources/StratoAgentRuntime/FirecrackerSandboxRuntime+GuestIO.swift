@@ -17,8 +17,12 @@ extension FirecrackerSandboxRuntime {
         request: SandboxExecRequest,
         events: @escaping @Sendable (SandboxExecEvent) -> Void
     ) async throws {
+        noteIdleActivity(sandboxId: sandboxId)
         let activity = suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].beginActivity()
-        defer { suspensionGuards[sandboxId]?.endActivity(activity) }
+        defer {
+            suspensionGuards[sandboxId]?.endActivity(activity)
+            noteIdleActivity(sandboxId: sandboxId)
+        }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
@@ -110,6 +114,7 @@ extension FirecrackerSandboxRuntime {
 
     func closeExec(sessionId: String) async {
         guard let session = execSessions.removeValue(forKey: sessionId) else { return }
+        noteIdleActivity(sandboxId: session.sandboxId)
         logger.info(
             "Closing sandbox exec session",
             metadata: [
@@ -131,6 +136,7 @@ extension FirecrackerSandboxRuntime {
         sandboxes[sandboxId]?.execSweepEpoch += 1
         for (sessionId, session) in execSessions where session.sandboxId == sandboxId {
             execSessions.removeValue(forKey: sessionId)
+            noteIdleActivity(sandboxId: sandboxId)
             await session.connection.close()
             session.reader?.cancel()
             session.events(.closed(reason: reason))
@@ -142,6 +148,7 @@ extension FirecrackerSandboxRuntime {
     /// sandbox teardown, which speak for themselves).
     func execSessionEnded(sessionId: String, terminal: SandboxExecEvent) async {
         guard let session = execSessions.removeValue(forKey: sessionId) else { return }
+        noteIdleActivity(sandboxId: session.sandboxId)
         await session.connection.close()
         logger.info(
             "Sandbox exec session ended",
@@ -230,6 +237,9 @@ extension FirecrackerSandboxRuntime {
     // MARK: - Control-plane connectivity (issue #423)
 
     func controlPlaneDisconnected() async {
+        // Reconnect cannot reuse a proof of absent user streams or guest activity.
+        idleActivityObservations.removeAll()
+        idleSuspensionAdmissions.removeAll()
         // Exec sessions: their frontends are unreachable and the control plane
         // cannot send guestExecClose over the dead socket. Closing the guest
         // connections kills the exec process groups; the .closed events this

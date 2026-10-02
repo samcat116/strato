@@ -32,6 +32,10 @@ public struct SandboxSuspensionGuard: Sendable {
 
     public init() {}
 
+    /// Runtime-local idle evidence includes handshakes reserved before their first await.
+    public var activityEpoch: UInt64 { epoch }
+    public var pendingActivityCount: Int { activity.count }
+
     /// Older syncs never undo newer intent. Equal-generation replays are inert.
     public mutating func updateIntent(generation: Int64, desiredRunning: Bool) {
         guard generation >= 0, self.generation.map({ generation > $0 }) ?? true else { return }

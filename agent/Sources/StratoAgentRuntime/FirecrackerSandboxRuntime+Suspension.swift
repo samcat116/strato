@@ -59,6 +59,13 @@ extension FirecrackerSandboxRuntime {
     }
 
     func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws {
+        if automatic {
+            guard
+                idleSuspensionAdmissions[sandboxId]?.permitsDestruction(
+                    evidence: idleSuspensionEvidence(sandboxId: sandboxId), at: Date()) == true
+            else { throw SandboxSuspensionGuard.GateError.stale }
+        }
+        defer { if automatic { idleSuspensionAdmissions.removeValue(forKey: sandboxId) } }
         if try loadSuspensionRecord(sandboxId: sandboxId)?.phase == .suspended { return }
         guard let id = UUID(uuidString: sandboxId), let managed = sandboxes[sandboxId],
             let jail = managed.jail
@@ -111,6 +118,12 @@ extension FirecrackerSandboxRuntime {
             try saveSuspension(record)
             // No await between this admission commit and the durable journal
             // write. Activity after this point requests restore, not rollback.
+            if automatic {
+                guard
+                    idleSuspensionAdmissions[sandboxId]?.permitsDestruction(
+                        evidence: idleSuspensionEvidence(sandboxId: sandboxId), at: Date()) == true
+                else { throw SandboxSuspensionGuard.GateError.stale }
+            }
             try suspensionGuards[sandboxId]?.commitDestruction(ticket)
             record.phase = .destroying
             try saveSuspension(record)
@@ -211,6 +224,7 @@ extension FirecrackerSandboxRuntime {
     }
 
     func resumeSuspendedSandbox(sandboxId: String) async throws {
+        invalidateIdleActivity(sandboxId: sandboxId)
         guard var record = try loadSuspensionRecord(sandboxId: sandboxId), record.checkpoint != nil else {
             throw SandboxSuspensionGuard.GateError.stale
         }
@@ -238,6 +252,7 @@ extension FirecrackerSandboxRuntime {
             guard identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) else {
                 throw SandboxSuspensionGuard.GateError.stale
             }
+            recordIdleResidency(sandboxId: sandboxId)
             record.phase = .resumed
             record.lastRestoreFailure = nil
             try saveSuspension(record)
@@ -256,6 +271,7 @@ extension FirecrackerSandboxRuntime {
                     sandboxId: sandboxId, snapshotId: snapshotId, artifacts: nil,
                     networkAttachments: attachments, internalArchive: true)
             }
+            recordIdleResidency(sandboxId: sandboxId)
             record.phase = .resumed
             let elapsed = began.duration(to: .now).components
             record.lastRestoreMillis = elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000

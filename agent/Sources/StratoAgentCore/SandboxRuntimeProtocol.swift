@@ -71,6 +71,10 @@ public protocol SandboxRuntimeService: Sendable {
     /// Stale generations never invalidate a newer suspension admission.
     func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async
 
+    /// Prepare an automatic-policy claim from runtime-authoritative evidence.
+    /// This does not suspend; the host-admitted Agent wrapper must perform it.
+    func prepareIdleSuspension(sandboxId: String, policy: SandboxIdlePolicy) async -> SandboxIdlePolicy.Verdict
+
     /// STR-312's sole suspension entry point. Automatic callers must have
     /// supplied known eligibility and admitted no commands/sessions. Unsupported
     /// runtimes fail; mock lifecycle is not evidence of memory reclamation.
@@ -201,6 +205,11 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public func prepareIdleSuspension(
+        sandboxId: String, policy: SandboxIdlePolicy
+    ) async -> SandboxIdlePolicy.Verdict {
+        policy.enabled ? .unsupportedBackend : .disabled
+    }
     public func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async {}
     public func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws {
         throw SandboxRuntimeError.notSnapshottable("this runtime does not implement durable suspension")

@@ -214,6 +214,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Firecracker rejects a vsock snapshot over.
     var checkpointing: Set<String> = []
     var suspensionGuards: [String: SandboxSuspensionGuard] = [:]
+    let idleActivityIncarnation = UUID()
+    var idleActivityObservations: [String: SandboxIdleActivityObservation] = [:]
+    var idleLastActivity: [String: Date] = [:]
+    var idleResidentSince: [String: Date] = [:]
+    var idleSuspensionAdmissions: [String: SandboxIdleSuspensionAdmission] = [:]
     var suspending: Set<String> = []
     var suspensionRecords: [String: SandboxSuspensionRecord] = [:]
     var restoreAdmission = SandboxRestoreAdmission()
