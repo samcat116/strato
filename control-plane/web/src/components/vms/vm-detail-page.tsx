@@ -35,6 +35,7 @@ import {
   VMIdentityCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs, usePermissions } from "@/lib/hooks";
+import { VMGuestAgentCard } from "@/components/vms/vm-guest-agent-card";
 import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
 
 // Dynamically import VNCDisplay: noVNC touches `document` while its module is
@@ -115,6 +116,7 @@ export function VMDetailPage({ id }: { id: string }) {
       />
 
       <ConvergenceFailureAlert conditions={vm.conditions} />
+      <VMGuestAgentCard vm={vm} />
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
@@ -353,10 +355,19 @@ export function VMDetailPage({ id }: { id: string }) {
               <CardContent className="p-0">
                 {!isRunning ? (
                   <p role="status" className="p-6">VM is not running. Start the VM to use Exec.</p>
-                ) : vm.guestAgentEnabled === false ? (
+                ) : vm.guestAgentEnabled !== true ? (
                   <div role="status" className="p-6">
-                    <p>Strato guest agent channel is disabled for this VM.</p>
-                    <p>Create a VM with the guest agent enabled and install the Strato guest agent inside it. Use Console to access this VM.</p>
+                    {vm.guestAgentEnabled === false ? (
+                      <>
+                        <p>Strato guest agent channel is disabled for this VM.</p>
+                        <p>Recreation is required to enable it. Create a Linux/QEMU VM with the guest agent opt-in; cloud-init installs it at first boot. Use Console to access this VM.</p>
+                      </>
+                    ) : (
+                      <>
+                        <p>Guest-agent opt-in state is unavailable.</p>
+                        <p>Refresh VM details or update the control plane before using Exec. Console remains available.</p>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <>

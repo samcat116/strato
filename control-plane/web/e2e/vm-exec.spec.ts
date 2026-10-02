@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-async function fixture(page: Page, options: { allowed?: boolean; status?: string; enabled?: boolean } = {}) {
+async function fixture(page: Page, options: { allowed?: boolean; status?: string; enabled?: boolean; missingOptIn?: boolean } = {}) {
   await page.context().addCookies([{ name: "strato-e2e", value: "terminal", url: `http://127.0.0.1:${process.env.E2E_APP_PORT ?? 3100}` }]);
   let minted = 0;
   await page.route("**/api/**", async route => {
@@ -15,7 +15,7 @@ async function fixture(page: Page, options: { allowed?: boolean; status?: string
       data = { sessionId: `session-${minted}`, websocketPath: `${path}/session-${minted}/attach`, expiresAt: new Date(Date.now() + 60000).toISOString() };
       expect(request.postDataJSON()).toMatchObject({ command: ["/bin/sh"], tty: true });
     } else if (/\/api\/vms\/vm-\d$/.test(path)) {
-      data = { id: path.split("/").at(-1), name: "Exec test VM", status: options.status ?? "Running", guestAgentEnabled: options.enabled ?? true, cpu: 2, maxCpu: 2, memoryFormatted: "2 GiB", diskFormatted: "10 GiB", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", conditions: {}, networkInterfaces: [] };
+      data = { id: path.split("/").at(-1), name: "Exec test VM", status: options.status ?? "Running", guestAgentEnabled: options.missingOptIn ? undefined : options.enabled ?? true, cpu: 2, maxCpu: 2, memoryFormatted: "2 GiB", diskFormatted: "10 GiB", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", conditions: {}, networkInterfaces: [] };
     } else if (path === "/api/organizations") {
       data = [{ id: "e2e-org", name: "Terminal tests" }];
     }
@@ -96,6 +96,7 @@ for (const [message, remedy] of [
 for (const options of [
   { status: "Stopped", enabled: true, message: "VM is not running" },
   { status: "Running", enabled: false, message: "Strato guest agent channel is disabled" },
+  { status: "Running", missingOptIn: true, message: "Guest-agent opt-in state is unavailable" },
 ]) {
   test(`prevents startup when ${options.message}`, async ({ page }) => {
     const minted = await fixture(page, options);

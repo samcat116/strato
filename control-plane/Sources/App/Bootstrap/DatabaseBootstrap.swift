@@ -118,6 +118,7 @@ extension Application {
         // without an upgrade migration. Repair preserved databases before any VM
         // query can select the required field.
         migrations.add(AddGuestAgentEnabledToVM())
+        migrations.add(AddGuestAgentObservationToVM())
 
         // STR-256: reject oversized IAM names before their unique btree indexes
         // turn caller input into PostgreSQL 54000 and an API 500.
