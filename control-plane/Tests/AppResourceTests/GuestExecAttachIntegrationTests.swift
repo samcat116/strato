@@ -240,8 +240,11 @@ struct GuestExecAttachIntegrationTests {
 
     @Test(
         "VM and sandbox routes preserve raw framing and support multiplexed framing",
-        arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine],
-        ExecTestOutputMode.allCases, ExecEnd.allCases)
+        arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine].flatMap { resource in
+            ExecTestOutputMode.allCases.flatMap { output in
+                ExecEnd.allCases.map { (resource, output, $0) }
+            }
+        })
     func attachRelaysExecStartAndFrames(
         resourceKind: GuestResourceKind,
         outputMode: ExecTestOutputMode,

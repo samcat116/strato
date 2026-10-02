@@ -695,24 +695,47 @@ struct VMExecSessionManagerTests {
         #expect(checks.withLock { $0 } == 2)
         #expect(await connection.isClosed)
     }
-    @Test("VM cap reserves starting connections, shares interactive and recorded slots, and releases failed starts")
+    @Test("Starting bridges reserve the VM cap and cancelled starts release their slots")
     func perVMCapIncludesStartingConnections() async throws {
-        let gate = SuspensionGate()
+        let gates = (0..<GuestExecLimits.maxSessionsPerVM).map { _ in SuspensionGate() }
+        let connects = Mutex(0)
         let connections = Recorder<FakeConnection>()
         let manager = VMExecSessionManager(logger: Self.logger) { _, _, _, _ in
-            await gate.wait()
+            let index = connects.withLock { count in
+                let index = count
+                count += 1
+                return index
+            }
+            await gates[index].wait()
             let connection = FakeConnection(lines: [#"{"type":"exec_started","nonce":"test"}"#])
             connections.append(connection)
             return connection
         }
-        // One suspended start already owns one slot. The remaining starts
-        // are refused placement immediately, releasing their reservations.
-        let start = Task {
+        var starts: [Task<Void, any Error>] = []
+        for index in gates.indices {
+            starts.append(
+                Task {
+                    try await manager.startExec(
+                        placement: placement(), sessionId: "pending-\(index)",
+                        sessionKind: index.isMultiple(of: 2) ? .interactive : .recorded, request: request(),
+                        placementIsCurrent: { true }, events: { _ in })
+                })
+            #expect(await eventually { await gates[index].isWaiting })
+        }
+        let error = await #expect(throws: VMExecBridgeError.self) {
             try await manager.startExec(
-                placement: placement(), sessionId: "pending", sessionKind: .interactive, request: request(),
+                placement: placement(), sessionId: "overflow", sessionKind: .interactive, request: request(),
                 placementIsCurrent: { true }, events: { _ in })
         }
-        #expect(await eventually { await gate.isWaiting })
+        #expect(error?.localizedDescription.contains("limit reached") == true)
+        #expect(connects.withLock { $0 } == GuestExecLimits.maxSessionsPerVM)
+        for index in gates.indices {
+            await manager.closeExec(sessionId: "pending-\(index)", reason: "cancelled")
+            await gates[index].release()
+            await #expect(throws: VMExecBridgeError.self) { try await starts[index].value }
+        }
+        for connection in connections.all { #expect(await connection.isClosed) }
+        // Failed placement never connects and must release its reservation.
         for index in 0..<8 {
             await #expect(throws: VMExecBridgeError.self) {
                 try await manager.startExec(
@@ -720,11 +743,7 @@ struct VMExecSessionManagerTests {
                     placementIsCurrent: { false }, events: { _ in })
             }
         }
-        await manager.closeExec(sessionId: "pending", reason: "cancelled")
-        await gate.release()
-        await #expect(throws: VMExecBridgeError.self) { try await start.value }
-        #expect(connections.all.count == 1)
-        #expect(await connections.all[0].isClosed)
+        #expect(connects.withLock { $0 } == GuestExecLimits.maxSessionsPerVM)
     }
 
     @Test("Shared VM cap refuses a fifth bridge, preserves duplicate delivery, and releases a closed slot")

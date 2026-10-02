@@ -32,6 +32,7 @@ vi.mock("@/lib/hooks", () => ({
     return { permissions: { exec: mocks.allowed } };
   },
 }));
+vi.mock("@/components/vms/vm-exec-sessions-card", () => ({ VMExecSessionsCard: () => null }));
 vi.mock("@/components/vms", () => Object.fromEntries([
   "VMStatusBadge", "VMActions", "LogViewer", "VMVolumesCard", "VMNetworkCard", "VMSnapshotsCard", "VMMetadataCard", "VMIdentityCard",
 ].map(name => [name, () => null])));
