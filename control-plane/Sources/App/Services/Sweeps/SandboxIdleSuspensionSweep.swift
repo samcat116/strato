@@ -11,9 +11,12 @@ extension AgentMaintenanceLoop {
             await app.coordination.acquireSweepLock("sandbox_idle_suspension")
         else { return }
         do {
-            for sandbox in try await Sandbox.query(on: app.db)
-                .filter(\.$status == .running).filter(\.$desiredStatus == .running).all()
-            {
+            // One bounded keyset page per tick. Continue on the next tick,
+            // rather than opening transactions for the entire running fleet.
+            let page = try await SandboxIdleFenceService.nominationCandidates(
+                after: idleSuspensionCursor, at: instant, on: app.db)
+            idleSuspensionCursor = page.nextCursor
+            for sandbox in page.sandboxes {
                 guard !isShutDown, !app.didShutdown else { return }
                 do { try await SandboxIdleFenceService.nominate(sandbox, app: app, at: instant) } catch let error
                     as AbortError where error.status == .conflict

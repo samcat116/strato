@@ -36,6 +36,54 @@ enum SandboxIdleFenceService {
             """
         ).first(decoding: State.self)
     }
+    struct AssemblyState {
+        let idle: State?
+        let hasAdmittedActivity: Bool
+    }
+
+    /// One statement per bounded ID chunk keeps fence and lease evidence in
+    /// the same database snapshot; the caller supplies one clock for the sync.
+    /// Desired state never needs the potentially large full idle reports.
+    static func assemblyStates(ids: [UUID], at instant: ClusterInstant, on db: any Database) async throws
+        -> [UUID: AssemblyState]
+    {
+        guard !ids.isEmpty else { return [:] }
+        guard let sql = db as? any SQLDatabase else { throw ConvergenceWriteError.unsupportedDatabase }
+        struct Row: Decodable {
+            let id: UUID
+            let idle: State?
+            let busy: Bool
+            enum CodingKeys: String, CodingKey { case sandbox_id, activity_revision, busy }
+            init(from decoder: any Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                id = try values.decode(UUID.self, forKey: .sandbox_id)
+                busy = try values.decode(Bool.self, forKey: .busy)
+                idle =
+                    try values.decodeIfPresent(Int64.self, forKey: .activity_revision) == nil
+                    ? nil : State(from: decoder)
+            }
+        }
+        var result: [UUID: AssemblyState] = [:]
+        let uniqueIDs = Array(Set(ids))
+        for start in stride(from: 0, to: uniqueIDs.count, by: 512) {
+            let page = Array(uniqueIDs[start..<min(start + 512, uniqueIDs.count)])
+            let rows = try await sql.raw(
+                """
+                SELECT s.id AS sandbox_id, f.activity_revision, f.agent_key, f.inventory_session_id,
+                    NULL::text AS report, f.received_at, f.fence::text AS fence, f.valid, f.expires_at,
+                    EXISTS (SELECT 1 FROM sandbox_activity_leases l WHERE l.sandbox_id = s.id
+                        AND (l.expires_at IS NULL OR l.expires_at > \(bind: instant.date))) AS busy
+                FROM sandboxes s LEFT JOIN sandbox_idle_fences f ON f.sandbox_id = s.id
+                WHERE s.id IN (\(binds: page))
+                """
+            ).all(decoding: Row.self)
+            for row in rows {
+                result[row.id] = AssemblyState(idle: row.idle, hasAdmittedActivity: row.busy)
+            }
+        }
+        return result
+    }
+
     static func observe(
         _ report: SandboxIdleActivityReport?, sandbox: Sandbox, at now: ClusterInstant, on db: any Database
     ) async throws {
@@ -170,6 +218,80 @@ enum SandboxIdleFenceService {
         else { return }
         try await sql.raw("UPDATE sandbox_idle_fences SET valid = true WHERE sandbox_id = \(bind: id)").run()
     }
+    struct CandidatePage {
+        let sandboxes: [Sandbox]
+        /// Advances over every coarse candidate, including rejected reports.
+        let nextCursor: UUID?
+    }
+
+    static let maximumCandidatePageSize = 64
+
+    /// Selection is only a bounded optimization. nominate still rechecks all
+    /// evidence under the sandbox lock with a freshly read cluster clock.
+    static func nominationCandidates(
+        after cursor: UUID?, limit: Int = maximumCandidatePageSize,
+        at now: ClusterInstant, on db: any Database
+    ) async throws -> CandidatePage {
+        guard now.permitsDestructiveSweeps else { return CandidatePage(sandboxes: [], nextCursor: nil) }
+        guard let sql = db as? any SQLDatabase else { throw ConvergenceWriteError.unsupportedDatabase }
+        let pageSize = max(1, min(limit, maximumCandidatePageSize))
+        struct Row: Decodable {
+            let id: UUID
+            let report: String
+            let last_active_at: Date?
+            let created_at: Date?
+        }
+        let rows = try await sql.raw(
+            """
+            SELECT s.id, f.report::text AS report, s.last_active_at, s.created_at
+            FROM sandbox_idle_fences f JOIN sandboxes s ON s.id = f.sandbox_id
+            JOIN agents a ON a.id::text = lower(s.hypervisor_id)
+            WHERE s.status = \(bind: SandboxStatus.running.rawValue)
+                AND s.desired_status = \(bind: DesiredSandboxStatus.running.rawValue)
+                AND s.observed_generation = s.generation AND s.failed_generation IS DISTINCT FROM s.generation
+                AND s.generation < 9223372036854775807 AND f.activity_revision < 9223372036854775807
+                AND f.agent_key = s.hypervisor_id AND NOT a.administratively_offline
+                AND f.inventory_session_id IS NOT NULL AND f.inventory_session_id = a.inventory_session_id
+                AND f.received_at <= \(bind: now.date)
+                AND f.received_at >= \(bind: now.date.addingTimeInterval(-30))
+                AND f.report ->> 'generation' = s.generation::text
+                AND f.report ->> 'controlPlaneActivityRevision' = f.activity_revision::text
+                AND f.report ->> 'idleFenceSupported' = 'true'
+                AND f.report -> 'policy' ->> 'enabled' = 'true'
+                AND f.report -> 'activeExecSessionIds' = '[]'::jsonb
+                AND f.report ->> 'pendingCommandCount' = '0'
+                AND f.report ->> 'hostPendingCommandCount' = '0'
+                AND f.report ->> 'snapshotOrRestoreInProgress' = 'false'
+                AND f.report -> 'guest' ->> 'coverage' = 'complete'
+                AND f.report -> 'guest' ->> 'trusted' = 'true'
+                AND f.report -> 'guest' ->> 'nic_count' = '0'
+                AND NOT EXISTS (SELECT 1 FROM sandbox_network_interfaces n WHERE n.sandbox_id = s.id)
+                AND NOT EXISTS (SELECT 1 FROM sandbox_activity_leases l WHERE l.sandbox_id = s.id
+                    AND (l.expires_at IS NULL OR l.expires_at > \(bind: now.date)))
+                AND (\(bind: cursor)::uuid IS NULL OR s.id > \(bind: cursor)::uuid)
+            ORDER BY s.id LIMIT \(bind: pageSize)
+            """
+        ).all(decoding: Row.self)
+        let ids = rows.compactMap { row -> UUID? in
+            guard
+                let report = try? WireProtocol.makeDecoder().decode(
+                    SandboxIdleActivityReport.self, from: Data(row.report.utf8)), report.isCompleteQuiet,
+                let policy = report.policy, policy.enabled, !policy.excludedSandboxIDs.contains(row.id),
+                policy.idleSeconds.isFinite, policy.idleSeconds > 0,
+                policy.minimumResidencySeconds.isFinite, policy.minimumResidencySeconds > 0,
+                let quiet = report.hostQuietMilliseconds,
+                Double(quiet) / 1000 >= policy.idleSeconds,
+                now.date.timeIntervalSince(row.last_active_at ?? row.created_at ?? now.date)
+                    >= policy.idleSeconds,
+                Double(report.residentForMilliseconds) / 1000 >= policy.minimumResidencySeconds
+            else { return nil }
+            return row.id
+        }
+        let sandboxes = ids.isEmpty ? [] : try await Sandbox.query(on: db).filter(\.$id ~~ ids).all()
+        return CandidatePage(
+            sandboxes: sandboxes, nextCursor: rows.count == pageSize ? rows.last?.id : nil)
+    }
+
     static func nominate(
         _ sandbox: Sandbox, app: Application, at now: ClusterInstant, mutation: ResourceMutation? = nil
     ) async throws {
