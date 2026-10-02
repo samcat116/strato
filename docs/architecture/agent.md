@@ -1696,3 +1696,28 @@ retain their separate lossless delivery and overflow contracts (STR-89).
 The [opt-in bootstrap profile](../deployment/host-memory-profile.md) owns persistent
 compressed swap, THP, and tenant-safe KSM settings. Runtime observation is read-only
 and profile failures fence all hypervisor placement, including KSM unmerge transitions.
+
+### Guest configuration convergence (STR-91)
+
+For running VM intent with STR-90 `guestConfig`, the VM planner appends
+`convergeGuestConfig` after power/network/edge realization and after orphan
+adoption. The normal per-VM lane and observed-generation/error verdict cover
+this step: a VM generation cannot succeed before guest read-back. Equal-generation
+syncs still run the step to observe and repair drift. Nil intent runs no guest
+steps and never reverses prior changes. A stopped or paused VM defers guest
+realization until desired running state.
+
+`GuestConfigClient` checks placement before connection/request and after the
+reply, verifies the ping/reply boot nonce, and bounds and validates the hostile
+observation before retaining it. A guest-side busy pass is a dependency wait;
+a reported guest failure is permanent for that generation. Fixed host log
+categories prevent guest-controlled diagnostic text from entering node logs.
+The full report includes `guestConfigObservation` alongside the existing VM
+failure fields. STR-92 owns detailed observation persistence/API projection.
+
+The Linux guest uses a single serialized diff/apply/read-back engine, a shared
+180-second pass budget, 120-second package commands, and a durable metadata-only
+journal. Failed/interrupted generations survive restarts; successful replays
+measure current facts rather than trusting the journal as installed state.
+See [guest configuration details](../../sandbox-guest/README.md#managed-vm-guest-configuration-str-90--str-91)
+for supported managers, observations, withdrawal semantics, and failure recovery.

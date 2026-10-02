@@ -660,11 +660,29 @@ capability checks, generation guarding, and content-free observations. STR-92
 owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
-remain decodable. Realization-capable live peers require a later coordinated
-wire version together with the STR-91 consumer.
+remain decodable; realization-capable live peers use the current exact wire v66
+registration.
 
 STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
 host-reserved, workload-effective, remaining allocatable, and QEMU allowance
 bytes. Remaining bytes are already net of host reserve and backend overhead.
-Control plane and agent builds must be coordinated; v65 carries host density. GuestConfig remains staged vocabulary; no
-consumer or realization capability is advertised by this build.
+Control plane and agent builds must be coordinated; v65 carries host density.
+
+### Guest realization observations (STR-91, following STR-90)
+
+`ObservedVMState.guestConfigObservation` is optional and generation-scoped. It
+contains `generation`, `status` (`converged` / `failed`), nullable `error`, and
+bounded arrays: packages (`name`, nullable `version`), files (`path`, nullable
+`sha256` / `mode`), services (`name`, nullable `enabled` / `activeState`), and
+sysctls (`key`, nullable `value`). No file contents or command output are reported.
+Success requires complete identities and no error; failure may contain partial
+facts but also sets the existing VM `lastError` / `failedGeneration` fields.
+Old payloads without this optional field decode as nil. This extends STR-90's
+contract without another wire-version change.
+
+Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`)
+and `guest_config_state` (`nonce`, `observation`). These are additive to the
+sandbox guest v4 surface; sandbox init does not realize VM guest intent. An old
+VM daemon rejects the new request explicitly rather than reporting convergence.
+The same connection first performs the existing v4 ping handshake and every
+reply is checked against that boot nonce.

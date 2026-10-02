@@ -3,7 +3,8 @@
 use std::io::{BufReader, Write};
 use std::mem;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use strato_sandbox_init::convergence::Converger;
 
 use strato_sandbox_init::protocol::{
     decode_request, encode_line, read_request_line, Request, Response, WorkloadState,
@@ -15,7 +16,10 @@ use super::GuestIdentity;
 
 /// Bind the well-known guest port and serve connections for the process's
 /// lifetime. A service restart calls this again and re-establishes the socket.
-pub fn serve(identity: Arc<GuestIdentity>) -> Result<(), String> {
+pub fn serve(
+    identity: Arc<GuestIdentity>,
+    convergence: Arc<Mutex<Converger>>,
+) -> Result<(), String> {
     let listener = bind_listener(DEFAULT_VSOCK_PORT)?;
     eprintln!("[strato-guest-agent] listening on vsock port {DEFAULT_VSOCK_PORT}");
 
@@ -52,10 +56,13 @@ pub fn serve(identity: Arc<GuestIdentity>) -> Result<(), String> {
         }
 
         let connection_identity = Arc::clone(&identity);
+        let connection_convergence = Arc::clone(&convergence);
         let spawned = std::thread::Builder::new()
             .name("guest-vsock-conn".to_string())
             .spawn(move || {
-                if let Err(e) = handle_connection(connection, &connection_identity) {
+                if let Err(e) =
+                    handle_connection(connection, &connection_identity, &connection_convergence)
+                {
                     eprintln!("[strato-guest-agent] vsock connection error: {e}");
                 }
             });
@@ -132,7 +139,11 @@ unsafe fn accept_cloexec(
     Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-fn handle_connection(connection: OwnedFd, identity: &GuestIdentity) -> std::io::Result<()> {
+fn handle_connection(
+    connection: OwnedFd,
+    identity: &GuestIdentity,
+    convergence: &Mutex<Converger>,
+) -> std::io::Result<()> {
     let writer_fd = connection.try_clone()?;
     let mut writer = std::fs::File::from(writer_fd);
     let mut reader = BufReader::new(std::fs::File::from(connection));
@@ -148,9 +159,9 @@ fn handle_connection(connection: OwnedFd, identity: &GuestIdentity) -> std::io::
     }
 
     match decode_request(&first) {
-        Ok(request @ (Request::Ping | Request::GetStatus)) => {
-            serve_control(request, reader, writer, identity)
-        }
+        Ok(
+            request @ (Request::Ping | Request::GetStatus | Request::ConvergeGuestConfig { .. }),
+        ) => serve_control(request, reader, writer, identity, convergence),
         Ok(Request::Exec {
             session_id: _,
             argv,
@@ -197,8 +208,12 @@ fn serve_control(
     mut reader: BufReader<std::fs::File>,
     mut writer: std::fs::File,
     identity: &GuestIdentity,
+    convergence: &Mutex<Converger>,
 ) -> std::io::Result<()> {
-    write_response(&mut writer, &control_response(first, identity))?;
+    write_response(
+        &mut writer,
+        &vm_control_response(first, identity, convergence),
+    )?;
 
     let mut line = String::new();
     loop {
@@ -209,9 +224,10 @@ fn serve_control(
             continue;
         }
         let response = match decode_request(&line) {
-            Ok(request @ (Request::Ping | Request::GetStatus)) => {
-                control_response(request, identity)
-            }
+            Ok(
+                request
+                @ (Request::Ping | Request::GetStatus | Request::ConvergeGuestConfig { .. }),
+            ) => vm_control_response(request, identity, convergence),
             Ok(_) => Response::Error {
                 nonce: identity.nonce.clone(),
                 message: "only ping/get_status are valid on a VM control connection".to_string(),
@@ -223,6 +239,34 @@ fn serve_control(
         };
         write_response(&mut writer, &response)?;
     }
+}
+
+fn vm_control_response(
+    request: Request,
+    identity: &GuestIdentity,
+    convergence: &Mutex<Converger>,
+) -> Response {
+    if let Request::ConvergeGuestConfig {
+        generation,
+        guest_config,
+    } = request
+    {
+        return match convergence.try_lock() {
+            Ok(mut engine) => Response::GuestConfigState {
+                nonce: identity.nonce.clone(),
+                observation: engine.converge(
+                    generation,
+                    guest_config,
+                    &mut strato_sandbox_init::convergence_linux::LinuxBackend,
+                ),
+            },
+            Err(_) => Response::Error {
+                nonce: identity.nonce.clone(),
+                message: "guest configuration convergence busy or unavailable".into(),
+            },
+        };
+    }
+    control_response(request, identity)
 }
 
 fn control_response(request: Request, identity: &GuestIdentity) -> Response {
@@ -307,7 +351,15 @@ mod tests {
     fn connection() -> (UnixStream, std::thread::JoinHandle<()>) {
         let (client, server) = UnixStream::pair().expect("socket pair");
         let handle = std::thread::spawn(move || {
-            handle_connection(OwnedFd::from(server), &identity()).expect("serve connection");
+            handle_connection(
+                OwnedFd::from(server),
+                &identity(),
+                &Mutex::new(Converger::new(
+                    std::env::temp_dir().join("strato-unused-test-journal"),
+                    std::time::Duration::from_secs(1),
+                )),
+            )
+            .expect("serve connection");
         });
         (client, handle)
     }

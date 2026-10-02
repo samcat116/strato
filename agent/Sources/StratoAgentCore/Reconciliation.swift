@@ -693,6 +693,7 @@ public actor Reconciler {
         case .vm(let desired):
             let observed = try await actuator.adoptVM(item)
             return Self.statusSteps(desired: desired.desiredStatus, observed: observed)
+                + (desired.desiredStatus == .running && desired.guestConfig != nil ? [.convergeGuestConfig] : [])
         case .sandbox(let desired):
             let observed = try await actuator.adoptSandbox(item)
             return Self.sandboxStatusSteps(desired: desired.desiredStatus, observed: observed)
@@ -945,6 +946,7 @@ public actor Reconciler {
         case .resume: return "resuming"
         case .resize: return "resizing"
         case .reconfigureNetworks: return "reconfiguring network interfaces"
+        case .convergeGuestConfig: return "converging guest configuration"
         case .shutdown: return "shutting down"
         case .delete: return "deleting"
         case .attach: return "attaching"

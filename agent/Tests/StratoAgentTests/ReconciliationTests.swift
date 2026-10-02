@@ -236,7 +236,7 @@ struct ReconciliationTests {
                 }
             case .reboot: presence[item.id] = .managed(.running)
             case .restore: presence[item.id] = .managed(.running)
-            case .adopt, .export, .reconfigureNetworks: break
+            case .adopt, .export, .reconfigureNetworks, .convergeGuestConfig: break
             case .attach, .detach, .throttle: break  // volume-only steps; never planned for a VM
             }
         }
@@ -264,6 +264,51 @@ struct ReconciliationTests {
         Reconciler(
             actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
             metadataStore: MetadataStore(), now: now)
+    }
+
+    @Test("Guest convergence gates the VM generation and permanent failure needs a new generation")
+    func guestFailureGatesGeneration() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .managed(.running)])
+        await actuator.setFailure(GuestConfigurationFailure.failed(reason: "package budget exhausted"))
+        let reconciler = makeReconciler(actuator)
+        func intent(_ generation: Int64) -> DesiredStateMessage {
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
+                    generation: generation, guestConfig: GuestConfig())
+            ])
+        }
+        await reconciler.apply(intent(7))
+        _ = await actuator.waitForReports(1)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 0)
+        #expect(await reconciler.lastError(for: id.uuidString) == "package budget exhausted")
+        #expect(await reconciler.failureClassification(for: id.uuidString) == .permanent)
+        let attempts = await actuator.performed.count
+        await actuator.setFailure(nil)
+        await reconciler.apply(intent(7))
+        #expect(await actuator.performed.count == attempts)
+        await reconciler.apply(intent(8))
+        _ = await actuator.waitForReports(2)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 8)
+        #expect(await reconciler.lastError(for: id.uuidString) == nil)
+        #expect(await actuator.performed.last?.step == .convergeGuestConfig)
+    }
+
+    @Test("Guest convergence follows adoption before the VM generation is acknowledged")
+    func guestConvergenceFollowsAdoption() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .orphaned])
+        let reconciler = makeReconciler(actuator)
+        await reconciler.apply(
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
+                    generation: 7, guestConfig: GuestConfig())
+            ]))
+        _ = await actuator.waitForReports(1)
+        #expect(await actuator.performed.last?.step == .convergeGuestConfig)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 7)
     }
 
     // MARK: - Pure diff engine

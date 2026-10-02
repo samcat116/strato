@@ -218,6 +218,8 @@ public enum ReconcileStep: Equatable, Sendable {
     /// (STR-202), or replace a Firecracker VMM whose immutable MMDS interface
     /// allow-list changed (STR-67). Creation realizes either initial set.
     case reconfigureNetworks
+    /// STR-91: guest diff/apply/read-back in the same per-VM serial lane.
+    case convergeGuestConfig
     case shutdown
     /// Gracefully stop (best effort) and remove the workload from this host.
     case delete
