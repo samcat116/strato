@@ -586,6 +586,113 @@ final class GuestExecTests {
         }
     }
 
+    @Test("Opposite cross-project fleet lock inputs serialize without double charging")
+    func crossProjectFleetBudgetsHaveStableLockOrder() async throws {
+        try await withSandboxTestApp { app, _, project, _, _ in
+            let organizationID = try #require(project.$organization.id)
+            let organization = try #require(try await Organization.find(organizationID, on: app.db))
+            let other = try await TestDataBuilder(db: app.db).createProject(
+                name: "other-fleet-project", description: "Cross-project fleet lock fixture", organization: organization
+            )
+            let firstID = try project.requireID()
+            let secondID = try other.requireID()
+            let firstVM = try await TestDataBuilder(db: app.db).createVM(name: "first-fleet-vm", project: project)
+            let secondVM = try await TestDataBuilder(db: app.db).createVM(name: "second-fleet-vm", project: other)
+            let firstVMID = try firstVM.requireID()
+            let secondVMID = try secondVM.requireID()
+            async let forward: Void = app.db.transaction { db in
+                try await VMExecSessionLimits.lockProjectBudgets(projectIDs: [firstID, secondID], on: db)
+                try await VMExecSessionLimits.admitRun(projectID: firstID, vmID: firstVMID, on: db)
+                try await VMExecSessionLimits.admitRun(projectID: secondID, vmID: secondVMID, on: db)
+            }
+            async let reverse: Void = app.db.transaction { db in
+                try await VMExecSessionLimits.lockProjectBudgets(projectIDs: [secondID, firstID], on: db)
+                try await VMExecSessionLimits.admitRun(projectID: secondID, vmID: secondVMID, on: db)
+                try await VMExecSessionLimits.admitRun(projectID: firstID, vmID: firstVMID, on: db)
+            }
+            _ = try await (forward, reverse)
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct Count: Decodable { let count: Int }
+            let counts = try await sql.raw("SELECT cardinality(accepted_at) AS count FROM vm_run_rate_limits")
+                .all(decoding: Count.self)
+            #expect(counts.count == 2)
+            #expect(counts.allSatisfy { $0.count == 2 })
+        }
+    }
+
+    @Test("Fleet acceptance shares VM and project limits without charging refused or repeated children")
+    func fleetSharesAdmissionLimits() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            let builder = TestDataBuilder(db: app.db)
+            let busy = try await builder.createVM(name: "fleet-full", project: project)
+            let available = try await builder.createVM(name: "fleet-one-slot", project: project)
+            for (index, vm) in [busy, available].enumerated() {
+                vm.guestAgentEnabled = true
+                _ = try await self.registerAgent(
+                    app: app, vm: vm, named: "fleet-limits-\(index)", supportsVMGuestExec: true)
+                vm.setStatus(.running)
+                try await vm.save(on: app.db)
+            }
+            let projectID = try project.requireID()
+            let availableID = try available.requireID()
+            for _ in 0..<(GuestExecLimits.runsPerProjectPerMinute - 2) {
+                try await app.db.transaction { db in
+                    try await VMExecSessionLimits.admitRun(projectID: projectID, vmID: availableID, on: db)
+                }
+            }
+            for vm in [busy, available] {
+                let slots = vm.id == busy.id ? GuestExecLimits.maxSessionsPerVM : GuestExecLimits.maxSessionsPerVM - 1
+                for _ in 0..<slots {
+                    try await VMExecSessionLimits.reserve(
+                        id: UUID(), vmID: vm.requireID(), userID: user.requireID(), username: user.username, on: app.db)
+                }
+            }
+            var fleetID: UUID?
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    VMFleetPrepareRequest(selector: "ids=\(busy.id!);\(availableID)", command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                fleetID = try res.content.decode(VMFleetRunResponse.self).id
+            }
+            let id = try #require(fleetID)
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/vm-fleet-runs/\(id)/confirm") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(VMFleetConfirmRequest(vmIDs: [busy.id!, availableID]))
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                    let result = try res.content.decode(VMFleetRunResponse.self)
+                    #expect(result.entries.first { $0.vmID == busy.id }?.state == "skipped")
+                    #expect(result.entries.first { $0.vmID == busy.id }?.reason?.contains("concurrent") == true)
+                    #expect(result.operations.count == 1)
+                    #expect(result.operations.first?.error?.contains("Could not dispatch fleet command") == true)
+                }
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 1)
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct RateCount: Decodable { let count: Int }
+            let rate = try #require(
+                try await sql.raw(
+                    "SELECT cardinality(accepted_at) AS count FROM vm_run_rate_limits WHERE project_id = \(bind: projectID)"
+                )
+                .first(decoding: RateCount.self))
+            #expect(rate.count == GuestExecLimits.runsPerProjectPerMinute - 1)
+            for expected in [HTTPResponseStatus.accepted, .tooManyRequests] {
+                try await app.test(.POST, "/api/vms/\(availableID)/actions/run") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(ExecBody(command: ["/usr/bin/id"]))
+                } afterResponse: { res in
+                    #expect(res.status == expected)
+                }
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 2)
+        }
+    }
+
     // MARK: - POST /api/vms/:id/actions/run
 
     @Test("VM command run is denied without the separate vm:runCommand grant")

@@ -25,12 +25,10 @@ enum VMExecSessionLimits {
     /// The project lock serializes the rolling rate window on every replica.
     static func admitRun(projectID: UUID, vmID: UUID, on db: any Database) async throws {
         let sql = try sql(db)
-        try await sql.raw(
-            "INSERT INTO vm_run_rate_limits (project_id) VALUES (\(bind: projectID)) ON CONFLICT DO NOTHING"
-        ).run()
-        _ = try await sql.raw(
-            "SELECT project_id FROM vm_run_rate_limits WHERE project_id = \(bind: projectID) FOR UPDATE"
-        ).all()
+        try await lockProjectBudget(projectID: projectID, on: db)
+        // Fleet confirmation catches admission refusals inside an outer transaction.
+        // Fluent does not provide nested savepoints, so refuse a full VM before charging.
+        try await admitVM(vmID: vmID, on: db)
         let admitted = try await sql.raw(
             """
             UPDATE vm_run_rate_limits
@@ -43,7 +41,24 @@ enum VMExecSessionLimits {
         guard !admitted.isEmpty else {
             throw Abort(.tooManyRequests, reason: "Project command rate limit reached; retry after 60 seconds")
         }
-        try await admitVM(vmID: vmID, on: db)
+    }
+
+    /// Fleet acceptance holds all project budgets in a stable order before VM locks.
+    /// Sorting prevents overlapping cross-project fleets from deadlocking each other.
+    static func lockProjectBudgets(projectIDs: [UUID], on db: any Database) async throws {
+        for projectID in Set(projectIDs).sorted(by: { $0.uuidString < $1.uuidString }) {
+            try await lockProjectBudget(projectID: projectID, on: db)
+        }
+    }
+
+    private static func lockProjectBudget(projectID: UUID, on db: any Database) async throws {
+        let sql = try sql(db)
+        try await sql.raw(
+            "INSERT INTO vm_run_rate_limits (project_id) VALUES (\(bind: projectID)) ON CONFLICT DO NOTHING"
+        ).run()
+        _ = try await sql.raw(
+            "SELECT project_id FROM vm_run_rate_limits WHERE project_id = \(bind: projectID) FOR UPDATE"
+        ).all()
     }
 
     private static func admitVM(vmID: UUID, on db: any Database) async throws {

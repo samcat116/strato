@@ -440,7 +440,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a fleet command without dispatch
-         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
          */
         post: operations["prepareVMFleetRun"];
         delete?: never;
@@ -460,7 +460,7 @@ export interface paths {
         };
         /**
          * Read collected fleet results
-         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
          */
         get: operations["getVMFleetRun"];
         put?: never;
@@ -484,7 +484,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm the exact fleet target list
-         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
          */
         post: operations["confirmVMFleetRun"];
         delete?: never;
@@ -11533,7 +11533,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            /** @description VM session cap or project command rate limit reached. */
+            /** @description VM concurrent exec session limit reached. */
             429: {
                 headers: {
                     [name: string]: unknown;

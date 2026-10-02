@@ -723,7 +723,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
-        "429": { description: VM session cap or project command rate limit reached. }
+        "429": { description: VM concurrent exec session limit reached. }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/vm-fleet-runs:
     post:
@@ -736,6 +736,9 @@ paths:
         and binds the exact resolved IDs. Repeated confirmation never replays commands.
         At most eight children are active per fleet. Poll until complete; failures
         and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
       requestBody:
         required: true
         content:
@@ -768,6 +771,9 @@ paths:
         and binds the exact resolved IDs. Repeated confirmation never replays commands.
         At most eight children are active per fleet. Poll until complete; failures
         and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
       responses:
         "200":
           description: The saved fleet run.
@@ -795,6 +801,9 @@ paths:
         and binds the exact resolved IDs. Repeated confirmation never replays commands.
         At most eight children are active per fleet. Poll until complete; failures
         and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
       requestBody:
         required: true
         content:

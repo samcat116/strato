@@ -242,10 +242,16 @@ has exited; the agent gate remains authoritative in that case.
 
 Recorded command acceptance also locks a per-project rate row and retains only
 the last minute's accepted timestamps (at most 60). Rejected transactions do
-not consume rate budget. Both normal `actions/run` and future fleet-run callers
-must call `VMExecSessionLimits.admitRun` inside their acceptance transaction,
-before inserting the existing `VMCommandExecution`; do not add another command
-model or bypass the per-project/per-VM gates. HTTP refusals return 429.
+not consume rate budget. Normal `actions/run` and fleet confirmation use the
+shared `VMController.acceptRunCommand` transaction, which calls
+`VMExecSessionLimits.admitRun` before inserting the existing `VMCommandExecution`.
+Capacity is checked before changing the rate window: Fluent nested transactions
+do not create savepoints, and fleet confirmation catches each refused child.
+Fleet confirmation locks its project budgets in UUID order before acquiring VM
+locks, preventing opposite cross-project lock acquisition. Queued children reserve
+VM slots until terminal. Dispatch and repeat confirmation reuse accepted records
+without charging admission again. Direct HTTP refusals return 429; fleet refusals
+become explicit skipped children.
 
 Interactive presence uses PostgreSQL leases. Pending reservations expire after
 60 seconds. The socket owner renews attached leases every maintenance tick
