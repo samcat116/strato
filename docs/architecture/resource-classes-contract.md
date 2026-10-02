@@ -6,7 +6,8 @@ runtime enforcement and effective readback for the selected backend.
 
 STR267 is stacked on STR265 PR1444, exact head
 `be5c7f10b2bddc290bd4841c80cb0152ee91d24f`. Issues #1246 and #1251 govern the
-control-plane and runtime halves. Wire v64 is GuestConfig, v65 is host density,
+control-plane and runtime halves. GuestConfig remains staged vocabulary;
+v65 is host density,
 and v66 is headroom; v67 is the coordinated resource-class schema.
 Do not independently allocate another version for STR272 fields while both
 changes remain unmerged. Exact-version agent/control-plane registration remains

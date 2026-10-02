@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 65). The required registration fields
+currently 67). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -62,11 +62,12 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v65 adds optional host memory profile observations, swap counters/rates,
-compressed zram original bytes, and bounded memory warnings. It includes wire v64's
-generation-guarded GuestConfig vocabulary. Matching v65 builds include both
-schemas, but do not advertise guest configuration realization. v64 peers are
-rejected before state exchange.
+Wire v67 carries resource-class snapshots, fractional CPU capacity, and coherent
+enforcement observations. Wire v66 adds net host memory accounting and backend
+allowances; v65 adds optional host memory profile observations, swap counters/rates,
+compressed zram original bytes, and bounded memory warnings. GuestConfig remains
+staged, generation-guarded vocabulary. This build advertises no guest configuration
+realization; its consumer requires a subsequent coordinated exact wire version.
 
 Wire v63 requires first-boot installation of the selected Strato guest-agent
 release for opted-in VMs across ISO and IMDS delivery, and adds independent
@@ -595,7 +596,7 @@ documentation — `MessageEnvelopeTests.swift`, `ReconciliationProtocolTests.swi
 `WireProtocolTests.swift`, and `GuestExecMessageTests.swift` show the
 expected encode/decode flows and compatibility behavior.
 
-## Managed VM guest configuration (STR-90, staged for wire v64)
+## Managed VM guest configuration (STR-90, staged vocabulary)
 
 STR-90 introduces shared vocabulary, not a live realization capability. Its
 standalone model-only build remains on wire v63. This compute integration uses
