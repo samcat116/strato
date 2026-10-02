@@ -57,7 +57,15 @@ struct VMFleetSelector: Sendable {
 }
 
 struct VMFleetPrepareRequest: Content { var selector: String; var command: [String] }
-struct VMFleetConfirmRequest: Content { var vmIDs: [UUID] }
+struct VMFleetConfirmRequest: Content, ValidatedRequestBody {
+    var vmIDs: [UUID]
+
+    mutating func validate() throws {
+        guard (1...VMFleetRunController.maxTargets).contains(vmIDs.count) else {
+            throw Abort(.badRequest, reason: "Confirm between 1 and 100 VM IDs")
+        }
+    }
+}
 
 struct VMFleetRunController: RouteCollection {
     static let maxTargets = 100
@@ -142,7 +150,7 @@ struct VMFleetRunController: RouteCollection {
     }
 
     func confirm(req: Request) async throws -> Response {
-        let body = try req.content.decode(VMFleetConfirmRequest.self)
+        let body = try req.content.decodeValidated(VMFleetConfirmRequest.self)
         let (id, audits) = try await req.db.transaction { db -> (UUID, [VMGuestExecutionAuditContext]) in
             let fleet = try await owned(req: req, on: db)
             guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }

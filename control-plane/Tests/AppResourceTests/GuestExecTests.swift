@@ -695,6 +695,76 @@ final class GuestExecTests {
 
     // MARK: - POST /api/vms/:id/actions/run
 
+    @Test("Fleet confirmations reject empty and oversized lists before mutation, including repeated confirmations")
+    func fleetConfirmationBounds() async throws {
+        try await withSandboxTestApp { app, _, _, _, token in
+            let unknown = UUID()
+            var preview: VMFleetRunResponse?
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(VMFleetPrepareRequest(selector: "ids=\(unknown)", command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                preview = try res.content.decode(VMFleetRunResponse.self)
+            }
+            let id = try #require(preview?.id)
+            for ids in [[], Array(repeating: unknown, count: VMFleetRunController.maxTargets + 1)] {
+                try await app.test(.POST, "/api/vm-fleet-runs/\(id)/confirm") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(VMFleetConfirmRequest(vmIDs: ids))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                }
+            }
+            #expect(try await VMFleetRun.find(id, on: app.db)?.confirmed == false)
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/vm-fleet-runs/\(id)/confirm") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(VMFleetConfirmRequest(vmIDs: [unknown]))
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                }
+            }
+            try await app.test(.POST, "/api/vm-fleet-runs/\(id)/confirm") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(VMFleetConfirmRequest(vmIDs: Array(repeating: unknown, count: 101)))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            #expect(try await VMFleetRun.find(id, on: app.db)?.confirmed == true)
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("A fleet confirmation accepts the documented maximum of 100 IDs")
+    func fleetConfirmationMaximumAccepted() async throws {
+        try await withSandboxTestApp { app, _, _, _, token in
+            let ids = (0..<VMFleetRunController.maxTargets).map { _ in UUID() }
+            var preview: VMFleetRunResponse?
+            try await app.test(.POST, "/api/vm-fleet-runs") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    VMFleetPrepareRequest(
+                        selector: "ids=" + ids.map(\.uuidString).joined(separator: ";"), command: ["/usr/bin/id"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                preview = try res.content.decode(VMFleetRunResponse.self)
+                #expect(preview?.entries.count == VMFleetRunController.maxTargets)
+            }
+            try await app.test(.POST, "/api/vm-fleet-runs/\(try #require(preview?.id))/confirm") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(VMFleetConfirmRequest(vmIDs: ids))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                let result = try res.content.decode(VMFleetRunResponse.self)
+                #expect(result.complete)
+                #expect(result.entries.count == VMFleetRunController.maxTargets)
+                #expect(result.operations.isEmpty)
+            }
+            #expect(try await VMCommandExecution.query(on: app.db).count() == 0)
+        }
+    }
+
     @Test("VM command run is denied without the separate vm:runCommand grant")
     func vmRunDeniedWithoutPermission() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
