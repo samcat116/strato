@@ -287,19 +287,17 @@ struct SandboxController: RouteCollection {
 
         let updateRequest = try req.content.decodeValidated(UpdateSandboxRequest.self)
 
-        // Only metadata is updatable: image/resources/process changes would
-        // need a re-converge story that phase 1 doesn't have.
-        if let name = updateRequest.name {
-            sandbox.name = name
+        // Metadata edits hold the same workload lock as placement so they
+        // cannot overwrite a newly admitted owner, snapshot or commitment.
+        if let ttl = updateRequest.ttlSeconds, ttl <= 0 {
+            throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
         }
-        if let ttl = updateRequest.ttlSeconds {
-            guard ttl > 0 else {
-                throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
-            }
-            sandbox.ttlSeconds = ttl
+        try await req.db.transaction { db in
+            guard try await sandbox.lockAndRefresh(on: db) else { throw Abort(.notFound) }
+            if let name = updateRequest.name { sandbox.name = name }
+            if let ttl = updateRequest.ttlSeconds { sandbox.ttlSeconds = ttl }
+            try await sandbox.save(on: db)
         }
-
-        try await sandbox.save(on: req.db)
         return try await Self.detailResponse(for: sandbox, on: req)
     }
 

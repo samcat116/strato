@@ -296,6 +296,7 @@ private func launchAgent(options: AgentOptions) async throws {
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,
         qemuMemoryOverheadBytes: config.qemuMemoryOverheadBytes,
+        hostMemoryReserveBytes: config.hostMemoryReserveBytes,
         simulation: finalSimulation,
         installMode: .detect(),
         spiffeConfig: config.spiffe,

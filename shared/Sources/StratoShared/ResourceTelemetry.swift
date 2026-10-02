@@ -128,6 +128,13 @@ public struct HostResourceTelemetry: Codable, Sendable, Equatable {
     /// Available false means the kernel exposes MGLRU but it is disabled;
     /// unavailable means this kernel exposes no MGLRU control at all.
     public let mglruEnabled: ResourceTelemetryFlag
+    public let memoryProfile: HostMemoryProfileObservation?
+    public let swapInPagesTotal: ResourceTelemetryValue?
+    public let swapOutPagesTotal: ResourceTelemetryValue?
+    public let zramOriginalBytes: ResourceTelemetryValue?
+    public let swapInPagesPerSecond: Double?
+    public let swapOutPagesPerSecond: Double?
+    public let memoryWarnings: [String]?
 
     public init(
         sampledAt: Date,
@@ -144,7 +151,14 @@ public struct HostResourceTelemetry: Codable, Sendable, Equatable {
         reclaimScannedPagesTotal: ResourceTelemetryValue,
         reclaimReclaimedPagesTotal: ResourceTelemetryValue,
         oomKillsTotal: ResourceTelemetryValue,
-        mglruEnabled: ResourceTelemetryFlag
+        mglruEnabled: ResourceTelemetryFlag,
+        memoryProfile: HostMemoryProfileObservation? = nil,
+        swapInPagesTotal: ResourceTelemetryValue? = nil,
+        swapOutPagesTotal: ResourceTelemetryValue? = nil,
+        zramOriginalBytes: ResourceTelemetryValue? = nil,
+        swapInPagesPerSecond: Double? = nil,
+        swapOutPagesPerSecond: Double? = nil,
+        memoryWarnings: [String]? = nil
     ) {
         self.sampledAt = sampledAt
         self.health = health
@@ -161,6 +175,13 @@ public struct HostResourceTelemetry: Codable, Sendable, Equatable {
         self.reclaimReclaimedPagesTotal = reclaimReclaimedPagesTotal
         self.oomKillsTotal = oomKillsTotal
         self.mglruEnabled = mglruEnabled
+        self.memoryProfile = memoryProfile
+        self.swapInPagesTotal = swapInPagesTotal
+        self.swapOutPagesTotal = swapOutPagesTotal
+        self.zramOriginalBytes = zramOriginalBytes
+        self.swapInPagesPerSecond = swapInPagesPerSecond
+        self.swapOutPagesPerSecond = swapOutPagesPerSecond
+        self.memoryWarnings = memoryWarnings
     }
 }
 

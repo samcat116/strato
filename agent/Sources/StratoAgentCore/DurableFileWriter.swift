@@ -63,7 +63,7 @@ struct DurableFileWriter: Sendable {
     /// `path`. `permissions` is applied when the temporary file is created and
     /// is therefore never wider while its contents are present. Concurrent calls
     /// stage independently; the last rename publishes a complete payload.
-    func write(_ data: Data, to path: String, permissions: CInt = 0o666) throws {
+    func write(_ data: Data, to path: String, permissions: CInt = 0o600) throws {
         try createDirectory(at: parentDirectory(of: path))
 
         // Cleanup and publication share a cross-process directory lock, held
@@ -148,7 +148,7 @@ struct DurableFileWriter: Sendable {
         }
 
         for directory in missingDirectories.reversed() {
-            let result = systemCalls.createDirectory(at: directory, permissions: 0o777)
+            let result = systemCalls.createDirectory(at: directory, permissions: 0o700)
             if result != 0 {
                 let errorNumber = systemCalls.errorNumber
                 guard errorNumber == EEXIST, systemCalls.pathStatus(at: directory) == .directory else {

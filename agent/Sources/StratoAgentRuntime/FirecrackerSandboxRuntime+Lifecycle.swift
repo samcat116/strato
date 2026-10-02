@@ -17,9 +17,22 @@ extension FirecrackerSandboxRuntime {
         registryCredential: RegistryCredential?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass, enforcement: burstableEnforcement)
+        if spec.resourceClass?.policy.kind == .burstable {
+            guard jailNewSandboxes else {
+                throw ConvergenceError.blocked("Burstable sandboxes require the jailer boundary")
+            }
+            try BurstableCgroupEnforcement.requireDelegatedControllers()
+        }
         // Idempotent: a replayed create for an already-defined sandbox is a
         // no-op (the Firecracker process is already configured).
-        if sandboxes[sandboxId] != nil {
+        if let existing = sandboxes[sandboxId] {
+            if spec.resourceClass?.policy.kind == .burstable {
+                guard existing.spec.resourceClass == spec.resourceClass,
+                    existing.spec.memoryBytes == spec.memoryBytes, existing.spec.cpus == spec.cpus
+                else { throw ConvergenceError.blocked("Existing sandbox does not match the admitted burstable grant") }
+                try await validateResourceLimits(sandboxId: sandboxId, spec: spec)
+            }
             return
         }
 
@@ -412,7 +425,8 @@ extension FirecrackerSandboxRuntime {
                 vsock: SandboxJailPlan.vsockUDSPathInJail
             )
 
-            jailOptions = makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes)
+            jailOptions = try makeJailerOptions(
+                plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass)
         } else {
             jailPlan = nil
             let dir = sandboxDirectory(vmId)
@@ -442,7 +456,9 @@ extension FirecrackerSandboxRuntime {
         // `vmAlreadyRunning`.
         let manager: FirecrackerManager
         do {
-            manager = try await client.createVM(vmId: vmId, jail: jailOptions)
+            manager = try await client.createVM(
+                vmId: vmId, jail: jailOptions,
+                validateCgroup: try resourceLimitValidator(sandboxId: vmId, spec: spec))
         } catch {
             if let plan = jailPlan {
                 await removeJailArtifacts(plan)
@@ -583,12 +599,16 @@ extension FirecrackerSandboxRuntime {
             try await createNetns(plan.netnsName)
 
             let manager = try await client.restoreVM(
-                vmId: sandboxId, jail: makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes),
+                vmId: sandboxId,
+                jail: makeJailerOptions(
+                    plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
                     resumeVM: false,
-                    networkOverrides: overrides))
+                    networkOverrides: overrides),
+                validateCgroup: try resourceLimitValidator(sandboxId: sandboxId, spec: spec))
+            try await validateRestoredGrant(manager: manager, sandboxId: sandboxId, spec: spec, resume: false)
             return ProvisionedMicroVM(
                 rootfsPath: rootfsHost, configPath: configHost,
                 vsockUdsPath: plan.vsockUDSHostPath, jail: plan, manager: manager)
@@ -702,12 +722,15 @@ extension FirecrackerSandboxRuntime {
             // quietly depend on it if it ever became real.
             let manager = try await client.restoreVM(
                 vmId: sandboxId,
-                jail: makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes),
+                jail: makeJailerOptions(
+                    plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: true,
-                    networkOverrides: overrides))
+                    resumeVM: spec.resourceClass?.policy.kind != .burstable,
+                    networkOverrides: overrides),
+                validateCgroup: try resourceLimitValidator(sandboxId: sandboxId, spec: spec))
+            try await validateRestoredGrant(manager: manager, sandboxId: sandboxId, spec: spec, resume: true)
 
             let sourceResponse = try await sendControl(
                 .ping, udsPath: plan.vsockUDSHostPath, timeout: 20)
@@ -802,8 +825,18 @@ extension FirecrackerSandboxRuntime {
     /// The jailer options for one microVM's jail plan — shared by cold
     /// provisioning, warm restores, and checkpoint restores so isolation
     /// settings can never drift between the three spawn paths.
-    func makeJailerOptions(plan: SandboxJailPlan, guestMemoryBytes: Int64) -> JailerOptions {
-        let cgroups = jailerCgroups(guestMemoryBytes: guestMemoryBytes)
+    func makeJailerOptions(
+        plan: SandboxJailPlan, guestMemoryBytes: Int64, resourceClass: WorkloadResourceClassSnapshot? = nil
+    ) throws -> JailerOptions {
+        let cgroups: (version: Int?, entries: [String])
+        if let limits = try BurstableResourceLimits.plan(
+            resourceClass: resourceClass, guestGrantBytes: guestMemoryBytes,
+            backendOverheadBytes: WorkloadMemoryReservation.firecrackerOverheadBytes)
+        {
+            cgroups = (2, try limits.jailerEntries(pageSize: BurstableCgroupEnforcement.hostPageSizeBytes))
+        } else {
+            cgroups = jailerCgroups(guestMemoryBytes: guestMemoryBytes)
+        }
         return JailerOptions(
             jailerBinaryPath: jailerConfig.jailerBinaryPath,
             chrootBaseDir: jailerConfig.chrootBaseDir,
@@ -826,9 +859,12 @@ extension FirecrackerSandboxRuntime {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
+        try BurstableRuntimeGate.requireSupport(
+            resourceClass: managed.spec.resourceClass, enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
+        try await validateResourceLimits(sandboxId: sandboxId, spec: managed.spec)
         let bootStarted = Date()
 
         let info = try await managed.manager.getInstanceInfo()
@@ -1134,7 +1170,9 @@ extension FirecrackerSandboxRuntime {
     func adoptSandbox(
         sandboxId: String, spec: SandboxSpec, jailUID: UInt32?
     ) async throws -> SandboxStatus {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass, enforcement: burstableEnforcement)
         if let managed = sandboxes[sandboxId] {
+            try await validateResourceLimits(sandboxId: sandboxId, spec: spec)
             // A replayed sync can race adoption; if already managed, adoption is
             // satisfied only after a running guest has passed the strict
             // current-protocol handshake. A prior failed adoption intentionally
@@ -1179,15 +1217,13 @@ extension FirecrackerSandboxRuntime {
             candidates.append(
                 (
                     plan,
-                    JailerOptions(
-                        jailerBinaryPath: jailerConfig.jailerBinaryPath,
-                        chrootBaseDir: jailerConfig.chrootBaseDir,
-                        uid: plan.uid, gid: plan.gid),
+                    try makeJailerOptions(
+                        plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass),
                     jailedSocketPath
                 ))
         }
         let flatSocketPath = FirecrackerClient.socketPath(socketDirectory: socketDirectory, vmId: sandboxId)
-        if FileManager.default.fileExists(atPath: flatSocketPath) {
+        if FileManager.default.fileExists(atPath: flatSocketPath), spec.resourceClass?.policy.kind != .burstable {
             candidates.append((nil, nil, flatSocketPath))
         }
         guard !candidates.isEmpty else {
@@ -1209,8 +1245,13 @@ extension FirecrackerSandboxRuntime {
                 ])
             do {
                 let (manager, info) = try await client.adoptVM(vmId: sandboxId, jail: candidate.jailOptions)
+                // Preserve an existing process if validation fails. Do not
+                // treat a control mismatch as process-death evidence.
+                try await validateResourceLimits(sandboxId: sandboxId, spec: spec)
                 adoption = (manager, info, candidate.jailPlan)
                 break
+            } catch let error as ConvergenceError {
+                throw error
             } catch {
                 // A live Firecracker always answers its API socket, so a failed
                 // connect means this candidate's process is gone and its socket

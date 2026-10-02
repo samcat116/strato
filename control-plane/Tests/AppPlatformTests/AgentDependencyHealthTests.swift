@@ -223,6 +223,20 @@ struct AgentDependencyHealthTests {
         #expect(availability.lastValue == 1)
     }
 
+    @Test("KSM transition fences QEMU, Firecracker, and snapshot placement")
+    func memoryProfileFence() {
+        let now = Date()
+        let agent = makeAgent(
+            observations: [
+                observation(.libvirt, capability: .qemuPlacement, state: .healthy, checkedAt: now),
+                observation(.hostMemoryProfile, capability: .qemuPlacement, state: .unhealthy, checkedAt: now),
+            ], receivedAt: now)
+        let instant = ClusterInstant.testing(now)
+        #expect(agent.supportedHypervisors(at: instant).isEmpty)
+        #expect(!agent.supportsSnapshotArtifact(.sandboxSnapshot, at: instant))
+        #expect(!agent.hostMemoryProfileAllowsPlacement(at: instant))
+    }
+
     private func makeAgent(
         observations: [NodeDependencyObservation],
         receivedAt: Date = Date()
@@ -231,7 +245,7 @@ struct AgentDependencyHealthTests {
             name: "node-1", hostname: "node-1", version: "test", siteID: UUID(), status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
-                totalMemory: 16_000, availableMemory: 16_000,
+                totalMemory: 16_000 * 1024 * 1024, availableMemory: 16_000 * 1024 * 1024,
                 totalDisk: 100_000, availableDisk: 100_000),
             hypervisors: [
                 HypervisorSupport(

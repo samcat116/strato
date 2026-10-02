@@ -79,8 +79,14 @@ log_level = "info"
 # QEMU process memory allowance above the VM's current guest memory. When the
 # host exposes the cgroup-v2 memory controller, the agent programs guest memory
 # plus this allowance as libvirt's hard memory limit. This is a containment
-# backstop, not capacity or quota. Valid range: 128-4096 MiB (default: 512).
+# backstop and is included once in host admission/placement (not tenant quota).
+# Valid range: 128-4096 MiB (default: 512).
 # qemu_memory_overhead_mb = 512
+
+# Physical host memory held back for the kernel, agent, daemons, and reclaim.
+# Nonnegative MiB; default 1024. Reserve edits affect new create/boot/growth
+# admission only. Running workloads are never restarted or resized.
+# host_memory_reserve_mb = 1024
 
 # Select the network and hypervisor drivers advertised by this Linux agent.
 # network_mode = "ovn"          # "ovn" or "user"; default: "user"

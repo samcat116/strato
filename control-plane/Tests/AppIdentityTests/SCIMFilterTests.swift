@@ -168,13 +168,14 @@ final class SCIMFilterTests: BaseTestCase {
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Org A")
             try await createUser(builder, username: "tenPercent", displayName: "No Symbol", org: org)
-            try await createUser(builder, username: "ten%off", displayName: "Has Percent", org: org)
+            try await createUser(builder, username: "ten_off", displayName: "Has % Percent", org: org)
 
-            // A literal "%" must be escaped: it should match only the username that
-            // actually contains "%", not every row (which is what an unescaped
-            // wildcard would do).
+            // Underscores are valid username characters; percent signs belong
+            // in display names. Both must match literally, not as SQL wildcards.
             #expect(
-                try await searchUsernames(app, org: org, path: "userName", op: .contains, value: "%") == ["ten%off"])
+                try await searchUsernames(app, org: org, path: "userName", op: .contains, value: "_") == ["ten_off"])
+            #expect(
+                try await searchUsernames(app, org: org, path: "displayName", op: .contains, value: "%") == ["ten_off"])
         }
     }
 

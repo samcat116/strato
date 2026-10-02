@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+import { WorkloadResourceClassField, GUARANTEED_RESOURCE_CLASS_ID } from "@/components/ui/workload-resource-class-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -46,6 +47,7 @@ export function CreateVMDialog({
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: "",
+    resourceClassSiteID: "",
     description: "",
     imageId: "",
     cpu: "2",
@@ -227,6 +229,7 @@ export function CreateVMDialog({
     setQuotaError(null);
     const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API fields are named `memory`/`disk`
     const payload = {
+      ...(formData.resourceClassSiteID ? { resourceClass: { siteID: formData.resourceClassSiteID, classID: GUARANTEED_RESOURCE_CLASS_ID } } : {}),
       name: formData.name,
       description: formData.description || undefined,
       projectId,
@@ -276,6 +279,7 @@ export function CreateVMDialog({
         // Reset form
         setFormData({
           name: "",
+      resourceClassSiteID: "",
           description: "",
           imageId: "",
           cpu: "2",
@@ -323,6 +327,7 @@ export function CreateVMDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
+            <WorkloadResourceClassField siteID={formData.resourceClassSiteID} onChange={(siteID) => setFormData((current) => ({ ...current, resourceClassSiteID: siteID }))} disabled={isLoading} />
             {quotaError && (
               <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-700">
                 <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />

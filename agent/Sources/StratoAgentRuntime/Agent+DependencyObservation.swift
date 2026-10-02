@@ -65,6 +65,16 @@ extension Agent {
             ]
 
             #if os(Linux)
+            registry.append(
+                HostMemoryProfileDependencyModule(
+                    observation: {
+                        await Task.detached(priority: .utility) {
+                            ResourceTelemetryProbe.live.memoryProfileObservation()
+                        }.value
+                    },
+                    warnings: { [weak self] in
+                        await self?.hostResourceTelemetry?.memoryWarnings ?? []
+                    }))
             let libvirtVersionCache = NodeDependencyProbeCache<String?>()
             registry.append(
                 LibvirtNodeDependencyModule(

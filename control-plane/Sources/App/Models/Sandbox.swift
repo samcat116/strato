@@ -11,6 +11,12 @@ import StratoShared
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks
 /// receive IDs or immutable snapshots and reload their own instance.
 final class Sandbox: Model, @unchecked Sendable {
+    @OptionalField(key: "admitted_reservation")
+    var admittedReservation: WorkloadAdmittedReservation?
+
+    @OptionalField(key: "resource_class")
+    var resourceClass: WorkloadResourceClassSnapshot?
+
     static let schema = "sandboxes"
 
     @ID(key: .id)
@@ -370,7 +376,9 @@ extension Sandbox {
             workingDir: workingDir,
             network: network,
             restoreFrom: restoreFrom,
-            cpuTemplate: cpuTemplate
+            cpuTemplate: cpuTemplate,
+            resourceClass: resourceClass,
+            admittedReservation: admittedReservation
         )
     }
 }
@@ -422,6 +430,10 @@ struct SandboxNetworkInterfaceResponse: Content {
 }
 
 struct SandboxDetailResponse: Content {
+    let admittedReservation: WorkloadAdmittedReservation?
+    let effectiveMemoryReservationBytes: Int64?
+    let resourceClass: WorkloadResourceClassSnapshot?
+    let resourceClassKind: WorkloadResourceClassKind
     let id: UUID?
     let name: String
     let projectId: UUID?
@@ -484,6 +496,10 @@ struct SandboxDetailResponse: Content {
 
     init(from sandbox: Sandbox, securityGroupsEnforced: Bool? = nil) {
         self.id = sandbox.id
+        self.admittedReservation = sandbox.admittedReservation
+        self.effectiveMemoryReservationBytes = sandbox.admittedReservation?.effectiveMemoryBytes
+        self.resourceClass = sandbox.resourceClass
+        self.resourceClassKind = sandbox.resourceClass?.policy.kind ?? .guaranteed
         self.name = sandbox.name
         self.projectId = sandbox.$project.id
         self.environment = sandbox.environment

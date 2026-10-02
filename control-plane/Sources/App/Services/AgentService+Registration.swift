@@ -27,14 +27,16 @@ extension AgentService {
         trustDomain: String = PlatformTrustDomain.current,
         identityOrganizationID: UUID? = nil,
         siteID: UUID? = nil,
-        organizationScope: OrganizationScope? = nil
+        organizationScope: OrganizationScope? = nil,
+        inventorySessionID: UUID? = nil
     ) async throws -> UUID {
         try await registerAgent(
             message,
             identity: AgentIdentity(trustDomain: trustDomain, name: agentName),
             identityOrganizationID: identityOrganizationID,
             siteID: siteID,
-            organizationScope: organizationScope
+            organizationScope: organizationScope,
+            inventorySessionID: inventorySessionID
         )
     }
 
@@ -52,7 +54,10 @@ extension AgentService {
         identity: AgentIdentity,
         identityOrganizationID: UUID? = nil,
         siteID: UUID? = nil,
-        organizationScope: OrganizationScope? = nil
+        organizationScope: OrganizationScope? = nil,
+        inventorySessionID: UUID? = nil,
+        afterCapturingInventorySession: (@Sendable () async -> Void)? = nil,
+        afterCheckingRegistrationPredecessor: (@Sendable () async -> Void)? = nil
     ) async throws -> UUID {
         let agentName = identity.name
         let agentKey = identity.key
@@ -67,222 +72,55 @@ extension AgentService {
         }
 
         let db = app.db
-        var organizationScope = organizationScope
-        var siteID = siteID
-        let dependencyObservations = normalizedDependencyObservations(
-            message.dependencyObservations, agentName: agentName)
-        let registrationInstant = try await ClusterClock.read(on: db)
-        // Set when this registration creates the agent row, so the enrollment it
-        // drew its scope from can be marked used after a successful save.
-        var newAgentEnrollment: AgentEnrollment?
-        var previousDependencyObservations: [NodeDependencyObservation] = []
-
-        // Find existing agent or create new one
-        let agent: Agent
-        if let existingAgent = try await Agent.query(on: db)
-            .filter(\.$trustDomain == trustDomain)
-            .filter(\.$name == agentName)
-            .first()
+        // Capture the predecessor at the first registration DB read. A late
+        // completion on another replica cannot replace a session that changed
+        // while enrollment/resource work was in flight.
+        guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
+        let predecessor = try await sql.raw(
+            "SELECT id, inventory_session_id FROM agents WHERE trust_domain = \(bind: trustDomain) AND name = \(bind: agentName)"
+        ).first()
+        let capturedAgentID = try predecessor?.decode(column: "id", as: UUID.self)
+        let token = try predecessor?.decode(column: "inventory_session_id", as: UUID?.self)
+        let registrationExpectation = InventorySessionExpectation.matches(token ?? nil)
+        if inventorySessionID != nil, observedInventorySessions[agentKey] == inventorySessionID,
+            token ?? nil != inventorySessionID
         {
-            guard !existingAgent.administrativelyOffline else {
-                throw Abort(.forbidden, reason: "Agent is administratively offline")
-            }
-            // Update existing agent
-            agent = existingAgent
-            previousDependencyObservations = existingAgent.dependencyObservations
-            if siteID == nil { siteID = existingAgent.$site.id }
-            if existingAgent.version != message.version {
-                // The visible confirmation that a self-update (issue #432)
-                // landed: the restarted binary re-registers under its name
-                // with the new build version.
-                app.logger.notice(
-                    "Agent re-registered with a new version",
-                    metadata: [
-                        "strato.agent.name": .string(agentName),
-                        "previousVersion": .string(existingAgent.version),
-                        "version": .string(message.version),
-                    ])
-            }
-            agent.apply(
-                registration: message,
-                dependencyObservations: dependencyObservations,
-                receivedAt: registrationInstant.date)
-        } else {
-            // A brand-new agent takes its scope and site placement from the
-            // enrollment an operator created for this name: agents authenticate
-            // by SVID and carry no credential that could convey either. Existing
-            // agents deliberately skip this — both are durable on the agent row,
-            // and re-reading the enrollment on every reconnect would fight an
-            // operator who has since moved the agent to another site.
-            let enrollment = try await AgentEnrollment.query(on: db)
-                .filter(\.$trustDomain == trustDomain)
-                .filter(\.$agentName == agentName)
-                .sort(\.$createdAt, .descending)
-                .first()
-            if organizationScope == nil { organizationScope = enrollment?.organizationScope }
-            if siteID == nil { siteID = enrollment?.siteID }
-
-            // An org trust domain is a cryptographic statement about *whose*
-            // node this is, so it must agree with the enrollment's scope: a
-            // node attested by org A's CA may not join org B's capacity, and a
-            // node whose enrollment carries no scope at all inherits its
-            // domain's org rather than being refused.
-            if let identityOrganizationID {
-                if let scope = organizationScope {
-                    let owner = try await scope.rootOrganizationID(on: db)
-                    guard owner == identityOrganizationID else {
-                        Telemetry.agentRegistrationFailed(reason: "organization_scope_mismatch")
-                        throw AgentServiceError.missingOrganizationScope(agentName: agentName)
+            throw Abort(.conflict, reason: "The registered socket was superseded by another replica")
+        }
+        await afterCapturingInventorySession?()
+        let targetAgentID = capturedAgentID ?? UUID()
+        let session = inventorySessionID ?? UUID()
+        let result: RegistrationPersistence = try await withCheckedThrowingContinuation { continuation in
+            enqueueInventoryOperation(for: agentKey) {
+                do {
+                    let result = try await InventorySessionFence.withLock(
+                        agentID: targetAgentID, on: db, logger: self.app.logger
+                    ) { connection in
+                        try await connection.transaction { tx in
+                            try await self.persistAgentRegistration(
+                                message, identity: identity, identityOrganizationID: identityOrganizationID,
+                                siteID: siteID, organizationScope: organizationScope,
+                                targetAgentID: targetAgentID, capturedAgentID: capturedAgentID,
+                                expectation: registrationExpectation, session: session,
+                                afterCheckingRegistrationPredecessor: afterCheckingRegistrationPredecessor, on: tx)
+                        }
                     }
-                } else {
-                    organizationScope = .organization(identityOrganizationID)
+                    await self.activateRegistrationSession(session, for: agentKey)
+                    continuation.resume(returning: result)
+                } catch {
+                    continuation.resume(throwing: error)
                 }
             }
-
-            guard organizationScope != nil else {
-                Telemetry.agentRegistrationFailed(reason: "missing_organization_scope")
-                throw AgentServiceError.missingOrganizationScope(agentName: agentName)
-            }
-            guard let siteID else {
-                throw Abort(.badRequest, reason: "Agent enrollment requires a site")
-            }
-            // Create new agent
-            agent = Agent.from(
-                registration: message,
-                name: agentName,
-                siteID: siteID,
-                dependencyObservations: dependencyObservations,
-                at: registrationInstant,
-                trustDomain: trustDomain)
-            newAgentEnrollment = enrollment
         }
-
-        let previousScope = agent.organizationScope
-        if let organizationScope, previousScope != organizationScope {
-            // A token-driven org change moves dedicated capacity between
-            // tenants, so it must honor the same drain invariant as a site
-            // change: never move an agent that still hosts VMs (they belong to
-            // the old org's projects and would be stranded on foreign
-            // hardware). An agent assigned to a site can't change org either —
-            // the site's whole OVN deployment belongs to one org. Refusals are
-            // logged, not fatal; the agent registers with its previous scope.
-            var refusalReason: String?
-            if agent.id != nil {
-                refusalReason = "agent organization is fixed by its required site"
-            }
-            if let refusalReason {
-                app.logger.error(
-                    "Ignoring enrollment organization assignment: \(refusalReason)",
-                    metadata: ["strato.agent.identity": .string(agentKey)])
-            } else {
-                agent.organizationScope = organizationScope
-            }
-        }
-
-        if let siteID, agent.$site.id != siteID {
-            // A token-driven site change must honor the same invariants as the
-            // sites API's assign/remove endpoints, or the token becomes a
-            // bypass. Never move a site's designated network controller (the
-            // old site would point at a non-member and its networks would
-            // silently stop being reconciled), and never move an agent that
-            // still hosts VMs (their networks would drop out of the NB that
-            // has been realizing them). Refusals are logged, not fatal — the
-            // agent still registers with its previous site intact. (A
-            // brand-new agent row has no id yet and trips neither guard.)
-            var refusalReason: String?
-            if let agentID = agent.id {
-                let controllerships =
-                    try await Site.query(on: db)
-                    .filter(\.$networkControllerAgent.$id == agentID)
-                    .filter(\.$id != siteID)
-                    .count()
-                if controllerships > 0 {
-                    refusalReason = "agent is another site's network controller"
-                } else {
-                    let hostedVMs = try await VM.query(on: db)
-                        .filter(\.$hypervisorId == agentID.uuidString)
-                        .count()
-                    let hostedSandboxes = try await Sandbox.query(on: db)
-                        .filter(\.$hypervisorId == agentID.uuidString)
-                        .count()
-                    if hostedVMs > 0 {
-                        refusalReason = "agent hosts \(hostedVMs) VM(s); drain it first"
-                    } else if hostedSandboxes > 0 {
-                        refusalReason = "agent hosts \(hostedSandboxes) sandbox(es); drain it first"
-                    }
-                }
-            }
-            // A site is one OVN deployment owned by one scope; its members
-            // must live within that scope (sibling-OU agents included — see
-            // the sites API's assignAgent, which this token path must match).
-            if refusalReason == nil {
-                let siteScope = try await Site.find(siteID, on: db)?.organizationScope
-                let agentScope = agent.organizationScope
-                let contained: Bool
-                if let siteScope, let agentScope {
-                    contained = try await siteScope.contains(agentScope, on: db)
-                } else {
-                    contained = false
-                }
-                if !contained {
-                    refusalReason = "site's organization scope does not contain the agent's"
-                }
-            }
-            if let refusalReason {
-                app.logger.error(
-                    "Ignoring enrollment site assignment: \(refusalReason)",
-                    metadata: ["strato.agent.identity": .string(agentKey), "requestedSite": .string(siteID.uuidString)])
-            } else {
-                agent.$site.id = siteID
-            }
-        }
-
-        try await saveActiveAgent(agent, on: db)
-
-        // A site with no designated network controller reconciles no topology
-        // at all, so the first OVN-capable node to join one takes the job
-        // (issue #743). Without this the common single-node deployment — new
-        // org, its default site, one enrolled node — comes up with switches
-        // authored by nobody and every VM parked on a logical switch that
-        // never appears, with no API-visible symptom. An existing designation
-        // is never displaced. The sync pushed right after this registration
-        // carries the new controller its authoritative topology.
-        //
-        // Re-validation runs first: every condition the designation was made
-        // under is a property of *this* registration, and an agent that came
-        // back in user-mode or on a rolled-back binary would otherwise keep the
-        // job while authoring nothing (issue #833). When it hands the job back,
-        // an eligible peer claims it on its own next registration.
-        let persistedSiteID = agent.$site.id
-        await SiteNetworkAuthority.revalidateDesignation(
-            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
-        await SiteNetworkAuthority.designateIfUnset(
-            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
-
-        // Record that the node completed its first registration. Bootstrap
-        // redemption already erased the token hash atomically before minting
-        // the node credential, so this informational save cannot reopen the
-        // credential even if it fails. The enrollment row remains as the
-        // durable scope record.
-        if let enrollment = newAgentEnrollment, !enrollment.isUsed {
-            enrollment.markAsUsed()
-            do {
-                try await enrollment.save(on: db)
-            } catch {
-                app.logger.warning(
-                    "Failed to mark agent enrollment as used",
-                    metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
-            }
-        }
-
-        guard let agentUUID = agent.id else {
-            throw AgentServiceError.invalidResponse("Failed to get agent ID after save")
-        }
+        let agent = result.agent
+        let agentUUID = targetAgentID
+        let previousDependencyObservations = result.previousDependencyObservations
+        let dependencyObservations = result.dependencyObservations
+        let registrationInstant = result.registrationInstant
 
         // Attach the UUID to the live socket so local routing (console and
         // exec streams) can resolve it without a database read. No-op when no
         // socket exists (tests).
-        try await beginObservedInventorySession(for: agentKey)
         app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
 
         // Publish presence to the coordination store so every control-plane
@@ -444,6 +282,9 @@ extension AgentService {
         // Capture routing before local cleanup clears claims. This works even
         // after the agent row and enrollment have been deleted.
         let owner = await app.coordination.agentRoute(agentKey: agentKey)
+        // Coordination fails open: a missing route cannot prove a remote
+        // socket is absent. A known local connection can still be revoked.
+        let hasLocalConnection = app.websocketManager.getConnection(agentKey: agentKey) != nil
         var failure: (any Error)?
         do {
             if let owner, owner != app.replicaID {
@@ -456,6 +297,12 @@ extension AgentService {
         await disconnectLocalAgent(agentKey: agentKey)
         if let owner {
             await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: owner)
+        }
+        if owner == nil && !hasLocalConnection {
+            throw Abort(
+                .serviceUnavailable,
+                reason: "Agent revocation is durable, but socket ownership is unknown and teardown was not acknowledged"
+            )
         }
         if failure != nil {
             throw Abort(
@@ -564,7 +411,27 @@ extension AgentService {
     /// the claimed `agentId` must belong to it, so one agent cannot drive another
     /// agent's resource tracking or VM reconciliation.
     func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
-        let db = app.db
+        let session = observedInventorySessions[agentKey]
+        try await updateAgentHeartbeat(message, fromAgentKey: agentKey, inventorySession: session)
+    }
+
+    /// Network callers supply the immutable session captured by their socket,
+    /// never a fresh lookup using the identity shared by successor connections.
+    func updateAgentHeartbeat(
+        _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, inventorySession session: UUID?
+    ) async throws {
+        guard let agentID = UUID(uuidString: message.agentId), observedInventorySessions[agentKey] == session else {
+            return
+        }
+        try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
+            guard try await InventorySessionFence.current(agentID: agentID, on: db) == session else { return }
+            try await self.applyFencedHeartbeat(message, fromAgentKey: agentKey, on: db)
+        }
+    }
+
+    private func applyFencedHeartbeat(
+        _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, on db: any Database
+    ) async throws {
         let instant = try await ClusterClock.read(on: db)
         guard let agentUUID = UUID(uuidString: message.agentId),
             let agent = try await Agent.find(agentUUID, on: db)
@@ -590,8 +457,12 @@ extension AgentService {
         // and observed report carry the same snapshot on the same cadence.
         // Persist only real resource/status changes or one heartbeat per half
         // TTL so identical pairs do not churn the row.
+        // Once coherent reporting is established, unordered heartbeat capacity
+        // cannot overwrite the accepted accounting snapshot. The existing
+        // session fence serializes this read/save with reports and reconnects.
+        let accepted = try await AgentResourceAdmission.find(agentUUID, on: db)?.state.resources
         if applyPeriodicAgentState(
-            message.resources,
+            accepted ?? message.resources,
             dependencyObservations: message.dependencyObservations,
             hostResourceTelemetry: message.hostResourceTelemetry,
             to: agent,
@@ -639,6 +510,9 @@ extension AgentService {
     ) -> Bool {
         guard !agent.administrativelyOffline else { return false }
         var changed = agent.updateAvailableResources(resources)
+        if let accounting = resources.memoryAccounting, let agentID = agent.id?.uuidString {
+            Telemetry.recordHostMemoryAccounting(agentID: agentID, accounting: accounting)
+        }
         let now = instant.date
         if let dependencyObservations {
             let storedObservations = normalizedDependencyObservations(
@@ -780,6 +654,268 @@ extension AgentService {
 }
 
 extension AgentService {
+
+    private struct RegistrationPersistence: Sendable {
+        let agent: Agent
+        let previousDependencyObservations: [NodeDependencyObservation]
+        let dependencyObservations: [NodeDependencyObservation]
+        let registrationInstant: ClusterInstant
+    }
+
+    private func activateRegistrationSession(_ session: UUID, for agentKey: String) {
+        observedInventorySessions[agentKey] = session
+        acceptedInventorySections.removeValue(forKey: agentKey)
+    }
+
+    /// Metadata, designation, enrollment and inventory ownership commit together.
+    /// Check the predecessor before any registration-derived durable write.
+    private func persistAgentRegistration(
+        _ message: AgentRegisterMessage, identity: AgentIdentity, identityOrganizationID: UUID?,
+        siteID: UUID?, organizationScope: OrganizationScope?, targetAgentID: UUID,
+        capturedAgentID: UUID?, expectation: InventorySessionExpectation, session: UUID,
+        afterCheckingRegistrationPredecessor: (@Sendable () async -> Void)?, on db: any Database
+    ) async throws -> RegistrationPersistence {
+        let agentName = identity.name
+        let agentKey = identity.key
+        let trustDomain = identity.trustDomain
+        guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
+        let current = try await sql.raw(
+            "SELECT id, inventory_session_id, administratively_offline FROM agents WHERE trust_domain = \(bind: trustDomain) AND name = \(bind: agentName) FOR UPDATE"
+        ).first()
+        let currentID = try current?.decode(column: "id", as: UUID.self)
+        guard currentID == capturedAgentID else {
+            throw Abort(.conflict, reason: "Agent registration identity changed while in flight")
+        }
+        if case .matches(let expected) = expectation,
+            try current?.decode(column: "inventory_session_id", as: UUID?.self) ?? nil != expected
+        {
+            throw Abort(.conflict, reason: "Agent registration was superseded while in flight")
+        }
+        if try current?.decode(column: "administratively_offline", as: Bool.self) == true {
+            throw Abort(.forbidden, reason: "Agent is administratively offline")
+        }
+        await afterCheckingRegistrationPredecessor?()
+        var organizationScope = organizationScope
+        var siteID = siteID
+        let dependencyObservations = normalizedDependencyObservations(
+            message.dependencyObservations, agentName: agentName)
+        let registrationInstant = try await ClusterClock.read(on: db)
+        // Set when this registration creates the agent row, so the enrollment it
+        // drew its scope from can be marked used after a successful save.
+        var newAgentEnrollment: AgentEnrollment?
+        var previousDependencyObservations: [NodeDependencyObservation] = []
+
+        // Find existing agent or create new one
+        let agent: Agent
+        let existingAgent = try await Agent.query(on: db)
+            .filter(\.$trustDomain == trustDomain)
+            .filter(\.$name == agentName)
+            .first()
+        // An absent predecessor locks no row. Under READ COMMITTED this
+        // statement can see another replica's newly inserted agent. Never
+        // adopt that row under our independently generated agent UUID.
+        guard existingAgent?.id == capturedAgentID else {
+            throw Abort(.conflict, reason: "Agent registration identity changed while in flight")
+        }
+        if let existingAgent {
+            guard !existingAgent.administrativelyOffline else {
+                throw Abort(.forbidden, reason: "Agent is administratively offline")
+            }
+            // Update existing agent
+            agent = existingAgent
+            previousDependencyObservations = existingAgent.dependencyObservations
+            if siteID == nil { siteID = existingAgent.$site.id }
+            if existingAgent.version != message.version {
+                // The visible confirmation that a self-update (issue #432)
+                // landed: the restarted binary re-registers under its name
+                // with the new build version.
+                app.logger.notice(
+                    "Agent re-registered with a new version",
+                    metadata: [
+                        "strato.agent.name": .string(agentName),
+                        "previousVersion": .string(existingAgent.version),
+                        "version": .string(message.version),
+                    ])
+            }
+            agent.apply(
+                registration: message,
+                dependencyObservations: dependencyObservations,
+                receivedAt: registrationInstant.date)
+        } else {
+            // A brand-new agent takes its scope and site placement from the
+            // enrollment an operator created for this name: agents authenticate
+            // by SVID and carry no credential that could convey either. Existing
+            // agents deliberately skip this — both are durable on the agent row,
+            // and re-reading the enrollment on every reconnect would fight an
+            // operator who has since moved the agent to another site.
+            let enrollment = try await AgentEnrollment.query(on: db)
+                .filter(\.$trustDomain == trustDomain)
+                .filter(\.$agentName == agentName)
+                .sort(\.$createdAt, .descending)
+                .first()
+            if organizationScope == nil { organizationScope = enrollment?.organizationScope }
+            if siteID == nil { siteID = enrollment?.siteID }
+
+            // An org trust domain is a cryptographic statement about *whose*
+            // node this is, so it must agree with the enrollment's scope: a
+            // node attested by org A's CA may not join org B's capacity, and a
+            // node whose enrollment carries no scope at all inherits its
+            // domain's org rather than being refused.
+            if let identityOrganizationID {
+                if let scope = organizationScope {
+                    let owner = try await scope.rootOrganizationID(on: db)
+                    guard owner == identityOrganizationID else {
+                        Telemetry.agentRegistrationFailed(reason: "organization_scope_mismatch")
+                        throw AgentServiceError.missingOrganizationScope(agentName: agentName)
+                    }
+                } else {
+                    organizationScope = .organization(identityOrganizationID)
+                }
+            }
+
+            guard organizationScope != nil else {
+                Telemetry.agentRegistrationFailed(reason: "missing_organization_scope")
+                throw AgentServiceError.missingOrganizationScope(agentName: agentName)
+            }
+            guard let siteID else {
+                throw Abort(.badRequest, reason: "Agent enrollment requires a site")
+            }
+            // Create new agent
+            agent = Agent.from(
+                registration: message,
+                name: agentName,
+                siteID: siteID,
+                dependencyObservations: dependencyObservations,
+                at: registrationInstant,
+                trustDomain: trustDomain)
+            newAgentEnrollment = enrollment
+        }
+
+        let previousScope = agent.organizationScope
+        if let organizationScope, previousScope != organizationScope {
+            // A token-driven org change moves dedicated capacity between
+            // tenants, so it must honor the same drain invariant as a site
+            // change: never move an agent that still hosts VMs (they belong to
+            // the old org's projects and would be stranded on foreign
+            // hardware). An agent assigned to a site can't change org either —
+            // the site's whole OVN deployment belongs to one org. Refusals are
+            // logged, not fatal; the agent registers with its previous scope.
+            var refusalReason: String?
+            if agent.id != nil {
+                refusalReason = "agent organization is fixed by its required site"
+            }
+            if let refusalReason {
+                app.logger.error(
+                    "Ignoring enrollment organization assignment: \(refusalReason)",
+                    metadata: ["strato.agent.identity": .string(agentKey)])
+            } else {
+                agent.organizationScope = organizationScope
+            }
+        }
+
+        if let siteID, agent.$site.id != siteID {
+            // A token-driven site change must honor the same invariants as the
+            // sites API's assign/remove endpoints, or the token becomes a
+            // bypass. Never move a site's designated network controller (the
+            // old site would point at a non-member and its networks would
+            // silently stop being reconciled), and never move an agent that
+            // still hosts VMs (their networks would drop out of the NB that
+            // has been realizing them). Refusals are logged, not fatal — the
+            // agent still registers with its previous site intact. (A
+            // brand-new agent row has no id yet and trips neither guard.)
+            var refusalReason: String?
+            if let agentID = agent.id {
+                let controllerships =
+                    try await Site.query(on: db)
+                    .filter(\.$networkControllerAgent.$id == agentID)
+                    .filter(\.$id != siteID)
+                    .count()
+                if controllerships > 0 {
+                    refusalReason = "agent is another site's network controller"
+                } else {
+                    let hostedVMs = try await VM.query(on: db)
+                        .filter(\.$hypervisorId == agentID.uuidString)
+                        .count()
+                    let hostedSandboxes = try await Sandbox.query(on: db)
+                        .filter(\.$hypervisorId == agentID.uuidString)
+                        .count()
+                    if hostedVMs > 0 {
+                        refusalReason = "agent hosts \(hostedVMs) VM(s); drain it first"
+                    } else if hostedSandboxes > 0 {
+                        refusalReason = "agent hosts \(hostedSandboxes) sandbox(es); drain it first"
+                    }
+                }
+            }
+            // A site is one OVN deployment owned by one scope; its members
+            // must live within that scope (sibling-OU agents included — see
+            // the sites API's assignAgent, which this token path must match).
+            if refusalReason == nil {
+                let siteScope = try await Site.find(siteID, on: db)?.organizationScope
+                let agentScope = agent.organizationScope
+                let contained: Bool
+                if let siteScope, let agentScope {
+                    contained = try await siteScope.contains(agentScope, on: db)
+                } else {
+                    contained = false
+                }
+                if !contained {
+                    refusalReason = "site's organization scope does not contain the agent's"
+                }
+            }
+            if let refusalReason {
+                app.logger.error(
+                    "Ignoring enrollment site assignment: \(refusalReason)",
+                    metadata: ["strato.agent.identity": .string(agentKey), "requestedSite": .string(siteID.uuidString)])
+            } else {
+                agent.$site.id = siteID
+            }
+        }
+
+        if agent.id == nil { agent.id = targetAgentID }
+        try await saveActiveAgent(agent, on: db)
+
+        // A site with no designated network controller reconciles no topology
+        // at all, so the first OVN-capable node to join one takes the job
+        // (issue #743). Without this the common single-node deployment — new
+        // org, its default site, one enrolled node — comes up with switches
+        // authored by nobody and every VM parked on a logical switch that
+        // never appears, with no API-visible symptom. An existing designation
+        // is never displaced. The sync pushed right after this registration
+        // carries the new controller its authoritative topology.
+        //
+        // Re-validation runs first: every condition the designation was made
+        // under is a property of *this* registration, and an agent that came
+        // back in user-mode or on a rolled-back binary would otherwise keep the
+        // job while authoring nothing (issue #833). When it hands the job back,
+        // an eligible peer claims it on its own next registration.
+        let persistedSiteID = agent.$site.id
+        await SiteNetworkAuthority.revalidateDesignation(
+            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
+        await SiteNetworkAuthority.designateIfUnset(
+            agent: agent, siteID: persistedSiteID, at: registrationInstant, on: db, logger: app.logger)
+
+        // Record that the node completed its first registration. Bootstrap
+        // redemption already erased the token hash atomically before minting
+        // the node credential, so this informational save cannot reopen the
+        // credential even if it fails. The enrollment row remains as the
+        // durable scope record.
+        if let enrollment = newAgentEnrollment, !enrollment.isUsed {
+            enrollment.markAsUsed()
+            do {
+                try await enrollment.save(on: db)
+            } catch {
+                app.logger.warning(
+                    "Failed to mark agent enrollment as used",
+                    metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
+            }
+        }
+
+        try await InventorySessionFence.replace(session, agentID: targetAgentID, on: db)
+        try await ResourceAdmissionService.invalidateSession(agentID: targetAgentID, on: db)
+        return RegistrationPersistence(
+            agent: agent, previousDependencyObservations: previousDependencyObservations,
+            dependencyObservations: dependencyObservations, registrationInstant: registrationInstant)
+    }
     // MARK: - Agent Status
 
     /// Every agent known to the cluster, from the shared registry. Rows are

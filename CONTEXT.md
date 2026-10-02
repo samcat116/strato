@@ -386,3 +386,13 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Fleet run**: a confirmed immutable VM target list and argv, with a durable
   parent record aggregating individually authorized recorded command operations.
   Skipped targets and partial failure are normal collected outcomes.
+
+### Workload resource class
+
+A site-scoped admitted CPU/memory policy. `guaranteed` is the immutable default
+with 1:1 physical accounting; `burstable` is explicit and requires verified
+backend reclaim, fair-share, containment, and readback. Catalog revisions do
+not reprice existing grants. `admittedReservation` persists the physical
+commitment, including growth admitted under a different revision. Ratio bounds
+are policy ceilings, not recommendations for safe overcommit. See
+[the class contract](docs/architecture/resource-classes-contract.md).

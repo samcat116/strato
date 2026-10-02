@@ -601,6 +601,10 @@ extension Agent: ReconcileActuator {
             return
         }
         do {
+            if step != .shutdown && step != .delete, item.desired?.spec.resourceClass?.policy.kind == .burstable {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "Burstable workloads require verified STR272 runtime enforcement")
+            }
             switch step {
             case .adopt:
                 // Adoption flows through adoptVM (the reconciler needs the
@@ -717,15 +721,16 @@ extension Agent: ReconcileActuator {
 
         let raw = await rawHostCapacitySnapshot()
         let currentReservation = VMHostReservation.forManifestEntry(
-            current, architecture: .current)
+            current, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let desiredReservation = VMHostReservation.forSpec(
-            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current,
+            qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
         try capacityAdmissionLedger.validateExistingReservation(
             currentReservation, snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
             growth, desiredWorkloadReservation: desiredReservation,
-            snapshot: raw, agentName: initialAgentID)
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
@@ -734,7 +739,8 @@ extension Agent: ReconcileActuator {
                     desiredReservation.memoryBytes > currentReservation.memoryBytes,
                     let entry = managedVMs[item.id] ?? orphanedVMs[item.id]
                 {
-                    let widened = entry.reservingMemory(atLeast: desiredReservation.memoryBytes)
+                    let widened = entry.reservingMemory(
+                        atLeast: max(0, desiredReservation.memoryBytes - configuration.qemuMemoryOverheadBytes))
                     if managedVMs[item.id] != nil {
                         managedVMs[item.id] = widened
                     } else {
@@ -806,7 +812,10 @@ extension Agent: ReconcileActuator {
             var booted = entry.reservingPositiveSizingGrowth(toward: desired.spec)
             if entry.hypervisorType == .qemu {
                 booted = booted.reservingMemory(
-                    atLeast: max(currentReservation.memoryBytes, desiredReservation.memoryBytes))
+                    atLeast: max(
+                        0,
+                        max(currentReservation.memoryBytes, desiredReservation.memoryBytes)
+                            - configuration.qemuMemoryOverheadBytes))
             }
             if managedVMs[item.id] != nil {
                 managedVMs[item.id] = booted

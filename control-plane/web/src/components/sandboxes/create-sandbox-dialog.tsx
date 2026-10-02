@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { DialogSubmitFooter } from "@/components/ui/dialog-submit-footer";
+import { WorkloadResourceClassField, GUARANTEED_RESOURCE_CLASS_ID } from "@/components/ui/workload-resource-class-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
@@ -29,6 +30,7 @@ interface CreateSandboxDialogProps {
 
 const EMPTY_FORM = {
   name: "",
+  resourceClassSiteID: "",
   image: "",
   cpus: "1",
   memory: "1",
@@ -113,6 +115,7 @@ export function CreateSandboxDialog({
     const env = parseEnv(formData.env);
     const ttl = parseInt(formData.ttlSeconds, 10);
     const payload = {
+      ...(formData.resourceClassSiteID ? { resourceClass: { siteID: formData.resourceClassSiteID, classID: GUARANTEED_RESOURCE_CLASS_ID } } : {}),
       name: formData.name.trim(),
       image: formData.image.trim(),
       projectId,
@@ -178,6 +181,7 @@ export function CreateSandboxDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-4">
+            <WorkloadResourceClassField siteID={formData.resourceClassSiteID} onChange={(siteID) => setFormData((current) => ({ ...current, resourceClassSiteID: siteID }))} disabled={isLoading} />
             {quotaError && (
               <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-700">
                 <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />

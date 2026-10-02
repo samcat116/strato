@@ -319,6 +319,8 @@ Force-offline persists `agents.administratively_offline` before disconnecting;
 only `POST /api/agents/{id}/actions/resume` releases the hold. Registration,
 periodic reports, HTTP mTLS authorization, and presence refresh refuse held
 agents. Resume permits normal reconnect but does not assert online status.
+Only releasing an active hold clears the old heartbeat; repeated resume leaves
+a healthy agent's heartbeat intact.
 Report saves recheck the hold under a PostgreSQL row lock so an in-flight report
 cannot overwrite the operator's status transition.
 
@@ -329,7 +331,11 @@ event loop. It waits for the active handler before clearing presence, routes,
 inventory sessions, and interactive console/exec sessions. Captured command
 records keep their existing terminal-event/deadline contract. Ordinary EOF still
 drains accepted final frames. Identity-keyed cleanup runs even after row deletion;
-an unacknowledged remote close returns 503 rather than claiming success.
+an unacknowledged remote close returns 503 rather than claiming success. An
+unknown socket owner also returns 503 unless this replica holds and revokes a
+local connection. Coordination route loss cannot prove socket absence, even
+on a retry after the durable hold has already been saved. Local identity cleanup
+still runs on this failure path.
 
 Live sockets periodically recheck durable agent/enrollment authority; operator
 teardown stops queued frame processing before acknowledging revocation. A

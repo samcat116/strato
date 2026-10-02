@@ -183,6 +183,8 @@ extension FirecrackerSandboxRuntime {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
+        try BurstableRuntimeGate.requireSupport(
+            resourceClass: managed.spec.resourceClass, enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
@@ -271,12 +273,14 @@ extension FirecrackerSandboxRuntime {
 
             newManager = try await client.restoreVM(
                 vmId: sandboxId,
-                jail: makeJailerOptions(plan: plan, guestMemoryBytes: managed.spec.memoryBytes),
+                jail: makeJailerOptions(
+                    plan: plan, guestMemoryBytes: managed.spec.memoryBytes, resourceClass: managed.spec.resourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: true,
-                    networkOverrides: overrides))
+                    resumeVM: managed.spec.resourceClass?.policy.kind != .burstable,
+                    networkOverrides: overrides),
+                validateCgroup: try resourceLimitValidator(sandboxId: sandboxId, spec: managed.spec))
         } else {
             // Unjailed: replace the live rootfs with the checkpointed copy
             // and load memory/vmstate straight from the archive (Firecracker
@@ -294,10 +298,16 @@ extension FirecrackerSandboxRuntime {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: archiveVmstate,
                     memFilePath: archiveMemory,
-                    resumeVM: true,
+                    resumeVM: managed.spec.resourceClass?.policy.kind != .burstable,
                     networkOverrides: overrides))
         }
 
+        do {
+            try await validateRestoredGrant(manager: newManager, sandboxId: sandboxId, spec: managed.spec, resume: true)
+        } catch {
+            try? await client.destroyVM(vmId: sandboxId)
+            throw error
+        }
         sandboxes[sandboxId]?.manager = newManager
         // Whatever exit the pre-restore guest reported no longer describes
         // this guest; the restored one re-reports over vsock.

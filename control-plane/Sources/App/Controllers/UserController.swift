@@ -121,7 +121,7 @@ struct UserController: RouteCollection {
     }
 
     func register(req: Request) async throws -> User.Public {
-        let createUser = try req.content.decode(CreateUserRequest.self)
+        let createUser = try req.content.decodeValidated(CreateUserRequest.self)
 
         // The bootstrap decision and the insert that invalidates it have to be
         // one atomic step. "No users exist" is a predicate over rows that do
@@ -191,14 +191,10 @@ struct UserController: RouteCollection {
     func create(req: Request) async throws -> AdminCreateUserResponse {
         let currentUser = try await req.requireSystemAdmin("System admin access required")
 
-        let body = try req.content.decode(AdminCreateUserRequest.self)
-        let username = body.username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let email = body.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = body.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !username.isEmpty, !email.isEmpty, !displayName.isEmpty else {
-            throw Abort(.badRequest, reason: "username, email and displayName are required")
-        }
+        let body = try req.content.decodeValidated(AdminCreateUserRequest.self)
+        let username = body.username
+        let email = body.email
+        let displayName = body.displayName
 
         let isSystemAdmin = body.isSystemAdmin ?? false
         let createdByID = currentUser.id
@@ -302,7 +298,7 @@ struct UserController: RouteCollection {
             throw Abort(.notFound)
         }
 
-        let updateUser = try req.content.decode(UpdateUserRequest.self)
+        let updateUser = try req.content.decodeValidated(UpdateUserRequest.self)
 
         // SCIM-provisioned accounts are owned by the identity provider: the
         // next sync rewrites username/displayName/email from the IdP record, so
@@ -317,7 +313,7 @@ struct UserController: RouteCollection {
         }
 
         if let username = updateUser.username {
-            let normalized = try Self.validateUsername(username)
+            let normalized = username
             if normalized != user.username {
                 try await requireUnusedIdentifier(
                     normalized, field: "username", excluding: userID, on: req.db)
@@ -326,11 +322,11 @@ struct UserController: RouteCollection {
         }
 
         if let displayName = updateUser.displayName {
-            user.displayName = try Self.validateDisplayName(displayName)
+            user.displayName = displayName
         }
 
         if let email = updateUser.email {
-            let normalized = try Self.validateEmail(email)
+            let normalized = email
             if normalized != user.email {
                 try await requireUnusedIdentifier(
                     normalized, field: "email", excluding: userID, on: req.db)
@@ -917,28 +913,38 @@ struct LogoutResponse: Content {
     let sloUrl: String?
 }
 
-struct CreateUserRequest: Content {
-    let username: String
-    let email: String
-    let displayName: String
+struct CreateUserRequest: Content, ValidatedRequestBody {
+    var username: String
+    var email: String
+    var displayName: String
+    mutating func validate() throws {
+        username = try UserController.validateUsername(username)
+        email = try UserController.validateEmail(email)
+        displayName = try UserController.validateDisplayName(displayName)
+    }
 }
 
-struct UpdateUserRequest: Content {
-    let username: String?
-    let displayName: String?
-    let email: String?
+struct UpdateUserRequest: Content, ValidatedRequestBody {
+    var username: String?
+    var displayName: String?
+    var email: String?
 
     init(username: String? = nil, displayName: String? = nil, email: String? = nil) {
         self.username = username
         self.displayName = displayName
         self.email = email
     }
+    mutating func validate() throws {
+        if let username { self.username = try UserController.validateUsername(username) }
+        if let email { self.email = try UserController.validateEmail(email) }
+        if let displayName { self.displayName = try UserController.validateDisplayName(displayName) }
+    }
 }
 
-struct AdminCreateUserRequest: Content {
-    let username: String
-    let email: String
-    let displayName: String
+struct AdminCreateUserRequest: Content, ValidatedRequestBody {
+    var username: String
+    var email: String
+    var displayName: String
     let isSystemAdmin: Bool?
     /// Optional org to provision the invitee into up front. Without it the
     /// account is created unassigned and the admin manages membership later.
@@ -960,6 +966,11 @@ struct AdminCreateUserRequest: Content {
         self.isSystemAdmin = isSystemAdmin
         self.organizationId = organizationId
         self.role = role
+    }
+    mutating func validate() throws {
+        username = try UserController.validateUsername(username)
+        email = try UserController.validateEmail(email)
+        displayName = try UserController.validateDisplayName(displayName)
     }
 }
 
@@ -1158,7 +1169,7 @@ extension UserController {
     /// Trims and validates a username, returning the value to store.
     static func validateUsername(_ raw: String) throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (3...64).contains(trimmed.count) else {
+        guard (3...64).contains(Validate.length(trimmed)) else {
             throw Abort(.badRequest, reason: "Username must be between 3 and 64 characters")
         }
         guard trimmed.unicodeScalars.allSatisfy(usernameAllowedCharacters.contains) else {
@@ -1172,7 +1183,7 @@ extension UserController {
 
     static func validateDisplayName(_ raw: String) throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (1...128).contains(trimmed.count) else {
+        guard (1...128).contains(Validate.length(trimmed)) else {
             throw Abort(.badRequest, reason: "Display name must be between 1 and 128 characters")
         }
         return trimmed
@@ -1184,13 +1195,15 @@ extension UserController {
     static func validateEmail(_ raw: String) throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
-        guard trimmed.count <= 254,
+        guard Validate.length(trimmed) <= 254,
             parts.count == 2,
             !parts[0].isEmpty,
             parts[1].contains("."),
             !parts[1].hasPrefix("."),
             !parts[1].hasSuffix("."),
-            !trimmed.contains(" ")
+            !trimmed.unicodeScalars.contains(where: {
+                CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains($0)
+            })
         else {
             throw Abort(.badRequest, reason: "Enter a valid email address")
         }

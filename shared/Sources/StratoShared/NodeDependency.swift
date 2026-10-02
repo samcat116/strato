@@ -11,6 +11,7 @@ public enum NodeDependencyID: String, Codable, CaseIterable, Sendable {
     case frr
     case cephClient = "ceph_client"
     case cephCluster = "ceph_cluster"
+    case hostMemoryProfile = "host_memory_profile"
 }
 
 public enum NodeDependencyRole: String, Codable, Sendable {

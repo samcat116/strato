@@ -5995,6 +5995,7 @@ export interface components {
         /** @enum {string} */
         CPUArchitecture: "x86_64" | "arm64";
         CreateVMRequest: {
+            resourceClass?: components["schemas"]["WorkloadResourceClassReference"];
             name: string;
             /** @description The VM's DNS label. Defaults to a slugified `name`, disambiguated with a numeric suffix against whatever already registers into the target network's primary zone. An explicit value is instead held to strict uniqueness and answers `409` on a collision. */
             hostname?: string;
@@ -6110,6 +6111,18 @@ export interface components {
             sshAuthorizedKeys?: string[];
         };
         VMDetail: {
+            admittedReservation?: components["schemas"]["WorkloadAdmittedReservation"];
+            /**
+             * Format: int64
+             * @description Durable physical memory commitment; absent for historical guaranteed accounting.
+             */
+            effectiveMemoryReservationBytes?: number | null;
+            resourceClass?: components["schemas"]["WorkloadResourceClassSnapshot"];
+            /**
+             * @description Missing historical references resolve to guaranteed.
+             * @enum {string}
+             */
+            resourceClassKind?: "guaranteed" | "burstable";
             /** Format: uuid */
             id?: string;
             name: string;
@@ -6312,6 +6325,7 @@ export interface components {
             prefixLength?: number;
         };
         CreateSandboxRequest: {
+            resourceClass?: components["schemas"]["WorkloadResourceClassReference"];
             name: string;
             /** @description OCI image reference. */
             image?: string;
@@ -6386,6 +6400,18 @@ export interface components {
             ttlSeconds?: number;
         };
         SandboxDetail: {
+            admittedReservation?: components["schemas"]["WorkloadAdmittedReservation"];
+            /**
+             * Format: int64
+             * @description Durable physical memory commitment; absent for historical guaranteed accounting.
+             */
+            effectiveMemoryReservationBytes?: number | null;
+            resourceClass?: components["schemas"]["WorkloadResourceClassSnapshot"];
+            /**
+             * @description Missing historical references resolve to guaranteed.
+             * @enum {string}
+             */
+            resourceClassKind?: "guaranteed" | "burstable";
             /** Format: uuid */
             id?: string;
             name: string;
@@ -7468,14 +7494,20 @@ export interface components {
         UserSource: "local" | "scim" | "oidc";
         /** @description Self-registration payload for `POST /api/users/register`. */
         SelfRegisterUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName: string;
         };
         /** @description Admin invitation payload. `role` only applies when `organizationId` is set. */
         AdminCreateUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName: string;
             /** @default false */
             isSystemAdmin: boolean;
@@ -7500,8 +7532,11 @@ export interface components {
         };
         /** @description Partial update; omitted fields are left unchanged. */
         UpdateUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username?: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName?: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email?: string;
         };
         /** @description The user behind the current session. */
@@ -8687,7 +8722,7 @@ export interface components {
         };
         NodeDependencyObservation: {
             /** @enum {string} */
-            id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster";
+            id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster" | "host_memory_profile";
             /** @enum {string} */
             role: "identity" | "compute" | "networking" | "routing" | "storage";
             /** @enum {string} */
@@ -8787,6 +8822,7 @@ export interface components {
              * @description Control-plane time when the latest dependency snapshot arrived. Placement freshness uses this value instead of the agent's clock.
              */
             dependencyObservationsReceivedAt?: string;
+            memoryAccounting?: components["schemas"]["HostMemoryAccounting"];
             resourceTelemetry?: components["schemas"]["HostResourceTelemetry"];
             /**
              * Format: date-time
@@ -8879,6 +8915,11 @@ export interface components {
         AgentStatus: "online" | "offline" | "connecting" | "error";
         /** @description Capacity reported by the agent host. */
         AgentResources: {
+            /**
+             * Format: int64
+             * @description Physical CPU capacity after inventory and provisional commitments; one CPU is 1000000 units.
+             */
+            availableCPUMicroUnits?: number;
             /** @description Total vCPUs on the host. */
             totalCPU: number;
             availableCPU: number;
@@ -8904,6 +8945,22 @@ export interface components {
              * @description Bytes physically free on the local volume filesystem.
              */
             physicalFreeDisk: number;
+            memoryAccounting?: components["schemas"]["HostMemoryAccounting"];
+        };
+        HostMemoryAccounting: {
+            /** Format: int64 */
+            physicalBytes: number;
+            /** Format: int64 */
+            hostReservedBytes: number;
+            /** Format: int64 */
+            workloadEffectiveBytes: number;
+            /**
+             * Format: int64
+             * @description Clamped remaining bytes; host and workload reserves are already subtracted.
+             */
+            remainingAllocatableBytes: number;
+            /** Format: int64 */
+            qemuOverheadBytes: number;
         };
         /**
          * @description Whether the latest sampling pass measured the signal. Unavailable is distinct from an available signal whose value is zero.
@@ -8956,6 +9013,35 @@ export interface components {
             reclaimReclaimedPagesTotal: components["schemas"]["ResourceTelemetryValue"];
             oomKillsTotal: components["schemas"]["ResourceTelemetryValue"];
             mglruEnabled: components["schemas"]["ResourceTelemetryFlag"];
+            memoryProfile?: components["schemas"]["HostMemoryProfileObservation"];
+            swapInPagesTotal?: components["schemas"]["ResourceTelemetryValue"];
+            swapOutPagesTotal?: components["schemas"]["ResourceTelemetryValue"];
+            zramOriginalBytes?: components["schemas"]["ResourceTelemetryValue"];
+            swapInPagesPerSecond?: number | null;
+            swapOutPagesPerSecond?: number | null;
+            memoryWarnings?: ("swap_thrashing" | "oom_kill")[];
+        };
+        HostMemoryProfileConfiguration: {
+            /** @enum {string} */
+            tier: "zswap" | "zram";
+            /** @enum {string} */
+            tenant_class: "single" | "multi";
+            /** Format: int64 */
+            zram_bytes?: number;
+            zswap_pool_percent?: number;
+            nvme_swap: string;
+            ksm?: boolean;
+            require_mglru?: boolean;
+            ksm_pages_to_scan?: number;
+            ksm_sleep_millisecs?: number;
+        };
+        HostMemoryProfileObservation: {
+            configured?: components["schemas"]["HostMemoryProfileConfiguration"];
+            /** @enum {string|null} */
+            effectiveTier?: "zswap" | "zram" | null;
+            thpPolicy?: string | null;
+            ksmRunning?: boolean | null;
+            reason?: string | null;
         };
         WorkloadMemoryEventsTelemetry: {
             availability: components["schemas"]["ResourceTelemetryAvailability"];
@@ -9260,6 +9346,9 @@ export interface components {
         StoragePoolMode: "local" | "replicated" | "ceph";
         /** @description An availability zone: the agents that share one OVN deployment, so a logical network pinned to the site can span its nodes. */
         SiteDetail: {
+            resourceClasses?: components["schemas"]["WorkloadResourceClassSnapshot"][];
+            /** @description False until verified STR272 runtime enforcement is available. */
+            burstableAdmissionAvailable?: boolean;
             /** Format: uuid */
             id: string;
             name: string;
@@ -9328,6 +9417,7 @@ export interface components {
         };
         /** @description Full-replace (PUT) semantics for descriptive fields: omitting one clears it (labels omitted → empty map). `status` is the exception — an omitted status leaves the current lifecycle unchanged. */
         UpdateSiteRequest: {
+            burstableResourcePolicy?: components["schemas"]["WorkloadResourceClassPolicy"];
             description?: string | null;
             /** Format: uuid */
             networkControllerAgentId?: string | null;
@@ -10605,6 +10695,52 @@ export interface components {
             labels: {
                 [key: string]: string;
             };
+        };
+        /** @description Site-scoped class selection. Omission preserves guaranteed placement; burstable assignment currently fails closed. */
+        WorkloadResourceClassReference: {
+            /** Format: uuid */
+            siteID: string;
+            /** Format: uuid */
+            classID: string;
+        };
+        /** @description Configuration ceilings are policy bounds, not recommendations for safe overcommit. Guaranteed is immutable at 1:1; burstable is explicit and requires verified runtime enforcement. Catalog changes affect new placement and growth only, never existing grants or generations. */
+        WorkloadResourceClassPolicy: {
+            /** @enum {string} */
+            kind: "guaranteed" | "burstable";
+            /** Format: double */
+            cpuAllocationRatio: number;
+            /** Format: double */
+            memoryAllocationRatio: number;
+            cpuWeight: number;
+            /** @description Guaranteed requires 100; burstable requires 1 through 99. Denominator is current guest grant, before backend overhead. */
+            memoryHighPercent: number;
+            /** @enum {string} */
+            hardLimitPolicy: "guestAndBackend";
+            /** Format: double */
+            maxCPUPressure10: number;
+            /** Format: double */
+            maxMemoryPressure10: number;
+            maxTelemetryAgeSeconds: number;
+        };
+        WorkloadResourceClassSnapshot: components["schemas"]["WorkloadResourceClassPolicy"] & {
+            /** Format: uuid */
+            classID: string;
+            /** Format: uuid */
+            siteID: string;
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @description Durable admitted physical commitment; growth preserves previous pricing. */
+        WorkloadAdmittedReservation: {
+            grantedCPUs: number;
+            /** Format: int64 */
+            guestCommitmentBytes: number;
+            /** Format: int64 */
+            cpuMicroUnits: number;
+            /** Format: int64 */
+            discountedGuestBytes: number;
+            /** Format: int64 */
+            backendOverheadBytes: number;
         };
     };
     responses: {

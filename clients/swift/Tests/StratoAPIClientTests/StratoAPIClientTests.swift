@@ -72,3 +72,30 @@ struct StratoAPIClientTests {
         #expect(transport.lastRequest?.headerFields[.authorization] == "Bearer strato_test_key")
     }
 }
+
+@Suite("Generated resource class client contract")
+struct ResourceClassClientTests {
+    @Test func policyAndSnapshotEncodeFlatAndReferenceIsSiteScoped() throws {
+        let policy = Components.Schemas.WorkloadResourceClassPolicy(
+            kind: .burstable,
+            cpuAllocationRatio: 4, memoryAllocationRatio: 1, cpuWeight: 100,
+            memoryHighPercent: 80, hardLimitPolicy: .guestAndBackend,
+            maxCPUPressure10: 10, maxMemoryPressure10: 5, maxTelemetryAgeSeconds: 60)
+        let snapshot = Components.Schemas.WorkloadResourceClassSnapshot(
+            value1: policy,
+            value2: .init(classID: "00000000-0000-0000-0000-000000000002", siteID: UUID().uuidString, revision: 3))
+        let data = try JSONEncoder().encode(snapshot)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["kind"] as? String == "burstable")
+        #expect(object["revision"] as? Int == 3)
+        #expect(object["policy"] == nil)
+        #expect(try JSONDecoder().decode(Components.Schemas.WorkloadResourceClassSnapshot.self, from: data) == snapshot)
+        let request = Components.Schemas.CreateVMRequest(
+            resourceClass: .init(
+                siteID: snapshot.value2.siteID, classID: snapshot.value2.classID), name: "worker",
+            projectId: UUID().uuidString)
+        let requestData = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(Components.Schemas.CreateVMRequest.self, from: requestData)
+        #expect(decoded.resourceClass?.siteID == snapshot.value2.siteID)
+    }
+}
