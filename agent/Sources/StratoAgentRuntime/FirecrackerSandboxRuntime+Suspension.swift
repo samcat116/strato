@@ -32,6 +32,14 @@ extension FirecrackerSandboxRuntime {
         try await resumeSuspendedSandbox(sandboxId: sandboxId)
     }
 
+    func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment], expectedGeneration: Int64)
+        async throws
+    {
+        guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
+        sandboxes[sandboxId]?.networkAttachments = networkAttachments
+        try await resumeSuspendedSandbox(sandboxId: sandboxId, expectedGeneration: expectedGeneration)
+    }
+
     func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async {
         suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].updateIntent(
             generation: generation, desiredRunning: desiredRunning)
@@ -132,7 +140,7 @@ extension FirecrackerSandboxRuntime {
             try retirePreviousSuspensionCheckpoint(&record)
             if suspensionGuards[sandboxId]?.needsRestore(after: ticket) == true {
                 suspending.remove(sandboxId)
-                try await resumeSuspendedSandbox(sandboxId: sandboxId)
+                try await resumeSuspendedSandbox(sandboxId: sandboxId, allowRacedActivity: true)
             }
         } catch {
             if !committed {
@@ -220,11 +228,15 @@ extension FirecrackerSandboxRuntime {
         try await teardownWarmTemplate(templateId: proofId, vm: nil, lease: lease)
     }
 
-    func resumeSuspendedSandbox(sandboxId: String) async throws {
+    func resumeSuspendedSandbox(sandboxId: String, expectedGeneration: Int64? = nil, allowRacedActivity: Bool = false)
+        async throws
+    {
         guard var record = try loadSuspensionRecord(sandboxId: sandboxId), record.checkpoint != nil else {
             throw SandboxSuspensionGuard.GateError.stale
         }
         guard record.phase != .resumed else { return }
+        let resumeGeneration = try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()]
+            .resumeGeneration(expected: expectedGeneration, allowRacedActivity: allowRacedActivity)
         let permit = try restoreAdmission.acquire()
         defer { restoreAdmission.release(permit) }
         if [.verified, .destroying].contains(record.phase), let managed = sandboxes[sandboxId] {
@@ -243,7 +255,11 @@ extension FirecrackerSandboxRuntime {
         if record.phase == .resuming {
             guard let managed = sandboxes[sandboxId] else { throw SandboxSuspensionGuard.GateError.stale }
             let info = try await managed.manager.getInstanceInfo()
-            if info.state == .paused { try await managed.manager.resume() }
+            if info.state == .paused {
+                try suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].validateResumeGeneration(
+                    resumeGeneration)
+                try await managed.manager.resume()
+            }
             let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
             guard identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) else {
                 throw SandboxSuspensionGuard.GateError.stale
@@ -264,7 +280,7 @@ extension FirecrackerSandboxRuntime {
             try await StageBudget.run(seconds: suspensionRestoreTimeoutSeconds, stage: "sandbox-suspension-restore") {
                 try await self.restoreSandboxArchive(
                     sandboxId: sandboxId, snapshotId: snapshotId, artifacts: nil,
-                    networkAttachments: attachments, internalArchive: true)
+                    networkAttachments: attachments, internalArchive: true, expectedGeneration: resumeGeneration)
             }
             record.phase = .resumed
             let elapsed = began.duration(to: .now).components

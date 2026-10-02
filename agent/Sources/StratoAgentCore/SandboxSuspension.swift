@@ -16,11 +16,27 @@ public struct SandboxSuspensionGuard: Sendable {
         fileprivate let nonce: UUID
     }
 
-    public enum GateError: Error, Sendable, Equatable {
+    public enum GateError: ClassifiableError, LocalizedError, Sendable, Equatable {
         case unknownIntent
         case active
         case stale
         case busy
+
+        public var failureClassification: FailureClassification {
+            switch self {
+            case .busy, .unknownIntent: .waitingOnDependency
+            case .active, .stale: .blocked
+            }
+        }
+
+        public var errorDescription: String? {
+            switch self {
+            case .unknownIntent: "Waiting for current sandbox intent"
+            case .busy: "Waiting for the owned suspension/restore permit"
+            case .active: "Sandbox has active user execution; close the session before suspending"
+            case .stale: "Sandbox intent, activity or durable recovery evidence changed; refresh before retrying"
+            }
+        }
     }
 
     private var generation: Int64?
@@ -73,6 +89,24 @@ public struct SandboxSuspensionGuard: Sendable {
     public func needsRestore(after candidate: Ticket) -> Bool {
         destructionCommitted
             && (epoch != candidate.activityEpoch || (generation != candidate.generation && desiredRunning))
+    }
+
+    /// Bind a paused replacement to the requested intent before any load awaits.
+    /// Activity after a committed destruction may require immediate recovery
+    /// while the same suspension ticket still owns the guest.
+    public func resumeGeneration(expected: Int64? = nil, allowRacedActivity: Bool = false) throws -> Int64 {
+        guard let generation else { throw GateError.unknownIntent }
+        guard expected == nil || expected == generation else { throw GateError.stale }
+        let raced =
+            allowRacedActivity && destructionCommitted
+            && ticket?.generation == generation && ticket?.activityEpoch != epoch
+        guard desiredRunning || raced else { throw GateError.stale }
+        return generation
+    }
+
+    /// No await between this check, the durable resuming commit and resume RPC.
+    public func validateResumeGeneration(_ expected: Int64) throws {
+        guard generation == expected else { throw GateError.stale }
     }
 
     public mutating func finish(_ candidate: Ticket) {

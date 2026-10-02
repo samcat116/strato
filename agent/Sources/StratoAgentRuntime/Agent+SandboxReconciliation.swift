@@ -139,7 +139,7 @@ extension Agent {
     /// resolved fresh at sync assembly, so an entry that sat in the desired
     /// state for a while still carries usable locators.
     func sandboxReconcileRestore(_ item: ReconcileWorkItem) async throws {
-        guard let restore = item.desiredSandbox?.restore else {
+        guard let desired = item.desiredSandbox, let restore = desired.restore else {
             throw SandboxRuntimeError.unsupportedStep("restore work item without a restore nonce")
         }
         // A restore loads the checkpoint resumed, and a resumed guest starts
@@ -179,7 +179,7 @@ extension Agent {
         defer { if let claim { capacityAdmissionLedger.release(claim) } }
         try await runtime.restoreSandbox(
             sandboxId: item.id, snapshotId: restore.snapshotId.uuidString,
-            artifacts: restore.artifacts, networkAttachments: attachments)
+            artifacts: restore.artifacts, networkAttachments: attachments, expectedGeneration: desired.generation)
         if entry?.sandboxSuspension != nil {
             entry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
             if let entry { managedSandboxes[item.id] = entry }
@@ -458,7 +458,8 @@ extension Agent {
                     sandboxId: item.id, jailUID: manifestEntry?.jailUID, existingJail: true)
             let attachments = try await networkOrchestrator.prepareAttachments(
                 vmId: item.id, networks: networks, placement: placement)
-            try await runtime.resumeSuspension(sandboxId: item.id, networkAttachments: attachments)
+            try await runtime.resumeSuspension(
+                sandboxId: item.id, networkAttachments: attachments, expectedGeneration: desired.generation)
             manifestEntry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
             if let manifestEntry { managedSandboxes[item.id] = manifestEntry }
             guard persistManifest() else {

@@ -6,6 +6,52 @@ import Testing
 
 @Suite("Suspension generation, activity and durable admission")
 struct SandboxSuspensionTests {
+    @Test func staleResumeCannotOvertakeNewStopDuringLoad() throws {
+        var gate = SandboxSuspensionGuard()
+        gate.updateIntent(generation: 4, desiredRunning: true)
+        let generation = try gate.resumeGeneration(expected: 4)
+        // New execution during load wants the same restored guest.
+        let activity = gate.beginActivity()
+        try gate.validateResumeGeneration(generation)
+        gate.endActivity(activity)
+        // A newer stop/delete wins before the paused replacement can run.
+        gate.updateIntent(generation: 5, desiredRunning: false)
+        #expect(throws: SandboxSuspensionGuard.GateError.stale) {
+            try gate.validateResumeGeneration(generation)
+        }
+        #expect(throws: SandboxSuspensionGuard.GateError.stale) {
+            try gate.resumeGeneration(expected: 4)
+        }
+    }
+
+    @Test func postDestructionActivityRecoveryBelongsToItsOriginalIntent() throws {
+        var gate = SandboxSuspensionGuard()
+        gate.updateIntent(generation: 4, desiredRunning: false)
+        let ticket = try gate.beginSuspension(generation: 4, automatic: false)
+        try gate.commitDestruction(ticket)
+        let activity = gate.beginActivity()
+        gate.endActivity(activity)
+        #expect(try gate.resumeGeneration(expected: 4, allowRacedActivity: true) == 4)
+        gate.updateIntent(generation: 5, desiredRunning: false)
+        #expect(throws: SandboxSuspensionGuard.GateError.stale) {
+            try gate.resumeGeneration(expected: 5, allowRacedActivity: true)
+        }
+        gate.updateIntent(generation: 6, desiredRunning: true)
+        #expect(try gate.resumeGeneration(expected: 6) == 6)
+    }
+
+    @Test func unknownResumeIntentCannotRunAReplacement() {
+        let gate = SandboxSuspensionGuard()
+        #expect(throws: SandboxSuspensionGuard.GateError.unknownIntent) {
+            try gate.resumeGeneration(expected: 1)
+        }
+    }
+    @Test func admissionContentionDoesNotConsumeFailureBudget() {
+        #expect(SandboxSuspensionGuard.GateError.busy.failureClassification == .waitingOnDependency)
+        #expect(SandboxSuspensionGuard.GateError.unknownIntent.failureClassification == .waitingOnDependency)
+        #expect(SandboxSuspensionGuard.GateError.active.failureClassification == .blocked)
+        #expect(SandboxSuspensionGuard.GateError.stale.failureClassification == .blocked)
+    }
     @Test func unknownIntentIsRefused() {
         var gate = SandboxSuspensionGuard()
         #expect(throws: SandboxSuspensionGuard.GateError.unknownIntent) {

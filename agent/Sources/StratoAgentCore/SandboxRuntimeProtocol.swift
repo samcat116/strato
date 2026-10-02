@@ -80,6 +80,8 @@ public protocol SandboxRuntimeService: Sendable {
     func suspensionRecord(sandboxId: String) async throws -> SandboxSuspensionRecord?
     func suspensionStorageEstimate(sandboxId: String) async throws -> Int64
     func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment]) async throws
+    func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment], expectedGeneration: Int64)
+        async throws
 
     /// Gracefully stop (best effort) and remove the sandbox from this host.
     func deleteSandbox(sandboxId: String) async throws
@@ -134,6 +136,11 @@ public protocol SandboxRuntimeService: Sendable {
         sandboxId: String, snapshotId: String,
         artifacts: [SandboxSnapshotArtifactDescriptor]?,
         networkAttachments: [ResolvedNetworkAttachment]
+    ) async throws
+    func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?, networkAttachments: [ResolvedNetworkAttachment],
+        expectedGeneration: Int64
     ) async throws
 
     /// Stream a snapshot's artifacts to the pre-signed upload targets, one
@@ -201,6 +208,21 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public func restoreSandbox(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?, networkAttachments: [ResolvedNetworkAttachment],
+        expectedGeneration: Int64
+    ) async throws {
+        try await restoreSandbox(
+            sandboxId: sandboxId, snapshotId: snapshotId,
+            artifacts: artifacts, networkAttachments: networkAttachments)
+    }
+    public func resumeSuspension(
+        sandboxId: String, networkAttachments: [ResolvedNetworkAttachment], expectedGeneration: Int64
+    ) async throws {
+        try await resumeSuspension(sandboxId: sandboxId, networkAttachments: networkAttachments)
+    }
+
     public func noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool) async {}
     public func suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool) async throws {
         throw SandboxRuntimeError.notSnapshottable("this runtime does not implement durable suspension")
