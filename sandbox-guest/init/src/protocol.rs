@@ -84,6 +84,11 @@ pub enum Request {
     Ping,
     /// Ask for the workload's current lifecycle state and exit code.
     GetStatus,
+    /// STR-91: authoritative enclosing VM generation and small STR-90 intent.
+    ConvergeGuestConfig {
+        generation: i64,
+        guest_config: Option<crate::convergence::GuestConfig>,
+    },
     /// Start an exec session on this connection (v2). Must be the first
     /// request on the connection.
     Exec {
@@ -230,6 +235,10 @@ pub enum WorkloadState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    GuestConfigState {
+        nonce: String,
+        observation: crate::convergence::Observation,
+    },
     /// Reply to [`Request::Ping`].
     Pong {
         sandbox_id: String,
@@ -309,6 +318,7 @@ impl Response {
             | Response::ClockSynced { nonce }
             | Response::Launched { nonce }
             | Response::Reidentified { nonce }
+            | Response::GuestConfigState { nonce, .. }
             | Response::Error { nonce, .. } => nonce,
         }
     }
@@ -362,6 +372,32 @@ pub fn read_request_line(reader: &mut impl BufRead, line: &mut String) -> io::Re
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn guest_config_request_matches_host_contract_and_observation_has_nonce() {
+        let request = decode_request(r#"{"type":"converge_guest_config","generation":7,"guest_config":{"packages":[],"files":[],"services":[],"sysctls":[]}}"#).unwrap();
+        match request {
+            Request::ConvergeGuestConfig {
+                generation,
+                guest_config: Some(config),
+            } => {
+                assert_eq!(generation, 7);
+                config.validate().unwrap();
+            }
+            _ => panic!("wrong guest config request"),
+        }
+        let request = decode_request(
+            r#"{"type":"converge_guest_config","generation":8,"guest_config":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            request,
+            Request::ConvergeGuestConfig {
+                guest_config: None,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn ping_round_trips() {

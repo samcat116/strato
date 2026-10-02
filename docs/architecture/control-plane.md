@@ -802,7 +802,9 @@ stdin and stdout, exec enters raw mode, requests a PTY, and forwards terminal
 size changes. `--no-tty` disables PTY allocation; `--tty` requires terminal
 stdin and stdout. Redirected I/O selects multiplexed output, preserves stdout
 and stderr separately, forwards stdin EOF, and returns the remote exit code.
-Use an explicit shell, such as `-- sh -c 'cat | wc -l'`, for guest-side pipes.
+Stdin is forwarded in both modes, including terminal stdin with `--no-tty`;
+EOF is sent only when local stdin closes. Use an explicit shell, such as
+`-- sh -c 'cat | wc -l'`, for guest-side pipes.
 
 Both mint and attach authorize `vm:exec`; this path never uses the recorded
 `actions/run` endpoint or its separate `vm:runCommand` permission. Server
@@ -811,7 +813,8 @@ hypervisor support, and authorization failures. An unreachable guest agent
 or a disconnect after attach is reported as a session error. Only the initial
 replica-local attachment is retried; a started process is never replayed.
 Cancellation and termination signals close the socket and restore terminal
-settings; Ctrl-C in a raw PTY is forwarded as guest input.
+settings, including externally delivered SIGINT. Typed Ctrl-C in a raw PTY
+is forwarded as guest input.
 
 ## Guest configuration controls (STR-92)
 
@@ -840,3 +843,4 @@ Observed guest convergence is a separate STR-91 contract. These controls must
 remain a dependent draft until its generation/failure evidence is connected to
 status and mutation completion. Host lifecycle success alone cannot prove that
 packages, files, services or sysctls converged.
+

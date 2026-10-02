@@ -27,6 +27,26 @@ extension Reconciler {
             presentNetworks: presentNetworks,
             presentFirecrackerMMDSInterfaces: presentFirecrackerMMDSInterfaces,
             appliedEdges: appliedEdges)
+        // A same-generation pass still re-observes guest drift. This step is
+        // always real work: VM convergence cannot advance before its read-back.
+        for entry in desired where entry.desiredStatus == .running && entry.guestConfig?.isEmpty == false {
+            let id = entry.vmId.uuidString
+            guard entry.generation >= (lastApplied[id] ?? 0) else { continue }
+            if let index = plan.items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {
+                guard !plan.items[index].steps.contains(.adopt), !plan.items[index].steps.contains(.delete) else {
+                    continue
+                }
+                let item = plan.items[index]
+                plan.items[index] = ReconcileWorkItem(
+                    kind: .vm, id: id, generation: entry.generation,
+                    steps: item.steps + [.convergeGuestConfig], target: entry.asTarget, appliedEdges: item.appliedEdges)
+            } else if case .managed(.running)? = present[id] {
+                plan.items.append(
+                    ReconcileWorkItem(
+                        kind: .vm, id: id, generation: entry.generation,
+                        steps: [.convergeGuestConfig], target: entry.asTarget))
+            }
+        }
         return plan
     }
 

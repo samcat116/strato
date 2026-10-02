@@ -62,6 +62,12 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
+Wire v63 requires first-boot installation of the selected Strato guest-agent
+release for opted-in VMs across ISO and IMDS delivery, and adds independent
+guest-agent reachability observations. Older agents only understand the channel
+flag and cannot fulfill that installation intent. Rejecting v62 peers prevents
+an opted-in VM from being created without its guest daemon during mixed builds.
+
 Wire v44 generalized the interactive exec stream across VMs and sandboxes with
 `guest_exec_*` messages and a resource-kind discriminator on start.
 
@@ -642,3 +648,30 @@ owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
 remain decodable; live peers still require exact wire v64 registration.
+
+### Guest realization observations (STR-91, following STR-90)
+
+`ObservedVMState.guestConfigObservation` is optional and generation-scoped. It
+contains `generation`, `status` (`converged` / `failed`), nullable `error`, and
+bounded arrays: packages (`name`, nullable `version`), files (`path`, nullable
+`sha256` / `mode`), services (`name`, nullable `enabled` / `activeState`), and
+sysctls (`key`, nullable `value`). No file contents or command output are reported.
+Success requires complete identities and no error; failure may contain partial
+facts but also sets the existing VM `lastError` / `failedGeneration` fields.
+Old payloads without this optional field decode as nil. This extends STR-90's
+wire v64 contract on the dependent branch.
+
+Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`)
+and `guest_config_state` (`nonce`, `observation`). These are additive to the
+sandbox guest v4 surface; sandbox init does not realize VM guest intent. An old
+VM daemon rejects the new request explicitly rather than reporting convergence.
+The same connection first performs the existing v4 ping handshake and every
+reply is checked against that boot nonce.
+
+Item-level failures are explicit: optional `failedItem` contains `section`
+(`packages`, `files`, `services`, or `sysctls`), `identity` (package/service
+name, file path, or sysctl key), and fixed `reason` matching the top-level
+`error`. It names the failed observation/apply/read-back row; other unmet rows
+were not necessarily attempted. Journal, validation, or interrupted-pass errors
+have no failed item. Failed-item identity and reason survive restart in the
+metadata journal.
