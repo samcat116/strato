@@ -93,6 +93,15 @@ impl Monitor {
                 return Err("invalid session identity".into());
             }
         }
+        if let Some(ref id) = id {
+            if self.sessions.values().any(|old| {
+                old.as_ref()
+                    .map(|v| v.eq_ignore_ascii_case(id))
+                    .unwrap_or(false)
+            }) {
+                return Err("exec identity is already active".into());
+            }
+        }
         self.next_session = n;
         self.sessions.insert(n, id.map(|v| v.to_ascii_lowercase()));
         self.touch();
@@ -311,6 +320,14 @@ pub mod linux {
                 if !root.join(file).exists() {
                     return Err("idle controller unavailable".into());
                 }
+            }
+            if !fs::read_to_string(root.join("cgroup.procs"))
+                .map_err(|e| e.to_string())?
+                .trim()
+                .is_empty()
+            {
+                // A new daemon cannot reconstruct another monitor's exec ledger.
+                return Err("existing workload admission ownership is unknown".into());
             }
             let inode = fs::metadata(&root).map_err(|e| e.to_string())?.ino();
             Ok(Self { root, inode })
