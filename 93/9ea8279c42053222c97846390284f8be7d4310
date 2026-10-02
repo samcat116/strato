@@ -1,0 +1,36 @@
+control-plane/web/e2e/mock-control-plane.ts
+  h_a84d4ff76cadd1 3,9-24
+control-plane/web/e2e/vm-exec.spec.ts
+  h_a84d4ff76cadd1 1-107
+control-plane/web/playwright.config.ts
+  h_a84d4ff76cadd1 3-4,26
+control-plane/web/src/components/terminal/guest-terminal.test.tsx
+  h_a84d4ff76cadd1 1-183
+control-plane/web/src/components/terminal/guest-terminal.tsx
+  h_a84d4ff76cadd1 1-221
+control-plane/web/src/components/terminal/sandbox-terminal.tsx
+  h_a84d4ff76cadd1 3,5-6
+control-plane/web/src/components/vms/vm-detail-page.tsx
+  h_a84d4ff76cadd1 37,70-74,78-80,139-144,350-373
+control-plane/web/src/lib/api/vms.ts
+  h_a84d4ff76cadd1 8-9,28-31
+control-plane/web/src/lib/hooks/use-guest-exec.ts
+  h_a84d4ff76cadd1 1-254
+control-plane/web/src/lib/hooks/use-sandbox-exec.ts
+  h_a84d4ff76cadd1 1,3-4
+control-plane/web/src/types/api.ts
+  h_a84d4ff76cadd1 214,218-221
+docs/architecture/sandboxes.md
+  h_a84d4ff76cadd1 518-528
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "939ea8279c42053222c97846390284f8be7d4310",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
