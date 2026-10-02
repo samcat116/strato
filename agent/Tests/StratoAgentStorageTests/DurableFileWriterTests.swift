@@ -22,7 +22,14 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     private struct State: Sendable {
         var events: [Event] = []
+        var overlappingWrite: (@Sendable () throws -> Void)?
+        var modelFiles = false
+        var nextDescriptor: CInt = 10
+        var paths: [String: CInt] = [:]
+        var contents: [CInt: Data] = [:]
+        var publications: [Data] = []
         var fileSynchronizationFails = false
+        var failureOperation: String?
         var existingDirectories: Set<String>
         var directoryEntries: [String: [DurableDirectoryEntry]] = [:]
     }
@@ -38,6 +45,26 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     var events: [Event] {
         state.withLock { $0.events }
+    }
+
+    var publications: [Data] { state.withLock { $0.publications } }
+
+    func overlapFirstWrite(with operation: @escaping @Sendable () throws -> Void) {
+        state.withLock {
+            $0.modelFiles = true
+            $0.overlappingWrite = operation
+        }
+    }
+
+    var createdPaths: [String] {
+        events.compactMap { event in
+            if case .create(let path, _) = event { return path }
+            return nil
+        }
+    }
+
+    func fail(_ operation: String) {
+        state.withLock { $0.failureOperation = operation }
     }
 
     func failFileSynchronization() {
@@ -64,13 +91,24 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
     }
 
     func removeItem(at path: String) -> CInt {
-        record(.remove(path))
+        state.withLock {
+            $0.events.append(.remove(path))
+            $0.paths.removeValue(forKey: path)
+        }
         return 0
     }
 
     func createFile(at path: String, permissions: CInt) -> CInt {
-        record(.create(path, permissions: permissions))
-        return 10
+        state.withLock {
+            $0.events.append(.create(path, permissions: permissions))
+            if $0.failureOperation == "create" { return -1 }
+            guard $0.paths[path] == nil else { return -1 }
+            let descriptor = $0.nextDescriptor
+            $0.nextDescriptor += 1
+            $0.paths[path] = descriptor
+            $0.contents[descriptor] = Data()
+            return descriptor
+        }
     }
 
     func openDirectoryForSynchronization(at path: String) -> CInt {
@@ -79,7 +117,19 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
     }
 
     func write(_ data: Data, to fileDescriptor: CInt) throws {
-        record(.write(data, fileDescriptor: fileDescriptor))
+        let overlap = state.withLock {
+            let operation = $0.overlappingWrite
+            $0.overlappingWrite = nil
+            return operation
+        }
+        try overlap?()
+        if state.withLock({ $0.failureOperation == "write" }) {
+            throw DurableFileWriteError(operation: "write", path: "descriptor", errorNumber: errorNumber)
+        }
+        state.withLock {
+            $0.events.append(.write(data, fileDescriptor: fileDescriptor))
+            $0.contents[fileDescriptor] = data
+        }
     }
 
     func synchronizeFile(_ fileDescriptor: CInt, at path: String) throws {
@@ -105,17 +155,24 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     func synchronizeDirectory(_ fileDescriptor: CInt) -> CInt {
         record(.synchronizeDirectory(fileDescriptor))
-        return 0
+        return state.withLock { $0.failureOperation == "directory sync" ? -1 : 0 }
     }
 
     func close(_ fileDescriptor: CInt) -> CInt {
         record(.close(fileDescriptor))
-        return 0
+        return state.withLock { $0.failureOperation == "close" && fileDescriptor == 10 ? -1 : 0 }
     }
 
     func replaceItem(at destination: String, withItemAt source: String) -> CInt {
-        record(.replace(source: source, destination: destination))
-        return 0
+        state.withLock {
+            $0.events.append(.replace(source: source, destination: destination))
+            if $0.failureOperation == "rename" { return -1 }
+            guard $0.modelFiles else { return 0 }
+            guard let descriptor = $0.paths.removeValue(forKey: source) else { return -1 }
+            $0.paths[destination] = descriptor
+            $0.publications.append($0.contents[descriptor] ?? Data())
+            return 0
+        }
     }
 
     private func record(_ event: Event) {
@@ -133,21 +190,72 @@ struct DurableFileWriterTests {
 
         try writer.write(data, to: "/state/manifest.json", permissions: 0o600)
 
+        let temporaryPath = try #require(calls.createdPaths.first)
+        #expect(temporaryPath.hasPrefix("/state/manifest.json.tmp."))
         #expect(
             calls.events == [
                 .pathStatus("/state"),
-                .remove("/state/manifest.json.tmp"),
-                .create("/state/manifest.json.tmp", permissions: 0o600),
+                .create(temporaryPath, permissions: 0o600),
                 .write(data, fileDescriptor: 10),
                 .synchronizeFile(10),
                 .close(10),
                 .replace(
-                    source: "/state/manifest.json.tmp",
+                    source: temporaryPath,
                     destination: "/state/manifest.json"),
                 .openDirectory("/state"),
                 .synchronizeDirectory(20),
                 .close(20),
             ])
+    }
+
+    @Test("An overlapping writer cannot unlink or consume another writer's staging inode")
+    func overlappingWritesOwnTheirStagingFiles() throws {
+        let calls = RecordingDurableFileSystemCalls()
+        let writer = DurableFileWriter(systemCalls: calls)
+        let first = Data("first complete payload".utf8)
+        let second = Data("second complete payload".utf8)
+        // A has opened its staging inode when B runs to completion. With the
+        // old shared name B unlinks A's inode and consumes the shared entry,
+        // leaving A's rename to fail despite having synchronized its bytes.
+        calls.overlapFirstWrite {
+            try writer.write(second, to: "/state/manifest.json")
+        }
+
+        try writer.write(first, to: "/state/manifest.json")
+
+        #expect(Set(calls.createdPaths).count == 2)
+        #expect(calls.publications == [second, first])
+        #expect(
+            !calls.events.contains {
+                if case .remove = $0 { return true }; return false
+            })
+    }
+
+    @Test("Concurrent real writers publish complete payloads and leave no staging files")
+    func concurrentWriters() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("durable-concurrency-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let path = root.appendingPathComponent("state").path
+        let payloads = (0..<16).map { Data(repeating: UInt8($0), count: 128 * 1024) }
+        let writer = DurableFileWriter()
+        try writer.write(payloads[0], to: path, permissions: 0o600)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for payload in payloads {
+                group.addTask {
+                    try writer.write(payload, to: path, permissions: 0o600)
+                    let observed = try Data(contentsOf: URL(fileURLWithPath: path))
+                    #expect(payloads.contains(observed))
+                }
+            }
+            try await group.waitForAll()
+        }
+        #expect(payloads.contains(try Data(contentsOf: URL(fileURLWithPath: path))))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["state"])
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
     @Test("Every newly created directory is synchronized through its parent")
@@ -158,6 +266,8 @@ struct DurableFileWriterTests {
 
         try writer.write(data, to: "/root/state/records/manifest.json")
 
+        let temporaryPath = try #require(calls.createdPaths.first)
+        #expect(temporaryPath.hasPrefix("/root/state/records/manifest.json.tmp."))
         #expect(
             calls.events == [
                 .pathStatus("/root/state/records"),
@@ -171,13 +281,12 @@ struct DurableFileWriterTests {
                 .openDirectory("/root/state"),
                 .synchronizeDirectory(20),
                 .close(20),
-                .remove("/root/state/records/manifest.json.tmp"),
-                .create("/root/state/records/manifest.json.tmp", permissions: 0o666),
+                .create(temporaryPath, permissions: 0o666),
                 .write(data, fileDescriptor: 10),
                 .synchronizeFile(10),
                 .close(10),
                 .replace(
-                    source: "/root/state/records/manifest.json.tmp",
+                    source: temporaryPath,
                     destination: "/root/state/records/manifest.json"),
                 .openDirectory("/root/state/records"),
                 .synchronizeDirectory(20),
@@ -300,7 +409,32 @@ struct DurableFileWriterTests {
                 if case .replace = event { return true }
                 return false
             })
-        #expect(calls.events.last == .remove("/state/manifest.json.tmp"))
+        #expect(calls.createdPaths.count == 1)
+        #expect(calls.events.last == calls.createdPaths.first.map { .remove($0) })
+    }
+
+    @Test(
+        "Failure cleanup removes only owned unpublished staging files",
+        arguments: ["create", "write", "close", "rename", "directory sync"])
+    func failureCleanup(operation: String) throws {
+        let calls = RecordingDurableFileSystemCalls()
+        calls.fail(operation)
+        let writer = DurableFileWriter(systemCalls: calls)
+
+        #expect(throws: DurableFileWriteError.self) {
+            try writer.write(Data("state".utf8), to: "/state/manifest.json", permissions: 0o600)
+        }
+
+        let staging = try #require(calls.createdPaths.first)
+        let removals = calls.events.compactMap { event -> String? in
+            if case .remove(let path) = event { return path }
+            return nil
+        }
+        #expect(removals == (operation == "create" || operation == "directory sync" ? [] : [staging]))
+        #expect(calls.events.filter { $0 == .close(10) }.count == (operation == "create" ? 0 : 1))
+        if operation == "directory sync" {
+            #expect(calls.events.contains(.replace(source: staging, destination: "/state/manifest.json")))
+        }
     }
 
     @Test("A staged file synchronization failure never publishes the file")

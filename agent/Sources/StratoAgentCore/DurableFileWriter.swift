@@ -60,12 +60,14 @@ struct DurableFileWriter: Sendable {
 
     /// Writes `data` to a same-directory temporary file and durably replaces
     /// `path`. `permissions` is applied when the temporary file is created and
-    /// is therefore never wider while its contents are present.
+    /// is therefore never wider while its contents are present. Concurrent calls
+    /// stage independently; the last rename publishes a complete payload.
     func write(_ data: Data, to path: String, permissions: CInt = 0o666) throws {
         try createDirectory(at: parentDirectory(of: path))
 
-        let temporaryPath = path + ".tmp"
-        _ = systemCalls.removeItem(at: temporaryPath)
+        // Each call owns its staging inode, including failure cleanup. Shared
+        // staging names let another writer unlink or publish incomplete bytes.
+        let temporaryPath = "\(path).tmp.\(UUID().uuidString)"
 
         let fileDescriptor = systemCalls.createFile(at: temporaryPath, permissions: permissions)
         guard fileDescriptor >= 0 else {

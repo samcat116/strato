@@ -426,7 +426,9 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             credentialId: configuration.credentialId)
         let directory = (configPath as NSString).deletingLastPathComponent
         let secretXMLPath = "\(directory)/libvirt-secret.xml"
-        let secretValuePath = "\(directory)/libvirt-secret.value"
+        // Per-call ownership also isolates actor reentrancy and different pools
+        // sharing this credential: cleanup cannot remove another virsh input.
+        let secretValuePath = "\(directory)/libvirt-secret.value.\(UUID().uuidString)"
         let writer = DurableFileWriter()
 
         // Libvirt needs only the cephx key value, not the whole keyring. Parse

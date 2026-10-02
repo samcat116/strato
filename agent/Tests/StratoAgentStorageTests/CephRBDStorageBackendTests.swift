@@ -5,6 +5,39 @@ import Testing
 
 @testable import StratoAgentCore
 
+// Hold one virsh reader while a different pool completes and removes its input.
+private actor CephSecretReadBarrier {
+    private var blocked = false
+    private var reader: CheckedContinuation<Void, Never>?
+    private var observer: CheckedContinuation<Void, Never>?
+    private(set) var paths: [String] = []
+
+    func read(_ path: String) async throws {
+        paths.append(path)
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        if paths.count == 1 {
+            await withCheckedContinuation { continuation in
+                reader = continuation
+                blocked = true
+                observer?.resume()
+                observer = nil
+            }
+        }
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == "AQB-top-secret-cephx-value==")
+    }
+
+    func waitUntilBlocked() async {
+        if blocked { return }
+        await withCheckedContinuation { observer = $0 }
+    }
+
+    func release() {
+        reader?.resume()
+        reader = nil
+    }
+}
+
 private actor CephCommandRecorder {
     struct Invocation: Sendable {
         let executable: String
@@ -23,6 +56,7 @@ private actor CephCommandRecorder {
     var failNextImportAfterMutation = false
     var failNextFlatten = false
     var failNextSecretUndefine = false
+    var failNextSecretSet = false
 
     init(
         sourceFormat: String = "raw", allImagesExist: Bool = false,
@@ -39,6 +73,10 @@ private actor CephCommandRecorder {
             return success("{\"format\":\"\(sourceFormat)\"}")
         }
         if executable.lastPathComponent == "virsh" {
+            if arguments.first == "secret-set-value", failNextSecretSet {
+                failNextSecretSet = false
+                return failure("libvirt refused secret input")
+            }
             if arguments.first == "secret-undefine", failNextSecretUndefine {
                 failNextSecretUndefine = false
                 return failure("libvirt refused secret cleanup")
@@ -182,6 +220,7 @@ private actor CephCommandRecorder {
     func failSnapshotCreateAfterMutation() { failNextSnapshotCreateAfterMutation = true }
     func failImportAfterMutation() { failNextImportAfterMutation = true }
     func failFlattenOnce() { failNextFlatten = true }
+    func failSecretSetOnce() { failNextSecretSet = true }
     func failSecretUndefineOnce() { failNextSecretUndefine = true }
 
     private func value(after marker: String, in values: [String]) -> String? {
@@ -270,11 +309,11 @@ struct CephRBDStorageBackendTests {
             caps osd = "profile rbd pool=volumes namespace=project-a"
         """
 
-    private func configuration(keyring: String = Self.keyring) -> CephVolumeStorage {
+    private func configuration(keyring: String = Self.keyring, pool: String = "volumes") -> CephVolumeStorage {
         CephVolumeStorage(
             clusterId: Self.clusterId,
             fsid: Self.fsid,
-            pool: "volumes",
+            pool: pool,
             namespace: "project-a",
             clientName: "client.strato-project",
             monEndpoints: ["v2:mon-a.example:3300", "v2:[2001:db8::10]:3300"],
@@ -285,18 +324,24 @@ struct CephRBDStorageBackendTests {
 
     private func makeBackend(
         root: String, recorder: CephCommandRecorder,
-        imageSource: (any ImageSource)? = nil
+        imageSource: (any ImageSource)? = nil,
+        pool: String = "volumes", secretReadBarrier: CephSecretReadBarrier? = nil
     ) -> CephRBDStorageBackend {
         CephRBDStorageBackend(
             logger: Logger(label: "ceph-test"),
-            configuration: configuration(),
+            configuration: configuration(pool: pool),
             imageSource: imageSource,
             rbdPath: "/fake/rbd",
             virshPath: "/fake/virsh",
             qemuImgPath: "/fake/qemu-img",
             clientRoot: root,
             runSubprocess: { executable, arguments in
-                await recorder.run(executable, arguments)
+                if arguments.first == "secret-set-value",
+                    let index = arguments.firstIndex(of: "--file")
+                {
+                    try await secretReadBarrier?.read(arguments[index + 1])
+                }
+                return await recorder.run(executable, arguments)
             })
     }
 
@@ -405,6 +450,64 @@ struct CephRBDStorageBackendTests {
         #expect(secretSet.arguments.contains("--plain"))
         #expect(!calls.flatMap(\.arguments).contains(where: { $0.contains(Self.secret) }))
         #expect(!calls.flatMap(\.arguments).contains(where: { $0.contains(Self.keyring) }))
+    }
+
+    @Test("A failed libvirt secret installation removes its transient input and can retry")
+    func failedSecretInstallationCleansInput() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ceph-secret-failure-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = CephCommandRecorder()
+        let backend = makeBackend(root: root, recorder: recorder)
+        let attachment = try await backend.createVolume(
+            volumeId: Self.volumeId, sizeBytes: 2 * 1024 * 1024, format: .raw)
+        await recorder.failSecretSetOnce()
+
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.prepareAttachmentForQEMU(attachment)
+        }
+        try await backend.prepareAttachmentForQEMU(attachment)
+
+        let calls = await recorder.invocations.filter { $0.arguments.first == "secret-set-value" }
+        #expect(calls.count == 2)
+        let paths = calls.compactMap { call -> String? in
+            guard let index = call.arguments.firstIndex(of: "--file") else { return nil }
+            return call.arguments[index + 1]
+        }
+        #expect(Set(paths).count == 2)
+        #expect(paths.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
+    }
+
+    @Test("Two pools sharing a credential retain independent virsh inputs until each reader finishes")
+    func sharedCredentialSecretInputsAreIndependent() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ceph-concurrent-secret-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = CephCommandRecorder()
+        let barrier = CephSecretReadBarrier()
+        let first = makeBackend(root: root, recorder: recorder, secretReadBarrier: barrier)
+        let second = makeBackend(root: root, recorder: recorder, pool: "other-pool", secretReadBarrier: barrier)
+        let firstAttachment = try await first.createVolume(
+            volumeId: Self.volumeId, sizeBytes: 2 * 1024 * 1024, format: .raw)
+        let secondAttachment = try await second.createVolume(
+            volumeId: Self.volumeId, sizeBytes: 2 * 1024 * 1024, format: .raw)
+
+        let firstPreparation = Task { try await first.prepareAttachmentForQEMU(firstAttachment) }
+        await barrier.waitUntilBlocked()
+        do {
+            try await second.prepareAttachmentForQEMU(secondAttachment)
+        } catch {
+            await barrier.release()
+            _ = try? await firstPreparation.value
+            throw error
+        }
+        await barrier.release()
+        try await firstPreparation.value
+
+        let paths = await barrier.paths
+        #expect(paths.count == 2)
+        #expect(Set(paths).count == 2)
+        #expect(paths.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
     }
 
     @Test("Subprocess output cannot echo a key into the observed error")
