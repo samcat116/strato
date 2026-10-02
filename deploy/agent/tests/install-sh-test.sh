@@ -62,6 +62,7 @@ echo "install_unit: shared traversal without systemd"
 STRATO_STATE_DIR="$WORK_DIR/manual-state"
 USE_SYSTEMD=0
 install_unit
+check "manual supervisor leaves systemd disabled" 0 "$USE_SYSTEMD"
 check "fresh manual-supervisor state root permits traversal" 711 "$(file_mode "$STRATO_STATE_DIR")"
 mkdir "$STRATO_STATE_DIR/private-child"
 chmod 700 "$STRATO_STATE_DIR" "$STRATO_STATE_DIR/private-child"
