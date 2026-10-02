@@ -123,6 +123,8 @@ actor LibvirtService: HypervisorService {
     /// KVM on Linux, HVF on macOS; when false, domains run under TCG.
     private let hardwareAccelerationEnabled: Bool
     private let memoryOverheadBytes: Int64
+    private let cloudInitProvisioner: CloudInitProvisioner
+    private let defineDomain: (@Sendable (String) async throws -> Void)?
     private let burstableEnforcement: WorkloadResourceClassEnforcement?
     private let burstableOwnedCgroupPath: (@Sendable (String) -> String?)?
     /// Transient control transactions, not cached workload specs. A status
@@ -190,9 +192,13 @@ actor LibvirtService: HypervisorService {
         memoryControllerAvailable: Bool = HostMemoryController.isAvailable(),
         varstore: UEFIVarstore? = nil,
         burstableEnforcement: WorkloadResourceClassEnforcement? = nil,
-        burstableOwnedCgroupPath: (@Sendable (String) -> String?)? = nil
+        burstableOwnedCgroupPath: (@Sendable (String) -> String?)? = nil,
+        cloudInitProvisioner: CloudInitProvisioner? = nil,
+        defineDomain: (@Sendable (String) async throws -> Void)? = nil
     ) {
         self.logger = logger
+        self.cloudInitProvisioner = cloudInitProvisioner ?? CloudInitProvisioner(logger: logger)
+        self.defineDomain = defineDomain
         self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.uri = uri
@@ -637,17 +643,24 @@ actor LibvirtService: HypervisorService {
             // assembled from (STR-177).
             var cloudInitISOPath: String?
             let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
-            if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
-                at: isoPath, vmId: vmId, hostname: metadata?.hostname,
-                sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
-                guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
-                metadataSource: spec.metadataSource,
-                noCloudSeedToken: metadata?.noCloudSeedToken,
-                networkAttachments: networkAttachments)
-            {
-                cloudInitISOPath = isoPath
-            } else if spec.guestAgentEnabled {
-                throw HypervisorServiceError.diskError("could not create guest-agent bootstrap seed for VM \(vmId)")
+            let needsSeed =
+                spec.guestAgentEnabled || !spec.sshAuthorizedKeys.isEmpty || spec.userData != nil
+                || metadata?.hostname != nil || spec.metadataSource == .imds
+                || CloudInitProvisioner.networkConfigYAML(
+                    for: networkAttachments, renameInterfaces: spec.metadataSource == .iso) != nil
+            if needsSeed {
+                do {
+                    _ = try await cloudInitProvisioner.makeNoCloudISO(
+                        at: isoPath, vmId: vmId, hostname: metadata?.hostname,
+                        sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                        guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
+                        metadataSource: spec.metadataSource,
+                        noCloudSeedToken: metadata?.noCloudSeedToken,
+                        networkAttachments: networkAttachments)
+                    cloudInitISOPath = isoPath
+                } catch {
+                    throw HypervisorServiceError.diskError("could not create guest bootstrap seed for VM \(vmId)")
+                }
             }
 
             let input = DomainXMLInput(
@@ -702,9 +715,13 @@ actor LibvirtService: HypervisorService {
             // sync then shuts it down again) and leave nothing behind for an
             // agent restart to adopt.
             let definitionXML = xml
-            _ = try await call("libvirt-define", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
-                client, deadline in
-                try await client.domainDefineXML(xml: definitionXML, deadline: deadline)
+            if let defineDomain {
+                try await defineDomain(definitionXML)
+            } else {
+                _ = try await call("libvirt-define", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
+                    client, deadline in
+                    try await client.domainDefineXML(xml: definitionXML, deadline: deadline)
+                }
             }
 
             logger.info("libvirt domain defined", metadata: ["strato.vm.id": .string(vmId)])
@@ -847,13 +864,14 @@ actor LibvirtService: HypervisorService {
 
             let vmDirectory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
             let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
-            let refreshed = await CloudInitProvisioner(logger: logger).makeNoCloudISO(
-                at: isoPath, vmId: vmId, hostname: metadata?.hostname,
-                sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
-                guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
-                metadataSource: spec.metadataSource, noCloudSeedToken: token,
-                networkAttachments: networkAttachments)
-            guard refreshed else {
+            do {
+                _ = try await cloudInitProvisioner.makeNoCloudISO(
+                    at: isoPath, vmId: vmId, hostname: metadata?.hostname,
+                    sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                    guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
+                    metadataSource: spec.metadataSource, noCloudSeedToken: token,
+                    networkAttachments: networkAttachments)
+            } catch {
                 throw HypervisorServiceError.diskError(
                     "could not refresh the IMDS bootstrap seed for VM \(vmId)")
             }

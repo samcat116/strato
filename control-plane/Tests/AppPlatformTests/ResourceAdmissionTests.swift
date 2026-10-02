@@ -533,6 +533,90 @@ struct ResourceAdmissionTests {
         }
     }
 
+    @Test(arguments: [true, false])
+    func realLateRegistrationCannotOverwriteSuccessorMetadataOrSite(usesExplicitSession: Bool) async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Registration race")
+            let scope = OrganizationScope.organization(try org.requireID())
+            let firstSite = Site(name: "Old registration site", organizationScope: scope)
+            let nextSite = Site(name: "Successor site", organizationScope: scope)
+            try await firstSite.save(on: app.db)
+            try await nextSite.save(on: app.db)
+            let firstSiteID = try firstSite.requireID(), nextSiteID = try nextSite.requireID()
+            let agent = try await builder.createAgent(named: "real-registration-race", siteID: firstSiteID)
+            let peer = try await builder.createAgent(
+                named: "eligible-site-peer", networkCapability: .overlay,
+                lastHeartbeat: Date(), siteID: nextSiteID)
+            let agentID = try agent.requireID(), key = agent.identity.key
+            let prior = UUID(), lateSession = UUID(), successor = UUID()
+            try await app.agentService.beginObservedInventorySession(for: key, sessionID: prior)
+            let lateReplica = AgentService(app: app)
+            let entered = SocketRegistrationLatch(), release = SocketRegistrationLatch()
+            let late = Task {
+                do {
+                    _ = try await lateReplica.registerAgent(
+                        AgentRegisterMessage(
+                            agentId: agent.name, hostname: "stale-host", version: "stale-version",
+                            resources: agent.resources, architecture: .x86_64, networkCapability: .userMode),
+                        identity: agent.identity, siteID: firstSiteID,
+                        inventorySessionID: usesExplicitSession ? lateSession : nil,
+                        afterCapturingInventorySession: {
+                            await entered.signal()
+                            await release.wait()
+                        })
+                    Issue.record("Delayed real registration overwrote the successor")
+                } catch let error as Abort { #expect(error.status == .conflict) }
+            }
+            await entered.wait()
+            let profile = NodeDependencyObservation(
+                id: .hostMemoryProfile, role: .compute, desiredState: .required,
+                ownership: .observeOnly, supervisorState: .active,
+                compatibility: .compatible, functionalState: .healthy,
+                checkedAt: Date(), affectedCapabilities: [])
+            let overlay = NodeDependencyObservation(
+                id: .ovnOvs, role: .networking, desiredState: .required,
+                ownership: .observeOnly, supervisorState: .active,
+                compatibility: .compatible, functionalState: .healthy,
+                checkedAt: Date(), lastHealthyAt: Date(), affectedCapabilities: [.overlayNetworking])
+            peer.dependencyObservations = [overlay]
+            peer.dependencyObservationsReceivedAt = Date()
+            try await peer.save(on: app.db)
+            let resources = AgentResources(
+                totalCPU: 16, availableCPU: 12, totalMemory: 32 << 30, availableMemory: 20 << 30,
+                totalDisk: 1 << 40, availableDisk: 1 << 40,
+                memoryAccounting: .init(
+                    physicalBytes: 32 << 30, hostReservedBytes: 4 << 30, workloadEffectiveBytes: 8 << 30,
+                    qemuOverheadBytes: 1 << 30))
+            let message = AgentRegisterMessage(
+                agentId: agent.name, hostname: "successor-host", version: "successor-version",
+                resources: resources, architecture: .arm64,
+                hypervisors: [.init(type: .qemu, available: true, accelerated: true)],
+                networkCapability: .overlay, sandboxCapable: true, resolverCapable: true,
+                dependencyObservations: [profile, overlay])
+            _ = try await app.agentService.registerAgent(
+                message, identity: agent.identity, siteID: nextSiteID, inventorySessionID: successor)
+            #expect(try await Site.find(nextSiteID, on: app.db)?.$networkControllerAgent.id == agentID)
+            #expect(SiteNetworkAuthority.canAuthorTopology(peer, at: try await ClusterClock.read(on: app.db)))
+            await release.signal()
+            try await late.value
+            let stored = try #require(try await Agent.find(agentID, on: app.db))
+            #expect(stored.hostname == message.hostname && stored.version == message.version)
+            #expect(stored.cpuArchitecture == .arm64)
+            #expect(stored.hypervisors == message.hypervisors)
+            #expect(
+                stored.networkCapability == NetworkCapability.overlay.rawValue && stored.sandboxCapable
+                    && stored.resolverCapable)
+            #expect(stored.dependencyObservations == [profile, overlay])
+            #expect(stored.memoryAccounting?.qemuOverheadBytes == (Int64(1) << 30))
+            #expect(stored.$site.id == nextSiteID)
+            #expect(try await Site.find(nextSiteID, on: app.db)?.$networkControllerAgent.id == agentID)
+            #expect(try await Site.find(firstSiteID, on: app.db)?.$networkControllerAgent.id == nil)
+            #expect(try await InventorySessionFence.current(agentID: agentID, on: app.db) == successor)
+            await lateReplica.shutdown()
+        }
+    }
+
     @Test func lateRegistrationCannotReplaceSuccessorAcrossReplicas() async throws {
         try await withTestApp { app in
             let f = try await fixture(app)

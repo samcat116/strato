@@ -79,7 +79,7 @@ struct ManagedStatePermissionsTests {
             try FileManager.default.createDirectory(atPath: outside, withIntermediateDirectories: false)
             let linkPath = root + "/linked"
             try FileManager.default.createSymbolicLink(atPath: linkPath, withDestinationPath: outside)
-            #expect(throws: (any Error).self) {
+            await #expect(throws: (any Error).self) {
                 try ManagedStatePermissions.prepareVMDirectory(at: linkPath + "/child")
             }
             #expect(!FileManager.default.fileExists(atPath: outside + "/child"))
@@ -88,11 +88,11 @@ struct ManagedStatePermissionsTests {
             try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: target)
             let record = root + "/vm-manifest.json"
             try FileManager.default.createSymbolicLink(atPath: record, withDestinationPath: target)
-            #expect(throws: (any Error).self) { try ManagedStatePermissions.migrate(at: root) }
+            await #expect(throws: (any Error).self) { try ManagedStatePermissions.migrate(at: root) }
             #expect(try mode(target) == 0o644)
             try FileManager.default.removeItem(atPath: record)
             #expect(link(target, record) == 0)
-            #expect(throws: (any Error).self) { try ManagedStatePermissions.migrate(at: root) }
+            await #expect(throws: (any Error).self) { try ManagedStatePermissions.migrate(at: root) }
             #expect(try mode(target) == 0o644)
         }
     }
@@ -115,7 +115,7 @@ struct ManagedStatePermissionsTests {
                 return ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
             }
             #expect(
-                await provisioner.makeNoCloudISO(
+                try await provisioner.makeNoCloudISO(
                     at: root + "/cloud-init.iso", vmId: "fixture", userData: "#cloud-config\nfixture: secret"))
             #expect(try mode(root) == 0o700)
             #expect(try mode(root + "/cloud-init.iso") == 0o600)
@@ -129,16 +129,22 @@ struct ManagedStatePermissionsTests {
             try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: false)
             try Data("stale".utf8).write(to: URL(fileURLWithPath: staging + "/user-data"))
             let provisioner = CloudInitProvisioner(logger: Logger(label: "test"))
-            #expect(await provisioner.makeNoCloudISO(at: root + "/cloud-init.iso", vmId: "fixture") == false)
+            await #expect(throws: (any Error).self) {
+                try await provisioner.makeNoCloudISO(at: root + "/cloud-init.iso", vmId: "fixture")
+            }
             #expect(try String(contentsOfFile: staging + "/user-data", encoding: .utf8) == "stale")
             try FileManager.default.removeItem(atPath: staging)
             try FileManager.default.createSymbolicLink(atPath: staging, withDestinationPath: root)
-            #expect(await provisioner.makeNoCloudISO(at: root + "/cloud-init.iso", vmId: "fixture") == false)
+            await #expect(throws: (any Error).self) {
+                try await provisioner.makeNoCloudISO(at: root + "/cloud-init.iso", vmId: "fixture")
+            }
             #expect(try FileManager.default.destinationOfSymbolicLink(atPath: staging) == root)
             try FileManager.default.removeItem(atPath: staging)
             try FileManager.default.createSymbolicLink(
                 atPath: root + "/cloud-init.iso", withDestinationPath: root + "/operator")
-            #expect(await provisioner.makeNoCloudISO(at: root + "/cloud-init.iso", vmId: "fixture") == false)
+            await #expect(throws: (any Error).self) {
+                try await provisioner.makeNoCloudISO(at: root + "/cloud-init.iso", vmId: "fixture")
+            }
             #expect(!FileManager.default.fileExists(atPath: staging))
         }
     }
@@ -154,13 +160,16 @@ struct ManagedStatePermissionsTests {
                 #expect(metadata.contains("seedfrom:"))
                 return ProcessResult(terminationStatus: 1, standardOutput: Data(), standardError: Data())
             }
-            #expect(
-                await provisioner.makeNoCloudISO(
-                    at: iso, vmId: "fixture", metadataSource: .imds, noCloudSeedToken: UUID()) == false)
+            await #expect(throws: (any Error).self) {
+                try await provisioner.makeNoCloudISO(
+                    at: iso, vmId: "fixture", metadataSource: .imds, noCloudSeedToken: UUID())
+            }
             #expect(try String(contentsOfFile: iso, encoding: .utf8) == "previous seed")
             #expect(!FileManager.default.fileExists(atPath: root + "/.cloud-init-staging"))
             provisioner.runISO = { _, _ in throw CocoaError(.fileWriteUnknown) }
-            #expect(await provisioner.makeNoCloudISO(at: iso, vmId: "fixture") == false)
+            await #expect(throws: (any Error).self) {
+                try await provisioner.makeNoCloudISO(at: iso, vmId: "fixture")
+            }
             #expect(try String(contentsOfFile: iso, encoding: .utf8) == "previous seed")
             // Without a confirmed generator exit, the stage may still be in
             // use by a surviving subprocess; retain it and refuse reclamation.
@@ -245,7 +254,7 @@ struct ManagedStatePermissionsTests {
             }
             for path in untouched { #expect(try mode(path) == 0o644) }
             #expect(try FileManager.default.destinationOfSymbolicLink(atPath: operatorLink) == operatorUUID)
-            #expect(throws: (any Error).self) {
+            await #expect(throws: (any Error).self) {
                 try ManagedStatePermissions.migrate(at: root, qemuVMIds: [(operatorLink as NSString).lastPathComponent])
             }
         }

@@ -9,7 +9,9 @@ import StratoShared
 /// configuration through kernel command-line args or the MMDS metadata service
 /// rather than an attached ISO. Keeping this logic out of the hypervisor service
 /// lets each driver opt into the provisioning mechanism it actually needs.
-public struct CloudInitProvisioner {
+public struct CloudInitProvisioner: Sendable {
+    private enum ProvisioningError: Error { case generatorFailed }
+
     let logger: Logger
     var runISO: @Sendable (URL, [String]) async throws -> ProcessResult = { executable, arguments in
         try await ProcessRunner.run(executableURL: executable, arguments: arguments)
@@ -52,7 +54,7 @@ public struct CloudInitProvisioner {
     ///   - networkAttachments: The VM's resolved NICs; ones carrying a static
     ///     IP allocation are configured in the guest via a NoCloud
     ///     `network-config` (v2). User-mode NICs are left on DHCP.
-    /// - Returns: true if the ISO was created successfully.
+    /// - Returns: true after publishing the ISO. Refused staging or failed generation throws.
     public func makeNoCloudISO(
         at isoPath: String, vmId: String, hostname: String? = nil, sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
@@ -60,7 +62,7 @@ public struct CloudInitProvisioner {
         metadataSource: MetadataSource = .iso,
         noCloudSeedToken: UUID? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = []
-    ) async -> Bool {
+    ) async throws -> Bool {
         let fileManager = FileManager.default
         let vmDirectory = (isoPath as NSString).deletingLastPathComponent
         let tempDir = (vmDirectory as NSString).appendingPathComponent(".cloud-init-staging")
@@ -159,11 +161,11 @@ public struct CloudInitProvisioner {
                 return true
             } else {
                 logger.warning("Failed to create cloud-init ISO: \(result.combinedOutput)")
-                return false
+                throw ProvisioningError.generatorFailed
             }
         } catch {
             logger.warning("Failed to create cloud-init ISO: \(error.localizedDescription)")
-            return false
+            throw error
         }
     }
 
