@@ -383,7 +383,8 @@ extension Agent {
                     jailerBlockedReason: sandboxJailCreationBlockedReason,
                     warmStartEnabled: configuration.sandboxWarmStart,
                     warmCacheBudgetBytes: configuration.sandboxWarmCacheMaxSizeBytes,
-                    snapshotTransfer: snapshotTransfer
+                    snapshotTransfer: snapshotTransfer,
+                    suspensionRestoreTimeoutSeconds: configuration.sandboxSuspensionRestoreTimeoutSeconds
                 )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")

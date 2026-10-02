@@ -11,9 +11,10 @@ extension Agent {
     /// installed; explicit opt-in stop keeps STR-312's separate manual path.
     /// Automatic callers always retain STR-312's host admission and reservations.
     func sandboxReconcileIdleSuspend(
-        _ item: ReconcileWorkItem, policy: SandboxIdlePolicy = SandboxIdlePolicy(),
+        _ item: ReconcileWorkItem, policy suppliedPolicy: SandboxIdlePolicy? = nil,
         dependenciesReady: Bool = false
     ) async throws -> SandboxIdlePolicy.Verdict {
+        let policy = suppliedPolicy ?? configuration.sandboxIdlePolicy
         guard policy.enabled, dependenciesReady else { return .disabled }
         guard item.kind == .sandbox, let desired = item.desiredSandbox,
             desired.desiredStatus == .suspended, desired.generation == item.generation,

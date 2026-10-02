@@ -54,6 +54,8 @@ struct AgentRuntimeConfiguration: Sendable {
     // Warm start (issue #426): provision sandboxes from per-image template
     // snapshots when possible. Default on; warm failures cold-boot.
     let sandboxWarmStart: Bool
+    let sandboxSuspensionRestoreTimeoutSeconds: Int
+    let sandboxIdlePolicy: SandboxIdlePolicy
     let sandboxWarmCacheMaxSizeBytes: Int64?
     let hypervisorType: HypervisorType
     let hardwareAccelerationEnabled: Bool

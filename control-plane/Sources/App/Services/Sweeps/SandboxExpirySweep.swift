@@ -23,7 +23,7 @@ extension AgentMaintenanceLoop {
     /// Why the expiry sweep is deleting a sandbox. Both reasons end in the
     /// same deletion; they differ only in what started the clock.
     enum SandboxExpiryReason {
-        /// The lifetime budget ran out (`ttl_seconds` from `createdAt`).
+        /// The idle budget ran out (`ttl_seconds` from last admitted activity).
         case ttl(seconds: Int)
         /// A terminal sandbox outlived the retention window for its record.
         case retention(hours: Int)
@@ -40,7 +40,7 @@ extension AgentMaintenanceLoop {
 
     /// Deletes sandboxes that have outlived either clock (issue #424):
     ///
-    /// - **TTL** — `ttl_seconds` past `createdAt`. Sandboxes are ephemeral;
+    /// - **TTL** — `ttl_seconds` past durable `lastActiveAt` (initially creation);
     ///   this is what makes the stored budget real.
     /// - **Retention** — an exited or errored sandbox keeps its terminal
     ///   record (status and exit code) for `SANDBOX_RETENTION_HOURS` so the
@@ -76,6 +76,11 @@ extension AgentMaintenanceLoop {
         let now = instant.date
 
         do {
+            // A deadline exists only while the command is provably pending.
+            // Activation atomically replaces it with NULL before any dispatch.
+            if let sql = db as? any SQLDatabase {
+                try await sql.raw("DELETE FROM sandbox_activity_leases WHERE expires_at <= \(bind: now)").run()
+            }
             var expiring: [(sandbox: Sandbox, reason: SandboxExpiryReason)] = []
 
             // A sandbox already heading for `.absent` is being deleted by
@@ -111,7 +116,7 @@ extension AgentMaintenanceLoop {
             }
 
             for (sandbox, reason) in expiring {
-                await expireSandbox(sandbox, reason: reason, on: db)
+                await expireSandbox(sandbox, reason: reason, at: instant, on: db)
             }
         } catch {
             app.logger.error("Sandbox expiry sweep failed: \(error)")
@@ -125,7 +130,9 @@ extension AgentMaintenanceLoop {
     /// delete. Sharing the path is the point: quota release, reservation
     /// release, and the audit trail all come for free, and the `system` actor
     /// on the event makes the unattended deletion attributable.
-    func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, on db: Database) async {
+    func expireSandbox(_ sandbox: Sandbox, reason: SandboxExpiryReason, at instant: ClusterInstant, on db: Database)
+        async
+    {
         guard let sandboxID = sandbox.id else { return }
 
         var onlineAgentID: String?
@@ -150,6 +157,26 @@ extension AgentMaintenanceLoop {
             let accepted = try await app.resourceMutation.accept(
                 .delete, on: sandbox, actor: .system, dispatch: strategy, on: db, app: app
             ) { db in
+                // accept holds the row lock and refreshes durable activity.
+                // A candidate collected before command admission is not a verdict.
+                guard sandbox.desiredStatus != .absent else { throw Abort(.conflict) }
+                switch reason {
+                case .ttl:
+                    guard sandbox.isExpired(at: instant),
+                        try await !SandboxActivityService.hasAdmittedActivity(id: sandboxID, at: instant, on: db),
+                        sandbox.convergencePhase == nil,
+                        sandbox.observedGeneration == sandbox.generation || sandbox.hypervisorId == nil,
+                        sandbox.hasQuiescentIdleExpiryState,
+                        try await SandboxSnapshot.query(on: db).filter(\.$sandbox.$id == sandboxID).filter(
+                            \.$status == .creating
+                        ).first() == nil
+                    else { throw Abort(.conflict, reason: "Sandbox activity is active or unknown") }
+                case .retention(let hours):
+                    guard sandbox.status == .exited || sandbox.status == .error,
+                        let changedAt = sandbox.statusChangedAt ?? sandbox.updatedAt,
+                        changedAt <= instant.date.addingTimeInterval(-TimeInterval(hours) * 3600)
+                    else { throw Abort(.conflict, reason: "Sandbox is no longer retention-expired") }
+                }
                 try await SandboxController.requireSnapshotLineageDeletable(
                     for: sandboxID, on: db)
                 // Same stamp-then-mark order as the user-initiated delete: an

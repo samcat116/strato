@@ -287,19 +287,23 @@ struct SandboxController: RouteCollection {
 
         let updateRequest = try req.content.decodeValidated(UpdateSandboxRequest.self)
 
-        // Only metadata is updatable: image/resources/process changes would
-        // need a re-converge story that phase 1 doesn't have.
-        if let name = updateRequest.name {
-            sandbox.name = name
-        }
-        if let ttl = updateRequest.ttlSeconds {
-            guard ttl > 0 else {
-                throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
+        try await req.db.transaction { db in
+            guard try await sandbox.lockAndRefresh(on: db), sandbox.desiredStatus != .absent else {
+                throw Abort(.conflict, reason: "Sandbox is being deleted")
             }
-            sandbox.ttlSeconds = ttl
-        }
+            if let name = updateRequest.name {
+                sandbox.name = name
+            }
+            if let ttl = updateRequest.ttlSeconds {
+                guard ttl > 0 else {
+                    throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
+                }
+                sandbox.ttlSeconds = ttl
+            }
 
-        try await sandbox.save(on: req.db)
+            SandboxActivityService.touch(sandbox, at: try await ClusterClock.read(on: db))
+            try await sandbox.save(on: db)
+        }
         return try await Self.detailResponse(for: sandbox, on: req)
     }
 
@@ -405,7 +409,7 @@ struct SandboxController: RouteCollection {
         let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:exec")
         let sandboxID = try sandbox.requireID()
 
-        if sandbox.status == .suspended {
+        if sandbox.status == .suspended || sandbox.desiredStatus == .suspended {
             let accepted = try await req.resourceMutation.accept(
                 .boot, on: sandbox, actor: .user(try user.requireID()), dispatch: .stateSync,
                 on: req.db, app: req.application
@@ -444,7 +448,11 @@ struct SandboxController: RouteCollection {
             )
         }
 
+        let sessionID = UUID()
+        let admittedAt = try await SandboxActivityService.admitPending(
+            id: sandboxID, sessionID: sessionID, agentID: agentId, agentKey: agent.identity.key, on: req.db)
         let session = req.guestExecSessionManager.createPendingSession(
+            sessionId: sessionID.uuidString,
             resourceKind: .sandbox,
             resourceId: sandboxID.uuidString,
             agentKey: agent.identity.key,
@@ -455,7 +463,8 @@ struct SandboxController: RouteCollection {
             tty: execRequest.tty ?? false,
             rows: execRequest.rows,
             cols: execRequest.cols,
-            outputMode: execRequest.outputMode ?? .raw
+            outputMode: execRequest.outputMode ?? .raw,
+            now: admittedAt
         )
 
         let response = Response(status: .created)

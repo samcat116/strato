@@ -52,6 +52,67 @@ struct AgentConfigTests {
         }
     }
 
+    @Test("Suspension restore timeout loads at the supported boundaries", arguments: [5, 1200])
+    func suspensionRestoreTimeoutLoads(seconds: Int) async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try
+                "control_plane_url = \"ws://localhost:8080/agent/ws\"\nsandbox_suspension_restore_timeout_seconds = \(seconds)\n"
+                .write(toFile: path, atomically: true, encoding: .utf8)
+            #expect(try await loadConfig(from: path).sandboxSuspensionRestoreTimeoutSeconds == seconds)
+        }
+    }
+
+    @Test("Invalid suspension restore timeouts fail configuration", arguments: [0, 4, 1201])
+    func suspensionRestoreTimeoutRejects(seconds: Int) async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try
+                "control_plane_url = \"ws://localhost:8080/agent/ws\"\nsandbox_suspension_restore_timeout_seconds = \(seconds)\n"
+                .write(toFile: path, atomically: true, encoding: .utf8)
+            await #expect(throws: AgentConfigError.self) { try await loadConfig(from: path) }
+        }
+    }
+
+    @Test("Idle policy is disabled by default and configuration reaches runtime values")
+    func idlePolicyConfiguration() async throws {
+        #expect(!AgentConfig(controlPlaneURL: "ws://localhost").resolvedSandboxIdlePolicy.enabled)
+        try await withTempDirectory { directory in
+            let id = UUID()
+            let path = directory.appendingPathComponent("config.toml").path
+            let toml = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                sandbox_idle_suspend_enabled = true
+                sandbox_idle_seconds = 42
+                sandbox_minimum_residency_seconds = 15
+                sandbox_suspension_restore_timeout_seconds = 90
+                sandbox_idle_excluded_sandbox_ids = ["\(id.uuidString)"]
+                """
+            try toml.write(toFile: path, atomically: true, encoding: .utf8)
+            let policy = try await loadConfig(from: path).resolvedSandboxIdlePolicy
+            #expect(policy.enabled)
+            #expect(policy.idleSeconds == 42)
+            #expect(policy.minimumResidencySeconds == 15)
+            #expect(policy.restoreTimeoutSeconds == 90)
+            #expect(policy.excludedSandboxIDs == [id])
+        }
+    }
+
+    @Test(
+        "Invalid idle thresholds or exclusions refuse configuration",
+        arguments: [
+            "sandbox_idle_seconds = 0", "sandbox_minimum_residency_seconds = -1",
+            "sandbox_idle_excluded_sandbox_ids = [\"bad-id\"]",
+        ])
+    func invalidIdleConfiguration(setting: String) async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://localhost:8080/agent/ws\"\n\(setting)\n".write(
+                toFile: path, atomically: true, encoding: .utf8)
+            await #expect(throws: AgentConfigError.self) { try await loadConfig(from: path) }
+        }
+    }
+
     // MARK: - Warm start (issue #426)
 
     @Test("Load warm-start settings")

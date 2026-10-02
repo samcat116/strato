@@ -8,18 +8,13 @@ import { StatCard } from "@/components/ui/detail-page-shell";
 import { formatDuration, formatRemaining } from "./format";
 
 interface SandboxTtlCardProps {
-  /** The lifetime budget, or null for a sandbox that never expires. */
+  /** The idle budget, or null for a sandbox that never expires. */
   ttlSeconds?: number | null;
-  /** When the budget runs out; derived server-side from the creation anchor. */
+  /** When the budget runs out; extended server-side by admitted activity. */
   expiresAt?: string | null;
 }
 
-/**
- * The sandbox's lifetime budget as a live countdown. The control plane's expiry
- * sweep deletes the sandbox once `expiresAt` passes, but it runs on a periodic
- * tick — so reaching zero means deletion is imminent, not already done, which
- * is why the elapsed state reads as awaiting cleanup rather than deleted.
- */
+/** Activity extends this deadline; reaching it is not a deletion verdict. */
 export function SandboxTtlCard({ ttlSeconds, expiresAt }: SandboxTtlCardProps) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -30,7 +25,7 @@ export function SandboxTtlCard({ ttlSeconds, expiresAt }: SandboxTtlCardProps) {
   }, [expiresAt]);
 
   return (
-    <StatCard title="TTL" icon={<Timer className="h-4 w-4" />}>
+    <StatCard title="Idle TTL" icon={<Timer className="h-4 w-4" />}>
       <TtlValue ttlSeconds={ttlSeconds} expiresAt={expiresAt} now={now} />
     </StatCard>
   );
@@ -59,8 +54,8 @@ function TtlValue({
   if (remaining === null) {
     return (
       <>
-        <div className="text-xl font-bold text-red-600">Expired</div>
-        <p className="text-sm text-muted-foreground">Awaiting cleanup</p>
+        <div className="text-xl font-bold text-red-600">Idle deadline reached</div>
+        <p className="text-sm text-muted-foreground">Active or unknown activity can defer cleanup</p>
       </>
     );
   }
@@ -69,7 +64,7 @@ function TtlValue({
     <>
       <div className="text-xl font-bold text-foreground">{remaining}</div>
       <p className="text-sm text-muted-foreground">
-        of {formatDuration(ttlSeconds)} left
+        of {formatDuration(ttlSeconds)} idle budget remaining
       </p>
     </>
   );

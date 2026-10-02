@@ -10821,6 +10821,8 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
         networkId:
           type: string
           format: uuid
@@ -10896,6 +10898,8 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
     SandboxDetail:
       type: object
       required:
@@ -10943,9 +10947,16 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
         expiresAt:
           type: string
           format: date-time
+          description: Earliest idle deadline. Active or unknown activity prevents deletion beyond this time.
+        lastActiveAt:
+          type: string
+          format: date-time
+          description: Last admitted activity, initially creation; monotonically advances.
         hypervisorId:
           type: string
         restoredFromSnapshotId:

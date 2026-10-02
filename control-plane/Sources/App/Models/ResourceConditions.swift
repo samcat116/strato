@@ -483,6 +483,15 @@ extension Sandbox: ConvergingResource {
 
     func adoptReconciliationState(from committed: Sandbox) {
         adoptConvergenceBookkeeping(from: committed)
+        lastActiveAt = committed.lastActiveAt
+        createdAt = committed.createdAt
+        name = committed.name
+        ttlSeconds = committed.ttlSeconds
+        suspensionComputeReserved = committed.suspensionComputeReserved
+        suspensionStorageBytes = committed.suspensionStorageBytes
+        suspensionStorageEstimateBytes = committed.suspensionStorageEstimateBytes
+        suspensionAfterSnapshotId = committed.suspensionAfterSnapshotId
+        suspensionEvidence = committed.suspensionEvidence
         status = committed.status
         statusChangedAt = committed.statusChangedAt
         desiredStatus = committed.desiredStatus

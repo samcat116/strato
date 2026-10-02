@@ -1076,7 +1076,7 @@ snapshots do, from the shared storage pool (see
 **TTL and auto-expiry** (#424): sandboxes are ephemeral, and
 `sweepExpiredSandboxes` (on the `AgentService` heartbeat tick, a
 cluster-singleton under the `sandbox_expiry` sweep lock) is what makes that
-real. It deletes on two clocks: **TTL** — `ttl_seconds` past `created_at`,
+real. It deletes on two clocks: **idle TTL** — `ttl_seconds` past durable `last_active_at` (initially creation),
 surfaced to clients as the derived `expiresAt` and counted down on the
 detail page — and **retention** — an exited or errored sandbox keeps its
 terminal record (status and exit code) for `SANDBOX_RETENTION_HOURS`
@@ -1105,8 +1105,32 @@ legacy stopped, and unbudgeted suspended intents are refused. The caller must ho
 the existing sandbox reconciliation lane. Explicit opt-in stop remains on
 STR-312's manual dispatch path; automatic provenance/dispatch is not installed. Both the
 policy and dependency readiness gate default off; no automatic timer, capability,
-wire message, or activity producer is activated. The expiry sweep and existing
-creation-anchored TTL remain unchanged until control-plane integration lands.
+wire message, or complete guest/network activity producer is activated.
+
+Idle TTL advances on API mutations, user log queries, exec admission and
+owning-agent terminal exec evidence. `last_active_at` uses PostgreSQL time and
+never moves backward. Pending exec admissions are persisted before session
+minting and expire after 60 seconds; attachment makes the admission indefinite
+until an authenticated owning-agent terminal event releases it. Interrupted or
+orphaned admissions remain unknown across control-plane restart, not silently
+idle. Repeated terminal delivery does not extend TTL. Internal log followers and
+ordinary detail polling do not count as user activity.
+
+The expiry sweep locks and refreshes each candidate before rechecking expiry,
+admissions and snapshot work, atomically with desired-absent intent and its system
+attribution. Running/unmeasured guests refuse idle deletion. Stale candidates
+cannot delete a sandbox touched by an intervening mutation. Terminal retention
+keeps its independent status-change clock. The API exposes `lastActiveAt` and
+`expiresAt`; the latter is an earliest idle deadline, not a promise of deletion
+while activity is active or unknown.
+
+Agent TOML settings are `sandbox_idle_suspend_enabled` (default false),
+`sandbox_idle_seconds` (positive, default 300),
+`sandbox_minimum_residency_seconds` (positive, default 60), and
+`sandbox_idle_excluded_sandbox_ids` (UUID array). Invalid exclusions refuse
+configuration. `sandbox_suspension_restore_timeout_seconds` (5...1200, default
+1200) reaches the actual bounded STR-312 restore operation. Enabling the local
+idle setting alone cannot bypass the dependency gate or missing evidence.
 
 Eligibility requires fresh, authoritative evidence of zero active sessions and
 pending commands, no snapshot/restore work, full-snapshot backend support, and
@@ -1149,10 +1173,10 @@ checkpoint storage admission, retained storage/compute accounting, generation-aw
 restore, and explicit opt-in stop/exec wake. Automatic activation still requires
 versioned authoritative activity and upstream command/stream admission coordination,
 a durable distinction between automatic and explicit suspend intent, the policy
-consumer/sweep, restore-timeout configuration mapping, and real VM acceptance.
-It must persist activity monotonically, anchor user-visible `expiresAt` on that
-activity, protect active streams and queued commands during expiry, and keep
-system-attributed deletion on the existing delete path. Terminal-record retention
+consumer/sweep, and real VM acceptance. The durable user-activity ledger,
+idle TTL boundary checks, configuration mapping and user-visible deadlines are
+implemented; complete guest/network reporting and automatic provenance still
+require the coordinated wire contract. Terminal-record retention
 remains on its existing clock. Superseded idle checkpoint cleanup belongs to the
 suspended lifecycle and must never delete user-created snapshots. End-to-end RAM,
 full-snapshot restore, failover, and checkpoint/stop race tests require that

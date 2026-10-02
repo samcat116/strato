@@ -104,6 +104,11 @@ extension SandboxController {
                 req.idempotencyContext, actor: .user(userID), on: db)
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
+            guard try await sandbox.lockAndRefresh(on: db), sandbox.desiredStatus != .absent else {
+                throw Abort(.conflict, reason: "Sandbox is being deleted")
+            }
+            SandboxActivityService.touch(sandbox, at: try await ClusterClock.read(on: db))
+            try await sandbox.save(on: db)
             if stopAfterSnapshot {
                 // Checkpoint-and-stop has two halves and they live in two
                 // places on purpose. The *capture* leaves the microVM paused,

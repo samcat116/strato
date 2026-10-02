@@ -15,7 +15,10 @@ struct CurrentSchemaBaselineTests {
     private static let expectedPreFleetCatalogMD5 = "f719976e5b1c327d005f411e78e38144"
     private static let expectedPreSuspensionCatalogMD5 = "39c7c80bcc0b73465f941a6bd5cdc9a1"
     // STR-312 adds five suspension ledger fields and two nonnegative-size checks.
-    private static let expectedCurrentCatalogMD5 = "16d36b3b4449d6a1d370c5cbad4c0a4d"
+    private static let expectedPreIdleCatalogMD5 = "16d36b3b4449d6a1d370c5cbad4c0a4d"
+    // STR-313 adds the durable activity anchor and four-column admission table,
+    // with primary/foreign keys, lookup index and a monotonic timestamp trigger.
+    private static let expectedCurrentCatalogMD5 = "5d0f68b3a20d27aea8938a6a02d9cd35"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -68,25 +71,36 @@ struct CurrentSchemaBaselineTests {
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
-            #expect(upgradedCounts.tables == 80)
-            #expect(upgradedCounts.columns == 1054)
-            #expect(upgradedCounts.constraints == 378)
-            #expect(upgradedCounts.indexes == 246)
+            #expect(upgradedCounts.tables == 81)
+            #expect(upgradedCounts.columns == 1059)
+            #expect(upgradedCounts.constraints == 380)
+            #expect(upgradedCounts.indexes == 248)
             #expect(upgradedCounts.enums == baselineCounts.enums)
-            #expect(upgradedCounts.triggers == baselineCounts.triggers)
-            #expect(upgradedCounts.functions == baselineCounts.functions)
+            #expect(upgradedCounts.triggers == baselineCounts.triggers + 1)
+            #expect(upgradedCounts.functions == baselineCounts.functions + 1)
             let logs = try await MigrationLog.query(on: app.db).sort(\.$batch).all()
             #expect(logs.first?.name == CurrentSchemaBaseline().name)
             #expect(logs.count > 1, "the equivalence check must exercise the forward chain")
+
+            let idle = AddSandboxIdleActivity()
+            try await idle.revert(on: app.db)
+            let preIdleCounts = try await catalogCounts(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreIdleCatalogMD5)
+            #expect(preIdleCounts.tables == upgradedCounts.tables - 1)
+            #expect(preIdleCounts.columns == upgradedCounts.columns - 5)
+            #expect(preIdleCounts.constraints == upgradedCounts.constraints - 2)
+            #expect(preIdleCounts.indexes == upgradedCounts.indexes - 2)
+            #expect(preIdleCounts.triggers == upgradedCounts.triggers - 1)
+            #expect(preIdleCounts.functions == upgradedCounts.functions - 1)
 
             let suspension = AddSandboxSuspension()
             try await suspension.revert(on: app.db)
             #expect(try await catalogMD5(on: app.db) == Self.expectedPreSuspensionCatalogMD5)
             let preSuspensionCounts = try await catalogCounts(on: app.db)
-            #expect(preSuspensionCounts.tables == upgradedCounts.tables)
-            #expect(preSuspensionCounts.columns == upgradedCounts.columns - 5)
-            #expect(preSuspensionCounts.constraints == upgradedCounts.constraints - 2)
-            #expect(preSuspensionCounts.indexes == upgradedCounts.indexes)
+            #expect(preSuspensionCounts.tables == preIdleCounts.tables)
+            #expect(preSuspensionCounts.columns == preIdleCounts.columns - 5)
+            #expect(preSuspensionCounts.constraints == preIdleCounts.constraints - 2)
+            #expect(preSuspensionCounts.indexes == preIdleCounts.indexes)
 
             // Independently isolate the reviewed fleet-only delta. Reverting
             // that migration must restore the previously reviewed catalog;
@@ -102,6 +116,8 @@ struct CurrentSchemaBaselineTests {
             try await fleet.prepare(on: app.db)
             #expect(try await catalogMD5(on: app.db) == Self.expectedPreSuspensionCatalogMD5)
             try await suspension.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreIdleCatalogMD5)
+            try await idle.prepare(on: app.db)
             #expect(try await catalogMD5(on: app.db) == Self.expectedCurrentCatalogMD5)
 
         } catch {

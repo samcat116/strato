@@ -6268,6 +6268,7 @@ export interface components {
                 [key: string]: string;
             };
             workingDir?: string;
+            /** @description Idle budget in seconds since the last admitted activity. */
             ttlSeconds?: number;
             /**
              * Format: uuid
@@ -6304,6 +6305,7 @@ export interface components {
         };
         UpdateSandboxRequest: {
             name?: string;
+            /** @description Idle budget in seconds since the last admitted activity. */
             ttlSeconds?: number;
         };
         SandboxDetail: {
@@ -6324,9 +6326,18 @@ export interface components {
                 [key: string]: string;
             };
             workingDir?: string;
+            /** @description Idle budget in seconds since the last admitted activity. */
             ttlSeconds?: number;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Earliest idle deadline. Active or unknown activity prevents deletion beyond this time.
+             */
             expiresAt?: string;
+            /**
+             * Format: date-time
+             * @description Last admitted activity, initially creation; monotonically advances.
+             */
+            lastActiveAt?: string;
             hypervisorId?: string;
             /** Format: uuid */
             restoredFromSnapshotId?: string;

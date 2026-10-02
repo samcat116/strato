@@ -58,11 +58,14 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "working_dir")
     var workingDir: String?
 
-    /// Lifetime budget in seconds, counted from `createdAt` (see `expiresAt`).
+    /// Idle budget in seconds, counted from the last admitted activity.
     /// The expiry sweep deletes the sandbox once the budget runs out; nil
     /// means the sandbox lives until something else removes it.
     @OptionalField(key: "ttl_seconds")
     var ttlSeconds: Int?
+
+    @OptionalField(key: "last_active_at")
+    var lastActiveAt: Date?
 
     /// The agent this sandbox is placed on, written by the scheduler.
     @OptionalField(key: "hypervisor_id")
@@ -275,16 +278,29 @@ extension Sandbox {
         status == .running || status == .error
     }
 
-    /// When the lifetime budget runs out, or nil for a sandbox with no TTL.
-    /// Anchored at `createdAt` rather than at a start time: the budget covers
-    /// the record's whole life, so a sandbox that is created and never started
-    /// still expires instead of holding its quota forever.
+    /// Idle expiry anchor. Creation is the initial activity for a never-used
+    /// sandbox; admitted activity can only move the deadline forward.
     var expiresAt: Date? {
         guard let ttlSeconds, let createdAt else { return nil }
-        return createdAt.addingTimeInterval(TimeInterval(ttlSeconds))
+        return max(createdAt, lastActiveAt ?? createdAt).addingTimeInterval(TimeInterval(ttlSeconds))
     }
 
-    /// Whether the lifetime budget has run out. Always false for a sandbox
+    /// Running/unknown guest activity requires the future authoritative wire
+    /// report. Stopped/exited guests are quiescent; Suspended additionally
+    /// requires the retained, generation-matching destruction proof.
+    var hasQuiescentIdleExpiryState: Bool {
+        switch status {
+        case .stopped, .exited: return true
+        case .suspended:
+            guard let evidence = suspensionEvidence else { return false }
+            return evidence.verified && evidence.vmmDestroyed && evidence.generation == generation
+                && desiredStatus == .suspended && evidence.storageBytes > 0
+                && evidence.storageBytes <= suspensionStorageBytes && !suspensionComputeReserved
+        case .running, .starting, .stopping, .error, .unknown: return false
+        }
+    }
+
+    /// Whether the idle deadline has been reached. Always false for a sandbox
     /// with no TTL.
     func isExpired(at instant: ClusterInstant) -> Bool {
         guard let expiresAt else { return false }
@@ -297,6 +313,7 @@ extension Sandbox {
     func setStatus(_ newStatus: SandboxStatus, at instant: ClusterInstant) {
         status = newStatus
         statusChangedAt = instant.date
+        SandboxActivityService.touch(self, at: instant)
         divergenceDetectedAt = nil
     }
 
@@ -457,9 +474,10 @@ struct SandboxDetailResponse: Content {
     let env: [String: String]
     let workingDir: String?
     let ttlSeconds: Int?
-    /// Derived from `ttlSeconds` + `createdAt` so clients can show a countdown
-    /// without re-deriving the anchor. Nil when the sandbox has no TTL.
+    /// Earliest idle deadline, extended by admitted activity. Active or unknown
+    /// activity prevents deletion even after this timestamp. Nil without TTL.
     let expiresAt: Date?
+    let lastActiveAt: Date?
     let hypervisorId: String?
     let restoredFromSnapshotId: UUID?
     let cpuTemplate: String?
@@ -521,6 +539,7 @@ struct SandboxDetailResponse: Content {
         self.workingDir = sandbox.workingDir
         self.ttlSeconds = sandbox.ttlSeconds
         self.expiresAt = sandbox.expiresAt
+        self.lastActiveAt = sandbox.lastActiveAt ?? sandbox.createdAt
         self.hypervisorId = sandbox.hypervisorId
         self.restoredFromSnapshotId = sandbox.restoredFromSnapshotId
         self.cpuTemplate = sandbox.cpuTemplate

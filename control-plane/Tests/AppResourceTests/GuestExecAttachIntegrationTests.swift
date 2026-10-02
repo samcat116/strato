@@ -308,6 +308,7 @@ struct GuestExecAttachIntegrationTests {
                 let sandbox = try await builder.createSandbox(name: "exec-ws-sb", project: project)
                 sandbox.hypervisorId = try registeredAgent.requireID().uuidString
                 sandbox.setStatus(.running)
+                sandbox.desiredStatus = .running
                 try await sandbox.save(on: app.db)
                 collection = "sandboxes"
                 resourceId = try sandbox.requireID().uuidString

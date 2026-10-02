@@ -35,7 +35,10 @@ struct LogsController: RouteCollection {
     func getSandboxLogs(req: Request) async throws -> [LogEntry] {
         try await queryLogs(
             req: req, parameter: "sandboxID", invalidReason: "Invalid sandbox ID",
-            authorize: { _ = try await req.authorizedSandbox($0, action: "sandbox:read") },
+            authorize: {
+                _ = try await req.authorizedSandbox($0, action: "sandbox:read")
+                try await SandboxActivityService.touch(id: $0, on: req.db)
+            },
             query: { id, start, end, limit, direction in
                 try await req.lokiService.querySandboxLogs(
                     sandboxId: id, start: start, end: end, limit: limit, direction: direction)

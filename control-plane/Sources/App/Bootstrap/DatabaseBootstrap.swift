@@ -228,5 +228,6 @@ extension Application {
         migrations.add(AddAgentInventorySession())
         migrations.add(CreateVMFleetRuns())
         migrations.add(AddSandboxSuspension())
+        migrations.add(AddSandboxIdleActivity())
     }
 }
