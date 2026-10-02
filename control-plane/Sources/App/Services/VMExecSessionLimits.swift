@@ -17,6 +17,14 @@ struct LiveVMExecSession: Content, Sendable {
 /// local to the replica holding the agent; short leases bound crash staleness.
 enum VMExecSessionLimits {
     static let leaseSeconds = 60
+    static let renewalBatchSize = 256
+
+    struct Renewal: Sendable {
+        let id: UUID
+        let vmID: UUID
+        let userID: UUID
+        let lastActivity: Date
+    }
 
     private struct Count: Decodable { let count: Int }
     private struct ID: Decodable { let id: UUID }
@@ -128,17 +136,32 @@ enum VMExecSessionLimits {
         try await sql(db).raw("DELETE FROM vm_exec_sessions WHERE id = \(bind: id)").run()
     }
 
-    /// Renew only a live lease: after expiry we terminate rather than resurrect
-    /// a session whose released slot may already have been admitted elsewhere.
-    static func renew(id: UUID, lastActivity: Date, on db: any Database) async throws -> Bool {
-        let rows = try await sql(db).raw(
-            """
-            UPDATE vm_exec_sessions SET expires_at = clock_timestamp() + interval '60 seconds', last_activity_at = \(bind: lastActivity)
-            WHERE id = \(bind: id) AND expires_at > clock_timestamp() AND NOT termination_requested
-            RETURNING id
-            """
-        ).all(decoding: ID.self)
-        return !rows.isEmpty
+    /// Bounded statements renew the socket owner's live, attached leases without
+    /// a database round trip per socket. Missing, expired, terminated, or changed
+    /// ownership rows are returned as losses; renewal never recreates a lease.
+    static func renew(_ leases: [Renewal], on sql: any SQLDatabase) async throws -> Set<UUID> {
+        var renewed: Set<UUID> = []
+        for start in stride(from: 0, to: leases.count, by: renewalBatchSize) {
+            let batch = leases[start..<min(start + renewalBatchSize, leases.count)]
+            let values = SQLList(
+                batch.map { lease -> SQLQueryString in
+                    "(\(bind: lease.id)::uuid, \(bind: lease.vmID)::uuid, \(bind: lease.userID)::uuid, \(bind: lease.lastActivity)::timestamptz)"
+                })
+            let rows = try await sql.raw(
+                """
+                UPDATE vm_exec_sessions AS live
+                SET expires_at = clock_timestamp() + interval '60 seconds',
+                    last_activity_at = GREATEST(live.last_activity_at, owned.last_activity_at)
+                FROM (VALUES \(values)) AS owned(id, vm_id, user_id, last_activity_at)
+                WHERE live.id = owned.id AND live.vm_id = owned.vm_id AND live.user_id = owned.user_id
+                  AND live.attached_at IS NOT NULL AND live.expires_at > clock_timestamp()
+                  AND NOT live.termination_requested
+                RETURNING live.id
+                """
+            ).all(decoding: ID.self)
+            renewed.formUnion(rows.map(\.id))
+        }
+        return renewed
     }
 
     static func prune(on db: any Database) async throws {

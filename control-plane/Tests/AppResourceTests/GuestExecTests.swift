@@ -1687,7 +1687,10 @@ final class GuestExecTests {
             try await sql.raw(
                 "UPDATE vm_exec_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE id = \(bind: ids[1])"
             ).run()
-            #expect(try await !VMExecSessionLimits.renew(id: ids[1], lastActivity: Date(), on: app.db))
+            #expect(
+                try await VMExecSessionLimits.renew(
+                    [.init(id: ids[1], vmID: vmID, userID: user.requireID(), lastActivity: Date())], on: sql
+                ).isEmpty)
             try await VMExecSessionLimits.reserve(
                 id: UUID(), vmID: vmID, userID: user.requireID(), username: nil, on: app.db)
             try await VMExecSessionLimits.remove(id: ids[0], on: app.db)
@@ -1796,7 +1799,11 @@ final class GuestExecTests {
             #expect(
                 try await VMExecSessionLimits.list(vmID: vm.requireID(), on: app.db).first?.terminationRequested == true
             )
-            #expect(try await !VMExecSessionLimits.renew(id: id, lastActivity: Date(), on: app.db))
+            let sql = try #require(app.db as? any SQLDatabase)
+            #expect(
+                try await VMExecSessionLimits.renew(
+                    [.init(id: id, vmID: vm.requireID(), userID: user.requireID(), lastActivity: Date())], on: sql
+                ).isEmpty)
             try await VMExecSessionLimits.remove(id: id, on: app.db)
             try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
