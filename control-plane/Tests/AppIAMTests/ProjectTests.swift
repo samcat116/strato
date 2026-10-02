@@ -21,6 +21,7 @@ final class ProjectTests {
         let app = try await Application.makeForTesting()
 
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
 
             // Create test user and organization
@@ -67,8 +68,10 @@ final class ProjectTests {
 
             let authToken = try await testUser.generateAPIKey(on: app.db)
 
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app, testUser, testOrganization, testOU, authToken)
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }
