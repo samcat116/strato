@@ -16,11 +16,27 @@ public struct SandboxSuspensionGuard: Sendable {
         fileprivate let nonce: UUID
     }
 
-    public enum GateError: Error, Sendable, Equatable {
+    public enum GateError: ClassifiableError, LocalizedError, Sendable, Equatable {
         case unknownIntent
         case active
         case stale
         case busy
+
+        public var failureClassification: FailureClassification {
+            switch self {
+            case .busy, .unknownIntent: .waitingOnDependency
+            case .active, .stale: .blocked
+            }
+        }
+
+        public var errorDescription: String? {
+            switch self {
+            case .unknownIntent: "Waiting for current sandbox intent"
+            case .busy: "Waiting for the owned suspension/restore permit"
+            case .active: "Sandbox has active user execution; close the session before suspending"
+            case .stale: "Sandbox intent, activity or durable recovery evidence changed; refresh before retrying"
+            }
+        }
     }
 
     private var generation: Int64?

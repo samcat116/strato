@@ -6,6 +6,12 @@ import Testing
 
 @Suite("Suspension generation, activity and durable admission")
 struct SandboxSuspensionTests {
+    @Test func admissionContentionDoesNotConsumeFailureBudget() {
+        #expect(SandboxSuspensionGuard.GateError.busy.failureClassification == .waitingOnDependency)
+        #expect(SandboxSuspensionGuard.GateError.unknownIntent.failureClassification == .waitingOnDependency)
+        #expect(SandboxSuspensionGuard.GateError.active.failureClassification == .blocked)
+        #expect(SandboxSuspensionGuard.GateError.stale.failureClassification == .blocked)
+    }
     @Test func unknownIntentIsRefused() {
         var gate = SandboxSuspensionGuard()
         #expect(throws: SandboxSuspensionGuard.GateError.unknownIntent) {

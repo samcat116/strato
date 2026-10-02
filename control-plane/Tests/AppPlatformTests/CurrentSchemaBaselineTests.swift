@@ -10,6 +10,11 @@ import Vapor
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
     private static let expectedCatalogMD5 = "4164eef002a4bb3f9e26e0738d27bc06"
+    // #1440 adds vm_fleet_runs (eight columns, primary key/constraint),
+    // its queue index, and the VM tag GIN index. The frozen baseline stays fixed.
+    private static let expectedPreFleetCatalogMD5 = "f719976e5b1c327d005f411e78e38144"
+    private static let expectedPreSuspensionCatalogMD5 = "39c7c80bcc0b73465f941a6bd5cdc9a1"
+    // STR-312 adds five suspension ledger fields and two nonnegative-size checks.
     private static let expectedCurrentCatalogMD5 = "16d36b3b4449d6a1d370c5cbad4c0a4d"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
@@ -73,16 +78,32 @@ struct CurrentSchemaBaselineTests {
             let logs = try await MigrationLog.query(on: app.db).sort(\.$batch).all()
             #expect(logs.first?.name == CurrentSchemaBaseline().name)
             #expect(logs.count > 1, "the equivalence check must exercise the forward chain")
-            // STR-312 adds exactly five columns and two checks. Existing fleet
-            // history already supplies the extra table/indexes in this catalog.
-            try await AddSandboxSuspension().revert(on: app.db)
-            let beforeSuspension = try await catalogCounts(on: app.db)
-            #expect(beforeSuspension.tables == upgradedCounts.tables)
-            #expect(beforeSuspension.columns == upgradedCounts.columns - 5)
-            #expect(beforeSuspension.constraints == upgradedCounts.constraints - 2)
-            #expect(beforeSuspension.indexes == upgradedCounts.indexes)
-            try await AddSandboxSuspension().prepare(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == upgradedMD5)
+
+            let suspension = AddSandboxSuspension()
+            try await suspension.revert(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreSuspensionCatalogMD5)
+            let preSuspensionCounts = try await catalogCounts(on: app.db)
+            #expect(preSuspensionCounts.tables == upgradedCounts.tables)
+            #expect(preSuspensionCounts.columns == upgradedCounts.columns - 5)
+            #expect(preSuspensionCounts.constraints == upgradedCounts.constraints - 2)
+            #expect(preSuspensionCounts.indexes == upgradedCounts.indexes)
+
+            // Independently isolate the reviewed fleet-only delta. Reverting
+            // that migration must restore the previously reviewed catalog;
+            // reapplying it must reproduce the new exact fingerprint.
+            let fleet = CreateVMFleetRuns()
+            try await fleet.revert(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreFleetCatalogMD5)
+            let preFleetCounts = try await catalogCounts(on: app.db)
+            #expect(preFleetCounts.tables == 79)
+            #expect(preFleetCounts.columns == 1041)
+            #expect(preFleetCounts.constraints == 375)
+            #expect(preFleetCounts.indexes == 243)
+            try await fleet.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreSuspensionCatalogMD5)
+            try await suspension.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedCurrentCatalogMD5)
+
         } catch {
             try? await app.shutdownForTesting()
             throw error
