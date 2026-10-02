@@ -119,6 +119,8 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
     /// separate sources with separate precedence). Nil when the platform has
     /// nothing to say.
     public let vendorData: String?
+    /// Nil disables the Strato root daemon bootstrap; a release tag pins first-boot installation.
+    public let guestAgentRelease: String?
     /// Free-form key/value labels from the VM's tags. Ordinary metadata, not
     /// identity: nothing may authorize on a tag, because a guest reads its own
     /// tags and an operator can set them to anything.
@@ -187,6 +189,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
         vendorData: String? = nil,
+        guestAgentRelease: String? = nil,
         tags: [String: String] = [:],
         identity: IdentityPolicy? = nil,
         noCloudSeedToken: UUID? = nil,
@@ -202,6 +205,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         self.sshAuthorizedKeys = sshAuthorizedKeys
         self.userData = userData
         self.vendorData = vendorData
+        self.guestAgentRelease = guestAgentRelease
         self.tags = tags
         self.identity = identity
         self.noCloudSeedToken = noCloudSeedToken
@@ -228,6 +232,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         sshAuthorizedKeys = try c.decodeIfPresent([String].self, forKey: .sshAuthorizedKeys) ?? []
         userData = try c.decodeIfPresent(String.self, forKey: .userData)
         vendorData = try c.decodeIfPresent(String.self, forKey: .vendorData)
+        guestAgentRelease = try c.decodeIfPresent(String.self, forKey: .guestAgentRelease)
         tags = try c.decodeIfPresent([String: String].self, forKey: .tags) ?? [:]
         identity = try c.decodeIfPresent(IdentityPolicy.self, forKey: .identity)
         noCloudSeedToken = try c.decodeIfPresent(UUID.self, forKey: .noCloudSeedToken)

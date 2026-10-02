@@ -35,11 +35,17 @@ public enum GuestExecOutputMode: Sendable, Equatable {
     }
 }
 
+/// Selects the mint endpoint without changing the shared session protocol.
+public enum GuestExecResource: Sendable, Equatable {
+    case sandbox(String)
+    case virtualMachine(String)
+}
+
 /// One complete guest-exec invocation. The session module owns both the HTTP
 /// mint and WebSocket attach so callers do not need to understand the
 /// replica-local, single-use protocol.
 public struct GuestExecInvocation: Sendable {
-    public let sandboxID: String
+    public let resource: GuestExecResource
     public let command: [String]
     public let environment: [String: String]?
     public let workingDirectory: String?
@@ -49,6 +55,30 @@ public struct GuestExecInvocation: Sendable {
     public let input: AsyncStream<Data>?
     public let closeStdinWhenInputEnds: Bool
     public let resizes: AsyncStream<GuestExecTerminalSize>?
+
+    public init(
+        resource: GuestExecResource,
+        command: [String],
+        environment: [String: String]? = nil,
+        workingDirectory: String? = nil,
+        tty: Bool,
+        initialSize: GuestExecTerminalSize? = nil,
+        outputMode: GuestExecOutputMode,
+        input: AsyncStream<Data>? = nil,
+        closeStdinWhenInputEnds: Bool = false,
+        resizes: AsyncStream<GuestExecTerminalSize>? = nil
+    ) {
+        self.resource = resource
+        self.command = command
+        self.environment = environment
+        self.workingDirectory = workingDirectory
+        self.tty = tty
+        self.initialSize = initialSize
+        self.outputMode = outputMode
+        self.input = input
+        self.closeStdinWhenInputEnds = closeStdinWhenInputEnds
+        self.resizes = resizes
+    }
 
     public init(
         sandboxID: String,
@@ -62,20 +92,15 @@ public struct GuestExecInvocation: Sendable {
         closeStdinWhenInputEnds: Bool = false,
         resizes: AsyncStream<GuestExecTerminalSize>? = nil
     ) {
-        self.sandboxID = sandboxID
-        self.command = command
-        self.environment = environment
-        self.workingDirectory = workingDirectory
-        self.tty = tty
-        self.initialSize = initialSize
-        self.outputMode = outputMode
-        self.input = input
-        self.closeStdinWhenInputEnds = closeStdinWhenInputEnds
-        self.resizes = resizes
+        self.init(
+            resource: .sandbox(sandboxID), command: command, environment: environment,
+            workingDirectory: workingDirectory, tty: tty, initialSize: initialSize,
+            outputMode: outputMode, input: input, closeStdinWhenInputEnds: closeStdinWhenInputEnds,
+            resizes: resizes)
     }
 }
 
-/// Deep session module used by both `sandbox exec` and `sandbox attach`.
+/// Shared session module used by VM exec, sandbox exec, and sandbox attach.
 /// Authentication, typed minting, replica retries, frame validation, ordered
 /// input, and cleanup all remain behind this single `run` interface.
 public struct GuestExecSessionClient: Sendable {
@@ -172,10 +197,17 @@ public struct GuestExecSessionClient: Sendable {
 
         while true {
             do {
-                let response = try await client.createSandboxExecSession(
-                    path: .init(sandboxID: invocation.sandboxID),
-                    body: .json(request)
-                ).created.body.json
+                let response: Components.Schemas.GuestExecSession
+                switch invocation.resource {
+                case .sandbox(let id):
+                    response = try await client.createSandboxExecSession(
+                        path: .init(sandboxID: id), body: .json(request)
+                    ).created.body.json
+                case .virtualMachine(let id):
+                    response = try await client.createVMExecSession(
+                        path: .init(vmID: id), body: .json(request)
+                    ).created.body.json
+                }
                 return MintedSession(
                     websocketPath: response.websocketPath,
                     expiresAt: response.expiresAt,
@@ -203,6 +235,8 @@ public struct GuestExecSessionClient: Sendable {
             let socket: any GuestExecSocket
             do {
                 socket = try await connector.connect(url: websocketURL, bearerToken: token)
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 throw CLIError.network("Could not attach guest exec WebSocket: \(error)")
             }
@@ -465,7 +499,10 @@ struct WebSocketKitGuestExecConnector: GuestExecSocketConnecting {
                 return try await withCheckedThrowingContinuation { continuation in
                     guard attempt.install(continuation) else { return }
                     let future = startConnect(url, headers, configuration, group) { socket in
-                        if !attempt.succeed(with: socket) {
+                        // Handler registration is event-loop confined and must
+                        // precede any server frames arriving after the upgrade.
+                        let connected = WebSocketKitGuestExecSocket(socket: socket, group: group)
+                        if !attempt.succeed(with: connected) {
                             _ = socket.close(code: .goingAway)
                         }
                     }
@@ -480,10 +517,10 @@ struct WebSocketKitGuestExecConnector: GuestExecSocketConnecting {
             }
 
             if Task.isCancelled {
-                try? await socket.close(code: .goingAway)
+                await socket.close()
                 throw CancellationError()
             }
-            return WebSocketKitGuestExecSocket(socket: socket, group: group)
+            return socket
         } catch {
             try? await group.shutdownGracefully()
             throw error
@@ -494,14 +531,14 @@ struct WebSocketKitGuestExecConnector: GuestExecSocketConnecting {
 private final class GuestExecWebSocketConnectAttempt: Sendable {
     private enum State {
         case pending
-        case waiting(CheckedContinuation<WebSocket, any Error>)
+        case waiting(CheckedContinuation<any GuestExecSocket, any Error>)
         case cancelled
         case finished
     }
 
     private let state = Mutex(State.pending)
 
-    func install(_ continuation: CheckedContinuation<WebSocket, any Error>) -> Bool {
+    func install(_ continuation: CheckedContinuation<any GuestExecSocket, any Error>) -> Bool {
         let installed = state.withLock { state -> Bool in
             switch state {
             case .pending:
@@ -519,7 +556,7 @@ private final class GuestExecWebSocketConnectAttempt: Sendable {
         return installed
     }
 
-    func succeed(with socket: WebSocket) -> Bool {
+    func succeed(with socket: any GuestExecSocket) -> Bool {
         resolve { $0.resume(returning: socket) }
     }
 
@@ -528,10 +565,10 @@ private final class GuestExecWebSocketConnectAttempt: Sendable {
     }
 
     func cancel() {
-        let continuation = state.withLock { state -> CheckedContinuation<WebSocket, any Error>? in
+        let continuation = state.withLock { state -> CheckedContinuation<any GuestExecSocket, any Error>? in
             switch state {
             case .pending, .waiting:
-                let continuation: CheckedContinuation<WebSocket, any Error>?
+                let continuation: CheckedContinuation<any GuestExecSocket, any Error>?
                 if case .waiting(let waiting) = state {
                     continuation = waiting
                 } else {
@@ -547,9 +584,9 @@ private final class GuestExecWebSocketConnectAttempt: Sendable {
     }
 
     private func resolve(
-        _ body: (CheckedContinuation<WebSocket, any Error>) -> Void
+        _ body: (CheckedContinuation<any GuestExecSocket, any Error>) -> Void
     ) -> Bool {
-        let continuation = state.withLock { state -> CheckedContinuation<WebSocket, any Error>? in
+        let continuation = state.withLock { state -> CheckedContinuation<any GuestExecSocket, any Error>? in
             guard case .waiting(let continuation) = state else { return nil }
             state = .finished
             return continuation
@@ -596,7 +633,11 @@ private actor WebSocketKitGuestExecSocket: GuestExecSocket {
         }
         let promise = socket.eventLoop.makePromise(of: Void.self)
         socket.send(binary, promise: promise)
-        try await promise.futureResult.get()
+        do {
+            try await promise.futureResult.get()
+        } catch {
+            throw CLIError.network("Guest exec WebSocket send failed: \(error)")
+        }
     }
 
     func send(text: String) async throws {
@@ -605,7 +646,11 @@ private actor WebSocketKitGuestExecSocket: GuestExecSocket {
         }
         let promise = socket.eventLoop.makePromise(of: Void.self)
         socket.send(text, promise: promise)
-        try await promise.futureResult.get()
+        do {
+            try await promise.futureResult.get()
+        } catch {
+            throw CLIError.network("Guest exec WebSocket send failed: \(error)")
+        }
     }
 
     func close() async {

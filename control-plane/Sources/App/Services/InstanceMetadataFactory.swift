@@ -82,6 +82,7 @@ extension InstanceMetadata {
             sshAuthorizedKeys: vm.effectiveSSHAuthorizedKeys,
             userData: vm.userData,
             vendorData: nil,
+            guestAgentRelease: vm.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
             tags: vm.tags,
             identity: instanceSPIFFEID.map {
                 IdentityPolicy(

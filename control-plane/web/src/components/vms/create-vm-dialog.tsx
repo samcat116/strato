@@ -65,6 +65,7 @@ export function CreateVMDialog({
   // cheaper, and most guests are reached over SSH — but it cannot be turned on
   // later, so this is the only chance to ask for it.
   const [graphicsConsole, setGraphicsConsole] = useState(false);
+  const [guestAgentEnabled, setGuestAgentEnabled] = useState(false);
   // On by default: IMDS-backed bootstrap needs the listener, while ISO-backed
   // VMs can still use it as a guest metadata API.
   const [metadataEnabled, setMetadataEnabled] = useState(true);
@@ -249,7 +250,7 @@ export function CreateVMDialog({
       userData: formData.userData.trim() ? formData.userData : undefined,
       secureBoot: !isFirecracker && secureBoot,
       tpm: !isFirecracker && tpm,
-      guestAgentEnabled: false,
+      guestAgentEnabled: !isFirecracker && guestAgentEnabled,
       graphicsConsole: !isFirecracker && graphicsConsole,
       metadataEnabled,
       // Keep the selected source explicit so the request matches what the
@@ -289,6 +290,7 @@ export function CreateVMDialog({
         setSecureBoot(false);
         setTpm(false);
         setGraphicsConsole(false);
+        setGuestAgentEnabled(false);
         setMetadataEnabled(true);
         setMetadataSource("imds");
         setNetworkInterfaces([initialNIC()]);
@@ -542,6 +544,8 @@ export function CreateVMDialog({
               setTpm={setTpm}
               graphicsConsole={graphicsConsole}
               setGraphicsConsole={setGraphicsConsole}
+              guestAgentEnabled={guestAgentEnabled}
+              setGuestAgentEnabled={setGuestAgentEnabled}
               userData={formData.userData}
               onUserDataChange={(userData) =>
                 setFormData({ ...formData, userData })

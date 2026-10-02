@@ -9,7 +9,7 @@ struct VMCommand: AsyncParsableCommand {
         abstract: "Manage virtual machines.",
         subcommands: [
             List.self, Get.self, Create.self, Delete.self,
-            Start.self, Stop.self, Reboot.self, Pause.self, Resume.self,
+            Start.self, Stop.self, Reboot.self, Pause.self, Resume.self, Exec.self,
         ],
         defaultSubcommand: List.self
     )
@@ -63,6 +63,24 @@ struct VMCommand: AsyncParsableCommand {
                     table.addRow(["memory", vm.memoryFormatted])
                     table.addRow(["disk", vm.diskFormatted])
                     table.addRow(["metadata source", vm.metadataSource?.value1.rawValue ?? "iso"])
+                    table.addRow([
+                        "Strato guest agent",
+                        vm.guestAgentEnabled == true
+                            ? "Enabled (recreation required to change)" : "Disabled (recreation required to change)",
+                    ])
+                    let observation = vm.guestAgentObservation
+                    let recent =
+                        observation.map { $0.checkedAt }
+                        .map {
+                            let age = Date().timeIntervalSince($0); return age >= -5 && age < 90
+                        } ?? false
+                    let reachability =
+                        vm.guestAgentEnabled != true
+                        ? "Not enabled"
+                        : vm.status.rawValue != "Running"
+                            ? "Not running"
+                            : !recent ? "Unknown" : observation?.reachable == true ? "Reachable" : "Unreachable"
+                    table.addRow(["guest-agent reachability", reachability])
                     table.addRow(["created", formatDate(vm.createdAt)])
                     return table
                 }
@@ -104,6 +122,13 @@ struct VMCommand: AsyncParsableCommand {
 
         @Option(name: .long, help: "Path to an SSH public key to authorize in the guest.")
         var sshKeyFile: String?
+
+        @Flag(
+            name: .long,
+            help:
+                "Install Strato’s root exec daemon at first boot (Linux/QEMU with cloud-init and systemd). Off by default; existing VMs require recreation. No automatic updates."
+        )
+        var guestAgent = false
 
         @Option(name: .long, help: "Guest bootstrap source: iso or imds (x86 QEMU default: imds).")
         var metadataSource: String?
@@ -150,7 +175,7 @@ struct VMCommand: AsyncParsableCommand {
                             blockMode: requestedBlockMode,
                             environment: environment, cpu: cpu, memory: memory, disk: disk,
                             networkId: network, sshPublicKey: sshPublicKey,
-                            metadataSource: guestBootstrapSource))
+                            guestAgentEnabled: guestAgent, metadataSource: guestBootstrapSource))
                 ).accepted.body.json
                 try await handleMutation(
                     AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,

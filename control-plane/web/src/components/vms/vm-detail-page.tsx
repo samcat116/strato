@@ -34,7 +34,8 @@ import {
   VMMetadataCard,
   VMIdentityCard,
 } from "@/components/vms";
-import { useVM, useInvalidateVMs } from "@/lib/hooks";
+import { useVM, useInvalidateVMs, usePermissions } from "@/lib/hooks";
+import { VMGuestAgentCard } from "@/components/vms/vm-guest-agent-card";
 import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
 
 // Dynamically import VNCDisplay: noVNC touches `document` while its module is
@@ -67,9 +68,17 @@ const ConsoleTerminal = dynamic(
   }
 );
 
+const GuestTerminal = dynamic(
+  () => import("@/components/terminal/guest-terminal").then((mod) => mod.GuestTerminal),
+  { ssr: false, loading: () => <p>Loading terminal...</p> }
+);
+
 export function VMDetailPage({ id }: { id: string }) {
   const { data: vm, isLoading, error, refetch } = useVM(id);
   const invalidateVMs = useInvalidateVMs();
+  const { permissions } = usePermissions([
+    { key: "exec", action: "vm:exec", node: { type: "virtual_machine", id } },
+  ]);
 
   if (!id) {
     return (
@@ -107,6 +116,7 @@ export function VMDetailPage({ id }: { id: string }) {
       />
 
       <ConvergenceFailureAlert conditions={vm.conditions} />
+      <VMGuestAgentCard vm={vm} />
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
@@ -128,6 +138,12 @@ export function VMDetailPage({ id }: { id: string }) {
               <span className="ml-2 text-xs text-muted-foreground">(VM not running)</span>
             )}
           </TabsTrigger>
+          {permissions.exec && (
+            <TabsTrigger value="exec" className="data-[state=active]:bg-muted">
+              <Terminal className="h-4 w-4 mr-2" />
+              Exec
+            </TabsTrigger>
+          )}
           {/* The display needs both a running VM and a VM that was created
               with one — headless is the default, and it cannot be changed
               afterwards, so the hint says which condition failed. */}
@@ -328,6 +344,39 @@ export function VMDetailPage({ id }: { id: string }) {
                 <p className="text-muted-foreground text-sm mt-2">
                   Start the VM to access the console.
                 </p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="exec" className="mt-6">
+          {permissions.exec && (
+            <Card className="bg-background border-border">
+              <CardContent className="p-0">
+                {!isRunning ? (
+                  <p role="status" className="p-6">VM is not running. Start the VM to use Exec.</p>
+                ) : vm.guestAgentEnabled !== true ? (
+                  <div role="status" className="p-6">
+                    {vm.guestAgentEnabled === false ? (
+                      <>
+                        <p>Strato guest agent channel is disabled for this VM.</p>
+                        <p>Recreation is required to enable it. Create a Linux/QEMU VM with the guest agent opt-in; cloud-init installs it at first boot. Use Console to access this VM.</p>
+                      </>
+                    ) : (
+                      <>
+                        <p>Guest-agent opt-in state is unavailable.</p>
+                        <p>Refresh VM details or update the control plane before using Exec. Console remains available.</p>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <p className="p-3 text-sm text-muted-foreground">
+                      Interactive guest terminal. Closing this tab ends the process. Reconnecting starts a new session.
+                    </p>
+                    <GuestTerminal key={id} resourceId={id} resourceKind="vm" className="h-[500px] rounded-lg overflow-hidden" />
+                  </>
+                )}
               </CardContent>
             </Card>
           )}

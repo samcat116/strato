@@ -406,6 +406,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/exec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a VM guest exec session (attach over WebSocket)
+         * @description Requires vm:exec, a running VM with the Strato guest agent enabled, and a hypervisor advertising guest exec support.
+         */
+        post: operations["createVMExecSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/actions/run": {
         parameters: {
             query?: never;
@@ -5869,7 +5892,7 @@ export interface components {
              */
             tpm: boolean;
             /**
-             * @description Attach Strato's fixed-CID virtio-vsock channel for the in-guest daemon. This is distinct from QEMU guest agent (qga), is supported only for QEMU VMs, and is fixed at creation because it changes the domain's PCI device topology.
+             * @description Install the published Strato root exec daemon through visible first-boot cloud-init and attach its fixed-CID virtio-vsock channel. Default off. Requires Linux/QEMU, cloud-init, Python 3, systemd and HTTPS egress. SHA-256 verified; no automatic updates. Distinct from QEMU guest agent (qga). Fixed at creation; changing it requires recreation.
              * @default false
              */
             guestAgentEnabled: boolean;
@@ -5957,7 +5980,7 @@ export interface components {
             secureBoot?: boolean;
             /** @description Whether the guest has an emulated TPM 2.0. */
             tpmEnabled?: boolean;
-            /** @description Whether this VM was created with Strato's virtio-vsock guest-agent channel. Distinct from `qgaAvailable`. */
+            /** @description Whether this VM opted into Strato's root guest-agent installation and virtio-vsock channel at creation. Changing requires recreation. This does not prove installation or reachability; see guestAgentObservation. Distinct from qgaAvailable. */
             guestAgentEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
@@ -5971,6 +5994,12 @@ export interface components {
             };
             /** @description SSH authorized keys currently published through instance metadata. */
             sshAuthorizedKeys?: string[];
+            /** @description Last read-only Strato vsock probe. Missing or older than 90 seconds means unknown, not reachable. */
+            guestAgentObservation?: {
+                reachable: boolean;
+                /** Format: date-time */
+                checkedAt: string;
+            };
             /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
             qgaAvailable?: boolean;
             /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */
@@ -11319,6 +11348,39 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    createVMExecSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GuestExecRequest"];
+            };
+        };
+        responses: {
+            /** @description A pending single-use exec session. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GuestExecSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     runVMCommand: {

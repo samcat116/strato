@@ -133,12 +133,16 @@ The most involved pieces:
   version string before the agent's end of the relay existed and stall with no
   error. noVNC touches `document` at module scope, so it is imported inside the
   effect and the component is loaded through `next/dynamic` with `ssr: false`.
-- **Terminals** (`components/terminal/`): `console-terminal.tsx` (VM serial
-  console) and `sandbox-terminal.tsx` drive xterm.js; the WebSocket logic is
-  in `lib/hooks/use-console.ts` and `use-sandbox-exec.ts`. Sockets are opened
-  same-origin (`wss://<host>/api/vms/{id}/console`, and the `websocketPath`
-  returned by the sandbox exec endpoint). The hooks memoize callbacks by ref
-  so 5-second polling re-renders don't tear down live sockets.
+- **Terminals** (`components/terminal/`): `console-terminal.tsx` drives xterm.js
+  for the VM serial console through `lib/hooks/use-console.ts`. The shared
+  `guest-terminal.tsx` and `lib/hooks/use-guest-exec.ts` implement VM and sandbox
+  guest execution. `components/vms/vm-detail-page.tsx` loads the shared terminal
+  for VMs; `sandbox-terminal.tsx` and `use-sandbox-exec.ts` adapt the sandbox
+  resource path to that shared implementation.
+  Sockets are opened same-origin (`wss://<host>/api/vms/{id}/console`, or the
+  `websocketPath` returned by `/api/vms/{id}/exec` or
+  `/api/sandboxes/{id}/exec`). The hooks memoize callbacks by ref so 5-second
+  polling re-renders don't tear down live sockets.
 - **Overview dashboard** (`components/overview/`): hand-rolled capacity/
   health charts — there is deliberately no chart library dependency.
 - **Workload identity** (`components/workload-identity/`): the SPIFFE/SPIRE

@@ -625,11 +625,14 @@ actor LibvirtService: HypervisorService {
             if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
                 at: isoPath, vmId: vmId, hostname: metadata?.hostname,
                 sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
                 metadataSource: spec.metadataSource,
                 noCloudSeedToken: metadata?.noCloudSeedToken,
                 networkAttachments: networkAttachments)
             {
                 cloudInitISOPath = isoPath
+            } else if spec.guestAgentEnabled {
+                throw HypervisorServiceError.diskError("could not create guest-agent bootstrap seed for VM \(vmId)")
             }
 
             let input = DomainXMLInput(
@@ -825,6 +828,7 @@ actor LibvirtService: HypervisorService {
             let refreshed = await CloudInitProvisioner(logger: logger).makeNoCloudISO(
                 at: isoPath, vmId: vmId, hostname: metadata?.hostname,
                 sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
                 metadataSource: spec.metadataSource, noCloudSeedToken: token,
                 networkAttachments: networkAttachments)
             guard refreshed else {

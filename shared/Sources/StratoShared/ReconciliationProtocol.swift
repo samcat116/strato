@@ -124,6 +124,9 @@ public struct DesiredVMState: Codable, Sendable {
     /// The checkpoint this VM should have been restored to, as a nonce
     /// (STR-151). Nil means no restore has ever been requested.
     public let restore: DesiredRestore?
+    /// Nil means no managed guest intent. Omission never reverses previous guest changes.
+    /// Changes share this VM's generation; no separate guest generation exists.
+    public let guestConfig: GuestConfig?
 
     public init(
         vmId: UUID,
@@ -134,7 +137,8 @@ public struct DesiredVMState: Codable, Sendable {
         imageInfo: ImageInfo? = nil,
         metadata: InstanceMetadata? = nil,
         rebootGeneration: Int64? = nil,
-        restore: DesiredRestore? = nil
+        restore: DesiredRestore? = nil,
+        guestConfig: GuestConfig? = nil
     ) {
         self.vmId = vmId
         self.hypervisorType = hypervisorType
@@ -145,6 +149,7 @@ public struct DesiredVMState: Codable, Sendable {
         self.metadata = metadata
         self.rebootGeneration = rebootGeneration
         self.restore = restore
+        self.guestConfig = guestConfig
     }
 }
 
@@ -1316,6 +1321,7 @@ public struct ObservedVMState: Codable, Sendable {
     /// `Codable` decodes to nil, not a failure). Purely informational: it never
     /// participates in convergence.
     public let guestInfo: GuestInfo?
+    public let guestAgentObservation: GuestAgentObservation?
     /// Guest memory usage from the VM's virtio-balloon device (issue #567).
     /// Nil for guests without the virtio_balloon driver, still booting, or on
     /// agents/hypervisors that don't poll it — the same tolerant-both-ways
@@ -1340,6 +1346,7 @@ public struct ObservedVMState: Codable, Sendable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
         guestInfo: GuestInfo? = nil,
+        guestAgentObservation: GuestAgentObservation? = nil,
         memoryStats: VMMemoryStats? = nil,
         resourceTelemetry: WorkloadResourceTelemetry? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
@@ -1352,6 +1359,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.failedGeneration = failedGeneration
         self.failureClassification = failureClassification
         self.guestInfo = guestInfo
+        self.guestAgentObservation = guestAgentObservation
         self.memoryStats = memoryStats
         self.resourceTelemetry = resourceTelemetry
         self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds

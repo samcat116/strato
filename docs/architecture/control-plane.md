@@ -792,3 +792,23 @@ data-volume associations or cascade away VM interfaces/checkpoints. It also runs
 before observed-volume absence can delete replica records. Physical OVN/RBD
 cleanup remains owned by agent convergence, which a missing-manifest agent
 quarantines; no speculative detach or port cleanup is introduced here.
+
+### VM exec from the CLI
+
+`strato vm exec <vm-id> -- <command> [args...]` mints through the generated
+`createVMExecSession` operation, then uses the same `GuestExecSessionClient`
+as sandbox exec/attach. Omitting the command selects `/bin/sh`. With terminal
+stdin and stdout, exec enters raw mode, requests a PTY, and forwards terminal
+size changes. `--no-tty` disables PTY allocation; `--tty` requires terminal
+stdin and stdout. Redirected I/O selects multiplexed output, preserves stdout
+and stderr separately, forwards stdin EOF, and returns the remote exit code.
+Use an explicit shell, such as `-- sh -c 'cat | wc -l'`, for guest-side pipes.
+
+Both mint and attach authorize `vm:exec`; this path never uses the recorded
+`actions/run` endpoint or its separate `vm:runCommand` permission. Server
+refusals retain their reasons for stopped VMs, disabled guest agents, missing
+hypervisor support, and authorization failures. An unreachable guest agent
+or a disconnect after attach is reported as a session error. Only the initial
+replica-local attachment is retried; a started process is never replayed.
+Cancellation and termination signals close the socket and restore terminal
+settings; Ctrl-C in a raw PTY is forwarded as guest input.

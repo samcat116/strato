@@ -432,6 +432,8 @@ extension Agent {
                     // memory stats (issue #567); nil until the slow poll first
                     // sees a responsive qga / reporting balloon on this VM.
                     guestInfo: guestInfoCache[vmId],
+                    guestAgentObservation: status == .running && entry.spec.guestAgentEnabled
+                        ? guestAgentObservationCache[vmId] : nil,
                     memoryStats: memoryStatsCache[vmId],
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
