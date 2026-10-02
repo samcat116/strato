@@ -43,22 +43,21 @@ extension VMCommand {
                     credentials: authenticated.credentials)
                 let terminal = plan.tty ? try RawTerminal() : nil
                 let initialSize = try terminal?.size()
+                // Raw mode disables ISIG, so typed Ctrl-C remains guest input.
+                // External SIGINT still needs cleanup. Install the monitor before
+                // entering raw mode so interruption cannot leave the terminal raw.
+                let terminationMonitor = TerminalTerminationMonitor(
+                    signalNumbers: [SIGINT, SIGTERM, SIGHUP])
+                defer { withExtendedLifetime(terminationMonitor) {} }
                 let operation = {
                     let resizeMonitor = terminal.map { TerminalResizeMonitor(terminal: $0) }
-                    // In raw mode Ctrl-C is a guest input byte. In pipe mode it
-                    // interrupts this process and must still close the session.
-                    let terminationMonitor = TerminalTerminationMonitor(
-                        signalNumbers: plan.tty ? [SIGTERM, SIGHUP] : [SIGINT, SIGTERM, SIGHUP])
-                    defer {
-                        withExtendedLifetime(resizeMonitor) {}
-                        withExtendedLifetime(terminationMonitor) {}
-                    }
+                    defer { withExtendedLifetime(resizeMonitor) {} }
                     let invocation = GuestExecInvocation(
                         resource: .virtualMachine(id), command: plan.command,
                         environment: plan.environment, workingDirectory: workdir,
                         tty: plan.tty, initialSize: initialSize,
                         outputMode: plan.tty ? .raw : .multiplexed,
-                        input: plan.tty || !stdinIsTerminal ? fileHandleDataStream(.standardInput) : nil,
+                        input: fileHandleDataStream(.standardInput),
                         closeStdinWhenInputEnds: true, resizes: resizeMonitor?.sizes)
                     return try await withThrowingTaskGroup(of: RunOutcome.self) { group in
                         group.addTask {

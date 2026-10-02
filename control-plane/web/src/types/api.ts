@@ -211,12 +211,14 @@ export interface VNCSession {
   expiresAt: string;
 }
 
-// Sandbox exec (backend issue #423): POST /api/sandboxes/:id/exec creates a
+// VM and sandbox exec: POST /api/{vms|sandboxes}/:id/exec creates a
 // short-lived pending session, then the browser attaches over a WebSocket at
 // `websocketPath` (binary frames = stdin/stdout bytes, text frames = JSON
 // control messages).
-export type SandboxExecRequest = OpenAPISchemas["GuestExecRequest"];
-export type SandboxExecSession = OpenAPISchemas["GuestExecSession"];
+export type GuestExecRequest = OpenAPISchemas["GuestExecRequest"];
+export type GuestExecSession = OpenAPISchemas["GuestExecSession"];
+export type SandboxExecRequest = GuestExecRequest;
+export type SandboxExecSession = GuestExecSession;
 
 // Sandbox workload logs (stdout/stderr shipped to Loki). Same envelope as VM
 // logs, but labeled with `stream` instead of level/event_type.

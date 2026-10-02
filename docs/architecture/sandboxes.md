@@ -515,6 +515,17 @@ socket.
 The frontend's sandbox detail page has Terminal and Logs tabs mirroring the
 VM page — the terminal drives exec sessions (default `/bin/sh`, PTY, resize
 wired to xterm's fit addon), and the logs tab tails the Loki-backed endpoint.
+The VM detail page exposes the same `GuestTerminal` and `useGuestExec` through
+an Exec tab gated by `vm:exec`, beside the serial Console tab. The terminal
+starts a fresh PTY session on each open or explicit retry; switching tabs,
+navigating, or losing the connection ends that session and never automatically
+restarts the command. Pending POST results are fenced on teardown. VM state
+and `guestAgentEnabled` prevent known unavailable starts; the backend's distinct
+missing-agent and nonresponding-agent errors provide recovery guidance through
+Console. Enabling the channel does not prove that the daemon is installed or
+reachable. Interactive exec remains separate from recorded commands authorized
+by `vm:runCommand`.
+
 The CLI uses the same exchange: `sandbox exec` selects multiplexed non-PTY
 output and preserves remote exit status, while `sandbox attach` selects raw PTY
 output and starts a fresh shell.
