@@ -7,7 +7,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Add volume block policy migration", .serialized)
+@Suite("Add volume block policy migration", .serialized, .postgresFixture)
 struct AddVolumeBlockPolicyTests {
     @Test("existing volumes remain conservative and invalid modes are rejected")
     func backfillsConservativePolicy() async throws {

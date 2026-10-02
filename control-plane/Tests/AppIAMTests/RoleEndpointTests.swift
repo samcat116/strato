@@ -12,7 +12,7 @@ import AppTestSupport
 /// with its solver: parsing and schema validation are in-process and
 /// deterministic, and they are half of what these routes promise — a shape
 /// rejection this suite asserts on is the shape rejection production makes.
-@Suite("Role Endpoint Tests", .serialized)
+@Suite("Role Endpoint Tests", .serialized, .postgresFixture)
 final class RoleEndpointTests {
 
     private struct Fixture {

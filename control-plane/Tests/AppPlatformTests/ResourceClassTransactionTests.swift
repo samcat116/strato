@@ -7,7 +7,7 @@ import Testing
 import Vapor
 @testable import App
 
-@Suite("Resource class transactions", .serialized)
+@Suite("Resource class transactions", .serialized, .postgresFixture)
 struct ResourceClassTransactionTests {
     private func fixture(_ app: Application) async throws -> (Site, VM) {
         let builder = TestDataBuilder(db: app.db)

@@ -4,7 +4,7 @@ import SQLKit
 import Testing
 import Vapor
 
-@Suite("Test fixture diagnostics", .serialized)
+@Suite("Test fixture diagnostics", .serialized, .postgresFixture)
 struct TestFixtureDiagnosticsTests {
     @Test("PostgreSQL failure reports contain codes and timings, never SQL or bindings")
     func postgresErrorIsSanitized() async throws {

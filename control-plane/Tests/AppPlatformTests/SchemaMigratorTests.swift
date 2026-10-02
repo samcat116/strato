@@ -16,7 +16,7 @@ import Vapor
 /// genuinely unmigrated database. `createBareDatabaseForTest()` mints one, and
 /// `Application.makeForTesting(database:owningDatabase:)` points more than one
 /// application at it.
-@Suite("Schema Migrator", .serialized)
+@Suite("Schema Migrator", .serialized, .postgresFixture)
 struct SchemaMigratorTests {
 
     // MARK: - Half 1: serialization

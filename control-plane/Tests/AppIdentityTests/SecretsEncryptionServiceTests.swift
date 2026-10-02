@@ -6,7 +6,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("SecretsEncryptionService Tests")
+@Suite("SecretsEncryptionService Tests", .postgresFixture)
 struct SecretsEncryptionServiceTests {
 
     private static let hexKey = String(repeating: "ab", count: 32)

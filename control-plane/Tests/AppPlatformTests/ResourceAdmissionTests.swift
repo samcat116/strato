@@ -7,7 +7,7 @@ import Testing
 import Vapor
 @testable import App
 
-@Suite("Durable resource admission", .serialized)
+@Suite("Durable resource admission", .serialized, .postgresFixture)
 struct ResourceAdmissionTests {
     struct Fixture {
         let agent: Agent

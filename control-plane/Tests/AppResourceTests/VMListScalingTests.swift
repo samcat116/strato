@@ -22,7 +22,7 @@ import AppTestSupport
 ///
 /// `cachedResolutionMatchesUncached` guards the other half — that all this
 /// caching and batching still produces the chain a lone uncached walk would.
-@Suite("VM List Scaling Tests", .serialized)
+@Suite("VM List Scaling Tests", .serialized, .postgresFixture)
 final class VMListScalingTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

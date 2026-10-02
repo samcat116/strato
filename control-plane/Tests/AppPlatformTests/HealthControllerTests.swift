@@ -4,7 +4,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("HealthController Tests", .serialized)
+@Suite("HealthController Tests", .serialized, .postgresFixture)
 struct HealthControllerTests {
 
     // MARK: - Basic Health Check Tests

@@ -20,7 +20,7 @@ private func registerConcurrently(_ app: Application, username: String) async th
     return status
 }
 
-@Suite("Self-registration policy", .serialized)
+@Suite("Self-registration policy", .serialized, .postgresFixture)
 final class RegistrationPolicyTests: BaseTestCase {
 
     private func register(

@@ -18,7 +18,7 @@ import AppTestSupport
 /// is a per-sync, per-agent, fleet-wide loop, so metadata must cost zero
 /// additional queries; `metadataAddsNoQueriesAsTheFleetGrows` holds that as an
 /// equality across sizes rather than a budget.
-@Suite("Desired State Assembler Tests", .serialized)
+@Suite("Desired State Assembler Tests", .serialized, .postgresFixture)
 final class DesiredStateAssemblerTests {
 
     private func withAssemblerApp(

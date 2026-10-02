@@ -5,7 +5,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Resource Quota API Tests", .serialized)
+@Suite("Resource Quota API Tests", .serialized, .postgresFixture)
 final class ResourceQuotaTests {
 
     // Helper to run tests with fresh app and test data

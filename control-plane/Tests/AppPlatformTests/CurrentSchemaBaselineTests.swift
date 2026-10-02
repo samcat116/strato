@@ -7,7 +7,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Current schema baseline", .serialized)
+@Suite("Current schema baseline", .serialized, .postgresFixture)
 struct CurrentSchemaBaselineTests {
     private static let expectedCatalogMD5 = "4164eef002a4bb3f9e26e0738d27bc06"
     private static let expectedCurrentCatalogMD5 = "05b90621f2d6144decef47810d4d06cd"

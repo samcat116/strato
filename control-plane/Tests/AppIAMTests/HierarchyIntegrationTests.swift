@@ -5,7 +5,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Hierarchy Integration Tests", .serialized)
+@Suite("Hierarchy Integration Tests", .serialized, .postgresFixture)
 final class HierarchyIntegrationTests {
 
     // Helper to run tests with fresh app and test data
