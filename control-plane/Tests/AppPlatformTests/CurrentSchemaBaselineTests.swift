@@ -17,10 +17,11 @@ struct CurrentSchemaBaselineTests {
     // Session admission adds two tables; preview retention adds one partial
     // (deadline, id) index; administrative revocation adds one agents column.
     // Compute adds net accounting, class snapshots/ledgers, and one durable admission table.
+    // Account identity validation adds three checks after the compute migrations.
     // The combined catalog was measured from PostgreSQL, not inferred from migration text.
     // Historical catalogs and the frozen baseline remain
     // independently asserted below.
-    private static let expectedCurrentCatalogMD5 = "91d162185ae805f68d67ae836c12241a"
+    private static let expectedCurrentCatalogMD5 = "163841899e9673b6aca5ceb50ce96b5a"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -75,7 +76,7 @@ struct CurrentSchemaBaselineTests {
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Observed current catalog: \(upgradedMD5)")
             #expect(upgradedCounts.tables == 83)
             #expect(upgradedCounts.columns == 1070)
-            #expect(upgradedCounts.constraints == 381)
+            #expect(upgradedCounts.constraints == 384)
             #expect(upgradedCounts.indexes == 253)
             #expect(upgradedCounts.enums == baselineCounts.enums)
             #expect(upgradedCounts.triggers == baselineCounts.triggers)
