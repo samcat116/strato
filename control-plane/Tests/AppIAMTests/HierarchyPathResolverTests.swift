@@ -5,7 +5,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("HierarchyPathResolver Tests", .serialized)
+@Suite("HierarchyPathResolver Tests", .serialized, .postgresFixture)
 final class HierarchyPathResolverTests {
 
     func withApp(_ test: (Application, TestDataBuilder) async throws -> Void) async throws {

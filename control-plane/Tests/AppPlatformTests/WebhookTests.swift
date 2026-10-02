@@ -59,7 +59,7 @@ private func makeSubscription(
 
 // MARK: - Subscription CRUD API
 
-@Suite("Webhook Subscription API Tests", .serialized)
+@Suite("Webhook Subscription API Tests", .serialized, .postgresFixture)
 struct WebhookSubscriptionAPITests {
 
     @Test("Create returns the signing secret exactly once and echoes the config")
@@ -372,7 +372,7 @@ struct WebhookSubscriptionAPITests {
 
 // MARK: - Outbox enqueue
 
-@Suite("Webhook Outbox Tests", .serialized)
+@Suite("Webhook Outbox Tests", .serialized, .postgresFixture)
 struct WebhookOutboxTests {
 
     @Test("The pending ceiling drops each subscription's oldest rows independently")
@@ -932,7 +932,7 @@ private struct HookOrigin {
     }
 }
 
-@Suite("Webhook Delivery Sweep Tests", .serialized)
+@Suite("Webhook Delivery Sweep Tests", .serialized, .postgresFixture)
 struct WebhookDeliverySweepTests {
 
     @Test("The sweep POSTs a correctly signed payload and records success")

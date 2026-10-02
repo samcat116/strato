@@ -13,7 +13,7 @@ import AppTestSupport
 /// the generalized prefix mapping, desired-state syncs carry sandboxes, and
 /// observed-state reports settle convergence by generation — all mirroring the
 /// VM contracts.
-@Suite("Sandbox Tests", .serialized)
+@Suite("Sandbox Tests", .serialized, .postgresFixture)
 final class SandboxTests {
 
     /// The `202` body a sandbox lifecycle mutation answers with (STR-147).

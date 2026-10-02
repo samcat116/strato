@@ -5,7 +5,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Group API Tests", .serialized)
+@Suite("Group API Tests", .serialized, .postgresFixture)
 final class GroupTests: BaseTestCase {
 
     // MARK: - Create Group Tests

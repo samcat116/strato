@@ -22,7 +22,7 @@ import AppTestSupport
 ///    twenty-five-item batch issues against a one-item batch and requires them
 ///    to be equal — a regression that reintroduced a per-item read would show
 ///    up as a number, not as a slow endpoint nobody profiled.
-@Suite("IAM Batch Decision Tests", .serialized)
+@Suite("IAM Batch Decision Tests", .serialized, .postgresFixture)
 final class IAMBatchDecisionTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

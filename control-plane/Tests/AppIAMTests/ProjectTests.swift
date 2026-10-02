@@ -12,7 +12,7 @@ private struct AtomicProjectUpdateRequest: Content {
     let organizationalUnitId: UUID
 }
 
-@Suite("Project API Tests", .serialized)
+@Suite("Project API Tests", .serialized, .postgresFixture)
 final class ProjectTests {
 
     func withProjectTestApp(_ test: (Application, User, Organization, OrganizationalUnit, String) async throws -> Void)

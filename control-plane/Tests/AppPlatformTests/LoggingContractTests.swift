@@ -7,7 +7,7 @@ import VaporTesting
 
 @testable import App
 
-@Suite("Logging contracts")
+@Suite("Logging contracts", .postgresFixture)
 struct LoggingContractTests {
     private enum RouteFailure: Error {
         case failed

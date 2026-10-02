@@ -8,7 +8,7 @@ import AppTestSupport
 @testable import App
 
 /// The service-account and workload-registry APIs (issue #491).
-@Suite("Service Account API Tests", .serialized)
+@Suite("Service Account API Tests", .serialized, .postgresFixture)
 final class ServiceAccountAPITests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

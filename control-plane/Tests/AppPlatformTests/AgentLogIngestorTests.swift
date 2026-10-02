@@ -14,7 +14,7 @@ import AppTestSupport
 ///
 /// The ingestor's dependencies are injected closures, so these tests need no
 /// application, database, or Loki.
-@Suite("Agent Log Ingestor Tests")
+@Suite("Agent Log Ingestor Tests", .postgresFixture)
 struct AgentLogIngestorTests {
 
     private func makeMessage(sandboxId: String, line: String) -> SandboxLogMessage {

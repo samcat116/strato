@@ -4,7 +4,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Rate Limiting Tests", .serialized)
+@Suite("Rate Limiting Tests", .serialized, .postgresFixture)
 struct RateLimitTests {
 
     /// Build a minimal app wired with only the rate-limit middleware and a couple

@@ -12,7 +12,7 @@ import AppTestSupport
 /// Centralized audit logging (issue #39): the middleware that records API
 /// mutations and admin-bypassed requests, the explicit auth events, and the
 /// query API that reads the trail back.
-@Suite("Audit Logging Tests", .serialized)
+@Suite("Audit Logging Tests", .serialized, .postgresFixture)
 final class AuditLoggingTests {
 
     /// Captures the structured metadata emitted by a `Logger` without touching

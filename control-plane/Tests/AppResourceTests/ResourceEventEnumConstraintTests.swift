@@ -20,7 +20,7 @@ import AppTestSupport
 /// Same gap, same remedy as `nativeAgentStatusTypeMatchesModelEnum`: assert
 /// against the constraint the database actually installed, so the follow-up
 /// migration is a test failure rather than an incident.
-@Suite("Resource event enum constraints", .serialized)
+@Suite("Resource event enum constraints", .serialized, .postgresFixture)
 struct ResourceEventEnumConstraintTests {
 
     /// Inserts one row per raw value, returning the error if any is rejected.

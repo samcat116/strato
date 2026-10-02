@@ -11,7 +11,7 @@ import AppTestSupport
 /// sweep, the desired-state assembly that carries the assignment, the
 /// observed-report path that lands agent-reported blockers/failures on the
 /// row, and the PATCH toggle.
-@Suite("Agent Auto-Update Rollout Tests", .serialized)
+@Suite("Agent Auto-Update Rollout Tests", .serialized, .postgresFixture)
 final class AgentAutoUpdateTests {
 
     private static let target = "1.4.0"
