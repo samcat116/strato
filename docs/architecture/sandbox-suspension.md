@@ -1,12 +1,37 @@
-# Suspended sandboxes: STR-312 implementation boundary
+# Suspended sandboxes: STR-312
 
-STR-312 / [#1330](https://github.com/samcat116/strato/issues/1330) is **incomplete**.
-The local runtime now implements guarded checkpoint, paused fresh-VMM load
-validation, destruction, and restore/recovery APIs. These are not yet activated
-by stop or exposed as a coordinated wire/API contract; control-plane quota and
-operation integration remain unfinished. No capability is advertised and
-STR-273/STR-313 remain blocked. Stop still pauses the VMM. This document records the integration contract so policy
-and memory-backend work do not establish independent lifecycle owners.
+The guarded lifecycle is wired end to end behind explicit opt-in. `POST stop`
+with `{"suspend": true}` requests durable suspension; an empty stop request keeps
+its existing pause behavior. `POST snapshots` with `stop=true,suspend=true` first
+captures the user-owned snapshot, then suspends the parent on its shared lane.
+Default idle policy remains disabled pending real VM acceptance.
+
+Wire version **68** adds desired and observed `Suspended`, a total internal
+checkpoint storage budget, an optional capture dependency and a retained
+checkpoint ID. Versions 64–67 are reserved for the parent's coordinated guest
+configuration, density, headroom and resource-class changes. Those branches must
+be integrated preserving the final exact version handshake.
+
+The control plane reserves checkpoint storage using the owning agent's actual
+rootfs/config plus guest-memory estimate. It retains CPU/memory until a settled,
+verified, VMM-destroyed fact matches the current desired generation and admitted
+budget. Sandbox count, placement, UID/network identity and checkpoint storage
+remain reserved. Start, explicit restore and exec wake transactionally readmit
+compute under the shared quota locks before writing running intent. Concurrent
+wakes cannot exceed the same quota. Stale reports cannot undo a newer reservation.
+
+Exec on a suspended sandbox returns the existing `202` accepted wake mutation;
+no exec session is minted during restore. Retry after convergence. The frontend
+waits at most 30 seconds, refusing superseded/degraded generations before making
+the session request. The runtime separately guards pending handshakes before
+awaiting and established sessions through their lifetime.
+
+Retained checkpoint evidence and restore duration are exposed in sandbox detail.
+Control-plane restart/failover reads the same durable database ledger; no local
+replica owns the reservation. Local checkpoint state remains pinned to its agent.
+If journal/artifacts are unavailable or a resumed guest may have progressed,
+recovery blocks instead of silently replaying old memory or creating fresh OCI
+state. Cross-host checkpoint transport is not provided by this local lifecycle.
 
 ## Implemented checkpoint foundation
 
@@ -33,9 +58,9 @@ machine state**. They do not pin an immutable filesystem lease across restore,
 prove Firecracker/kernel/CPU compatibility, simulate power loss, or validate an
 actual snapshot/load. They cannot authorize destroying the only running copy.
 
-## Proposed lifecycle and generation contract
+## Lifecycle and generation contract
 
-Implemented agent-local interfaces (no wire version allocated):
+Agent-local interfaces:
 
 ```swift
 noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool)
@@ -73,6 +98,8 @@ hard bound on uninterruptible kernel I/O. Internal restore loads paused, commits
 `resuming`, then resumes and verifies identity. A failure after that commit retains
 the guest and memory reservation instead of replaying an older checkpoint.
 
+Host admission reserves both capture and shadow filesystem copies, plus the extra
+proof VMM. File restore reserves the archive and fresh jail copy through restart.
 Host manifests retain spec/UID, release guest CPU/RAM only on verified suspended
 facts, and retain checkpoint storage. Restore persists the full reservation before
 spawning. Failed reservation writes retain the admission claim for retry.
@@ -81,78 +108,13 @@ internally owned checkpoint cannot delete a user snapshot. Cold recreation is
 refused when a suspension journal represents the only copy or a guest that may
 have advanced past the checkpoint.
 
-The remaining shared/control-plane integration is design guidance:
-
-* Add desired and observed `Suspended` for a checkpoint-backed sandbox with
-  confirmed VMM absence. Explicit stop of a booted workload selects the suspended
-  goal; legacy/unstarted `Stopped` remains distinguishable and is not evidence of
-  reclamation. This avoids treating a paused intermediate state as already
-  satisfying suspension, including checkpoint-and-stop and restart recovery. Preserve
-  the existing `Exited` one-shot semantics. Coordinate any shared contract and
-  wire bump with the parent: guestConfig PR #1436 owns v64, and this branch
-  allocates no version.
-* The owning sandbox generation guards every transition. Persist the checkpoint
-  ID, capture generation, activity epoch, guest identity, network device shape,
-  jail UID, compatibility evidence, and lifecycle phase before destructive work.
-  Lifecycle phases are capturing, validating, ready-to-destroy, suspended, and
-  restoring. Phase advancement must be durable, idempotent, and generation
-  checked; observations never acknowledge the wrong generation.
-* STR-313 supplies eligibility and activity knowledge. STR-312 owns a per-sandbox
-  admission guard shared by policy, exec/session admission, snapshot, stop,
-  restore, and delete. Activity invalidates an in-flight capture before the
-  destruction commit; if destruction already committed, it requests one
-  serialized verified restore. Pending commands, live sessions, unknown activity,
-  unsupported backends, and unavailable proofs cannot enter suspension.
-* Capture into a distinct internally owned artifact. Flush and verify integrity,
-  then establish a real restorable proof using the approved VMM and compatible
-  disposable fixture. Recheck generation and activity immediately before the
-  destruction commit. Failure or cancellation preserves/resumes the original
-  guest. No mock, digest, filename, or version string constitutes that proof.
-* Report suspended only after retained process identity confirms VMM exit and
-  host-memory accounting confirms reclamation. Keep the network allocation,
-  sandbox identity, count, checkpoint bytes, and jail UID reserved. Never use
-  deletion cleanup to release a suspended sandbox's identity.
-* Start and supported guest operations use the same restore admission path:
-  transactional quota readmission, host-headroom admission (STR-265), a bounded
-  agent restore permit, fresh VMM staging, full snapshot/load, identity handshake,
-  then running observation. Preserve filesystem, processes, network allocation,
-  guest nonce, and log sequence semantics. A failed restore retains the durable
-  checkpoint and cannot fall back to a cold launch or roll back an already
-  resumed workload silently.
-* STR-273 plugs into fresh-VMM snapshot/load with an owned memory-backend lease.
-  It owns neither stop policy, desired status, generation, quota, nor a second
-  resume route. Backend failure before resume may select a verified full File
-  restore; failure after resume requires an explicit failure verdict.
-
-## Admission, recovery, and retention requirements still to implement
-
-Restore permit count and timeout are agent configuration with bounded validation;
-their defaults require real load evidence. Count active work through cancellation
-and VMM cleanup, not merely through request return. Persist restore latency and
-failure as workload conditions; publish disposable-load p50/p95/p99 results.
-
-Quota accounting must retain memory while capture/destruction is incomplete,
-release it only on verified suspension, and reacquire it in the same transaction
-as desired-running admission. Concurrent starts sharing ancestor quotas must use
-the existing quota locks. Desired-running but still suspended/restoring workloads
-must count once, including during resync. Charge staging/checkpoint storage before
-capture; preserve sandbox count and user-snapshot storage throughout. Agent host
-reservations must follow the same durable facts instead of spec-only sizing.
-
-Recovery must reverify checkpoint identity and compatibility before acknowledging
-each persisted phase. Prefer adopting an original live VMM over restoring an older
-copy; prove absence before replacement. A ready-to-destroy record with a live
-original must recheck current intent/activity. A suspended record must never fall
-through orphan `adoptionTargetGone` into cold recreation. An interrupted restore
-must adopt and validate its owned replacement or retain its checkpoint for retry.
-Control-plane failover must use PostgreSQL generations and artifact rows as truth;
-Valkey coordination cannot authorize checkpoint deletion or quota release.
-
-Internally owned checkpoints need separate ownership and retention from user
-snapshots. Keep the latest resumable checkpoint until its replacement is verified
-and durably referenced; retain it across failed restores. Delete superseded idle
-artifacts only when no lifecycle/backend lease pins them. User-created snapshots
-remain governed by their existing explicit retention/deletion contract.
+STR-313 supplies eligibility but must request the desired `Suspended` generation
+and admitted storage budget through the control plane before actuation. A
+running goal cannot be treated as already suspended. STR-273 integrates after
+fresh VMM staging and before snapshot/load; it must use this lifecycle's permit,
+generation fence, cancellation and quota ownership rather than a separate resume
+route. Backend failures before resume may fall back to verified File restore;
+after resume, the guest may have advanced and must not be rewound silently.
 
 ## Validation blocker in this selected environment
 
@@ -160,6 +122,6 @@ The workspace has Swift 6.4.0 and can run agent tests, but `/dev/kvm` is absent 
 Firecracker is not installed on PATH. No real capture/load, VMM RSS/cgroup floor,
 process/network continuity, failover lifecycle, restore herd load test, or latency
 percentiles have been demonstrated here. No live infrastructure, credentials,
-security settings, merge, or deployment are changed. The remaining lifecycle must
-be implemented and verified on an authorized disposable KVM fixture before this
+security settings, merge, or deployment are changed. The lifecycle must
+be verified on an authorized disposable KVM fixture before this
 issue can be completed or either dependent feature enabled.

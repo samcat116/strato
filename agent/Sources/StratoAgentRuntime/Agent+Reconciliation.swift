@@ -323,6 +323,10 @@ extension Agent: ReconcileActuator {
             }
         } catch SandboxRuntimeError.adoptionTargetGone(let reason) {
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
+            guard entry.sandboxSuspension == nil, item.desiredSandbox?.suspensionCheckpointId == nil else {
+                throw ConvergenceError.sourceNotReady(
+                    "checkpoint-backed guest state cannot be replaced by an OCI create")
+            }
             try await runtime.prepareJailUIDRelease(for: item.id, jailUID: jailUID)
             logger.warning(
                 "Orphaned sandbox has no live process; re-creating it from the desired entry",

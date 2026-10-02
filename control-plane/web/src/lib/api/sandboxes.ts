@@ -111,8 +111,28 @@ export const sandboxesApi = {
 
   // Creates a pending exec session (201). Attach to the returned
   // `websocketPath` before `expiresAt` to actually start the process.
-  exec(id: string, body: SandboxExecRequest): Promise<SandboxExecSession> {
-    return api.post<SandboxExecSession>(`/api/sandboxes/${id}/exec`, body);
+  async exec(id: string, body: SandboxExecRequest): Promise<SandboxExecSession> {
+    const result = await api.post<SandboxExecSession | AcceptedMutation<Sandbox>>(
+      `/api/sandboxes/${id}/exec`, body
+    );
+    if ("websocketPath" in result) return result;
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const sandbox = await api.get<Sandbox>(`/api/sandboxes/${id}`);
+      if (sandbox.conditions.degraded) throw new Error("Sandbox restore failed; retry after recovery");
+      if (sandbox.conditions.targetGeneration !== result.targetGeneration) {
+        throw new Error("Sandbox wake was superseded by another mutation");
+      }
+      if (sandbox.conditions.converged && sandbox.status === "Running") {
+        const session = await api.post<SandboxExecSession | AcceptedMutation<Sandbox>>(
+          `/api/sandboxes/${id}/exec`, body
+        );
+        if ("websocketPath" in session) return session;
+        throw new Error("Sandbox suspended again before exec admission; retry");
+      }
+    }
+    throw new Error("Sandbox restore is still pending; retry exec when running");
   },
 
   getLogs(

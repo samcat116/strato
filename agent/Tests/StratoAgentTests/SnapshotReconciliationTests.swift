@@ -26,6 +26,8 @@ struct SnapshotReconciliationTests {
     /// an in-memory artifact inventory.
     private actor MockSnapshotActuator: ReconcileActuator {
         var artifacts: [String: SnapshotPresence]
+        var sandboxes: [String: SandboxPresence] = [:]
+        func setSandboxes(_ presence: [String: SandboxPresence]) { sandboxes = presence }
         var inventoryReadable = true
         var presenceComplete = true
         var performed: [(ReconcileStep, String)] = []
@@ -43,7 +45,7 @@ struct SnapshotReconciliationTests {
         func observedSizing() -> [String: VMSizing] { [:] }
         func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
-        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func observedSandboxPresence() -> [String: SandboxPresence] { sandboxes }
         func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
             throw UnsupportedTestActuation.sandbox
         }
@@ -412,4 +414,32 @@ struct SnapshotReconciliationTests {
             observed: ObservedSnapshotArtifact(kind: .sandboxSnapshot, parentId: UUID()))
         #expect(steps == [.export])
     }
+    @Test("Checkpoint-and-suspend captures the user artifact before parent destruction")
+    func checkpointBeforeSuspensionOrdering() async throws {
+        let sandboxId = UUID()
+        let snapshotId = UUID()
+        let actuator = MockSnapshotActuator()
+        await actuator.setSandboxes([sandboxId.uuidString: .managed(.running)])
+        let reconciler = Self.reconciler(actuator)
+        let sandbox = DesiredSandboxState(
+            sandboxId: sandboxId,
+            spec: SandboxSpec(image: "test", cpus: 1, memoryBytes: 1024),
+            desiredStatus: .suspended, generation: 2,
+            suspensionStorageBudgetBytes: 2048, suspensionAfterSnapshotId: snapshotId)
+        await reconciler.apply(
+            DesiredStateMessage(
+                syncId: "s", vms: [], sandboxes: [sandbox],
+                snapshots: [Self.entry(snapshotId, kind: .sandboxSnapshot, parent: sandboxId)]))
+        for _ in 0..<50 {
+            if await actuator.performed.count >= 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let steps = await actuator.performed
+        #expect(steps.count == 2)
+        #expect(steps.first?.0 == .create)
+        #expect(steps.first?.1 == snapshotId.uuidString)
+        #expect(steps.last?.0 == .shutdown)
+        #expect(steps.last?.1 == sandboxId.uuidString)
+    }
+
 }

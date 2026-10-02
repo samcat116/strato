@@ -15,6 +15,10 @@ const statusConfig: Record<SandboxStatus, StatusBadgeConfig> = {
     label: "Stopped",
     className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
   },
+  Suspended: {
+    label: "Suspended",
+    className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
+  },
   Exited: {
     label: "Exited",
     className: "bg-blue-500/20 text-blue-600 border-blue-500/30",

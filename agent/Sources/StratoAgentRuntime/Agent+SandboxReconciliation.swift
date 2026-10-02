@@ -33,6 +33,11 @@ extension Agent {
         guard let desired = item.desiredSandbox,
             var entry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
         else { throw SandboxSuspensionGuard.GateError.unknownIntent }
+        if let snapshotId = desired.suspensionAfterSnapshotId {
+            guard !snapshotInventoryUnreadable, let snapshot = snapshotRecords[snapshotId],
+                snapshot.kind == .sandboxSnapshot, snapshot.parentId == UUID(uuidString: item.id)
+            else { throw ConvergenceError.sourceNotReady("user checkpoint must be durably captured before suspension") }
+        }
         let runtime = try requireSandboxRuntime()
         if let record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase == .suspended {
             entry.sandboxSuspension = record
@@ -46,10 +51,17 @@ extension Agent {
             return
         }
         let estimate = try await runtime.suspensionStorageEstimate(sandboxId: item.id)
+        let previousBytes = entry.sandboxSuspension?.checkpointBytes ?? 0
+        let (requiredBytes, overflow) = estimate.addingReportingOverflow(previousBytes)
+        guard !overflow, let budget = desired.suspensionStorageBudgetBytes, budget >= requiredBytes else {
+            throw ConvergenceError.sourceNotReady("internal checkpoint storage has not been admitted")
+        }
         let current = SandboxHostReservation.forManifestEntry(entry)
         let spec = entry.sandboxSpec ?? desired.spec
+        let (stagingBytes, stagingOverflow) = estimate.multipliedReportingOverflow(by: 2)
+        guard !stagingOverflow else { throw ConvergenceError.sourceNotReady("checkpoint staging size overflow") }
         let extra = HostReservation(
-            cpus: spec.cpus, memoryBytes: spec.memoryBytes, diskBytes: estimate)
+            cpus: spec.cpus, memoryBytes: spec.memoryBytes, diskBytes: stagingBytes)
         let raw = await rawHostCapacitySnapshot()
         let claim =
             try retainedSuspensionClaims[item.id]
@@ -95,7 +107,11 @@ extension Agent {
         case .boot:
             try await sandboxReconcileBoot(item)
         case .shutdown:
-            try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
+            if item.desiredSandbox?.desiredStatus == .suspended {
+                try await sandboxReconcileSuspend(item)
+            } else {
+                try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
+            }
         case .delete:
             try await sandboxReconcileDelete(item)
         case .restore:
@@ -148,7 +164,7 @@ extension Agent {
         if var record = try await runtime.suspensionRecord(sandboxId: item.id), let existing = entry {
             let current = SandboxHostReservation.forManifestEntry(existing)
             let target = SandboxHostReservation.forSpec(record.spec).addingSaturating(
-                HostReservation(diskBytes: current.diskBytes))
+                HostReservation(diskBytes: max(current.diskBytes, SandboxHostReservation.restorationDiskBytes(record))))
             claim = try capacityAdmissionLedger.claim(
                 .positiveDelta(from: current, to: target), desiredWorkloadReservation: target,
                 snapshot: await rawHostCapacitySnapshot(), agentName: initialAgentID)
@@ -225,6 +241,10 @@ extension Agent {
     func sandboxReconcileCreate(_ item: ReconcileWorkItem) async throws {
         guard let desired = item.desiredSandbox else {
             throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
+        }
+        guard desired.suspensionCheckpointId == nil else {
+            throw ConvergenceError.sourceNotReady(
+                "durable suspension checkpoint is unavailable on this host; cold recreation is refused")
         }
         let runtime = try requireSandboxRuntime()
 
@@ -409,7 +429,10 @@ extension Agent {
             manifestEntry.map(SandboxHostReservation.forManifestEntry)
             ?? SandboxHostReservation.forSpec(currentSpec)
         let targetReservation = SandboxHostReservation.forSpec(desired.spec).addingSaturating(
-            HostReservation(diskBytes: currentReservation.diskBytes))
+            HostReservation(
+                diskBytes: max(
+                    currentReservation.diskBytes,
+                    manifestEntry?.sandboxSuspension.map(SandboxHostReservation.restorationDiskBytes) ?? 0)))
         let growth = HostReservation.positiveDelta(from: currentReservation, to: targetReservation)
         try capacityAdmissionLedger.validateExistingReservation(
             currentReservation,
@@ -756,6 +779,16 @@ extension Agent {
                     exitCode = await runtime.exitCode(sandboxId: sandboxId)
                 }
             }
+            let record = managedSandboxes[sandboxId]?.sandboxSuspension
+            let evidence = record.flatMap { record -> SandboxSuspensionEvidence? in
+                guard record.checkpoint?.hasValidShape == true else { return nil }
+                return SandboxSuspensionEvidence(
+                    checkpointId: record.snapshotId, generation: record.generation,
+                    storageBytes: max(record.checkpointBytes, record.storageReservationBytes ?? 0),
+                    vmmDestroyed: record.phase == .suspended, verified: true,
+                    restoreDurationMilliseconds: record.lastRestoreMillis)
+            }
+            let estimate = try? await sandboxRuntime?.suspensionStorageEstimate(sandboxId: sandboxId)
             let facts = await reconciler.facts(for: sandboxId, kind: .sandbox)
             observed.append(
                 ObservedSandboxState(
@@ -767,7 +800,12 @@ extension Agent {
                     failedGeneration: facts.failedGeneration,
                     failureClassification: facts.failureClassification,
                     exitCode: exitCode,
-                    resourceTelemetry: workloadResourceTelemetry[sandboxId]
+                    resourceTelemetry: workloadResourceTelemetry[sandboxId],
+                    suspension: evidence,
+                    suspensionStorageReservedBytes: record.map {
+                        max($0.checkpointBytes, $0.storageReservationBytes ?? 0)
+                    } ?? 0,
+                    suspensionStorageEstimateBytes: estimate
                 ))
             reported.insert(sandboxId)
         }

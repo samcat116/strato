@@ -426,7 +426,10 @@ struct DesiredStateAssembler {
                     desiredStatus: sandbox.desiredStatus,
                     generation: sandbox.generation,
                     registryCredential: registryCredential,
-                    restore: restore
+                    restore: restore,
+                    suspensionStorageBudgetBytes: sandbox.suspensionStorageBytes,
+                    suspensionAfterSnapshotId: sandbox.suspensionAfterSnapshotId,
+                    suspensionCheckpointId: sandbox.suspensionEvidence?.checkpointId
                 ))
         }
 

@@ -323,6 +323,9 @@ actor WorkloadPlacementService {
                 // A delete may commit while the create scheduler is choosing a
                 // host. Absence is the one intent placement must never revive.
                 guard sandbox.desiredStatus != .absent else { return false }
+                guard sandbox.suspensionEvidence == nil || sandbox.hypervisorId == agentId else {
+                    throw Abort(.conflict, reason: "Local suspension checkpoint is pinned to its owning agent")
+                }
                 try await self.requireNetworkAuthority(
                     forAgentId: agentId, workloadId: sandboxId,
                     consequence:

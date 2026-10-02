@@ -90,6 +90,7 @@ extension FirecrackerSandboxRuntime {
             guard !overflow else { throw SandboxSuspensionGuard.GateError.stale }
             record.storageReservationBytes = total
         }
+        let originalWasRunning = try await managed.manager.getInstanceInfo().state == .running
         try saveSuspension(record)
         var committed = false
         var capturePaused = false
@@ -105,6 +106,15 @@ extension FirecrackerSandboxRuntime {
                     identityNonce: managed.identityNonce)
             }.value
             guard let checkpoint else { throw SandboxCheckpointManifest.CheckpointError.invalidManifest }
+            var bytes: Int64 = 0
+            for artifact in checkpoint.artifacts {
+                let (next, overflow) = bytes.addingReportingOverflow(artifact.sizeBytes)
+                guard !overflow else { throw SandboxCheckpointManifest.CheckpointError.invalidArtifact }
+                bytes = next
+            }
+            guard bytes <= estimate else {
+                throw SandboxRuntimeError.snapshotIOFailed("checkpoint exceeded admitted storage estimate")
+            }
             try await validateSuspensionCheckpoint(checkpoint, managed: managed, sandboxId: sandboxId)
             record.checkpoint = checkpoint
             record.phase = .verified
@@ -128,18 +138,18 @@ extension FirecrackerSandboxRuntime {
             if !committed {
                 // Validation, journal, cancellation, generation and activity
                 // failures before destruction preserve the original guest.
-                if capturePaused {
+                if capturePaused && originalWasRunning {
                     try await managed.manager.resume()
                     startLogFollow(sandboxId: sandboxId)
                 }
+                try removeItemIfPresent(
+                    atPath: suspensionArchive(sandboxId: sandboxId, snapshotId: record.snapshotId.uuidString))
                 if let previous {
                     try saveSuspension(previous)
                 } else {
                     try suspensionStore.remove(sandboxId: id)
                     suspensionRecords.removeValue(forKey: sandboxId)
                 }
-                try removeItemIfPresent(
-                    atPath: suspensionArchive(sandboxId: sandboxId, snapshotId: record.snapshotId.uuidString))
             }
             throw error
         }
@@ -313,8 +323,7 @@ extension FirecrackerSandboxRuntime {
             manager: manager, lastExitCode: nil)
         record.phase = .suspended
         try saveSuspension(record)
-        // The distinct wire state is gated on parent coordination.
-        return .stopped
+        return .suspended
     }
 
     func retirePreviousSuspensionCheckpoint(_ record: inout SandboxSuspensionRecord) throws {

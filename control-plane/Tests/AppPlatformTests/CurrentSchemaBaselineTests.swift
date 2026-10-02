@@ -10,7 +10,7 @@ import Vapor
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
     private static let expectedCatalogMD5 = "4164eef002a4bb3f9e26e0738d27bc06"
-    private static let expectedCurrentCatalogMD5 = "f719976e5b1c327d005f411e78e38144"
+    private static let expectedCurrentCatalogMD5 = "16d36b3b4449d6a1d370c5cbad4c0a4d"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -63,16 +63,26 @@ struct CurrentSchemaBaselineTests {
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
-            #expect(upgradedCounts.tables == 79)
-            #expect(upgradedCounts.columns == 1041)
-            #expect(upgradedCounts.constraints == 375)
-            #expect(upgradedCounts.indexes == 243)
+            #expect(upgradedCounts.tables == 80)
+            #expect(upgradedCounts.columns == 1054)
+            #expect(upgradedCounts.constraints == 378)
+            #expect(upgradedCounts.indexes == 246)
             #expect(upgradedCounts.enums == baselineCounts.enums)
             #expect(upgradedCounts.triggers == baselineCounts.triggers)
             #expect(upgradedCounts.functions == baselineCounts.functions)
             let logs = try await MigrationLog.query(on: app.db).sort(\.$batch).all()
             #expect(logs.first?.name == CurrentSchemaBaseline().name)
             #expect(logs.count > 1, "the equivalence check must exercise the forward chain")
+            // STR-312 adds exactly five columns and two checks. Existing fleet
+            // history already supplies the extra table/indexes in this catalog.
+            try await AddSandboxSuspension().revert(on: app.db)
+            let beforeSuspension = try await catalogCounts(on: app.db)
+            #expect(beforeSuspension.tables == upgradedCounts.tables)
+            #expect(beforeSuspension.columns == upgradedCounts.columns - 5)
+            #expect(beforeSuspension.constraints == upgradedCounts.constraints - 2)
+            #expect(beforeSuspension.indexes == upgradedCounts.indexes)
+            try await AddSandboxSuspension().prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == upgradedMD5)
         } catch {
             try? await app.shutdownForTesting()
             throw error

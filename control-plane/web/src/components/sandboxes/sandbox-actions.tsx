@@ -143,6 +143,7 @@ export function SandboxActions({
   // workload) and `Error` (recover an unconfirmed sandbox) are both startable.
   const canStart =
     sandbox.status === "Stopped" ||
+    sandbox.status === "Suspended" ||
     sandbox.status === "Exited" ||
     sandbox.status === "Error";
   // Mirrors Sandbox.canStop: `Error` means the agent could not confirm the
