@@ -424,9 +424,6 @@ final class GuestExecSessionManager: @unchecked Sendable {
             sessionId: sessionId, fromAgentKey: agentKey, timestamp: timestamp)
         switch transition {
         case .started(let session, let websocket):
-            if let websocket {
-                Self.sendControlFrame(BrowserControlFrame(type: "ready"), to: websocket)
-            }
             if let context = session.auditContext,
                 let startedAt = session.agentConfirmedStartedAt
             {
@@ -434,6 +431,9 @@ final class GuestExecSessionManager: @unchecked Sendable {
                     context,
                     timestamp: startedAt)
                 await app.audit.recordFailOpen(auditRecord)
+            }
+            if let websocket {
+                Self.sendControlFrame(BrowserControlFrame(type: "ready"), to: websocket)
             }
         case .duplicate:
             app.logger.debug(
