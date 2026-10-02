@@ -24,11 +24,19 @@ final class CloudInitStaging {
     private let descriptor: CInt
     private let parent: CInt
     private let identity: Identity
+    private let closeDescriptor: @Sendable (CInt) -> CInt
+    // A throwing initializer can run deinit after its properties are initialized.
+    // Transfer descriptor cleanup only when all fallible setup has completed.
+    private var ownsDescriptors = false
     private static let name = ".cloud-init-staging"
     private static let marker = ".strato-owner.json"
     private static let building = ".building"
 
-    init(vmDirectory: String, vmID: String, effectiveUID: uid_t = geteuid()) throws {
+    init(
+        vmDirectory: String, vmID: String, effectiveUID: uid_t = geteuid(),
+        closeDescriptor: @escaping @Sendable (CInt) -> CInt = { close($0) }
+    ) throws {
+        self.closeDescriptor = closeDescriptor
         path = vmDirectory + "/" + Self.name
         parent = open(vmDirectory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard parent >= 0 else { throw Self.failure("open staging parent", vmDirectory) }
@@ -37,13 +45,13 @@ final class CloudInitStaging {
             fresh = true
         } else if errno != EEXIST {
             let error = Self.failure("create staging", path)
-            _ = close(parent)
+            _ = closeDescriptor(parent)
             throw error
         }
         descriptor = openat(parent, Self.name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else {
             let error = Self.failure("open staging", path)
-            _ = close(parent)
+            _ = closeDescriptor(parent)
             throw error
         }
         do {
@@ -70,15 +78,18 @@ final class CloudInitStaging {
                 try removeContents()
             }
         } catch {
-            _ = close(descriptor)
-            _ = close(parent)
+            _ = closeDescriptor(descriptor)
+            _ = closeDescriptor(parent)
             throw error
         }
+        ownsDescriptors = true
     }
 
     deinit {
-        _ = close(descriptor)
-        _ = close(parent)
+        if ownsDescriptors {
+            _ = closeDescriptor(descriptor)
+            _ = closeDescriptor(parent)
+        }
     }
 
     func generatorWillStart() throws {

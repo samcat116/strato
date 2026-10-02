@@ -26,6 +26,32 @@ struct CloudInitStagingTests {
         // Releasing the lease without cleanup models an interrupted agent.
     }
 
+    private final class CloseRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var counts: [CInt: Int] = [:]
+
+        func closeOwned(_ descriptor: CInt) -> CInt {
+            lock.withLock { counts[descriptor, default: 0] += 1 }
+            return close(descriptor)
+        }
+
+        var closeCounts: [CInt: Int] { lock.withLock { counts } }
+    }
+
+    @Test func failedInitializationClosesOwnedDescriptorsOnce() throws {
+        try fixture { root in
+            try ManagedStatePermissions.createFreshDirectory(at: root + "/.cloud-init-staging")
+            let recorder = CloseRecorder()
+            #expect(throws: (any Error).self) {
+                try CloudInitStaging(
+                    vmDirectory: root, vmID: "fixture",
+                    closeDescriptor: { recorder.closeOwned($0) })
+            }
+            let counts = recorder.closeCounts
+            #expect(counts.values.sorted() == [1, 1])
+        }
+    }
+
     @Test func recoversVerifiedPreBuildAndCompletedCrashStages() throws {
         for completed in [false, true] {
             try fixture { root in
