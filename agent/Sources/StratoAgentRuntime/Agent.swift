@@ -274,6 +274,8 @@ actor Agent {
     // agent) never delays the report itself. Wholesale-replaced each refresh, so
     // entries for gone or no-longer-running VMs prune themselves.
     var guestInfoCache: [String: GuestInfo] = [:]
+    var guestAgentObservationCache: [String: GuestAgentObservation] = [:]
+    var lastGuestAgentRefresh: ContinuousClock.Instant?
     // Last-known balloon memory stats per VM (issue #567), maintained by the
     // same slow poll with the same lifecycle as `guestInfoCache`.
     var memoryStatsCache: [String: VMMemoryStats] = [:]

@@ -189,6 +189,9 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "qga_available")
     var qgaAvailable: Bool?
 
+    @OptionalField(key: "guest_agent_observation")
+    var guestAgentObservation: GuestAgentObservation?
+
     @OptionalField(key: "observed_hostname")
     var observedHostname: String?
 
@@ -741,6 +744,7 @@ struct VMDetailResponse: Content {
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
     let qgaAvailable: Bool?
+    let guestAgentObservation: GuestAgentObservation?
     let observedHostname: String?
     /// Observed guest memory usage from the virtio-balloon device (issue
     /// #567), nil until a guest with the virtio_balloon driver reports.
@@ -836,6 +840,7 @@ struct VMDetailResponse: Content {
         self.tags = vm.tags
         self.sshAuthorizedKeys = vm.effectiveSSHAuthorizedKeys
         self.qgaAvailable = vm.qgaAvailable
+        self.guestAgentObservation = vm.isRunning && vm.guestAgentEnabled ? vm.guestAgentObservation : nil
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes
         self.guestMemoryAvailableBytes = vm.guestMemoryAvailableBytes

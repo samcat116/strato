@@ -10074,10 +10074,11 @@ components:
           type: boolean
           default: false
           description: >-
-            Attach Strato's fixed-CID virtio-vsock channel for the in-guest
-            daemon. This is distinct from QEMU guest agent (qga), is supported
-            only for QEMU VMs, and is fixed at creation because it changes the
-            domain's PCI device topology.
+            Install the published Strato root exec daemon through visible first-boot
+            cloud-init and attach its fixed-CID virtio-vsock channel. Default off.
+            Requires Linux/QEMU, cloud-init, Python 3, systemd and HTTPS egress.
+            SHA-256 verified; no automatic updates. Distinct from QEMU guest agent
+            (qga). Fixed at creation; changing it requires recreation.
         graphicsConsole:
           type: boolean
           default: false
@@ -10286,8 +10287,10 @@ components:
         guestAgentEnabled:
           type: boolean
           description: >-
-            Whether this VM was created with Strato's virtio-vsock guest-agent
-            channel. Distinct from `qgaAvailable`.
+            Whether this VM opted into Strato's root guest-agent installation and
+            virtio-vsock channel at creation. Changing requires recreation. This
+            does not prove installation or reachability; see guestAgentObservation.
+            Distinct from qgaAvailable.
         graphicsConsole:
           type: boolean
           description: >-
@@ -10316,6 +10319,16 @@ components:
           items:
             type: string
           description: SSH authorized keys currently published through instance metadata.
+        guestAgentObservation:
+          type: object
+          description: Last read-only Strato vsock probe. Missing or older than 90 seconds means unknown, not reachable.
+          required: [reachable, checkedAt]
+          properties:
+            reachable:
+              type: boolean
+            checkedAt:
+              type: string
+              format: date-time
         qgaAvailable:
           type: boolean
           description: >-

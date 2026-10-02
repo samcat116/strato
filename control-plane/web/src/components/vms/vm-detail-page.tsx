@@ -35,6 +35,7 @@ import {
   VMIdentityCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
+import { VMGuestAgentCard } from "@/components/vms/vm-guest-agent-card";
 import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
 
 // Dynamically import VNCDisplay: noVNC touches `document` while its module is
@@ -107,6 +108,7 @@ export function VMDetailPage({ id }: { id: string }) {
       />
 
       <ConvergenceFailureAlert conditions={vm.conditions} />
+      <VMGuestAgentCard vm={vm} />
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">

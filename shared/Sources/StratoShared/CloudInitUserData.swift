@@ -21,13 +21,13 @@ public enum CloudInitUserDataFormat: String, CaseIterable, Sendable {
     /// re-dispatches on the header underneath.
     case jinjaTemplate = "text/jinja2"
     /// A complete MIME document the caller composed themselves (single part or
-    /// multipart). It cannot be embedded as a part of another multipart, so the
-    /// agent uses it as the NoCloud `user-data` verbatim.
+    /// multipart). The agent preserves it verbatim, or nests it alongside the
+    /// explicit Strato guest-agent installer when that feature is opted in.
     case mime
 
     /// The MIME content type the payload should be labeled with when embedded
-    /// as a part of a multipart user-data document. Nil for `.mime`, which is
-    /// never embedded.
+    /// as a part of a multipart user-data document. Nil for `.mime`, whose
+    /// own headers are retained when nested alongside platform script parts.
     public var mimeType: String? {
         self == .mime ? nil : rawValue
     }

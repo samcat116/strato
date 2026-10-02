@@ -1316,6 +1316,7 @@ public struct ObservedVMState: Codable, Sendable {
     /// `Codable` decodes to nil, not a failure). Purely informational: it never
     /// participates in convergence.
     public let guestInfo: GuestInfo?
+    public let guestAgentObservation: GuestAgentObservation?
     /// Guest memory usage from the VM's virtio-balloon device (issue #567).
     /// Nil for guests without the virtio_balloon driver, still booting, or on
     /// agents/hypervisors that don't poll it — the same tolerant-both-ways
@@ -1340,6 +1341,7 @@ public struct ObservedVMState: Codable, Sendable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
         guestInfo: GuestInfo? = nil,
+        guestAgentObservation: GuestAgentObservation? = nil,
         memoryStats: VMMemoryStats? = nil,
         resourceTelemetry: WorkloadResourceTelemetry? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
@@ -1352,6 +1354,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.failedGeneration = failedGeneration
         self.failureClassification = failureClassification
         self.guestInfo = guestInfo
+        self.guestAgentObservation = guestAgentObservation
         self.memoryStats = memoryStats
         self.resourceTelemetry = resourceTelemetry
         self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds
