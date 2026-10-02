@@ -15,7 +15,7 @@ import AppTestSupport
 /// an enrollment
 /// deprovisions the grant it still owns and fails closed when the SPIRE server
 /// is unreachable.
-@Suite("SPIRE Registration Flow Tests")
+@Suite("SPIRE Registration Flow Tests", .postgresFixture)
 final class SPIRERegistrationFlowTests: BaseTestCase {
 
     // MARK: - Helpers
@@ -894,7 +894,7 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
 
 // MARK: - Unit tests
 
-@Suite("SPIRE Registration Service Unit Tests")
+@Suite("SPIRE Registration Service Unit Tests", .postgresFixture)
 struct SPIRERegistrationServiceUnitTests {
 
     @Test("Bootstrap tokens are opaque, hashed at rest, and consumed by registration")

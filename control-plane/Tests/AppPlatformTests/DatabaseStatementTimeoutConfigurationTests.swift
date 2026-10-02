@@ -8,7 +8,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Database Statement Timeout Configuration")
+@Suite("Database Statement Timeout Configuration", .postgresFixture)
 struct DatabaseStatementTimeoutConfigurationTests {
 
     @Test("Does not add statement_timeout to the PostgreSQL startup packet")
@@ -28,7 +28,7 @@ struct DatabaseStatementTimeoutConfigurationTests {
     }
 }
 
-@Suite("Database Statement Timeout Integration", .serialized)
+@Suite("Database Statement Timeout Integration", .serialized, .postgresFixture)
 struct DatabaseStatementTimeoutIntegrationTests {
 
     @Test("A blocked lock query times out and its pooled connection remains usable")

@@ -18,7 +18,7 @@ import AppTestSupport
 /// fact: a VM whose desired state is `.absent` would have its deletion
 /// "confirmed" while the guest is still running, and a live VM would be
 /// escalated to `.error`.
-@Suite("Agent Manifest Quarantine Tests", .serialized)
+@Suite("Agent Manifest Quarantine Tests", .serialized, .postgresFixture)
 final class AgentManifestQuarantineTests {
 
     private func withQuarantineApp(

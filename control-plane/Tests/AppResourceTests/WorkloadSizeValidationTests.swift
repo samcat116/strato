@@ -16,7 +16,7 @@ import AppTestSupport
 /// "does not fit" (a clean `403`, never a trap), and oversized `memory` /
 /// `disk` / `maxMemory` are rejected with `400` at the create boundary,
 /// mirroring the existing vCPU and volume-size ceilings.
-@Suite("Workload Size Validation Tests", .serialized)
+@Suite("Workload Size Validation Tests", .serialized, .postgresFixture)
 final class WorkloadSizeValidationTests {
 
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }

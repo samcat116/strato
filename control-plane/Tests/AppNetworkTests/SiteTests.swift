@@ -11,7 +11,7 @@ import AppTestSupport
 /// topology-safety guards, site assignment at agent registration, the
 /// scheduler's site hard constraint, and site-aware desired-state assembly
 /// (network-controller authority and site-wide network scoping).
-@Suite("Site Tests", .serialized)
+@Suite("Site Tests", .serialized, .postgresFixture)
 final class SiteTests {
 
     private func withSiteTestApp(

@@ -17,7 +17,7 @@ import AppTestSupport
 /// * a volume's row is removed only when its agent stops listing it, so a
 ///   delete can be re-driven indefinitely without ever orphaning bytes;
 /// * an observed report that says *nothing* about volumes deletes nothing.
-@Suite("Volume Convergence Tests", .serialized)
+@Suite("Volume Convergence Tests", .serialized, .postgresFixture)
 final class VolumeConvergenceTests {
 
     private func withVolumeApp(

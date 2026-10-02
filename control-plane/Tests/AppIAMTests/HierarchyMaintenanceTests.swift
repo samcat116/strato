@@ -9,7 +9,7 @@ import AppTestSupport
 /// `GET /api/hierarchy/validate` and `POST /api/hierarchy/repair` over
 /// materialized-path drift — the class of damage a partial path rewrite leaves
 /// behind (issue #871).
-@Suite("Hierarchy Maintenance Tests", .serialized)
+@Suite("Hierarchy Maintenance Tests", .serialized, .postgresFixture)
 final class HierarchyMaintenanceTests {
 
     private struct Fixture {

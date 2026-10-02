@@ -5,7 +5,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Organizational Unit API Tests", .serialized)
+@Suite("Organizational Unit API Tests", .serialized, .postgresFixture)
 final class OrganizationalUnitTests {
 
     // Helper to run tests with fresh app and test data

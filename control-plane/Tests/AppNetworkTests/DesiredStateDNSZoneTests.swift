@@ -16,7 +16,7 @@ import AppTestSupport
 /// receiving agent would pass against an implementation that only ever looked
 /// at that agent's own workloads, so the multi-agent fixture below is the point
 /// rather than extra coverage.
-@Suite("Desired State DNS Zone Tests", .serialized)
+@Suite("Desired State DNS Zone Tests", .serialized, .postgresFixture)
 final class DesiredStateDNSZoneTests {
 
     private func withDNSSyncApp(

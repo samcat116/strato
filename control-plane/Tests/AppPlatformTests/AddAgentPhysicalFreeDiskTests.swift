@@ -5,7 +5,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Add agent physical free disk migration", .serialized)
+@Suite("Add agent physical free disk migration", .serialized, .postgresFixture)
 struct AddAgentPhysicalFreeDiskTests {
     @Test("Existing agents preserve their old free-space observation during the wire upgrade")
     func backfillsExistingAgents() async throws {
