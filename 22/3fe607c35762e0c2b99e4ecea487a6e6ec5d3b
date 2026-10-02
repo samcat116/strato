@@ -1,0 +1,18 @@
+docs/architecture/wire-protocol.md
+  h_a84d4ff76cadd1 54,65-70
+shared/Sources/StratoShared/WireProtocol.swift
+  h_a84d4ff76cadd1 14-17,40
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  h_a84d4ff76cadd1 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "223fe607c35762e0c2b99e4ecea487a6e6ec5d3b",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
