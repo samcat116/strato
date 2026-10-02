@@ -18,6 +18,7 @@ enum VMOperationKind: String, Codable, CaseIterable, Sendable {
     case detach
     case throttle
     case run
+    case guestConfig = "guest_config"
 }
 
 /// Terminal-or-not state of an asynchronous operation.

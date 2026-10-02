@@ -226,5 +226,6 @@ extension Application {
         migrations.add(RebaseLegacyClusterClockDeadlines())
 
         migrations.add(AddAgentInventorySession())
+        migrations.add(AddVMGuestConfig())
     }
 }

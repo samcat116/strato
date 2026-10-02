@@ -340,6 +340,15 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "guest_agent_enabled")
     var guestAgentEnabled: Bool
 
+    /// Root-level guest intent; returned only by the deliberately privileged config endpoint.
+    @OptionalField(key: "guest_config")
+    private var storedGuestConfig: StoredGuestConfig?
+
+    var guestConfig: GuestConfig? {
+        get { storedGuestConfig?.value }
+        set { storedGuestConfig = newValue.map(StoredGuestConfig.init) }
+    }
+
     // Graphics console (issue #566): whether the guest boots with a display
     // device and a VNC server for the web UI to attach to. Like the machine
     // profile above, the control plane records only the intent — the agent

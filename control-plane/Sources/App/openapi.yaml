@@ -472,6 +472,75 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/guest-config:
+    parameters:
+    - $ref: '#/components/parameters/VMID'
+    get:
+      operationId: getVMGuestConfiguration
+      summary: Read privileged desired guest configuration
+      description: Requires vm:configureGuest. Contains file contents; never include
+        in logs or status. Desired state is not proof of convergence.
+      tags:
+      - Virtual Machines
+      responses:
+        '200':
+          description: Desired configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VMGuestConfiguration'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: replaceVMGuestConfiguration
+      summary: Replace desired guest configuration
+      description: Requires vm:configureGuest and vm:read. Changes increment generation
+        transactionally; unchanged configurations (including reordered arrays) are no-ops.
+        Null or empty config withdraws management without reversing guest changes. Acceptance
+        does not mean convergence.
+      tags:
+      - Virtual Machines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceVMGuestConfigurationRequest'
+      responses:
+        '200':
+          description: Unchanged desired configuration; does not imply convergence.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VMDetail'
+        '202':
+          $ref: '#/components/responses/AcceptedVMMutation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: VM being deleted, not opted in or unsupported.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Guest configuration violates shared validation rules.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /api/vms/{vmID}/project-grant:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -9970,6 +10039,7 @@ components:
         - detach
         - throttle
         - run
+        - guest_config
     OperationStatus:
       type: string
       description: The state of an operation. `pending` is the only non-terminal value.
@@ -9986,6 +10056,132 @@ components:
       type: string
       enum: [x86_64, arm64]
 
+    GuestPackage:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - state
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          pattern: ^[A-Za-z0-9][A-Za-z0-9.+_:-]*$
+        state:
+          type: string
+          enum:
+          - present
+          - absent
+    GuestFile:
+      type: object
+      additionalProperties: false
+      required:
+      - path
+      - content
+      - mode
+      properties:
+        path:
+          type: string
+          maxLength: 4096
+          description: Canonical absolute non-root path, no control characters or dot
+            components.
+        content:
+          type: string
+          maxLength: 65536
+          description: UTF-8 without NUL, at most 65536 bytes per file and 262144 bytes
+            total.
+        mode:
+          type: string
+          pattern: ^0[0-7]{3}$
+    GuestService:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - enabled
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._@:-]*$
+        enabled:
+          type: boolean
+          description: Boot enablement only, not running/stopped state.
+    GuestSysctl:
+      type: object
+      additionalProperties: false
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: string
+          maxLength: 255
+          description: Bounded ASCII identifier with nonempty dot-separated components.
+        value:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: One nonempty line; server measures UTF-8 bytes.
+    GuestConfig:
+      type: object
+      additionalProperties: false
+      required:
+      - packages
+      - files
+      - services
+      - sysctls
+      properties:
+        packages:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/GuestPackage'
+        files:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/GuestFile'
+        services:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/GuestService'
+        sysctls:
+          type: array
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/GuestSysctl'
+      description: STR-90 shared model. Identities must be unique within each section.
+        Nil/empty/removed entries withdraw management without reversing guest changes.
+        Arrays compare independently of order.
+    ReplaceVMGuestConfigurationRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - guestConfig
+      properties:
+        guestConfig:
+          allOf:
+          - $ref: '#/components/schemas/GuestConfig'
+          nullable: true
+    VMGuestConfiguration:
+      type: object
+      additionalProperties: false
+      required:
+      - vmId
+      - desiredGeneration
+      properties:
+        vmId:
+          type: string
+          format: uuid
+        desiredGeneration:
+          type: integer
+          format: int64
+        guestConfig:
+          allOf:
+          - $ref: '#/components/schemas/GuestConfig'
+          nullable: true
     CreateVMRequest:
       type: object
       required: [name, projectId]

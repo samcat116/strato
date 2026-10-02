@@ -88,6 +88,9 @@ struct AuditMiddleware: AsyncMiddleware {
         }
 
         let guestExecution = isVMGuestExecutionAuditPath(request.url.path)
+        let guestConfiguration =
+            request.url.path.split(separator: "/").prefix(2) == ["api", "vms"]
+            && request.url.path.split(separator: "/").dropFirst(3).first == "guest-config"
         let deferredAttach = isVMGuestExecAttachAuditPath(request.url.path)
         do {
             let response = try await next.respond(to: request)
@@ -95,7 +98,7 @@ struct AuditMiddleware: AsyncMiddleware {
                 await request.recordAPIRequestAudit(
                     status: response.status,
                     failOpen: guestExecution,
-                    redactErrorDetails: guestExecution)
+                    redactErrorDetails: guestExecution || guestConfiguration)
             }
             return response
         } catch {
@@ -105,7 +108,7 @@ struct AuditMiddleware: AsyncMiddleware {
                 error: error,
                 force: guestExecution || status == .unauthorized || status == .forbidden,
                 failOpen: guestExecution,
-                redactErrorDetails: guestExecution)
+                redactErrorDetails: guestExecution || guestConfiguration)
             throw error
         }
     }

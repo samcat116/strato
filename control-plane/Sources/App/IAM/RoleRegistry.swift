@@ -320,6 +320,10 @@ enum IAMRoleRegistry {
     /// of the decision; keep it there rather than growing a second copy here.
     static let guestExecutionActions: Set<String> = ["vm:exec", "vm:runCommand"]
 
+    /// File writes and service changes can confer root execution. Grant this
+    /// deliberately, never through a seeded editor/admin role (STR-92).
+    static let guestConfigurationActions: Set<String> = ["vm:configureGuest"]
+
     /// Actions no seeded role carries and only the tier-1
     /// `platform-system-admin` policy reaches. `agent:updateArtifact` overrides
     /// the agent's update artifact with an arbitrary URL — that binary is
@@ -364,7 +368,7 @@ enum IAMRoleRegistry {
     static let allActions: Set<String> =
         IAMRole.allCases.reduce(
             into: membershipDerivedActions.union(identityActions).union(systemAdminOnlyActions)
-                .union(guestExecutionActions)
+                .union(guestExecutionActions).union(guestConfigurationActions)
         ) {
             $0.formUnion(actions(for: $1))
         }

@@ -204,3 +204,18 @@ cover hooks, providers, routing helpers, and components (`bun run test`).
 Playwright exercises critical browser navigation against a deterministic mock
 control plane (`bun run test:e2e`). CI enforces unit tests, browser smoke tests,
 lint, and the production build.
+
+## Guest configuration editor (STR-92)
+
+The VM overview includes a guest-configuration card gated by backend
+`vm:configureGuest` checks. Desired file contents appear only inside the privileged
+JSON editor, not in status summaries. A dirty editor survives polling and keeps
+its request identity after an ambiguous response, so retrying cannot create a
+second mutation. A synchronous no-op does not register a convergence watcher.
+
+Observed guest state remains explicitly unavailable until the STR-91 report
+contract is integrated; desired values must not be displayed as observed values.
+The CLI equivalents are `strato vm guest-config get`, `set --file config.json`,
+and `clear`, with `--no-wait` on mutations. Table output excludes file contents;
+JSON config export is a deliberate privileged read. CLI input uses the shared
+validator before sending the generated API request.

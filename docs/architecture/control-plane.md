@@ -812,3 +812,31 @@ or a disconnect after attach is reported as a session error. Only the initial
 replica-local attachment is retried; a started process is never replayed.
 Cancellation and termination signals close the socket and restore terminal
 settings; Ctrl-C in a raw PTY is forwarded as guest input.
+
+## Guest configuration controls (STR-92)
+
+`VM.guestConfig` persists the validated STR-90 shared model as optional JSON.
+`StoredGuestConfig` keeps the same JSON encoding but redacts diagnostic
+stringification, including Fluent/SQLKit bound-value debug logging. Desired-state
+assembly projects this intent onto `DesiredVMState.guestConfig`; ordinary VM
+responses do not expose file contents.
+
+The dedicated GET/PUT `/api/vms/:vmID/guest-config` routes require the deliberate
+`vm:configureGuest` action. PUT accepts `{guestConfig: ...}`; explicit null or an
+empty configuration withdraws management without reversing guest changes.
+Unknown envelope/model fields, duplicate identities, unsafe paths and bounded
+size violations are rejected using the shared validator, with rule-based errors
+that omit caller values.
+
+`VMGuestConfigMutation` compares normalized arrays under the VM row lock and
+refreshes prior intent along with reconciliation bookkeeping. A semantic change
+increments the enclosing VM generation and atomically records a `guest_config`
+resource event, a convergence deadline and any idempotency claim, then dispatches
+a desired-state doorbell. An unchanged request returns the VM without incrementing
+generation or creating an event; it does not imply convergence. Raw config
+contents are omitted from audit events and generic status responses.
+
+Observed guest convergence is a separate STR-91 contract. These controls must
+remain a dependent draft until its generation/failure evidence is connected to
+status and mutation completion. Host lifecycle success alone cannot prove that
+packages, files, services or sysctls converged.

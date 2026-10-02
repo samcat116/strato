@@ -56,6 +56,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
         switch (self, kind) {
         case (.virtualMachine, .create): return 600
         case (.virtualMachine, .boot): return 180
+        case (.virtualMachine, .guestConfig): return 600
         case (.virtualMachine, .delete): return 300
         case (.virtualMachine, .snapshot), (.virtualMachine, .restore): return 1800
         case (.virtualMachine, .snapshotExport): return 300
@@ -207,6 +208,12 @@ enum OperationFacade {
 
         if let degraded = conditions.degraded, degraded.sinceGeneration == target {
             return Verdict(status: .failed, error: degraded.reason, completedAt: nil)
+        }
+        // STR-92 is stacked on STR-90 while STR-91 report evidence is pending.
+        // Lifecycle acknowledgement alone cannot attest to in-guest convergence.
+        // Replace this guard only when the exact guest-report contract is integrated.
+        if event.mutation == .guestConfig {
+            return Verdict(status: .pending, error: nil, completedAt: nil)
         }
         if conditions.observedGeneration >= target,
             conditions.converged || conditions.targetGeneration > target

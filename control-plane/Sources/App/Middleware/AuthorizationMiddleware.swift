@@ -346,6 +346,14 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     static func action(
         method: HTTPMethod, pathComponents: [Substring], resource: GuardedResource
     ) -> String? {
+        // Raw desired file contents and root-level writes require a deliberate
+        // grant on every method; they must never fall back to viewer/editor.
+        if resource.prefix == "/api/vms", pathComponents.count >= 4,
+            pathComponents[3] == "guest-config"
+        {
+            return "vm:configureGuest"
+        }
+
         // Snapshot subresource (issue #426, and full-VM checkpoints in #564):
         // creating, deleting, or restoring a snapshot is guarded by the parent
         // resource's `snapshot` action (finer per-snapshot checks live in
