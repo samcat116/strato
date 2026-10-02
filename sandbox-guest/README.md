@@ -343,3 +343,11 @@ facts still hold. Older generations and different intent at an unchanged
 generation cannot apply. A corrupt/unreadable journal fails closed. Removing a
 journal manually discards its generation and failure guard and is not a recovery
 procedure; use a newer desired generation instead.
+
+Item-level failures are explicit: optional `failedItem` contains `section`
+(`packages`, `files`, `services`, or `sysctls`), `identity` (package/service
+name, file path, or sysctl key), and fixed `reason` matching the top-level
+`error`. It names the failed observation/apply/read-back row; other unmet rows
+were not necessarily attempted. Journal, validation, or interrupted-pass errors
+have no failed item. Failed-item identity and reason survive restart in the
+metadata journal.

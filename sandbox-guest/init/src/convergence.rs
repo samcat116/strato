@@ -142,11 +142,36 @@ pub enum Status {
     Failed,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Section {
+    Packages,
+    Files,
+    Services,
+    Sysctls,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ItemFailure {
+    pub section: Section,
+    pub identity: String,
+    pub reason: String,
+}
+impl ItemFailure {
+    fn new(section: Section, identity: &str, reason: String) -> Self {
+        Self {
+            section,
+            identity: identity.into(),
+            reason,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Observation {
     pub generation: i64,
     pub status: Status,
     pub error: Option<String>,
+    pub failed_item: Option<ItemFailure>,
     pub packages: Vec<PackageObservation>,
     pub files: Vec<FileObservation>,
     pub services: Vec<ServiceObservation>,
@@ -158,6 +183,7 @@ impl Observation {
             generation,
             status: Status::Converged,
             error: None,
+            failed_item: None,
             packages: vec![],
             files: vec![],
             services: vec![],
@@ -165,6 +191,7 @@ impl Observation {
         }
     }
     fn fail(&mut self, error: String) {
+        self.failed_item = None;
         self.status = Status::Failed;
         self.error = Some(error);
     }
@@ -188,6 +215,8 @@ struct Journal {
     digest: String,
     state: String,
     error: Option<String>,
+    #[serde(default)]
+    failed_item: Option<ItemFailure>,
 }
 
 /// One instance is held under the VM daemon's mutex: concurrent host requests
@@ -208,10 +237,10 @@ impl Converger {
             Err(_) => return Err("guest convergence journal is unreadable".into()),
         };
         let mut bytes = Vec::new();
-        file.take(4097)
+        file.take(16385)
             .read_to_end(&mut bytes)
             .map_err(|_| "guest convergence journal is unreadable")?;
-        if bytes.len() > 4096 {
+        if bytes.len() > 16384 {
             return Err("guest convergence journal is oversized".into());
         }
         let journal: Journal =
@@ -293,6 +322,7 @@ impl Converger {
                 digest: digest.clone(),
                 state: "applying".into(),
                 error: None,
+                failed_item: None,
             }) {
                 observation.fail(e);
                 return observation;
@@ -307,10 +337,12 @@ impl Converger {
         );
         if let Some(error) = retained_error {
             observation.fail(error);
+            observation.failed_item = previous.as_ref().and_then(|p| p.failed_item.clone());
             return observation;
         }
         if let Err(e) = result {
-            observation.fail(e);
+            observation.fail(e.reason.clone());
+            observation.failed_item = Some(e);
         }
         let journal = Journal {
             generation,
@@ -322,6 +354,7 @@ impl Converger {
             }
             .into(),
             error: observation.error.clone(),
+            failed_item: observation.failed_item.clone(),
         };
         if let Err(e) = self.save(&journal) {
             observation.fail(e);
@@ -335,24 +368,36 @@ impl Converger {
         deadline: Instant,
         apply: bool,
         observed: &mut Observation,
-    ) -> Result<(), String> {
+    ) -> Result<(), ItemFailure> {
         // Always collect pre-apply evidence, including on a sticky failure.
         for e in &config.packages {
             observed.packages.push(PackageObservation {
                 name: e.name.clone(),
-                version: backend.package(&e.name, deadline)?,
+                version: backend
+                    .package(&e.name, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Packages, &e.name, reason))?,
             });
         }
         for e in &config.files {
-            observed.files.push(backend.file(&e.path, deadline)?);
+            observed.files.push(
+                backend
+                    .file(&e.path, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Files, &e.path, reason))?,
+            );
         }
         for e in &config.services {
-            observed.services.push(backend.service(&e.name, deadline)?);
+            observed.services.push(
+                backend
+                    .service(&e.name, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Services, &e.name, reason))?,
+            );
         }
         for e in &config.sysctls {
             observed.sysctls.push(SysctlObservation {
                 key: e.key.clone(),
-                value: backend.sysctl(&e.key, deadline)?,
+                value: backend
+                    .sysctl(&e.key, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Sysctls, &e.key, reason))?,
             });
         }
         if !apply {
@@ -360,10 +405,18 @@ impl Converger {
         }
         for (entry, fact) in config.packages.iter().zip(observed.packages.iter_mut()) {
             if fact.version.is_some() != (entry.state == PackageState::Present) {
-                backend.apply_package(entry, deadline)?;
-                fact.version = backend.package(&entry.name, deadline)?;
+                backend
+                    .apply_package(entry, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Packages, &entry.name, reason))?;
+                fact.version = backend
+                    .package(&entry.name, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Packages, &entry.name, reason))?;
                 if fact.version.is_some() != (entry.state == PackageState::Present) {
-                    return Err("package read-back differs from desired state".into());
+                    return Err(ItemFailure::new(
+                        Section::Packages,
+                        &entry.name,
+                        "package read-back differs from desired state".into(),
+                    ));
                 }
             }
         }
@@ -371,30 +424,54 @@ impl Converger {
             if fact.sha256.as_deref() != Some(&hash(entry.content.as_bytes()))
                 || fact.mode.as_deref() != Some(&entry.mode)
             {
-                backend.apply_file(entry, deadline)?;
-                *fact = backend.file(&entry.path, deadline)?;
+                backend
+                    .apply_file(entry, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Files, &entry.path, reason))?;
+                *fact = backend
+                    .file(&entry.path, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Files, &entry.path, reason))?;
                 if fact.sha256.as_deref() != Some(&hash(entry.content.as_bytes()))
                     || fact.mode.as_deref() != Some(&entry.mode)
                 {
-                    return Err("file read-back differs from desired state".into());
+                    return Err(ItemFailure::new(
+                        Section::Files,
+                        &entry.path,
+                        "file read-back differs from desired state".into(),
+                    ));
                 }
             }
         }
         for (entry, fact) in config.services.iter().zip(observed.services.iter_mut()) {
             if fact.enabled != Some(entry.enabled) {
-                backend.apply_service(entry, deadline)?;
-                *fact = backend.service(&entry.name, deadline)?;
+                backend
+                    .apply_service(entry, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Services, &entry.name, reason))?;
+                *fact = backend
+                    .service(&entry.name, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Services, &entry.name, reason))?;
                 if fact.enabled != Some(entry.enabled) {
-                    return Err("service read-back differs from desired state".into());
+                    return Err(ItemFailure::new(
+                        Section::Services,
+                        &entry.name,
+                        "service read-back differs from desired state".into(),
+                    ));
                 }
             }
         }
         for (entry, fact) in config.sysctls.iter().zip(observed.sysctls.iter_mut()) {
             if fact.value.as_deref().map(normalize) != Some(normalize(&entry.value)) {
-                backend.apply_sysctl(entry, deadline)?;
-                fact.value = backend.sysctl(&entry.key, deadline)?;
+                backend
+                    .apply_sysctl(entry, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Sysctls, &entry.key, reason))?;
+                fact.value = backend
+                    .sysctl(&entry.key, deadline)
+                    .map_err(|reason| ItemFailure::new(Section::Sysctls, &entry.key, reason))?;
                 if fact.value.as_deref().map(normalize) != Some(normalize(&entry.value)) {
-                    return Err("sysctl read-back differs from desired state".into());
+                    return Err(ItemFailure::new(
+                        Section::Sysctls,
+                        &entry.key,
+                        "sysctl read-back differs from desired state".into(),
+                    ));
                 }
             }
         }
@@ -470,12 +547,16 @@ mod tests {
         sysctls: BTreeMap<String, String>,
         effects: Vec<String>,
         fail_package: bool,
+        fail_file: bool,
     }
     impl Backend for Fake {
         fn package(&mut self, n: &str, _: Instant) -> Result<Option<String>, String> {
             Ok(self.packages.get(n).cloned())
         }
         fn file(&mut self, p: &str, _: Instant) -> Result<FileObservation, String> {
+            if self.fail_file {
+                return Err("managed file is unreadable".into());
+            }
             Ok(self.files.get(p).cloned().unwrap_or(FileObservation {
                 path: p.into(),
                 sha256: None,
@@ -599,6 +680,9 @@ mod tests {
         };
         let failure = fixture.engine().converge(7, Some(config()), &mut fake);
         assert_eq!(failure.status, Status::Failed);
+        let failed_item = failure.failed_item.clone().unwrap();
+        assert_eq!(failed_item.section, Section::Packages);
+        assert_eq!(failed_item.identity, "curl");
         assert_eq!(fake.effects, ["package"]); // no subsequent file/service effects
         fake.fail_package = false;
         fake.effects.clear();
@@ -630,6 +714,7 @@ mod tests {
                 digest: hash(&serde_json::to_vec(&c).unwrap()),
                 state: "applying".into(),
                 error: None,
+                failed_item: None,
             })
             .unwrap();
         assert!(fixture
@@ -676,6 +761,22 @@ mod tests {
         fixture.engine().converge(3, Some(c), &mut fake);
         assert_eq!(fake.effects, ["package"]);
         assert!(!fake.packages.contains_key("curl"));
+    }
+    #[test]
+    fn observation_failure_names_the_exact_row_without_claiming_other_rows_failed() {
+        let fixture = Fixture::new();
+        let mut fake = Fake {
+            fail_file: true,
+            ..Fake::default()
+        };
+        let result = fixture.engine().converge(7, Some(config()), &mut fake);
+        let item = result.failed_item.unwrap();
+        assert_eq!(item.section, Section::Files);
+        assert_eq!(item.identity, "/etc/example.conf");
+        assert_eq!(result.error.as_deref(), Some(item.reason.as_str()));
+        assert!(result.files.is_empty());
+        assert_eq!(result.packages.len(), 1);
+        assert!(fake.effects.is_empty());
     }
     #[test]
     fn corrupt_journal_and_invalid_intent_fail_closed() {

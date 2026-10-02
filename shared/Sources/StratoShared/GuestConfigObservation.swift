@@ -7,10 +7,18 @@ public struct GuestConfigObservation: Codable, Equatable, Sendable {
     public let generation: Int64
     public let status: Status
     public let error: String?
+    public let failedItem: ItemFailure?
     public let packages: [Package]
     public let files: [File]
     public let services: [Service]
     public let sysctls: [Sysctl]
+
+    public struct ItemFailure: Codable, Equatable, Sendable {
+        public enum Section: String, Codable, Sendable { case packages, files, services, sysctls }
+        public let section: Section
+        public let identity: String
+        public let reason: String
+    }
 
     public struct Package: Codable, Equatable, Sendable {
         public let name: String
@@ -59,6 +67,18 @@ public struct GuestConfigObservation: Codable, Equatable, Sendable {
             services.allSatisfy({ $0.activeState.map({ !$0.isEmpty && $0.utf8.count <= 64 }) ?? true }),
             sysctls.allSatisfy({ $0.value.map({ $0.utf8.count <= 1024 }) ?? true })
         else { throw GuestConfigObservationError.invalid }
+        if let failedItem {
+            let identities: Set<String>
+            switch failedItem.section {
+            case .packages: identities = Set(config.packages.map(\.name))
+            case .files: identities = Set(config.files.map(\.path))
+            case .services: identities = Set(config.services.map(\.name))
+            case .sysctls: identities = Set(config.sysctls.map(\.key))
+            }
+            guard status == .failed, identities.contains(failedItem.identity),
+                failedItem.reason == error
+            else { throw GuestConfigObservationError.invalid }
+        }
         if status == .converged {
             guard
                 config.packages.allSatisfy({ desired in
