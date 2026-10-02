@@ -8,7 +8,7 @@ import VaporTesting
 
 @testable import App
 
-@Suite("Agent administrative revocation", .serialized)
+@Suite("Agent administrative revocation", .serialized, .postgresFixture)
 struct AgentRevocationTests {
     @Test("The administrative state migration defaults existing rows active and reverts")
     func migrationPreservesExistingAgents() async throws {
