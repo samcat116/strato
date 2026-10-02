@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 64). The required registration fields
+currently 63). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -589,7 +589,12 @@ documentation — `MessageEnvelopeTests.swift`, `ReconciliationProtocolTests.swi
 `WireProtocolTests.swift`, and `GuestExecMessageTests.swift` show the
 expected encode/decode flows and compatibility behavior.
 
-## Managed VM guest configuration (STR-90, wire v64)
+## Managed VM guest configuration (STR-90, staged for wire v64)
+
+STR-90 introduces shared vocabulary, not a live realization capability. Its
+model-only build remains on wire v63. STR-91 must introduce wire v64 together
+with the agent consumer; exact registration then rejects model-only agents
+before exchanging desired state. Do not publish v64 from a model-only build.
 
 `DesiredVMState.guestConfig: GuestConfig?` extends the VM's existing desired
 state. It uses **the enclosing VM generation**: every accepted edit must bump
@@ -647,4 +652,5 @@ capability checks, generation guarding, and content-free observations. STR-92
 owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
-remain decodable; live peers still require exact wire v64 registration.
+remain decodable. Realization-capable live peers will require exact wire v64
+registration once STR-91 lands; the staged model does not advertise that version.
