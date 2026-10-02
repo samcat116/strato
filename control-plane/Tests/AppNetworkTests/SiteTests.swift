@@ -1267,6 +1267,22 @@ extension SiteTests {
                     #expect(value.resourceClasses[1].revision == 2)
                     #expect(value.burstableAdmissionAvailable == false)
                 })
+            for field in [
+                "cpuAllocationRatio", "memoryAllocationRatio", "cpuWeight", "memoryHighPercent",
+                "maxTelemetryAgeSeconds",
+            ] {
+                var invalid = try #require(
+                    try JSONSerialization.jsonObject(with: JSONEncoder().encode(changed)) as? [String: Any])
+                invalid[field] = 0
+                let data = try JSONSerialization.data(withJSONObject: ["burstableResourcePolicy": invalid])
+                try await app.testing().test(
+                    .PUT, "/api/sites/\(try site.requireID())",
+                    beforeRequest: { req in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        req.headers.contentType = .json
+                        req.body = ByteBuffer(data: data)
+                    }, afterResponse: { response in #expect(response.status == .badRequest) })
+            }
             let reloaded = try #require(try await VM.find(vm.id, on: app.db))
             #expect(reloaded.resourceClass == initial[0])
             #expect(reloaded.generation == generation)

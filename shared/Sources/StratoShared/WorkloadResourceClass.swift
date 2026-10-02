@@ -69,16 +69,23 @@ public struct WorkloadResourceClassPolicy: Codable, Sendable, Equatable {
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            kind: c.decode(WorkloadResourceClassKind.self, forKey: .kind),
-            cpuAllocationRatio: c.decode(Double.self, forKey: .cpuAllocationRatio),
-            memoryAllocationRatio: c.decode(Double.self, forKey: .memoryAllocationRatio),
-            cpuWeight: c.decode(Int.self, forKey: .cpuWeight),
-            memoryHighPercent: c.decode(Int.self, forKey: .memoryHighPercent),
-            hardLimitPolicy: c.decode(WorkloadHardLimitPolicy.self, forKey: .hardLimitPolicy),
-            maxCPUPressure10: c.decode(Double.self, forKey: .maxCPUPressure10),
-            maxMemoryPressure10: c.decode(Double.self, forKey: .maxMemoryPressure10),
-            maxTelemetryAgeSeconds: c.decode(Int.self, forKey: .maxTelemetryAgeSeconds))
+        do {
+            try self.init(
+                kind: c.decode(WorkloadResourceClassKind.self, forKey: .kind),
+                cpuAllocationRatio: c.decode(Double.self, forKey: .cpuAllocationRatio),
+                memoryAllocationRatio: c.decode(Double.self, forKey: .memoryAllocationRatio),
+                cpuWeight: c.decode(Int.self, forKey: .cpuWeight),
+                memoryHighPercent: c.decode(Int.self, forKey: .memoryHighPercent),
+                hardLimitPolicy: c.decode(WorkloadHardLimitPolicy.self, forKey: .hardLimitPolicy),
+                maxCPUPressure10: c.decode(Double.self, forKey: .maxCPUPressure10),
+                maxMemoryPressure10: c.decode(Double.self, forKey: .maxMemoryPressure10),
+                maxTelemetryAgeSeconds: c.decode(Int.self, forKey: .maxTelemetryAgeSeconds))
+        } catch is WorkloadResourceClassError {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Resource class policy is outside validated bounds"))
+        }
     }
 
     public static let guaranteed = try! Self(kind: .guaranteed)
