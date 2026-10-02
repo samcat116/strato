@@ -1,40 +1,39 @@
 import Foundation
+import StratoShared
 
 /// Backend controls computed from an admitted class snapshot. This is an
 /// agent-local enforcement plan, not a resource-class or wire model.
 public struct BurstableResourceLimits: Sendable, Equatable {
     public enum InvalidLimits: Error, Equatable {
-        case guestGrant
-        case backendOverhead
-        case memoryHighPercent
-        case cpuWeight
         case overflow
-        case pressureThreshold
         case pageSize
         case kernelGranularity
     }
 
-    public let memoryHighBytes: Int64
-    public let memoryMaxBytes: Int64
-    public let cpuWeight: Int
+    private let intent: WorkloadRuntimeLimits
+    public var memoryHighBytes: Int64 { intent.memoryHighBytes }
+    public var memoryMaxBytes: Int64 { intent.memoryMaxBytes }
+    public var cpuWeight: Int { intent.cpuWeight }
 
     public init(guestGrantBytes: Int64, backendOverheadBytes: Int64, memoryHighPercent: Int, cpuWeight: Int) throws {
-        guard guestGrantBytes > 0 else { throw InvalidLimits.guestGrant }
-        guard backendOverheadBytes >= 0 else { throw InvalidLimits.backendOverhead }
-        guard (1...99).contains(memoryHighPercent) else { throw InvalidLimits.memoryHighPercent }
-        guard (1...10000).contains(cpuWeight) else { throw InvalidLimits.cpuWeight }
+        let policy = try WorkloadResourceClassPolicy(
+            kind: .burstable, cpuWeight: cpuWeight, memoryHighPercent: memoryHighPercent)
+        self.intent = try policy.runtimeLimits(guestBytes: guestGrantBytes, backendOverheadBytes: backendOverheadBytes)
+    }
 
-        // Multiplying the entire grant by a percentage can overflow even
-        // when its final quotient fits. Both products here are bounded by G.
-        let percentage = Int64(memoryHighPercent)
-        let guestHigh = (guestGrantBytes / 100) * percentage + (guestGrantBytes % 100) * percentage / 100
-        let (maximum, maxOverflow) = guestGrantBytes.addingReportingOverflow(backendOverheadBytes)
-        let (high, highOverflow) = guestHigh.addingReportingOverflow(backendOverheadBytes)
-        guard !maxOverflow, !highOverflow else { throw InvalidLimits.overflow }
-        guard high > 0, high < maximum else { throw InvalidLimits.pressureThreshold }
-        self.memoryHighBytes = high
-        self.memoryMaxBytes = maximum
-        self.cpuWeight = cpuWeight
+    private init(intent: WorkloadRuntimeLimits) {
+        self.intent = intent
+    }
+
+    /// Missing and guaranteed snapshots preserve the existing runtime path.
+    /// Consume the persisted admitted policy, never the current class catalog.
+    public static func plan(
+        resourceClass: WorkloadResourceClassSnapshot?, guestGrantBytes: Int64, backendOverheadBytes: Int64
+    ) throws -> Self? {
+        guard let resourceClass, resourceClass.policy.kind == .burstable else { return nil }
+        return Self(
+            intent: try resourceClass.policy.runtimeLimits(
+                guestBytes: guestGrantBytes, backendOverheadBytes: backendOverheadBytes))
     }
 
     /// Use the enforcement host's actual page size. Explicit alignment avoids

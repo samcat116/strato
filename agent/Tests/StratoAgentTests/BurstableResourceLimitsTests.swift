@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
@@ -6,6 +7,39 @@ import Testing
 
 @Suite("burstable runtime limits")
 struct BurstableResourceLimitsTests {
+    @Test("admitted snapshot replay preserves planning and guaranteed snapshots require no rewrite")
+    func admittedSnapshotReplay() throws {
+        let siteID = UUID()
+        let guest: Int64 = 1024 * 1024 * 1024
+        let overhead: Int64 = 512 * 1024 * 1024
+        let guaranteed = try WorkloadResourceClassSnapshot(
+            classID: WorkloadResourceClassSnapshot.guaranteedID, siteID: siteID,
+            revision: 1, policy: .guaranteed)
+        #expect(
+            try BurstableResourceLimits.plan(resourceClass: nil, guestGrantBytes: guest, backendOverheadBytes: overhead)
+                == nil)
+        #expect(
+            try BurstableResourceLimits.plan(
+                resourceClass: guaranteed, guestGrantBytes: guest, backendOverheadBytes: overhead) == nil)
+
+        let snapshot = try WorkloadResourceClassSnapshot(
+            classID: WorkloadResourceClassSnapshot.burstableID, siteID: siteID, revision: 3,
+            policy: WorkloadResourceClassPolicy(kind: .burstable, cpuWeight: 37, memoryHighPercent: 70))
+        let restored = try WireProtocol.makeDecoder().decode(
+            WorkloadResourceClassSnapshot.self, from: WireProtocol.makeEncoder().encode(snapshot))
+        let originalPlan = try #require(
+            try BurstableResourceLimits.plan(
+                resourceClass: snapshot, guestGrantBytes: guest, backendOverheadBytes: overhead))
+        let adoptedPlan = try #require(
+            try BurstableResourceLimits.plan(
+                resourceClass: restored, guestGrantBytes: guest, backendOverheadBytes: overhead))
+        #expect(originalPlan == adoptedPlan)
+        #expect(originalPlan.cpuWeight == 37)
+        #expect(originalPlan.memoryHighBytes == 1_288_490_188)
+        #expect(
+            originalPlan.memoryMaxBytes == QEMUMemoryCeiling.bytes(guestMemoryBytes: guest, overheadBytes: overhead))
+    }
+
     @Test("guest pressure percentage does not discount backend allowance")
     func arithmetic() throws {
         let limits = try BurstableResourceLimits(
@@ -28,7 +62,7 @@ struct BurstableResourceLimitsTests {
             guestGrantBytes: .max, backendOverheadBytes: 0, memoryHighPercent: 99, cpuWeight: 10000)
         #expect(limits.memoryHighBytes == 9_131_138_316_486_228_048)
         #expect(limits.memoryMaxBytes == .max)
-        #expect(throws: BurstableResourceLimits.InvalidLimits.overflow) {
+        #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) {
             try BurstableResourceLimits(
                 guestGrantBytes: .max, backendOverheadBytes: 1, memoryHighPercent: 99, cpuWeight: 1)
         }
@@ -36,19 +70,19 @@ struct BurstableResourceLimitsTests {
 
     @Test("invalid policies and unrepresentable thresholds refuse enforcement")
     func invalid() {
-        #expect(throws: BurstableResourceLimits.InvalidLimits.guestGrant) {
+        #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) {
             try BurstableResourceLimits(
                 guestGrantBytes: 0, backendOverheadBytes: 1, memoryHighPercent: 80, cpuWeight: 100)
         }
-        #expect(throws: BurstableResourceLimits.InvalidLimits.memoryHighPercent) {
+        #expect(throws: WorkloadResourceClassError.invalidPolicy) {
             try BurstableResourceLimits(
                 guestGrantBytes: 1024, backendOverheadBytes: 0, memoryHighPercent: 100, cpuWeight: 100)
         }
-        #expect(throws: BurstableResourceLimits.InvalidLimits.cpuWeight) {
+        #expect(throws: WorkloadResourceClassError.invalidPolicy) {
             try BurstableResourceLimits(
                 guestGrantBytes: 1024, backendOverheadBytes: 0, memoryHighPercent: 80, cpuWeight: 0)
         }
-        #expect(throws: BurstableResourceLimits.InvalidLimits.pressureThreshold) {
+        #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) {
             try BurstableResourceLimits(
                 guestGrantBytes: 1, backendOverheadBytes: 0, memoryHighPercent: 80, cpuWeight: 100)
         }

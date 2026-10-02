@@ -1,18 +1,19 @@
 # Burstable runtime enforcement foundations (STR-272)
 
-These helpers prepare runtime enforcement for the
-[STR-267 class contract](./resource-classes-contract.md). They are not yet wired
-to workload lifecycle execution. No burstable capability is advertised or
-placement enabled by this change. Guaranteed workloads retain their existing
-runtime path. The canonical class snapshot and wire v67 belong to the
-coordinated STR-267 implementation, not an additional DTO here.
+These helpers consume the executable
+[STR-267 class contract](./resource-classes-contract.md) at checkpoint
+`ef37ff760e1cb30fb6d5a888884362deaab11f63`. They are not yet wired to workload
+lifecycle execution. No burstable capability is advertised or placement enabled
+by this change. Guaranteed workloads retain their existing runtime path. The
+canonical class snapshot and wire v67 belong to the coordinated STR-267
+implementation, not an additional DTO here.
 
-`BurstableResourceLimits` in StratoAgentKit computes an agent-local plan from
-current granted guest RAM, backend allowance, memory-high percentage, and CPU
-weight. It uses quotient/remainder integer arithmetic for the percentage and
-rejects nonpositive grants, negative allowance, percentages outside 1...99,
-weights outside 1...10000, overflow, and a missing pressure interval. Backend
-allowance is never percentage-discounted:
+`BurstableResourceLimits` in StratoAgentKit wraps canonical `WorkloadRuntimeLimits`
+and delegates byte arithmetic to `WorkloadResourceClassPolicy.runtimeLimits`.
+Its `plan` adapter consumes the persisted admitted snapshot and returns nil for
+missing/guaranteed snapshots, preserving the existing runtime path. The shared
+policy owns percentage/weight validation, checked quotient/remainder arithmetic,
+and runtime overflow refusal. Backend allowance is never percentage-discounted:
 
 ```
 memory.high = floor(current guest grant * percentage / 100) + backend allowance
@@ -64,8 +65,7 @@ memory events, memory/CPU PSI, and CPU statistics. It does not establish
 ownership, ancestor restrictions, delegation, lifecycle application, reclaim,
 OOM containment, CPU fairness, or transient-limit safety by itself.
 
-Remaining integration requires the executable canonical class snapshot,
-backend-supported pre-execution/live control application, stable lifecycle
+Remaining integration requires backend-supported pre-execution/live control application, stable lifecycle
 ownership, effective readback, complete capability gating, and coordinated
 telemetry. Controller listing or unit-test fixtures alone never enable support.
 Actual QEMU and jailed Firecracker kernel tests must verify create/restart/adopt,
@@ -85,7 +85,7 @@ claiming runtime acceptance.
 | Catalog edit | No runtime call for an unchanged admitted snapshot. | Existing grants and limits remain intact. |
 
 The lifecycle implementations and capability/readback gate are intentionally not
-connected by this foundations change. They require the executable STR-267 type
-and coordination with the active reconciler owner. Unit planning tests establish
+connected by this foundations change. They require coordination with the active
+reconciler owner. Unit planning tests establish
 arithmetic, persisted XML idempotence and conflict refusal; they do not establish
 actual application order, owned kernel paths, adoption safety or cleanup.
