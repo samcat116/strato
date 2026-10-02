@@ -521,9 +521,16 @@ reload configuration while running.
 guest RAM. It defaults to 512 MiB and accepts 128–4096 MiB. On a host with the
 cgroup-v2 memory controller, the agent applies guest RAM plus this allowance as
 libvirt's persistent and live hard memory limit. The allowance protects the host
-from VMM overhead or runaway process memory; it is not added to scheduling or
-quota accounting. A host without that controller logs one warning and runs QEMU
+from VMM overhead or runaway process memory; it is included once in scheduling
+and host admission, while tenant quota counts guest RAM only. A host without that controller logs one warning and runs QEMU
 without the ceiling, matching Firecracker's graceful-degradation policy.
+
+`host_memory_reserve_mb` holds back physical host RAM for the kernel, agent,
+daemons, and emergency reclaim. It defaults to 1024 MiB; zero disables this
+reserve and negative values are rejected. Configuration is read at startup.
+Running workloads keep their grants after reserve edits, while new creates,
+boots, and grows must fit the updated reserve. Resource reports expose physical,
+host-reserved, workload-effective, and clamped remaining allocatable bytes.
 
 ### What the QEMU driver can be asked for
 

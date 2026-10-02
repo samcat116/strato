@@ -654,3 +654,9 @@ bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
 remain decodable. Realization-capable live peers will require exact wire v64
 registration once STR-91 lands; the staged model does not advertise that version.
+
+STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
+host-reserved, workload-effective, remaining allocatable, and QEMU allowance
+bytes. Remaining bytes are already net of host reserve and backend overhead.
+Control plane and agent builds must be coordinated; v65 carries host density. GuestConfig remains staged vocabulary; no
+consumer or realization capability is advertised by this build.

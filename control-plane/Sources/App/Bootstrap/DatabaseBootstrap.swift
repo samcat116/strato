@@ -230,5 +230,10 @@ extension Application {
         migrations.add(AddVMFleetPreviewExpiryIndex())
         migrations.add(CreateGuestExecSessionLimits())
         migrations.add(AddAgentAdministrativeOffline())
+
+        // Compute density additions follow the reviewed historical migration prefix.
+        migrations.add(AddAgentMemoryAccounting())
+        migrations.add(AddWorkloadResourceClasses())
+        migrations.add(AddDurableResourceAdmissions())
     }
 }

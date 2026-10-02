@@ -129,7 +129,8 @@ public struct VMManifestEntry: Codable, Sendable {
         self.kind = .sandbox
         self.hypervisorType = .firecracker
         self.spec = VMSpec(
-            cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil))
+            cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil),
+            resourceClass: sandboxSpec.resourceClass, admittedReservation: sandboxSpec.admittedReservation)
         self.realizedMemoryReservationBytes = nil
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil

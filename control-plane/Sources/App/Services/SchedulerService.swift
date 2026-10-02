@@ -25,11 +25,14 @@ struct SchedulableAgent: Sendable {
     let name: String
     let totalCPU: Int
     let availableCPU: Int
+    let availableCPUMicroUnits: Int64
     let totalMemory: Int64
     let availableMemory: Int64
     let totalDisk: Int64
     let availableDisk: Int64
     let physicalFreeDisk: Int64
+    let qemuOverheadBytes: Int64
+    let memoryAccounting: HostMemoryAccounting?
     let status: AgentStatus
     let runningVMCount: Int
     /// Hypervisor backends this agent can actually run, from its structured registration report.
@@ -68,6 +71,8 @@ struct SchedulableAgent: Sendable {
         totalDisk: Int64,
         availableDisk: Int64,
         physicalFreeDisk: Int64? = nil,
+        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes,
+        memoryAccounting: HostMemoryAccounting? = nil,
         status: AgentStatus,
         runningVMCount: Int,
         supportedHypervisors: [HypervisorType] = [.qemu],
@@ -78,17 +83,22 @@ struct SchedulableAgent: Sendable {
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false,
-        supportsVsock: Bool = false
+        supportsVsock: Bool = false,
+        availableCPUMicroUnits: Int64? = nil
     ) {
         self.id = id
         self.name = name
         self.totalCPU = totalCPU
+        self.availableCPUMicroUnits = max(
+            0, availableCPUMicroUnits ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: availableCPU))
         self.availableCPU = availableCPU
         self.totalMemory = totalMemory
         self.availableMemory = availableMemory
         self.totalDisk = totalDisk
         self.availableDisk = availableDisk
         self.physicalFreeDisk = physicalFreeDisk ?? availableDisk
+        self.qemuOverheadBytes = qemuOverheadBytes
+        self.memoryAccounting = memoryAccounting
         self.status = status
         self.runningVMCount = runningVMCount
         self.supportedHypervisors = supportedHypervisors
@@ -137,16 +147,20 @@ struct SchedulableAgent: Sendable {
     /// placements that are in flight but not yet reflected in the agent's own
     /// resource reports.
     func subtractingReservations(_ reserved: ReservationAmounts) -> SchedulableAgent {
-        SchedulableAgent(
+        let remainingCPU =
+            reserved.cpuMicroUnits >= availableCPUMicroUnits ? 0 : availableCPUMicroUnits - reserved.cpuMicroUnits
+        return SchedulableAgent(
             id: id,
             name: name,
             totalCPU: totalCPU,
-            availableCPU: max(0, availableCPU - reserved.cpu),
+            availableCPU: Int(remainingCPU / 1_000_000),
             totalMemory: totalMemory,
             availableMemory: max(0, availableMemory - reserved.memory),
             totalDisk: totalDisk,
             availableDisk: max(0, availableDisk - reserved.disk),
             physicalFreeDisk: physicalFreeDisk,
+            qemuOverheadBytes: qemuOverheadBytes,
+            memoryAccounting: memoryAccounting,
             status: status,
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
@@ -157,7 +171,8 @@ struct SchedulableAgent: Sendable {
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
             supportsVTPM: supportsVTPM,
-            supportsVsock: supportsVsock
+            supportsVsock: supportsVsock,
+            availableCPUMicroUnits: remainingCPU
         )
     }
 }
@@ -165,8 +180,23 @@ struct SchedulableAgent: Sendable {
 /// VM placement requirements for scheduling: hard constraints (hypervisor
 /// backend, architecture, network capability) plus resource needs.
 struct VMPlacementRequirements: Sendable, Equatable {
+    let resourceClass: WorkloadResourceClassSnapshot?
+    var effectiveCPU: Int64 { (resourceClass?.policy ?? .guaranteed).cpuMicroUnits(cpus: cpu) }
     let cpu: Int
     let memory: Int64
+    let maxMemory: Int64
+
+    func memoryReservation(on agent: SchedulableAgent) -> WorkloadMemoryReservation {
+        if requiresSandboxRuntime { return WorkloadMemoryReservation.sandbox(memoryBytes: memory) }
+        return WorkloadMemoryReservation.vm(
+            memoryBytes: memory, maxMemoryBytes: maxMemory,
+            hypervisorType: hypervisorType, architecture: architecture ?? agent.architecture ?? .current,
+            qemuOverheadBytes: agent.qemuOverheadBytes)
+    }
+
+    func effectiveMemory(on agent: SchedulableAgent) -> Int64 {
+        (resourceClass?.policy ?? .guaranteed).memoryReservation(memoryReservation(on: agent)).effectiveBytes
+    }
     let disk: Int64
     /// Hypervisor backend the VM must run under. Hard constraint — agents
     /// that don't support it are never eligible.
@@ -210,6 +240,7 @@ struct VMPlacementRequirements: Sendable, Equatable {
     init(
         cpu: Int,
         memory: Int64,
+        maxMemory: Int64? = nil,
         disk: Int64,
         hypervisorType: HypervisorType = .qemu,
         architecture: CPUArchitecture? = nil,
@@ -219,10 +250,13 @@ struct VMPlacementRequirements: Sendable, Equatable {
         requiresSandboxRuntime: Bool = false,
         requiresSandboxNetworking: Bool = false,
         requiresVTPM: Bool = false,
-        requiresVsock: Bool = false
+        requiresVsock: Bool = false,
+        resourceClass: WorkloadResourceClassSnapshot? = nil
     ) {
+        self.resourceClass = resourceClass
         self.cpu = cpu
         self.memory = memory
+        self.maxMemory = maxMemory ?? memory
         self.disk = disk
         self.hypervisorType = hypervisorType
         self.architecture = architecture
@@ -238,6 +272,7 @@ struct VMPlacementRequirements: Sendable, Equatable {
 
 /// Scheduler service errors
 enum SchedulerError: Error, CustomStringConvertible, Sendable {
+    case resourceClassAdmissionRefused(String)
     case noAvailableAgents
     case unsupportedHypervisor(required: HypervisorType, onlineAgents: Int, agentsWithoutHypervisors: Int)
     case noUsableHypervisors(onlineAgents: Int)
@@ -253,6 +288,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
 
     var description: String {
         switch self {
+        case .resourceClassAdmissionRefused(let reason): return reason
         case .noAvailableAgents:
             return "No online agents available for VM placement"
         case .unsupportedHypervisor(let required, let onlineAgents, let agentsWithoutHypervisors):
@@ -299,8 +335,18 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
             return
                 "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
         case .insufficientResources(let required, let available):
+            let operands = available.map { agent in
+                let accounting = agent.memoryAccounting
+                let reservation = required.memoryReservation(on: agent)
+                return "\(agent.name): physicalBytes=\(agent.totalMemory), "
+                    + "hostReservedBytes=\(accounting.map { String($0.hostReservedBytes) } ?? "unknown"), "
+                    + "reportedWorkloadEffectiveBytes=\(accounting.map { String($0.workloadEffectiveBytes) } ?? "unknown"), "
+                    + "remainingAfterPlacementClaimsBytes=\(agent.availableMemory), "
+                    + "requiredGuestBytes=\(required.memory), reservedGuestBytes=\(reservation.guestBytes), requiredEffectiveBytes=\(reservation.effectiveBytes), "
+                    + "backendOverheadBytes=\(reservation.backendOverheadBytes)"
+            }.joined(separator: "; ")
             return
-                "No agent has sufficient resources. Required: CPU=\(required.cpu), Memory=\(required.memory), Disk=\(required.disk). Available agents: \(available.count)"
+                "No agent has sufficient resources. Resource class=\(required.resourceClass?.policy.kind.rawValue ?? "guaranteed"), physicalCPUMicroUnits=\(required.effectiveCPU). Required CPU=\(required.cpu), Disk=\(required.disk). \(operands)"
         }
     }
 }
@@ -355,6 +401,7 @@ final class SchedulerService: Sendable {
         VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
+            maxMemory: vm.maxMemory,
             disk: diskBytes ?? vm.disk,
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
@@ -362,7 +409,8 @@ final class SchedulerService: Sendable {
             requiresMetadataService: vm.metadataSource == .imds,
             siteID: siteID,
             requiresVTPM: vm.tpmEnabled,
-            requiresVsock: vm.guestAgentEnabled
+            requiresVsock: vm.guestAgentEnabled,
+            resourceClass: vm.resourceClass
         )
     }
 
@@ -389,8 +437,6 @@ final class SchedulerService: Sendable {
         strategy: SchedulingStrategy? = nil,
         vmName: String = "unnamed"
     ) async throws -> String {
-        let amounts = ReservationAmounts(
-            cpu: requirements.cpu, memory: requirements.memory, disk: requirements.disk)
 
         // Apply categorical and raw-capacity constraints before touching the
         // coordination store. Reservations can only reduce availability, so
@@ -421,9 +467,14 @@ final class SchedulerService: Sendable {
             let capacity = ReservationAmounts(
                 cpu: selectedAgent.availableCPU,
                 memory: selectedAgent.availableMemory,
-                disk: selectedAgent.availableDisk
+                disk: selectedAgent.availableDisk,
+                cpuMicroUnits: selectedAgent.availableCPUMicroUnits
             )
 
+            let amounts = ReservationAmounts(
+                cpu: requirements.cpu,
+                memory: requirements.effectiveMemory(on: selectedAgent), disk: requirements.disk,
+                cpuMicroUnits: requirements.effectiveCPU)
             if await coordination.reserveCapacity(
                 agentId: selectedId, vmId: vmId, amounts: amounts, capacity: capacity)
             {
@@ -520,7 +571,20 @@ final class SchedulerService: Sendable {
         _ agents: [SchedulableAgent],
         for requirements: VMPlacementRequirements
     ) throws -> [SchedulableAgent] {
-        let online = agents.filter { $0.status == AgentStatus.online }
+        if let snapshot = requirements.resourceClass {
+            guard snapshot.policy.kind == .guaranteed else {
+                throw SchedulerError.resourceClassAdmissionRefused(
+                    "Resource class \(snapshot.classID) revision \(snapshot.revision): burstable placement requires verified STR272 runtime enforcement"
+                )
+            }
+            if let siteID = requirements.siteID, siteID != snapshot.siteID {
+                throw SchedulerError.resourceClassAdmissionRefused(
+                    "Resource class site conflicts with network site pinning")
+            }
+        }
+        let classScoped =
+            requirements.resourceClass.map { snapshot in agents.filter { $0.siteID == snapshot.siteID } } ?? agents
+        let online = classScoped.filter { $0.status == AgentStatus.online }
         guard !online.isEmpty else {
             throw SchedulerError.noAvailableAgents
         }
@@ -643,7 +707,8 @@ final class SchedulerService: Sendable {
         }
 
         let eligible = metadataCapable.filter { agent in
-            agent.availableCPU >= requirements.cpu && agent.availableMemory >= requirements.memory
+            agent.availableCPUMicroUnits >= requirements.effectiveCPU
+                && agent.availableMemory >= requirements.effectiveMemory(on: agent)
                 && agent.availableDisk >= requirements.disk
         }
         guard !eligible.isEmpty else {

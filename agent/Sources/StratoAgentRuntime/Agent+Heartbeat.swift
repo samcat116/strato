@@ -356,9 +356,10 @@ extension Agent {
         }
 
         // Resources committed to VMs currently managed on this host. We report
-        // available = total - reserved (1:1, no overcommit) so the scheduler treats
-        // CPU/memory as hard constraints; overcommit ratios can be layered on later.
+        // available = physical capacity minus admitted commitments. Historical
+        // workloads retain 1:1 accounting; class commitments are durable.
         var reserved = HostReservation()
+        var workloadReservations: [String: HostReservation] = [:]
         var backendsWithInventory: Set<HypervisorType> = []
 
         for (type, service) in hypervisorServices {
@@ -376,9 +377,18 @@ extension Agent {
                 reservations, orphan in
                 guard orphan.value.hypervisorType == type else { return }
                 reservations[orphan.key] = VMHostReservation.forManifestEntry(
-                    orphan.value, architecture: .current)
+                    orphan.value, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             }
-            if let observed {
+            if let rawObserved = observed {
+                let admitted = managedVMs.merging(orphanedVMs) { managed, _ in managed }
+                    .reduce(into: [String: WorkloadAdmittedReservation]()) { result, pair in
+                        guard pair.value.hypervisorType == type,
+                            pair.value.spec.resourceClass?.policy.kind == .burstable,
+                            let commitment = pair.value.spec.admittedReservation
+                        else { return }
+                        result[pair.key] = commitment
+                    }
+                let observed = rawObserved.accountingForAdmittedWorkloads(admitted)
                 // A daemon inventory with membership can also prove that a
                 // managed manifest entry disappeared out of band. Retain that
                 // entry's reservation for the same reason as a missing orphan:
@@ -386,15 +396,30 @@ extension Agent {
                 if observed.workloadIDs != nil {
                     for (vmId, entry) in managedVMs where entry.hypervisorType == type {
                         durableReservations[vmId] = VMHostReservation.forManifestEntry(
-                            entry, architecture: .current)
+                            entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
                     }
                 }
                 reserved = reserved.addingSaturating(
                     observed.includingMissingWorkloads(durableReservations))
+                if let exact = observed.workloadReservations {
+                    for (id, reservation) in exact { workloadReservations[id] = reservation }
+                }
+                for (id, durable) in durableReservations {
+                    let observed = workloadReservations[id] ?? HostReservation()
+                    workloadReservations[id] = HostReservation(
+                        memoryBytes: max(observed.memoryBytes, durable.memoryBytes),
+                        cpuMicroUnits: max(observed.cpuMicroUnits, durable.cpuMicroUnits))
+                }
             } else {
+                for (id, entry) in managedVMs where entry.hypervisorType == type {
+                    workloadReservations[id] = VMHostReservation.forManifestEntry(
+                        entry, architecture: .current,
+                        qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+                }
+                workloadReservations.merge(durableReservations) { _, durable in durable }
                 let managed = manifestReservations(for: type)
                 reserved = reserved.addingSaturating(
-                    HostReservation(cpus: managed.vcpus, memoryBytes: managed.memoryBytes))
+                    HostReservation(memoryBytes: managed.memoryBytes, cpuMicroUnits: managed.cpuMicroUnits))
                 for orphan in durableReservations.values {
                     reserved = reserved.addingSaturating(orphan)
                 }
@@ -405,22 +430,34 @@ extension Agent {
         // Preserve orphan reservations even when this build has no service for
         // their backend. They are durable evidence of host consumption, and an
         // unavailable driver is not evidence that the workload disappeared.
-        for entry in orphanedVMs.values {
+        for (id, entry) in orphanedVMs {
             guard !backendsWithInventory.contains(entry.hypervisorType) else { continue }
-            reserved = reserved.addingSaturating(
-                VMHostReservation.forManifestEntry(entry, architecture: .current))
+            let reservation = VMHostReservation.forManifestEntry(
+                entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+            workloadReservations[id] = reservation
+            reserved = reserved.addingSaturating(reservation)
         }
 
         // Sandbox reservations always come from the manifest (managed and
         // orphaned alike): the sandbox runtime seam has no reservation query,
         // and the manifest entry is authoritative for the workload's sizing.
-        for entry in managedSandboxes.values {
-            reserved = reserved.addingSaturating(
-                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
+        for (id, entry) in managedSandboxes {
+            let reservation =
+                entry.sandboxSpec.map(SandboxHostReservation.forSpec)
+                ?? VMHostReservation.forManifestEntry(
+                    entry, architecture: .current,
+                    qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+            workloadReservations[id] = reservation
+            reserved = reserved.addingSaturating(reservation)
         }
-        for entry in orphanedSandboxes.values {
-            reserved = reserved.addingSaturating(
-                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
+        for (id, entry) in orphanedSandboxes {
+            let reservation =
+                entry.sandboxSpec.map(SandboxHostReservation.forSpec)
+                ?? VMHostReservation.forManifestEntry(
+                    entry, architecture: .current,
+                    qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+            workloadReservations[id] = reservation
+            reserved = reserved.addingSaturating(reservation)
         }
 
         // Workloads whose manifest entry this build cannot route (STR-138) are
@@ -430,7 +467,13 @@ extension Agent {
         for entry in quarantinedWorkloads.values {
             reserved = reserved.addingSaturating(
                 HostReservation(
-                    cpus: entry.cpus, memoryBytes: entry.memoryBytes,
+                    cpus: entry.cpus,
+                    memoryBytes: WorkloadMemoryReservation(
+                        guestBytes: entry.memoryBytes,
+                        backendOverheadBytes: entry.effectiveKind == .sandbox
+                            || entry.hypervisorTypeRawValue == HypervisorType.firecracker.rawValue
+                            ? WorkloadMemoryReservation.firecrackerOverheadBytes : configuration.qemuMemoryOverheadBytes
+                    ).effectiveBytes,
                     diskBytes: entry.diskBytes))
         }
 
@@ -589,18 +632,26 @@ extension Agent {
             total: HostReservation(
                 cpus: totalCPU, memoryBytes: totalMemory, diskBytes: totalDisk),
             reserved: reserved, inventoryKnown: manifestReadFailure == nil,
-            diskInventoryKnown: diskInventoryKnown && manifestReadFailure == nil)
+            diskInventoryKnown: diskInventoryKnown && manifestReadFailure == nil,
+            hostReservedMemoryBytes: configuration.hostMemoryReserveBytes,
+            qemuOverheadBytes: configuration.qemuMemoryOverheadBytes, workloadReservations: workloadReservations)
     }
 
     func getAgentResources() async -> AgentResources {
         let raw = await rawHostCapacitySnapshot()
+        return agentResources(from: raw)
+    }
+
+    func agentResources(from raw: HostCapacitySnapshot) -> AgentResources {
         // Provisional claims are not durable reservations yet, but advertising
         // them as free would invite placement into an in-flight create/resize.
         let accounted = HostCapacitySnapshot(
             total: raw.total,
-            reserved: raw.reserved.addingSaturating(capacityAdmissionLedger.provisionalReservation),
+            reserved: raw.reserved.addingSaturating(
+                capacityAdmissionLedger.provisionalReservation(excludingObserved: raw.workloadReservations)),
             inventoryKnown: raw.inventoryKnown,
-            diskInventoryKnown: raw.diskInventoryKnown)
+            diskInventoryKnown: raw.diskInventoryKnown, hostReservedMemoryBytes: raw.hostReservedMemoryBytes,
+            qemuOverheadBytes: raw.qemuOverheadBytes)
         let available = accounted.available
 
         let disk = HostResources.diskCapacity(forPath: configuration.volumeStoragePath)
@@ -608,25 +659,28 @@ extension Agent {
 
         return AgentResources(
             totalCPU: raw.total.cpus,
-            availableCPU: available.cpus,
+            availableCPU: Int(available.cpuMicroUnits / 1_000_000),
             totalMemory: raw.total.memoryBytes,
             availableMemory: available.memoryBytes,
             totalDisk: raw.total.diskBytes,
             availableDisk: available.diskBytes,
-            physicalFreeDisk: physicalFreeDisk
+            physicalFreeDisk: physicalFreeDisk,
+            memoryAccounting: accounted.memoryAccounting,
+            availableCPUMicroUnits: available.cpuMicroUnits
         )
     }
 
     /// Reservations for `type` from the durable manifest, which carries every
     /// managed VM's sizing — authoritative, not a guess.
-    func manifestReservations(for type: HypervisorType) -> (vcpus: Int, memoryBytes: Int64) {
+    func manifestReservations(for type: HypervisorType) -> (vcpus: Int, memoryBytes: Int64, cpuMicroUnits: Int64) {
         let reserved = managedVMs.values.lazy.filter { $0.hypervisorType == type }.reduce(
             HostReservation()
         ) { partial, entry in
             partial.addingSaturating(
-                VMHostReservation.forManifestEntry(entry, architecture: .current))
+                VMHostReservation.forManifestEntry(
+                    entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes))
         }
-        return (reserved.cpus, reserved.memoryBytes)
+        return (reserved.cpus, reserved.memoryBytes, reserved.cpuMicroUnits)
     }
 
     /// Query a hypervisor for reporting purposes under a short budget,

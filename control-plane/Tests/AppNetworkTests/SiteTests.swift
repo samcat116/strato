@@ -1236,3 +1236,127 @@ final class SiteTests {
     }
 
 }
+
+extension SiteTests {
+    @Test("Class catalog edits preserve workload snapshots and generations")
+    func resourceClassCatalogPersistence() async throws {
+        try await withSiteTestApp { app, _, project, token in
+            let site = try await self.makeSite(app: app, name: "Resource Classes")
+            let initial = try site.resourceClasses()
+            #expect(initial[0].policy == .guaranteed)
+            #expect(initial[1].revision == 1)
+            let vm = VM(
+                name: "unchanged", description: "", image: "", projectID: try project.requireID(), environment: "test",
+                cpu: 1, memory: 1024, disk: 0)
+            vm.resourceClass = initial[0]
+            try await vm.save(on: app.db)
+            let generation = vm.generation
+            let changed = try WorkloadResourceClassPolicy(
+                kind: .burstable, cpuAllocationRatio: 8,
+                memoryAllocationRatio: 2, cpuWeight: 200, memoryHighPercent: 70)
+            try await app.testing().test(
+                .PUT, "/api/sites/\(try site.requireID())",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateSiteRequest(burstableResourcePolicy: changed))
+                },
+                afterResponse: { response async throws in
+                    #expect(response.status == .ok)
+                    let value = try response.content.decode(SiteResponse.self)
+                    #expect(value.resourceClasses[1].policy == changed)
+                    #expect(value.resourceClasses[1].revision == 2)
+                    #expect(value.burstableAdmissionAvailable == false)
+                })
+            for field in [
+                "cpuAllocationRatio", "memoryAllocationRatio", "cpuWeight", "memoryHighPercent",
+                "maxTelemetryAgeSeconds",
+            ] {
+                var invalid = try #require(
+                    try JSONSerialization.jsonObject(with: JSONEncoder().encode(changed)) as? [String: Any])
+                invalid[field] = 0
+                let data = try JSONSerialization.data(withJSONObject: ["burstableResourcePolicy": invalid])
+                try await app.testing().test(
+                    .PUT, "/api/sites/\(try site.requireID())",
+                    beforeRequest: { req in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        req.headers.contentType = .json
+                        req.body = ByteBuffer(data: data)
+                    }, afterResponse: { response in #expect(response.status == .badRequest) })
+            }
+            let reloaded = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(reloaded.resourceClass == initial[0])
+            #expect(reloaded.generation == generation)
+            try await app.testing().test(
+                .PUT, "/api/sites/\(try site.requireID())",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateSiteRequest(burstableResourcePolicy: .guaranteed))
+                }, afterResponse: { response in #expect(response.status == .badRequest) })
+        }
+    }
+}
+
+extension SiteTests {
+    @Test("API class assignment rejects burstable and cross-organization references")
+    func resourceClassAssignmentFailsClosed() async throws {
+        try await withSiteTestApp { app, admin, project, token in
+            let site = try await self.makeSite(app: app, name: "Class Selection")
+            let image = try await TestDataBuilder(db: app.db).createImage(project: project, uploadedBy: admin)
+            let builder = TestDataBuilder(db: app.db)
+            let otherOrg = try await builder.createOrganization(name: "Other Class Org")
+            let otherSite = Site(name: "Other Class Site", organizationScope: .organization(try otherOrg.requireID()))
+            try await otherSite.save(on: app.db)
+            for (siteID, classID, expected) in [
+                (try site.requireID(), WorkloadResourceClassSnapshot.burstableID, HTTPStatus.unprocessableEntity),
+                (try otherSite.requireID(), WorkloadResourceClassSnapshot.guaranteedID, HTTPStatus.notFound),
+            ] {
+                let reference = ["siteID": siteID.uuidString, "classID": classID.uuidString]
+                let projectID = try project.requireID().uuidString
+                let vmBody: [String: Any] = [
+                    "name": "blocked-vm", "imageId": try image.requireID().uuidString,
+                    "projectId": projectID, "resourceClass": reference,
+                ]
+                try await app.testing().test(
+                    .POST, "/api/vms",
+                    beforeRequest: { request in
+                        request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        request.headers.contentType = .json
+                        request.body = ByteBuffer(data: try JSONSerialization.data(withJSONObject: vmBody))
+                    }, afterResponse: { response in #expect(response.status == expected) })
+                let sandboxBody: [String: Any] = [
+                    "name": "blocked-sandbox", "image": "example.test/worker:v1",
+                    "projectId": projectID, "resourceClass": reference,
+                ]
+                try await app.testing().test(
+                    .POST, "/api/sandboxes",
+                    beforeRequest: { request in
+                        request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        request.headers.contentType = .json
+                        request.body = ByteBuffer(data: try JSONSerialization.data(withJSONObject: sandboxBody))
+                    }, afterResponse: { response in #expect(response.status == expected) })
+            }
+            #expect(try await VM.query(on: app.db).count() == 0)
+            #expect(try await Sandbox.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("A read-only member cannot configure resource class policy")
+    func resourceClassCatalogRequiresSiteManage() async throws {
+        try await withSiteTestApp { app, _, project, _ in
+            let site = try await self.makeSite(app: app, name: "Protected Class Catalog")
+            let builder = TestDataBuilder(db: app.db)
+            let member = try await builder.createUser(username: "class-reader", email: "reader@example.test")
+            let org = try #require(try await project.$organization.get(on: app.db))
+            try await builder.addUserToOrganization(user: member, organization: org, role: "member")
+            let token = try await member.generateAPIKey(on: app.db)
+            try await app.testing().test(
+                .PUT, "/api/sites/\(try site.requireID())",
+                beforeRequest: { request in
+                    request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try request.content.encode(UpdateSiteRequest(burstableResourcePolicy: .burstable))
+                }, afterResponse: { response in #expect(response.status == .forbidden) })
+            let unchanged = try #require(try await Site.find(site.id, on: app.db))
+            #expect(unchanged.burstableResourceClass == nil)
+        }
+    }
+}

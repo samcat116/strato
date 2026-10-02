@@ -679,10 +679,14 @@ public protocol ReconcileActuator: Sendable {
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
     /// Called after every work item finishes (success or failure) so the agent
     /// can push a fresh `ObservedStateReport` to the control plane.
+    func resourceEnforcementWillConverge(_ item: ReconcileWorkItem) async
+    func resourceEnforcementDidConverge(_ item: ReconcileWorkItem) async
     func convergenceDidChange() async
 }
 
 extension ReconcileActuator {
+    public func resourceEnforcementWillConverge(_: ReconcileWorkItem) async {}
+    public func resourceEnforcementDidConverge(_: ReconcileWorkItem) async {}
     public func prepareManagedVolumeInventory(
         from _: [DesiredVMState], desiredVolumes _: [DesiredVolumeState]
     ) async {}

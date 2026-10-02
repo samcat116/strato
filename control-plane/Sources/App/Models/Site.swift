@@ -1,5 +1,6 @@
 import Fluent
 import Vapor
+import StratoShared
 
 /// Operational lifecycle of a `Site`. String-backed so it stores as a plain
 /// column and round-trips over JSON as a stable slug.
@@ -33,6 +34,21 @@ enum SiteStatus: String, Codable, CaseIterable, Sendable {
 /// receive IDs or immutable snapshots and reload their own instance.
 final class Site: Model, Content, @unchecked Sendable {
     static let schema = "sites"
+
+    @OptionalField(key: "burstable_resource_class")
+    var burstableResourceClass: WorkloadResourceClassSnapshot?
+
+    func resourceClasses() throws -> [WorkloadResourceClassSnapshot] {
+        let siteID = try requireID()
+        return [
+            try WorkloadResourceClassSnapshot(
+                classID: WorkloadResourceClassSnapshot.guaranteedID,
+                siteID: siteID, revision: 1, policy: .guaranteed),
+            try burstableResourceClass
+                ?? WorkloadResourceClassSnapshot(
+                    classID: WorkloadResourceClassSnapshot.burstableID, siteID: siteID, revision: 1, policy: .burstable),
+        ]
+    }
 
     @ID(key: .id)
     var id: UUID?
@@ -191,6 +207,8 @@ extension Site {
 // MARK: - DTOs
 
 struct SiteResponse: Content {
+    let resourceClasses: [WorkloadResourceClassSnapshot]
+    let burstableAdmissionAvailable: Bool
     let id: UUID
     let name: String
     let description: String?
@@ -222,6 +240,8 @@ struct SiteResponse: Content {
         let health = SiteNetworkAuthority.controllerHealth(controller: controller, at: instant)
         self.networkControllerStatus = health.status
         self.networkControllerIssue = health.issue
+        self.resourceClasses = try site.resourceClasses()
+        self.burstableAdmissionAvailable = false
         self.id = try site.requireID()
         self.name = site.name
         self.description = site.description
@@ -293,6 +313,7 @@ struct CreateSiteRequest: Content, ValidatedRequestBody {
 /// be a real footgun, so an omitted `status` leaves the current value
 /// unchanged. Send it explicitly to change it.
 struct UpdateSiteRequest: Content, ValidatedRequestBody {
+    let burstableResourcePolicy: WorkloadResourceClassPolicy?
     let description: String?
     let networkControllerAgentId: UUID?
     let status: SiteStatus?
@@ -303,6 +324,7 @@ struct UpdateSiteRequest: Content, ValidatedRequestBody {
     let labels: [String: String]?
 
     init(
+        burstableResourcePolicy: WorkloadResourceClassPolicy? = nil,
         description: String? = nil,
         networkControllerAgentId: UUID? = nil,
         status: SiteStatus? = nil,
@@ -312,6 +334,7 @@ struct UpdateSiteRequest: Content, ValidatedRequestBody {
         regionCode: String? = nil,
         labels: [String: String]? = nil
     ) {
+        self.burstableResourcePolicy = burstableResourcePolicy
         self.description = description
         self.networkControllerAgentId = networkControllerAgentId
         self.status = status
@@ -324,5 +347,8 @@ struct UpdateSiteRequest: Content, ValidatedRequestBody {
 
     mutating func validate() throws {
         try Validate.text(description)
+        if let policy = burstableResourcePolicy, policy.kind != .burstable {
+            throw Abort(.badRequest, reason: "The guaranteed resource class is immutable")
+        }
     }
 }

@@ -11,6 +11,7 @@ enum SandboxCreationWorkflow {
         let user = try req.requireActingUser("Creating a sandbox")
 
         struct CreateSandboxRequest: Content, ValidatedRequestBody {
+            let resourceClass: WorkloadResourceClassReference?
             var name: String
             /// OCI image reference, e.g. `ghcr.io/acme/worker:v3`.
             let image: String?
@@ -237,6 +238,8 @@ enum SandboxCreationWorkflow {
             resourceKind: "sandboxes"
         )
         let projectId = try project.requireID()
+        let resourceClass = try await WorkloadResourceClassService.resolve(
+            createRequest.resourceClass, project: project, req: req)
 
         // The network the fork inherits when it named none (STR-104). Only
         // within the source's own project: networks are project-scoped, so a
@@ -348,6 +351,7 @@ enum SandboxCreationWorkflow {
             restoredFromSnapshotId: restoreSnapshot?.id,
             cpuTemplate: cpuTemplate
         )
+        sandbox.resourceClass = resourceClass
         sandbox.imageDigest = restoreSource?.imageDigest
 
         let userID = try user.requireID()

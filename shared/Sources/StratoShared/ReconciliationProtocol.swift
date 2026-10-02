@@ -1842,6 +1842,8 @@ public struct ObservedStateReport: WebSocketMessage {
     /// empty.
     public let sandboxes: [ObservedSandboxState]
     public let resources: AgentResources
+    /// Coherent wire67 enforcement/accounting acknowledgement. Nil is unknown.
+    public let resourceEnforcement: ResourceEnforcementSnapshot?
     /// Same independently sampled host-resource snapshot carried by the
     /// heartbeat. It is duplicated here so either periodic path refreshes the
     /// operator view without doing any probe work itself.
@@ -1909,6 +1911,7 @@ public struct ObservedStateReport: WebSocketMessage {
         vms: [ObservedVMState],
         sandboxes: [ObservedSandboxState] = [],
         resources: AgentResources,
+        resourceEnforcement: ResourceEnforcementSnapshot? = nil,
         hostResourceTelemetry: HostResourceTelemetry? = nil,
         agentUpdateStatus: ObservedAgentUpdateStatus? = nil,
         unrecognized: [UnrecognizedWorkload] = [],
@@ -1928,6 +1931,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.vms = vms
         self.sandboxes = sandboxes
         self.resources = resources
+        self.resourceEnforcement = resourceEnforcement
         self.hostResourceTelemetry = hostResourceTelemetry
         self.agentUpdateStatus = agentUpdateStatus
         self.unrecognized = unrecognized

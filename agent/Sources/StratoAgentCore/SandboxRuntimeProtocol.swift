@@ -15,6 +15,13 @@ import StratoShared
 /// (issue #423) is stream-shaped instead: sessions are keyed by the control
 /// plane's sessionId and end with exactly one terminal event.
 public protocol SandboxRuntimeService: Sendable {
+    /// Local desired/applied evidence; not a capability advertisement.
+    func resourceEnforcementEvidence(
+        sandboxId: String, application: ResourceEnforcementProducer.Application,
+        desired: BurstableResourceLimits
+    ) async -> WorkloadResourceLimitsEvidence
+    func resourceLimitsEvidence(sandboxId: String, desired: BurstableResourceLimits) async
+        -> WorkloadResourceLimitsEvidence
     /// Whether every sandbox owned by this runtime must have a durable host
     /// UID/GID assignment. Simulation runtimes occupy no host identity
     /// namespace and therefore keep this false.
@@ -187,6 +194,18 @@ public protocol SandboxRuntimeService: Sendable {
 /// fact out of every mock while the real Firecracker runtime overrides all
 /// four operations with its manifest-backed allocator.
 extension SandboxRuntimeService {
+    public func resourceEnforcementEvidence(
+        sandboxId: String, application: ResourceEnforcementProducer.Application,
+        desired: BurstableResourceLimits
+    ) async -> WorkloadResourceLimitsEvidence {
+        .sample(limits: desired, ownedPath: nil, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes)
+    }
+
+    public func resourceLimitsEvidence(sandboxId: String, desired: BurstableResourceLimits) async
+        -> WorkloadResourceLimitsEvidence
+    {
+        .sample(limits: desired, ownedPath: nil, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes)
+    }
     public var requiresJailUID: Bool { false }
     public func leaseJailUID(for sandboxId: String) async throws -> SandboxJailUIDLease? { nil }
     public func commitJailUID(_ lease: SandboxJailUIDLease) async {}

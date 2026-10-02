@@ -457,6 +457,15 @@ extension VM: ConvergingResource {
         desiredStateAssemblyErrorGeneration = committed.desiredStateAssemblyErrorGeneration
         desiredStateAssemblyErrorAt = committed.desiredStateAssemblyErrorAt
         divergenceDetectedAt = committed.divergenceDetectedAt
+        // Admission and sizing are one desired-state commitment; lifecycle
+        // saves must not restore the pre-lock footprint over a racing resize.
+        cpu = committed.cpu
+        memory = committed.memory
+        maxCpu = committed.maxCpu
+        maxMemory = committed.maxMemory
+        balloonTarget = committed.balloonTarget
+        resourceClass = committed.resourceClass
+        admittedReservation = committed.admittedReservation
         hypervisorId = committed.hypervisorId
         // The edge nonces (STR-151) are refreshed for `generation`'s reason,
         // and losing one is worse: a stale snapshot written back over a racing
@@ -488,6 +497,8 @@ extension Sandbox: ConvergingResource {
         desiredStatus = committed.desiredStatus
         lastErrorAt = committed.lastErrorAt
         divergenceDetectedAt = committed.divergenceDetectedAt
+        resourceClass = committed.resourceClass
+        admittedReservation = committed.admittedReservation
         hypervisorId = committed.hypervisorId
         restoreGeneration = committed.restoreGeneration
         restoreSnapshotID = committed.restoreSnapshotID

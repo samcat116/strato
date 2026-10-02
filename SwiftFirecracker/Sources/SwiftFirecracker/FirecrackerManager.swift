@@ -36,6 +36,16 @@ public actor FirecrackerManager {
 
     // MARK: - Machine Configuration
 
+    /// Effective configuration after cold configuration or snapshot load.
+    public func getMachineConfig() async throws -> MachineConfig {
+        let response = try await httpClient.request(method: .GET, path: "/machine-config")
+        try handleResponse(response)
+        guard let body = response.body else {
+            throw FirecrackerError.deserializationError("Empty machine configuration")
+        }
+        return try decoder.decode(MachineConfig.self, from: body)
+    }
+
     /// Must be called before starting the VM
     public func configureMachine(_ config: MachineConfig) async throws {
         let body = try encoder.encode(config)

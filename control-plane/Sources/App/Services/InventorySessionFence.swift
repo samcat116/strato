@@ -6,6 +6,10 @@ import Vapor
 
 /// PostgreSQL is the source of truth for observed-inventory ownership. Valkey
 /// routes may expire or be refreshed by an old socket; neither grants a write.
+enum InventorySessionExpectation: Sendable {
+    case matches(UUID?)
+}
+
 enum InventorySessionFence {
     static func withLock<Value: Sendable>(
         agentID: UUID, on db: any Database, logger: Logger,
