@@ -411,6 +411,27 @@ struct CephRBDStorageBackendTests {
         #expect(permissions?.intValue == 0o600)
     }
 
+    @Test("Client preparation reclaims interrupted secret staging but retains active reader inputs")
+    func preparationReclaimsSecretStagingOnly() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ceph-crash-\(UUID())").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let directory = CephRBDStorageBackend.clientDirectory(
+            root: root, clusterId: Self.clusterId, credentialId: Self.credentialId)
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let readerInput = directory + "/libvirt-secret.value." + UUID().uuidString
+        let interrupted = readerInput + ".tmp." + UUID().uuidString
+        let operatorFile = directory + "/libvirt-secret.value.operator.tmp." + UUID().uuidString
+        for path in [readerInput, interrupted, operatorFile] {
+            try Self.secret.write(toFile: path, atomically: false, encoding: .utf8)
+        }
+        let backend = makeBackend(root: root, recorder: CephCommandRecorder())
+        _ = try await backend.createVolume(volumeId: Self.volumeId, sizeBytes: 1024, format: .raw)
+        #expect(!FileManager.default.fileExists(atPath: interrupted))
+        for path in [readerInput, operatorFile] {
+            #expect(try String(contentsOfFile: path, encoding: .utf8) == Self.secret)
+        }
+    }
+
     @Test("An out-of-band deterministic image with incompatible features is never adopted")
     func existingImageFeaturesAreValidated() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -896,12 +917,27 @@ struct CephRBDStorageBackendTests {
         try Self.keyring.write(toFile: keyringPath, atomically: true, encoding: .utf8)
         try Self.secret.write(toFile: valuePath, atomically: true, encoding: .utf8)
         try "<secret/>".write(toFile: markerPath, atomically: true, encoding: .utf8)
+        let perCallPath = valuePath + "." + UUID().uuidString
+        let interruptedPaths = [
+            perCallPath, perCallPath + ".tmp." + UUID().uuidString,
+            valuePath + ".tmp." + UUID().uuidString,
+            keyringPath + ".tmp." + UUID().uuidString,
+            configPath + ".tmp." + UUID().uuidString,
+        ]
+        for path in interruptedPaths {
+            try Self.secret.write(toFile: path, atomically: false, encoding: .utf8)
+        }
         let recorder = CephCommandRecorder()
         await recorder.failSecretUndefineOnce()
         let revoker = CephCredentialRevoker(
             clientRoot: root, virshPath: "/fake/virsh",
             runSubprocess: { executable, arguments in
-                await recorder.run(executable, arguments)
+                if arguments.first == "secret-undefine" {
+                    for path in interruptedPaths {
+                        #expect(!FileManager.default.fileExists(atPath: path))
+                    }
+                }
+                return await recorder.run(executable, arguments)
             })
 
         do {
@@ -915,6 +951,7 @@ struct CephRBDStorageBackendTests {
         #expect(!FileManager.default.fileExists(atPath: keyringPath))
         #expect(!FileManager.default.fileExists(atPath: valuePath))
         #expect(FileManager.default.fileExists(atPath: markerPath))
+        for path in interruptedPaths { #expect(!FileManager.default.fileExists(atPath: path)) }
 
         try await revoker.revoke(clusterId: Self.clusterId, credentialId: Self.credentialId)
         #expect(!FileManager.default.fileExists(atPath: directory))
@@ -923,6 +960,60 @@ struct CephRBDStorageBackendTests {
         }
         #expect(calls.count == 2)
         #expect(!calls.flatMap(\.arguments).contains { $0.contains(Self.secret) })
+    }
+
+    @Test("Revocation preserves operator files and refuses unsafe secret entries")
+    func revocationPreservesUnownedEntries() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ceph-owned-\(UUID())").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let directory = CephRBDStorageBackend.clientDirectory(
+            root: root, clusterId: Self.clusterId, credentialId: Self.credentialId)
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let operatorFile = directory + "/operator.txt"
+        try "operator".write(toFile: operatorFile, atomically: false, encoding: .utf8)
+        let malformed = directory + "/libvirt-secret.value.operator"
+        try "operator".write(toFile: malformed, atomically: false, encoding: .utf8)
+        let unsafe = directory + "/libvirt-secret.value." + UUID().uuidString
+        try FileManager.default.createSymbolicLink(atPath: unsafe, withDestinationPath: operatorFile)
+        let owned = directory + "/libvirt-secret.value." + UUID().uuidString
+        try Self.secret.write(toFile: owned, atomically: false, encoding: .utf8)
+        let revoker = CephCredentialRevoker(clientRoot: root)
+        await #expect(throws: CephCredentialRevocationError.self) {
+            try await revoker.revoke(clusterId: Self.clusterId, credentialId: Self.credentialId)
+        }
+        #expect(!FileManager.default.fileExists(atPath: owned))
+        #expect(try String(contentsOfFile: unsafe, encoding: .utf8) == "operator")
+        try FileManager.default.removeItem(atPath: unsafe)
+        try await revoker.revoke(clusterId: Self.clusterId, credentialId: Self.credentialId)
+        for path in [operatorFile, malformed] {
+            #expect(try String(contentsOfFile: path, encoding: .utf8) == "operator")
+        }
+        #expect(FileManager.default.fileExists(atPath: directory))
+    }
+
+    @Test("An unsafe secret marker cannot recursively remove operator files")
+    func revocationRefusesDirectoryMarker() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ceph-marker-\(UUID())").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let directory = CephRBDStorageBackend.clientDirectory(
+            root: root, clusterId: Self.clusterId, credentialId: Self.credentialId)
+        let marker = directory + "/libvirt-secret.xml"
+        try FileManager.default.createDirectory(atPath: marker, withIntermediateDirectories: true)
+        let operatorFile = marker + "/operator.txt"
+        try "operator".write(toFile: operatorFile, atomically: false, encoding: .utf8)
+        let secret = directory + "/libvirt-secret.value." + UUID().uuidString
+        try Self.secret.write(toFile: secret, atomically: false, encoding: .utf8)
+        let revoker = CephCredentialRevoker(
+            clientRoot: root,
+            runSubprocess: { _, _ in
+                Issue.record("unsafe marker must fail before libvirt")
+                return ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
+            })
+        await #expect(throws: CephCredentialRevocationError.self) {
+            try await revoker.revoke(clusterId: Self.clusterId, credentialId: Self.credentialId)
+        }
+        #expect(!FileManager.default.fileExists(atPath: secret))
+        #expect(try String(contentsOfFile: operatorFile, encoding: .utf8) == "operator")
     }
 
     @Test("Revocation deny-lists a credential before waiting for in-flight work")

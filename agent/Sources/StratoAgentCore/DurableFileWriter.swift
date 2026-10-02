@@ -14,6 +14,7 @@ protocol DurableFileSystemCalls: Sendable {
     var errorNumber: CInt { get }
 
     func pathStatus(at path: String) -> DurablePathStatus
+    func prepareWrite(to path: String) throws -> CInt?
     func createDirectory(at path: String, permissions: CInt) -> CInt
     func removeItem(at path: String) -> CInt
     func createFile(at path: String, permissions: CInt) -> CInt
@@ -64,6 +65,13 @@ struct DurableFileWriter: Sendable {
     /// stage independently; the last rename publishes a complete payload.
     func write(_ data: Data, to path: String, permissions: CInt = 0o666) throws {
         try createDirectory(at: parentDirectory(of: path))
+
+        // Cleanup and publication share a cross-process directory lock, held
+        // before staging creation through rename and directory synchronization.
+        // A crash releases it, so the next write can reclaim interrupted saves
+        // without an age/PID heuristic or unlinking an active writer's inode.
+        let directoryLock = try systemCalls.prepareWrite(to: path)
+        defer { if let directoryLock { _ = systemCalls.close(directoryLock) } }
 
         // Each call owns its staging inode, including failure cleanup. Shared
         // staging names let another writer unlink or publish incomplete bytes.
@@ -283,6 +291,23 @@ struct DurableFileWriteError: Error, CustomStringConvertible {
 
 private struct POSIXDurableFileSystemCalls: DurableFileSystemCalls {
     var errorNumber: CInt { errno }
+
+    func prepareWrite(to path: String) throws -> CInt? {
+        let parent = (path as NSString).deletingLastPathComponent
+        let directory = parent.isEmpty ? "." : parent
+        // Generic writes retain their historical configured-directory aliases.
+        // The lock and descriptor-relative cleanup refer to the resolved inode.
+        let descriptor = try OwnedFileCleanup.lockDirectory(directory, followDirectoryLink: true)
+        do {
+            try OwnedFileCleanup.removeFiles(in: directory, descriptor: descriptor) {
+                OwnedFileCleanup.isStagingName($0, for: (path as NSString).lastPathComponent)
+            }
+            return descriptor
+        } catch {
+            _ = close(descriptor)
+            throw error
+        }
+    }
 
     func pathStatus(at path: String) -> DurablePathStatus {
         var information = stat()
