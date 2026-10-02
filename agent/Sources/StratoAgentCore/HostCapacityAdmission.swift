@@ -424,7 +424,7 @@ public enum VMHostReservation {
         _ spec: VMSpec, hypervisorType: HypervisorType, architecture: CPUArchitecture,
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
-        if let admitted = spec.admittedReservation {
+        if spec.resourceClass?.policy.kind == .burstable, let admitted = spec.admittedReservation {
             return HostReservation(memoryBytes: admitted.effectiveMemoryBytes, cpuMicroUnits: admitted.cpuMicroUnits)
         }
         let memory = WorkloadMemoryReservation.vm(
@@ -445,7 +445,7 @@ public enum VMHostReservation {
         _ entry: VMManifestEntry, architecture: CPUArchitecture,
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
-        if entry.spec.admittedReservation != nil {
+        if entry.spec.resourceClass?.policy.kind == .burstable, entry.spec.admittedReservation != nil {
             return forSpec(
                 entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture,
                 qemuOverheadBytes: qemuOverheadBytes)
@@ -471,7 +471,7 @@ public enum VMHostReservation {
 /// same reservation semantics as heartbeat accounting.
 public enum SandboxHostReservation {
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
-        if let admitted = spec.admittedReservation {
+        if spec.resourceClass?.policy.kind == .burstable, let admitted = spec.admittedReservation {
             return HostReservation(memoryBytes: admitted.effectiveMemoryBytes, cpuMicroUnits: admitted.cpuMicroUnits)
         }
         let policy = spec.resourceClass?.policy ?? .guaranteed

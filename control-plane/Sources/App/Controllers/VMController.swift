@@ -699,6 +699,8 @@ struct VMController: RouteCollection {
                     for: project, environment: existingVM.environment,
                     vcpuDelta: lockedCPU - committed.cpu,
                     memoryDelta: lockedMemory - committed.memory, on: db)
+                try await WorkloadResourceClassService.prepareVMResize(
+                    existingVM, cpu: lockedCPU, memory: lockedMemory, on: db)
                 existingVM.cpu = lockedCPU
                 existingVM.memory = lockedMemory
                 existingVM.balloonTarget = lockedBalloonTarget
@@ -802,6 +804,8 @@ struct VMController: RouteCollection {
                 for: project, environment: existingVM.environment,
                 vcpuDelta: lockedCPU - committed.cpu,
                 memoryDelta: lockedMemory - committed.memory, on: db)
+            try await WorkloadResourceClassService.prepareVMResize(
+                existingVM, cpu: lockedCPU, memory: lockedMemory, on: db)
             existingVM.cpu = lockedCPU
             existingVM.memory = lockedMemory
             // Deliberately not a quota movement: ballooning reclaims memory

@@ -854,6 +854,25 @@ actor CoordinationService {
     /// the selected node if capacity raced away, while refusing here would
     /// couple all VM creation availability to Valkey. Agent admission is the
     /// physical-capacity authority.
+    /// A growth generation has its own claim: rolling back a later mutation
+    /// cannot delete an earlier unobserved commitment for the same workload.
+    static func growthReservationID(workloadID: UUID, generation: Int64) -> String {
+        "\(workloadID.uuidString):growth:\(generation)"
+    }
+
+    /// This primitive does not enable burstable admission. Its production use
+    /// also requires the agreed runtime acknowledgement/resource-report contract.
+    func reserveGrowthCapacity(
+        agentId: String, workloadID: UUID, generation: Int64,
+        amounts: ReservationAmounts, capacity: ReservationAmounts
+    ) async -> Bool {
+        guard generation > 0 else { return false }
+        return await reserveCapacity(
+            agentId: agentId,
+            vmId: Self.growthReservationID(workloadID: workloadID, generation: generation),
+            amounts: amounts, capacity: capacity)
+    }
+
     func reserveCapacity(
         agentId: String,
         vmId: String,

@@ -130,10 +130,12 @@ public struct WorkloadResourceClassPolicy: Codable, Sendable, Equatable {
     }
 
     /// An unavailable or stale required signal cannot be treated as healthy zero pressure.
-    public func admissionRefusal(telemetry: HostResourceTelemetry?, now: Date) -> String? {
+    public func admissionRefusal(telemetry: HostResourceTelemetry?, now: Date, receivedAt: Date? = nil) -> String? {
         guard kind == .burstable else { return nil }
-        guard let telemetry, telemetry.sampledAt <= now,
-            now.timeIntervalSince(telemetry.sampledAt) <= Double(maxTelemetryAgeSeconds)
+        guard let telemetry else { return "burstable admission requires fresh host pressure telemetry" }
+        let observationTime = receivedAt ?? telemetry.sampledAt
+        guard observationTime <= now,
+            now.timeIntervalSince(observationTime) <= Double(maxTelemetryAgeSeconds)
         else { return "burstable admission requires fresh host pressure telemetry" }
         guard telemetry.cpuPressure.availability == .available,
             telemetry.memoryPressure.availability == .available,

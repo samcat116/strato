@@ -130,6 +130,13 @@ struct WorkloadResourceClassTests {
     @Test func freshAvailablePressureRequired() {
         let now = Date(timeIntervalSince1970: 1000)
         #expect(WorkloadResourceClassPolicy.guaranteed.admissionRefusal(telemetry: nil, now: now) == nil)
+        #expect(
+            WorkloadResourceClassPolicy.burstable.admissionRefusal(
+                telemetry: telemetry(now.addingTimeInterval(9999), cpu: 0, memory: 0), now: now, receivedAt: now) == nil
+        )
+        #expect(
+            WorkloadResourceClassPolicy.burstable.admissionRefusal(
+                telemetry: telemetry(now, cpu: 0, memory: 0), now: now, receivedAt: now.addingTimeInterval(-61)) != nil)
         #expect(WorkloadResourceClassPolicy.burstable.admissionRefusal(telemetry: nil, now: now) != nil)
         #expect(
             WorkloadResourceClassPolicy.burstable.admissionRefusal(

@@ -81,6 +81,67 @@ struct ResourceClassPlacementTests {
         #expect(second.availableCPUMicroUnits == 500_000)
     }
 
+    @Test func generationClaimsReplaceRetriesButRollbackOnlyTheirOwnDelta() async throws {
+        let store = InMemoryCoordinationStore()
+        let id = UUID()
+        let first = CoordinationService.growthReservationID(workloadID: id, generation: 1)
+        let second = CoordinationService.growthReservationID(workloadID: id, generation: 2)
+        let capacity = ReservationAmounts(memory: 4096, disk: 0, cpuMicroUnits: 500_000)
+        let quarter = ReservationAmounts(memory: 1024, disk: 0, cpuMicroUnits: 250_000)
+        #expect(
+            await store.tryReserve(agentKey: "host", vmId: first, amounts: quarter, capacity: capacity, ttlSeconds: 60))
+        #expect(
+            await store.tryReserve(agentKey: "host", vmId: first, amounts: quarter, capacity: capacity, ttlSeconds: 60))
+        #expect(
+            await store.tryReserve(agentKey: "host", vmId: second, amounts: quarter, capacity: capacity, ttlSeconds: 60)
+        )
+        #expect(await store.reservedTotal(agentKey: "host").cpuMicroUnits == 500_000)
+        await store.releaseReservation(agentKey: "host", vmId: second)
+        #expect(await store.reservedVMIds(agentKey: "host") == [first])
+        #expect(await store.reservedTotal(agentKey: "host") == quarter)
+    }
+
+    @Test func hostCriteriaRequireCompleteBackendEvidenceAndReceiptFreshness() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let siteID = UUID()
+        let snapshot = try WorkloadResourceClassSnapshot(
+            classID: WorkloadResourceClassSnapshot.burstableID, siteID: siteID, revision: 1, policy: .burstable)
+        let signal = PressureStallTelemetry.available(
+            some: .init(average10: 0, average60: 0, average300: 0, totalMicroseconds: 0), full: nil)
+        let telemetry = HostResourceTelemetry(
+            sampledAt: now.addingTimeInterval(9999), health: .healthy,
+            cpuPressure: signal, memoryPressure: signal, ioPressure: .unavailable, swapTotalBytes: .unavailable,
+            swapUsedBytes: .unavailable, zswapStoredBytes: .unavailable, zswapPoolBytes: .unavailable,
+            zramUsedBytes: .unavailable, majorFaultsTotal: .unavailable, reclaimScannedPagesTotal: .unavailable,
+            reclaimReclaimedPagesTotal: .unavailable, oomKillsTotal: .unavailable, mglruEnabled: .unavailable)
+        let agent = Agent(
+            name: "host", hostname: "host.test", version: "test", siteID: siteID,
+            resources: .init(
+                totalCPU: 1, availableCPU: 1, totalMemory: 4096, availableMemory: 4096, totalDisk: 4096,
+                availableDisk: 4096),
+            resourceTelemetry: telemetry, resourceTelemetryReceivedAt: now)
+        for mask in 0..<16 {
+            agent.resourceClassEnforcement = [
+                .init(
+                    backend: .qemuVM, controllersDelegated: mask & 1 != 0,
+                    stableOwnership: mask & 2 != 0, preExecutionEnforcement: mask & 4 != 0,
+                    effectiveReadback: mask & 8 != 0)
+            ]
+            let refusal = WorkloadResourceClassService.hostRefusal(snapshot, backend: .qemuVM, agent: agent, now: now)
+            #expect((refusal == nil) == (mask == 15))
+        }
+        #expect(
+            WorkloadResourceClassService.hostRefusal(
+                snapshot, backend: .jailedFirecrackerSandbox, agent: agent, now: now) != nil)
+        agent.resourceTelemetryReceivedAt = now.addingTimeInterval(-61)
+        #expect(WorkloadResourceClassService.hostRefusal(snapshot, backend: .qemuVM, agent: agent, now: now) != nil)
+        agent.resourceTelemetryReceivedAt = nil
+        #expect(WorkloadResourceClassService.hostRefusal(snapshot, backend: .qemuVM, agent: agent, now: now) != nil)
+        agent.resourceTelemetryReceivedAt = now
+        agent.resourceClassEnforcement = (agent.resourceClassEnforcement ?? []) + (agent.resourceClassEnforcement ?? [])
+        #expect(WorkloadResourceClassService.hostRefusal(snapshot, backend: .qemuVM, agent: agent, now: now) != nil)
+    }
+
     @Test func burstableSchedulerFailsClosedAndOperandsRetainOverhead() throws {
         let snapshot = try WorkloadResourceClassSnapshot(
             classID: WorkloadResourceClassSnapshot.burstableID,

@@ -190,9 +190,42 @@ Migration columns are optional, with no workload backfill or repricing. API
 assignment, scheduler placement, positive VM growth, and agent realization each
 refuse burstable. The class snapshot and aggregate ledger round-trip through
 models, canonical specs, and manifests. No enabled path admits a discounted
-commitment. Mixed-revision growth arithmetic is defined and tested in
-`WorkloadAdmittedReservation.growing`; activating admission must wire current
-catalog resolution and atomic ledger persistence into placement/growth only
-after complete backend enforcement and pressure gates have been validated.
+commitment. Placement holds the workload row lock and a shared site catalog lock through
+selection and persistence of owner, snapshot and admitted ledger. Repeating a
+committed placement preserves its owner and pricing. Growth plans from the
+freshly locked row and preserves the old aggregate's pricing; sizing, snapshot,
+ledger, quota and desired generation commit in one transaction. A burstable
+row missing its ledger cannot infer historical pricing. Lifecycle and metadata
+saves refresh the admitted state so stale models cannot overwrite it.
+Guaranteed uses its existing host physical-footprint path even when a ledger
+is present, and historical nil rows remain unchanged.
 This draft does not claim that runtime activation or full #1246 acceptance
 criteria are complete. STR272 remains the activation dependency.
+
+## Remaining activation evidence
+
+`hostRefusal` requires exactly one complete enforcement record for the selected
+backend and site, plus fresh CPU/memory PSI measured by control-plane receipt
+time. Repeated identical samples retain their prior receipt time. The host
+readiness predicate is necessary evidence; helper tests do not prove kernel
+enforcement or a workload's applied limits. The runtime owner must specify
+backend evidence lifetime/invalidation and its generation-guarded workload
+application/readback contract before activation.
+
+Generation-specific growth claims use `<workload UUID>:growth:<generation>`,
+so retries replace the same claim and rollback cannot remove an earlier
+unobserved mutation. The delta is the positive increase over the persisted
+admitted aggregate. Production growth claim submission and acknowledgement
+remain unwired while admission is disabled. Releasing a growth claim requires
+a runtime observation that proves the admitted footprint for that applied
+generation is included in the same host net-resource report. A manifest target
+generation, an ordinary workload-ID heartbeat or a readiness boolean is not
+that acknowledgement. STR272/STR266 must confirm the exact report fields,
+ordering, failure behavior and provenance; the coordinator owns this contract
+and eventual activation. Current API, scheduler and agent gates remain closed.
+
+Independent database regressions cover concurrent mixed-revision growth,
+rollback of snapshot/ledger/sizing/generation, catalog lock serialization,
+unchanged/shrinking grants, a missing historical ledger, and concurrent
+sandbox placement with a single retained owner/claim. These are transaction
+proofs rather than evidence of runtime enforcement.

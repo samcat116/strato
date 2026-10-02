@@ -664,6 +664,18 @@ struct FractionalHostCapacityTests {
                 .cpuMicroUnits == 750_000)
     }
 
+    @Test func guaranteedClassUsesItsExistingPhysicalFootprintEvenWithAnOldLedger() throws {
+        let snapshot = try WorkloadResourceClassSnapshot(
+            classID: WorkloadResourceClassSnapshot.guaranteedID, siteID: UUID(), revision: 1, policy: .guaranteed)
+        let oldLedger = WorkloadAdmittedReservation(cpus: 1, memory: .sandbox(memoryBytes: 1024), policy: .burstable)
+        let spec = SandboxSpec(
+            image: "example.test/worker:v1", cpus: 2, memoryBytes: 2048, resourceClass: snapshot,
+            admittedReservation: oldLedger)
+        let reservation = SandboxHostReservation.forSpec(spec)
+        #expect(reservation.cpuMicroUnits == 2_000_000)
+        #expect(reservation.memoryBytes == WorkloadMemoryReservation.sandbox(memoryBytes: 2048).effectiveBytes)
+    }
+
     @Test func manifestPreservesMixedRevisionCommitment() throws {
         let original = WorkloadAdmittedReservation(cpus: 1, memory: .sandbox(memoryBytes: 1024), policy: .burstable)
         let changed = try WorkloadResourceClassPolicy(

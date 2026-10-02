@@ -42,6 +42,13 @@ actor WorkloadPlacementService {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
 
+                if let placedAgent = currentVM.hypervisorId { return placedAgent }
+                guard currentVM.desiredStatus != .absent else {
+                    throw Abort(.conflict, reason: "Deleted VM cannot be placed")
+                }
+                if let snapshot = currentVM.resourceClass {
+                    currentVM.resourceClass = try await WorkloadResourceClassService.currentPolicy(snapshot, on: tx)
+                }
                 let currentVMID = try currentVM.requireID()
                 let bootVolumes = try await Volume.query(on: tx)
                     .filter(\.$vm.$id == currentVMID)
@@ -132,6 +139,21 @@ actor WorkloadPlacementService {
 
                 // Persist only from the current row. From here the VM is part
                 // of the agent's desired state and every sync path carries it.
+                try await WorkloadResourceClassService.requireHostReadiness(
+                    currentVM.resourceClass,
+                    backend: currentVM.hypervisorType == .qemu ? .qemuVM : nil, agentID: selectedAgentId, on: tx)
+                guard let selectedAgent = storageEligibleAgents.first(where: { $0.id == selectedAgentId }) else {
+                    throw Abort(.conflict, reason: "Selected agent is no longer an eligible class placement")
+                }
+                let requirements = SchedulerService.placementRequirements(
+                    for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID)
+                if let admission = try await WorkloadResourceClassService.placement(
+                    currentVM.resourceClass,
+                    cpus: currentVM.cpu, memory: requirements.memoryReservation(on: selectedAgent), on: tx)
+                {
+                    currentVM.resourceClass = admission.snapshot
+                    currentVM.admittedReservation = admission.reservation
+                }
                 currentVM.hypervisorId = selectedAgentId
                 try await currentVM.save(on: tx)
 
@@ -289,74 +311,62 @@ actor WorkloadPlacementService {
             }
         }
 
-        let agentId: String
+        let placementCandidates = schedulableAgents
+        let placementArchitecture = requiredArchitecture
+        let reservedAgent = NIOLockedValueBox<String?>(nil)
+        let agentId: String?
         do {
-            agentId = try await app.scheduler.selectAndReserveAgent(
-                requirements: VMPlacementRequirements(
-                    cpu: sandbox.cpus,
-                    memory: sandbox.memory,
-                    disk: 0,
-                    hypervisorType: .firecracker,
-                    architecture: requiredArchitecture,
-                    // Unlike a VM's plain NIC, which user-mode/SLIRP satisfies
-                    // with outbound NAT, a sandbox NIC has no user-mode form at
-                    // all — so unlike the VM path, presence really does imply
-                    // the overlay requirement.
-                    requiresInterVMNetworking: !nic.isEmpty,
-                    siteID: sandboxSiteID,
-                    requiresSandboxRuntime: true,
-                    requiresSandboxNetworking: !nic.isEmpty,
-                    resourceClass: sandbox.resourceClass
-                ),
-                vmId: sandboxId,
-                from: schedulableAgents,
-                coordination: app.coordination,
-                vmName: sandbox.name
-            )
-        } catch let error as SchedulerError {
-            app.logger.error("Scheduler failed to find suitable agent for sandbox: \(error)")
-            throw AgentServiceError.schedulingFailed(error.description)
-        }
-
-        do {
-            let placed = try await db.transaction { tx -> Bool in
-                guard try await sandbox.lockAndRefresh(on: tx) else { return false }
-                // A delete may commit while the create scheduler is choosing a
-                // host. Absence is the one intent placement must never revive.
-                guard sandbox.desiredStatus != .absent else { return false }
+            agentId = try await db.transaction { tx -> String? in
+                guard try await sandbox.lockAndRefresh(on: tx), sandbox.desiredStatus != .absent else { return nil }
+                if let placedAgent = sandbox.hypervisorId { return placedAgent }
+                let scheduledClass: WorkloadResourceClassSnapshot?
+                if let snapshot = sandbox.resourceClass {
+                    scheduledClass = try await WorkloadResourceClassService.currentPolicy(snapshot, on: tx)
+                } else {
+                    scheduledClass = nil
+                }
+                let selected = try await self.app.scheduler.selectAndReserveAgent(
+                    requirements: VMPlacementRequirements(
+                        cpu: sandbox.cpus, memory: sandbox.memory, disk: 0,
+                        hypervisorType: .firecracker, architecture: placementArchitecture,
+                        requiresInterVMNetworking: !nic.isEmpty, siteID: sandboxSiteID,
+                        requiresSandboxRuntime: true, requiresSandboxNetworking: !nic.isEmpty,
+                        resourceClass: scheduledClass),
+                    vmId: sandboxId, from: placementCandidates, coordination: self.app.coordination,
+                    vmName: sandbox.name)
+                reservedAgent.withLockedValue { $0 = selected }
                 try await self.requireNetworkAuthority(
-                    forAgentId: agentId, workloadId: sandboxId,
-                    consequence:
-                        "the sandbox's network would never be realized and it would never start",
-                    on: tx)
-
-                // Persist only after refreshing under the row lock, so this
-                // background placement cannot save its pre-scheduling snapshot
-                // over a concurrent lifecycle mutation.
-                sandbox.hypervisorId = agentId
+                    forAgentId: selected, workloadId: sandboxId,
+                    consequence: "the sandbox's network would never be realized and it would never start", on: tx)
+                try await WorkloadResourceClassService.requireHostReadiness(
+                    scheduledClass, backend: .jailedFirecrackerSandbox, agentID: selected, on: tx)
+                if let admission = try await WorkloadResourceClassService.placement(
+                    scheduledClass,
+                    cpus: sandbox.cpus, memory: .sandbox(memoryBytes: sandbox.memory), on: tx)
+                {
+                    sandbox.resourceClass = admission.snapshot
+                    sandbox.admittedReservation = admission.reservation
+                }
+                sandbox.hypervisorId = selected
                 try await sandbox.save(on: tx)
-                return true
+                return selected
             }
-            guard placed else {
-                await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxId)
-                return
-            }
-
-            app.logger.info(
-                "Sandbox creation dispatched via desired-state doorbell",
-                metadata: [
-                    "strato.sandbox.id": .string(sandboxId),
-                    "strato.agent.id": .string(agentId),
-                ])
-
-            await app.agentService.syncDesiredState(agentId: agentId)
         } catch {
-            // The placement never became desired state, so nothing will ever
-            // account for the reservation — release it rather than pinning
-            // capacity until the TTL.
-            await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxId)
+            if let selected = reservedAgent.withLockedValue({ $0 }) {
+                await app.coordination.releaseReservation(agentId: selected, vmId: sandboxId)
+            }
+            if let scheduling = error as? SchedulerError {
+                throw AgentServiceError.schedulingFailed(scheduling.description)
+            }
             throw error
         }
+        guard let agentId else { return }
+        app.logger.info(
+            "Sandbox creation dispatched via desired-state doorbell",
+            metadata: [
+                "strato.sandbox.id": .string(sandboxId), "strato.agent.id": .string(agentId),
+            ])
+        await app.agentService.syncDesiredState(agentId: agentId)
     }
 
     /// Refuses overlay placement when the selected site's controller cannot author topology.
