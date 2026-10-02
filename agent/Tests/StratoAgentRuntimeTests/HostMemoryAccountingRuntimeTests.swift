@@ -24,7 +24,11 @@ struct HostMemoryAccountingRuntimeTests {
             configuration: runtimeTestConfiguration(
                 path: path, simulation: SimulationConfig(enabled: true, memoryMB: 4096)), logger: logger)
         await original.seedMemoryAccounting(vm: vm, sandbox: sandbox, backend: backend)
+        // A backend can publish its new footprint while the create lane is
+        // still holding the pre-create claim. Reporting reconciles that owner.
+        let claim = try await original.seedClaimForAlreadyObservedVM()
         let resources = await original.getAgentResources()
+        await original.releaseMemoryAccountingClaim(claim)
         let accounting = try #require(resources.memoryAccounting)
         #expect(accounting.workloadEffectiveBytes == (1536 + 384) * mib)
         #expect(accounting.hostReservedBytes == 1024 * mib)
@@ -59,6 +63,20 @@ struct HostMemoryAccountingRuntimeTests {
 }
 
 private extension Agent {
+    func seedClaimForAlreadyObservedVM() throws -> HostCapacityClaim? {
+        let footprint = VMHostReservation.forManifestEntry(try #require(orphanedVMs["vm"]), architecture: .current)
+        return try capacityAdmissionLedger.claim(
+            footprint, desiredWorkloadReservation: footprint,
+            snapshot: HostCapacitySnapshot(
+                total: HostReservation(cpus: 8, memoryBytes: 4096 * 1024 * 1024),
+                reserved: HostReservation(), hostReservedMemoryBytes: 1024 * 1024 * 1024),
+            agentName: "host", workloadID: "vm")
+    }
+
+    func releaseMemoryAccountingClaim(_ claim: HostCapacityClaim?) {
+        capacityAdmissionLedger.release(claim)
+    }
+
     func seedMemoryAccounting(vm: VMManifestEntry, sandbox: VMManifestEntry, backend: MockHypervisorService?) {
         managedVMs = [:]
         orphanedVMs = ["vm": vm]

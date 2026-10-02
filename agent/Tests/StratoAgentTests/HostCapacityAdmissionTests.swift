@@ -591,3 +591,51 @@ struct EffectiveMemoryAdmissionTests {
         #expect(observed.memoryBytes == 2560 * mib)
     }
 }
+
+@Suite("observed provisional memory claims")
+struct ObservedProvisionalMemoryClaimTests {
+    @Test func backendPublicationBeforeManifestCommitIsChargedOnce() throws {
+        var ledger = HostCapacityAdmissionLedger()
+        let footprint = HostReservation(cpus: 1, memoryBytes: 1024)
+        let initial = HostCapacitySnapshot(
+            total: HostReservation(cpus: 4, memoryBytes: 2304),
+            reserved: HostReservation(), hostReservedMemoryBytes: 256)
+        let first = try ledger.claim(
+            footprint, desiredWorkloadReservation: footprint, snapshot: initial,
+            agentName: "host", workloadID: "first")
+        let observed = HostCapacitySnapshot(
+            total: initial.total, reserved: footprint,
+            hostReservedMemoryBytes: 256, workloadReservations: ["first": footprint])
+        #expect(ledger.provisionalReservation.memoryBytes == 1024)
+        #expect(ledger.provisionalReservation(excludingObserved: observed.workloadReservations).memoryBytes == 0)
+        let second = try ledger.claim(
+            footprint, desiredWorkloadReservation: footprint, snapshot: observed,
+            agentName: "host", workloadID: "second")
+        #expect(ledger.provisionalReservation(excludingObserved: observed.workloadReservations).memoryBytes == 1024)
+        #expect(throws: HostCapacityAdmissionError.self) {
+            try ledger.claim(
+                HostReservation(memoryBytes: 1), desiredWorkloadReservation: HostReservation(memoryBytes: 1),
+                snapshot: observed, agentName: "host", workloadID: "third")
+        }
+        ledger.release(first)
+        ledger.release(second)
+    }
+
+    @Test func partiallyObservedGrowthRetainsOnlyTheUnobservedDelta() throws {
+        var ledger = HostCapacityAdmissionLedger()
+        let before = HostReservation(memoryBytes: 3072)
+        let desired = HostReservation(memoryBytes: 4096)
+        let initial = HostCapacitySnapshot(
+            total: HostReservation(memoryBytes: 4352), reserved: before,
+            hostReservedMemoryBytes: 256)
+        let claim = try ledger.claim(
+            .positiveDelta(from: before, to: desired), desiredWorkloadReservation: desired,
+            snapshot: initial, agentName: "host", workloadID: "vm")
+        #expect(
+            ledger.provisionalReservation(excludingObserved: ["vm": HostReservation(memoryBytes: 3584)]).memoryBytes
+                == 512)
+        #expect(ledger.provisionalReservation(excludingObserved: ["vm": desired]).memoryBytes == 0)
+        #expect(ledger.provisionalReservation(excludingObserved: [:]).memoryBytes == 1024)
+        ledger.release(claim)
+    }
+}

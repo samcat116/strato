@@ -631,7 +631,7 @@ extension Agent {
                     .positiveDelta(from: currentReservation, to: desiredReservation),
                     desiredWorkloadReservation: desiredReservation,
                     snapshot: raw,
-                    agentName: initialAgentID)
+                    agentName: initialAgentID, workloadID: item.id)
             } else {
                 claim = nil
             }
@@ -989,7 +989,7 @@ extension Agent {
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
             desiredWorkloadReservation: desiredReservation,
-            snapshot: raw, agentName: initialAgentID)
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         defer { capacityAdmissionLedger.release(claim) }
 
         // The VM's host-global vsock context ID (STR-72), taken before the
@@ -1115,7 +1115,7 @@ extension Agent {
             claim = try capacityAdmissionLedger.claim(
                 .positiveDelta(from: currentReservation, to: desiredReservation),
                 desiredWorkloadReservation: desiredReservation,
-                snapshot: raw, agentName: initialAgentID)
+                snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         }
         defer { capacityAdmissionLedger.release(claim) }
         let service = try reconcileService(for: item.id)

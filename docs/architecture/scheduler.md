@@ -363,7 +363,9 @@ larger than physical capacity remains permanent.
 Manifests retain QEMU's realized **guest** reservation. Overhead is added when
 accounting, so adoption and backend inventory reconciliation take the larger
 per-workload reservation rather than adding the same domain twice. Provisional
-claims use effective bytes and retire after the durable manifest commit. The
+claims use effective bytes and retire after the durable manifest commit. Exact
+per-workload inventory absorbs any claim growth already observed by the backend,
+so publication before manifest commit does not charge the same workload twice. The
 control plane exports `strato_agent_memory_{physical,host_reserved,workload_effective,remaining_allocatable}_bytes`
 from the agent's report; all operands also appear in memory admission refusals.
 Agent and control plane must deploy matching wire-v66 builds together; v64 and v65 are

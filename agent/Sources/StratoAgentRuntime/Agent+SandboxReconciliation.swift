@@ -156,7 +156,7 @@ extension Agent {
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
             desiredWorkloadReservation: desiredReservation,
-            snapshot: raw, agentName: initialAgentID)
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         defer { capacityAdmissionLedger.release(claim) }
 
         // A jailed Firecracker runtime returns a lease. Direct Firecracker and
@@ -328,7 +328,7 @@ extension Agent {
             snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
             growth, desiredWorkloadReservation: SandboxHostReservation.forSpec(desired.spec),
-            snapshot: raw, agentName: initialAgentID)
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         defer { capacityAdmissionLedger.release(claim) }
 
         try await runtime.bootSandbox(sandboxId: item.id)

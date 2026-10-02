@@ -726,7 +726,7 @@ extension Agent: ReconcileActuator {
             currentReservation, snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
             growth, desiredWorkloadReservation: desiredReservation,
-            snapshot: raw, agentName: initialAgentID)
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {

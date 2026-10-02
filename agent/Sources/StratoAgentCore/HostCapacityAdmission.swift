@@ -98,6 +98,7 @@ public struct HostCapacitySnapshot: Sendable, Equatable {
     public let diskInventoryKnown: Bool
     public let hostReservedMemoryBytes: Int64
     public let qemuOverheadBytes: Int64
+    public let workloadReservations: [String: HostReservation]
 
     public var memoryAccounting: HostMemoryAccounting {
         HostMemoryAccounting(
@@ -112,7 +113,8 @@ public struct HostCapacitySnapshot: Sendable, Equatable {
         inventoryKnown: Bool = true,
         diskInventoryKnown: Bool? = nil,
         hostReservedMemoryBytes: Int64 = 0,
-        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
+        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes,
+        workloadReservations: [String: HostReservation] = [:]
     ) {
         self.total = total
         self.reserved = reserved
@@ -120,6 +122,7 @@ public struct HostCapacitySnapshot: Sendable, Equatable {
         self.diskInventoryKnown = diskInventoryKnown ?? inventoryKnown
         self.hostReservedMemoryBytes = max(0, hostReservedMemoryBytes)
         self.qemuOverheadBytes = max(0, qemuOverheadBytes)
+        self.workloadReservations = workloadReservations
     }
 
     public var available: HostReservation {
@@ -214,20 +217,39 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
 /// lane can take a stale host snapshot while awaiting backend inventory; claims
 /// made from earlier snapshots are added here before a later lane is admitted.
 public struct HostCapacityAdmissionLedger: Sendable {
-    private var claims: [UUID: HostReservation] = [:]
+    private struct PendingClaim: Sendable {
+        let reservation: HostReservation
+        let workloadID: String?
+        let baseline: HostReservation
+    }
+    private var claims: [UUID: PendingClaim] = [:]
     public private(set) var revision: UInt64 = 0
 
     public init() {}
 
     public var provisionalReservation: HostReservation {
-        claims.values.reduce(HostReservation()) { $0.addingSaturating($1) }
+        claims.values.reduce(HostReservation()) { $0.addingSaturating($1.reservation) }
+    }
+
+    /// An exact backend sweep may observe a create/resize before its owning
+    /// lane commits the manifest and retires the claim. Charge only the part
+    /// not already represented by that workload's observed footprint.
+    public func provisionalReservation(excludingObserved workloads: [String: HostReservation]) -> HostReservation {
+        claims.values.reduce(HostReservation()) { total, claim in
+            let observed = claim.workloadID.flatMap { workloads[$0] } ?? HostReservation()
+            let growth = HostReservation.positiveDelta(from: claim.baseline, to: observed)
+            let unobserved = claim.reservation.subtractingSaturating(
+                HostReservation(cpus: growth.cpus, memoryBytes: growth.memoryBytes))
+            return total.addingSaturating(unobserved)
+        }
     }
 
     public mutating func claim(
         _ requested: HostReservation,
         desiredWorkloadReservation: HostReservation,
         snapshot: HostCapacitySnapshot,
-        agentName: String
+        agentName: String,
+        workloadID: String? = nil
     ) throws -> HostCapacityClaim? {
         guard requested.cpus > 0 || requested.memoryBytes > 0 || requested.diskBytes > 0 else { return nil }
         guard snapshot.inventoryKnown else {
@@ -261,7 +283,8 @@ public struct HostCapacityAdmissionLedger: Sendable {
                 required: desiredWorkloadReservation, failureClassification: .permanent)
         }
 
-        let committedAndProvisional = snapshot.reserved.addingSaturating(provisionalReservation)
+        let committedAndProvisional = snapshot.reserved.addingSaturating(
+            provisionalReservation(excludingObserved: snapshot.workloadReservations))
         let effective = HostCapacitySnapshot(
             total: snapshot.total, reserved: committedAndProvisional, inventoryKnown: true,
             diskInventoryKnown: true, hostReservedMemoryBytes: snapshot.hostReservedMemoryBytes,
@@ -286,7 +309,9 @@ public struct HostCapacityAdmissionLedger: Sendable {
         }
 
         let claim = HostCapacityClaim(id: UUID(), reservation: requested)
-        claims[claim.id] = requested
+        claims[claim.id] = PendingClaim(
+            reservation: requested, workloadID: workloadID,
+            baseline: desiredWorkloadReservation.subtractingSaturating(requested))
         revision &+= 1
         return claim
     }
@@ -324,7 +349,8 @@ public struct HostCapacityAdmissionLedger: Sendable {
                 agentName: agentName, resource: .disk, available: snapshot.total,
                 required: currentWorkloadReservation, failureClassification: .permanent)
         }
-        let used = snapshot.reserved.addingSaturating(provisionalReservation)
+        let used = snapshot.reserved.addingSaturating(
+            provisionalReservation(excludingObserved: snapshot.workloadReservations))
         if used.cpus > snapshot.total.cpus {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .cpu, available: HostReservation(),
