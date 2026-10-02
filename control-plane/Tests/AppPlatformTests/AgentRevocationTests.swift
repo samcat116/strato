@@ -82,6 +82,7 @@ struct AgentRevocationTests {
                 username: "resume-admin", email: "resume-admin@example.test", isSystemAdmin: true)
             let token = try await admin.generateAPIKey(on: app.db)
             let id = try agent.requireID()
+            await app.replicaBridge.recordRoute(agentKey: agent.identity.key)
             try await app.test(.POST, "/api/agents/\(id)/actions/force-offline") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
@@ -112,6 +113,76 @@ struct AgentRevocationTests {
             #expect(!resumed.isOnline(at: .testing(Date())))
             #expect(resumed.statusBasedOnHeartbeat(at: .testing(Date())) == .offline)
             try await WorkloadRegistry.requireAgentRegistration(identity: resumed.identity, on: app.db)
+        }
+    }
+
+    @Test("An unknown socket owner reports failure while preserving the administrative hold on retries")
+    func unknownOwnerKeepsDurableHold() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Unknown Owner Org")
+            let agent = try await builder.createAgent(
+                named: "unknown-owner", status: .online, lastHeartbeat: Date(),
+                organizationScope: .organization(try org.requireID()))
+            let admin = try await builder.createUser(
+                username: "unknown-owner-admin", email: "unknown-owner@example.test", isSystemAdmin: true)
+            let token = try await admin.generateAPIKey(on: app.db)
+            let id = try agent.requireID()
+            #expect(await app.coordination.agentRoute(agentKey: agent.identity.key) == nil)
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/agents/\(id)/actions/force-offline") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .serviceUnavailable)
+                }
+                let held = try #require(try await Agent.find(id, on: app.db))
+                #expect(held.administrativelyOffline)
+                #expect(held.status == .offline)
+                #expect(!held.isOnline(at: .testing(Date())))
+                #expect(await app.coordination.isAgentPresent(agentKey: agent.identity.key) == false)
+            }
+        }
+    }
+
+    @Test("Repeated resume preserves a fresh heartbeat established after releasing the hold")
+    func repeatedResumePreservesHeartbeat() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Idempotent Resume Org")
+            let agent = try await builder.createAgent(
+                named: "resumed-healthy", status: .offline, lastHeartbeat: Date(),
+                organizationScope: .organization(try org.requireID()))
+            let id = try agent.requireID()
+            try await Agent.query(on: app.db).filter(\.$id == id)
+                .set(\.$administrativelyOffline, to: true).update()
+            let admin = try await builder.createUser(
+                username: "idempotent-resume-admin", email: "idempotent-resume@example.test", isSystemAdmin: true)
+            let token = try await admin.generateAPIKey(on: app.db)
+            try await app.test(.POST, "/api/agents/\(id)/actions/resume") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            let released = try #require(try await Agent.find(id, on: app.db))
+            #expect(!released.administrativelyOffline)
+            #expect(released.lastHeartbeat == nil)
+            #expect(released.status == .offline)
+
+            let heartbeat = Date()
+            try await Agent.query(on: app.db).filter(\.$id == id)
+                .set(\.$lastHeartbeat, to: heartbeat).set(\.$status, to: .online).update()
+            let fresh = try #require(try await Agent.find(id, on: app.db))
+            for _ in 0..<2 {
+                try await app.test(.POST, "/api/agents/\(id)/actions/resume") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .noContent)
+                }
+                let unchanged = try #require(try await Agent.find(id, on: app.db))
+                #expect(unchanged.lastHeartbeat == fresh.lastHeartbeat)
+                #expect(unchanged.status == .online)
+                #expect(unchanged.isOnline(at: .testing(Date())))
+            }
         }
     }
 
