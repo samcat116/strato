@@ -58,6 +58,7 @@ struct AgentRuntimeConfiguration: Sendable {
     let hypervisorType: HypervisorType
     let hardwareAccelerationEnabled: Bool
     let qemuMemoryOverheadBytes: Int64
+    let hostMemoryReserveBytes: Int64
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real
     // networking/storage, and reports the configured fake host capacity instead

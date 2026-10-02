@@ -1210,7 +1210,8 @@ actor LibvirtService: HypervisorService {
                                 dom.name,
                                 HostReservation(
                                     cpus: reservation.vcpus,
-                                    memoryBytes: reservation.memoryBytes)
+                                    memoryBytes: WorkloadMemoryReservation(guestBytes: reservation.memoryBytes,
+                                        backendOverheadBytes: self.memoryOverheadBytes).effectiveBytes)
                             )
                         }
                     }

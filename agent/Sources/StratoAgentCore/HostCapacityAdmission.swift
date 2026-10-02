@@ -96,24 +96,34 @@ public struct HostCapacitySnapshot: Sendable, Equatable {
     public let reserved: HostReservation
     public let inventoryKnown: Bool
     public let diskInventoryKnown: Bool
+    public let hostReservedMemoryBytes: Int64
+    public let qemuOverheadBytes: Int64
+
+    public var memoryAccounting: HostMemoryAccounting {
+        HostMemoryAccounting(physicalBytes: total.memoryBytes, hostReservedBytes: hostReservedMemoryBytes,
+            workloadEffectiveBytes: reserved.memoryBytes, inventoryKnown: inventoryKnown, qemuOverheadBytes: qemuOverheadBytes)
+    }
 
     public init(
         total: HostReservation,
         reserved: HostReservation,
         inventoryKnown: Bool = true,
-        diskInventoryKnown: Bool? = nil
+        diskInventoryKnown: Bool? = nil,
+        hostReservedMemoryBytes: Int64 = 0,
+        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) {
         self.total = total
         self.reserved = reserved
         self.inventoryKnown = inventoryKnown
         self.diskInventoryKnown = diskInventoryKnown ?? inventoryKnown
+        self.hostReservedMemoryBytes = max(0, hostReservedMemoryBytes)
+        self.qemuOverheadBytes = max(0, qemuOverheadBytes)
     }
 
     public var available: HostReservation {
         return HostReservation(
             cpus: !inventoryKnown || reserved.cpus >= total.cpus ? 0 : total.cpus - reserved.cpus,
-            memoryBytes: !inventoryKnown || reserved.memoryBytes >= total.memoryBytes
-                ? 0 : total.memoryBytes - reserved.memoryBytes,
+            memoryBytes: memoryAccounting.remainingAllocatableBytes,
             diskBytes: !diskInventoryKnown || reserved.diskBytes >= total.diskBytes
                 ? 0 : total.diskBytes - reserved.diskBytes)
     }
@@ -136,22 +146,28 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
     public let available: HostReservation
     public let required: HostReservation
     public let failureClassification: FailureClassification
+    public let memoryAccounting: HostMemoryAccounting?
 
     public init(
         agentName: String,
         resource: Resource,
         available: HostReservation,
         required: HostReservation,
-        failureClassification: FailureClassification = .blocked
+        failureClassification: FailureClassification = .blocked,
+        memoryAccounting: HostMemoryAccounting? = nil
     ) {
         self.agentName = agentName
         self.resource = resource
         self.available = available
         self.required = required
         self.failureClassification = failureClassification
+        self.memoryAccounting = memoryAccounting
     }
 
     public var errorDescription: String? {
+        if resource == .memory, let accounting = memoryAccounting {
+            return "agent `\(agentName)` refused memory admission: physicalBytes=\(accounting.physicalBytes), hostReservedBytes=\(accounting.hostReservedBytes), workloadEffectiveBytes=\(accounting.workloadEffectiveBytes), remainingAllocatableBytes=\(accounting.remainingAllocatableBytes), requiredEffectiveBytes=\(required.memoryBytes)"
+        }
         if failureClassification == .permanent {
             switch resource {
             case .inventory:
@@ -229,7 +245,8 @@ public struct HostCapacityAdmissionLedger: Sendable {
         if desiredWorkloadReservation.memoryBytes > snapshot.total.memoryBytes {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: snapshot.total,
-                required: desiredWorkloadReservation, failureClassification: .permanent)
+                required: desiredWorkloadReservation, failureClassification: .permanent,
+                memoryAccounting: snapshot.memoryAccounting)
         }
         if requested.diskBytes > 0, !snapshot.diskInventoryKnown {
             throw HostCapacityAdmissionError(
@@ -244,7 +261,8 @@ public struct HostCapacityAdmissionLedger: Sendable {
         let committedAndProvisional = snapshot.reserved.addingSaturating(provisionalReservation)
         let effective = HostCapacitySnapshot(
             total: snapshot.total, reserved: committedAndProvisional, inventoryKnown: true,
-            diskInventoryKnown: true
+            diskInventoryKnown: true, hostReservedMemoryBytes: snapshot.hostReservedMemoryBytes,
+            qemuOverheadBytes: snapshot.qemuOverheadBytes
         ).available
         guard requested.cpus <= effective.cpus else {
             throw HostCapacityAdmissionError(
@@ -252,7 +270,9 @@ public struct HostCapacityAdmissionLedger: Sendable {
         }
         guard requested.memoryBytes <= effective.memoryBytes else {
             throw HostCapacityAdmissionError(
-                agentName: agentName, resource: .memory, available: effective, required: requested)
+                agentName: agentName, resource: .memory, available: effective, required: requested,
+                memoryAccounting: HostMemoryAccounting(physicalBytes: snapshot.total.memoryBytes,
+                    hostReservedBytes: snapshot.hostReservedMemoryBytes, workloadEffectiveBytes: committedAndProvisional.memoryBytes))
         }
         guard requested.diskBytes <= effective.diskBytes else {
             throw HostCapacityAdmissionError(
@@ -285,7 +305,8 @@ public struct HostCapacityAdmissionLedger: Sendable {
         if currentWorkloadReservation.memoryBytes > snapshot.total.memoryBytes {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: snapshot.total,
-                required: currentWorkloadReservation, failureClassification: .permanent)
+                required: currentWorkloadReservation, failureClassification: .permanent,
+                memoryAccounting: snapshot.memoryAccounting)
         }
         if currentWorkloadReservation.diskBytes > 0, !snapshot.diskInventoryKnown {
             throw HostCapacityAdmissionError(
@@ -303,10 +324,11 @@ public struct HostCapacityAdmissionLedger: Sendable {
                 agentName: agentName, resource: .cpu, available: HostReservation(),
                 required: HostReservation(cpus: used.cpus - snapshot.total.cpus))
         }
-        if used.memoryBytes > snapshot.total.memoryBytes {
+        let memoryBudget = max(0, snapshot.total.memoryBytes - min(snapshot.total.memoryBytes, snapshot.hostReservedMemoryBytes))
+        if used.memoryBytes > memoryBudget {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: HostReservation(),
-                required: HostReservation(memoryBytes: used.memoryBytes - snapshot.total.memoryBytes))
+                required: HostReservation(memoryBytes: used.memoryBytes - memoryBudget), memoryAccounting: snapshot.memoryAccounting)
         }
         if used.diskBytes > snapshot.total.diskBytes {
             throw HostCapacityAdmissionError(
@@ -323,22 +345,17 @@ public struct HostCapacityAdmissionLedger: Sendable {
 }
 
 /// Reservation semantics shared by host admission and tests. QEMU reserves the
-/// aligned hot-add region already present in its domain; other backends reserve
-/// current guest memory only.
+/// aligned hot-add region already present in its domain. Every backend adds
+/// its process allowance once.
 public enum VMHostReservation {
     public static func forSpec(
-        _ spec: VMSpec, hypervisorType: HypervisorType, architecture: CPUArchitecture
+        _ spec: VMSpec, hypervisorType: HypervisorType, architecture: CPUArchitecture,
+        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
-        let memory: Int64
-        if hypervisorType == .qemu {
-            memory = QEMUMemoryReservation.reservedBytes(
-                memoryBytes: spec.memoryBytes,
-                maxMemoryBytes: spec.maxMemoryBytes,
-                architecture: architecture)
-        } else {
-            memory = spec.memoryBytes
-        }
-        return HostReservation(cpus: spec.cpus, memoryBytes: memory)
+        let memory = WorkloadMemoryReservation.vm(
+            memoryBytes: spec.memoryBytes, maxMemoryBytes: spec.maxMemoryBytes,
+            hypervisorType: hypervisorType, architecture: architecture, qemuOverheadBytes: qemuOverheadBytes)
+        return HostReservation(cpus: spec.cpus, memoryBytes: memory.effectiveBytes)
     }
 
     /// Reservation carried by the durable manifest. A QEMU entry written by a
@@ -347,24 +364,26 @@ public enum VMHostReservation {
     /// it keeps the full requested maximum reserved rather than risk releasing
     /// memory the domain still owns.
     public static func forManifestEntry(
-        _ entry: VMManifestEntry, architecture: CPUArchitecture
+        _ entry: VMManifestEntry, architecture: CPUArchitecture,
+        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
         guard entry.hypervisorType == .qemu else {
-            return forSpec(entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture)
+            return forSpec(entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture, qemuOverheadBytes: qemuOverheadBytes)
         }
         let legacyReservation = max(entry.spec.memoryBytes, entry.spec.maxMemoryBytes)
         let fixedReservation = entry.realizedMemoryReservationBytes ?? legacyReservation
         return HostReservation(
             cpus: entry.spec.cpus,
-            memoryBytes: max(entry.spec.memoryBytes, fixedReservation))
+            memoryBytes: WorkloadMemoryReservation(guestBytes: max(entry.spec.memoryBytes, fixedReservation),
+                backendOverheadBytes: qemuOverheadBytes).effectiveBytes)
     }
 }
 
-/// Sandboxes share the host's 1:1 CPU and memory pools with VMs. Keeping this
+/// Sandboxes share the host's CPU and effective memory pools with VMs. Keeping this
 /// conversion beside the VM version makes create and boot admission use the
 /// same reservation semantics as heartbeat accounting.
 public enum SandboxHostReservation {
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
-        HostReservation(cpus: spec.cpus, memoryBytes: spec.memoryBytes)
+        HostReservation(cpus: spec.cpus, memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: spec.memoryBytes).effectiveBytes)
     }
 }

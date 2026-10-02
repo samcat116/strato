@@ -599,6 +599,9 @@ extension AgentService {
         at instant: ClusterInstant
     ) -> Bool {
         var changed = agent.updateAvailableResources(resources)
+        if let accounting = resources.memoryAccounting, let agentID = agent.id?.uuidString {
+            Telemetry.recordHostMemoryAccounting(agentID: agentID, accounting: accounting)
+        }
         let now = instant.date
         if let dependencyObservations {
             let storedObservations = normalizedDependencyObservations(

@@ -8609,6 +8609,7 @@ export interface components {
              * @description Control-plane time when the latest dependency snapshot arrived. Placement freshness uses this value instead of the agent's clock.
              */
             dependencyObservationsReceivedAt?: string;
+            memoryAccounting?: components["schemas"]["HostMemoryAccounting"];
             resourceTelemetry?: components["schemas"]["HostResourceTelemetry"];
             /**
              * Format: date-time
@@ -8726,6 +8727,22 @@ export interface components {
              * @description Bytes physically free on the local volume filesystem.
              */
             physicalFreeDisk: number;
+            memoryAccounting?: components["schemas"]["HostMemoryAccounting"];
+        };
+        HostMemoryAccounting: {
+            /** Format: int64 */
+            physicalBytes: number;
+            /** Format: int64 */
+            hostReservedBytes: number;
+            /** Format: int64 */
+            workloadEffectiveBytes: number;
+            /**
+             * Format: int64
+             * @description Clamped remaining bytes; host and workload reserves are already subtracted.
+             */
+            remainingAllocatableBytes: number;
+            /** Format: int64 */
+            qemuOverheadBytes: number;
         };
         /**
          * @description Whether the latest sampling pass measured the signal. Unavailable is distinct from an available signal whose value is zero.

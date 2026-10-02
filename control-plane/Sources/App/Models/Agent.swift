@@ -151,6 +151,9 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "resource_telemetry")
     var resourceTelemetry: HostResourceTelemetry?
 
+    @OptionalField(key: "memory_accounting")
+    var memoryAccounting: HostMemoryAccounting?
+
     /// Control-plane receipt time for `resourceTelemetry`; placement must not
     /// trust the agent's wall clock when evaluating freshness.
     @OptionalField(key: "resource_telemetry_received_at")
@@ -300,6 +303,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.status = status
         self.totalCPU = resources.totalCPU
         self.totalMemory = resources.totalMemory
+        self.memoryAccounting = resources.memoryAccounting
         self.totalDisk = resources.totalDisk
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
@@ -337,11 +341,13 @@ final class Agent: Model, Content, @unchecked Sendable {
                 || availableMemory != memory
                 || availableDisk != disk
                 || physicalFreeDisk != resources.physicalFreeDisk
+                || memoryAccounting != resources.memoryAccounting
         else { return false }
         availableCPU = cpu
         availableMemory = memory
         availableDisk = disk
         physicalFreeDisk = resources.physicalFreeDisk
+        memoryAccounting = resources.memoryAccounting
         return true
     }
 
@@ -353,7 +359,8 @@ final class Agent: Model, Content, @unchecked Sendable {
             availableMemory: availableMemory,
             totalDisk: totalDisk,
             availableDisk: availableDisk,
-            physicalFreeDisk: physicalFreeDisk
+            physicalFreeDisk: physicalFreeDisk,
+            memoryAccounting: memoryAccounting
         )
     }
 }
@@ -452,6 +459,7 @@ extension Agent {
         dependencyObservationsReceivedAt = receivedAt
         totalCPU = registration.resources.totalCPU
         totalMemory = registration.resources.totalMemory
+        memoryAccounting = registration.resources.memoryAccounting
         totalDisk = registration.resources.totalDisk
         _ = updateAvailableResources(registration.resources)
         lastHeartbeat = receivedAt
@@ -714,6 +722,7 @@ struct AgentResponse: Content {
     let dependencyObservationsReceivedAt: Date?
     /// Latest host PSI, reclaim, swap, OOM, and MGLRU snapshot.
     let resourceTelemetry: HostResourceTelemetry?
+    let memoryAccounting: HostMemoryAccounting?
     /// Control-plane receipt time for the snapshot above.
     let resourceTelemetryReceivedAt: Date?
     /// Descriptive hardware/platform/OS details for operator display; nil for
@@ -820,6 +829,7 @@ struct AgentResponse: Content {
         self.dependencyObservations = agent.dependencyObservations
         self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
         self.resourceTelemetry = agent.resourceTelemetry
+        self.memoryAccounting = agent.memoryAccounting
         self.resourceTelemetryReceivedAt = agent.resourceTelemetryReceivedAt
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id

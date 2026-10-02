@@ -15450,6 +15450,8 @@ components:
           description: >-
             Control-plane time when the latest dependency snapshot arrived.
             Placement freshness uses this value instead of the agent's clock.
+        memoryAccounting:
+          $ref: "#/components/schemas/HostMemoryAccounting"
         resourceTelemetry:
           $ref: "#/components/schemas/HostResourceTelemetry"
         resourceTelemetryReceivedAt:
@@ -15671,6 +15673,29 @@ components:
           type: integer
           format: int64
           description: Bytes physically free on the local volume filesystem.
+        memoryAccounting:
+          $ref: "#/components/schemas/HostMemoryAccounting"
+
+    HostMemoryAccounting:
+      type: object
+      required: [physicalBytes, hostReservedBytes, workloadEffectiveBytes, remainingAllocatableBytes, qemuOverheadBytes]
+      properties:
+        physicalBytes:
+          type: integer
+          format: int64
+        hostReservedBytes:
+          type: integer
+          format: int64
+        workloadEffectiveBytes:
+          type: integer
+          format: int64
+        remainingAllocatableBytes:
+          type: integer
+          format: int64
+          description: Clamped remaining bytes; host and workload reserves are already subtracted.
+        qemuOverheadBytes:
+          type: integer
+          format: int64
 
     ResourceTelemetryAvailability:
       type: string

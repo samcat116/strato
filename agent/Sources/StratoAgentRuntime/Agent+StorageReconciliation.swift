@@ -508,7 +508,8 @@ extension Agent {
                     total: raw.total,
                     reserved: raw.reserved.subtractingSaturating(retained),
                     inventoryKnown: raw.inventoryKnown,
-                    diskInventoryKnown: raw.diskInventoryKnown)
+                    diskInventoryKnown: raw.diskInventoryKnown,
+                    hostReservedMemoryBytes: raw.hostReservedMemoryBytes, qemuOverheadBytes: raw.qemuOverheadBytes)
                 do {
                     supplementalClaim = try capacityAdmissionLedger.claim(
                         .positiveDelta(
@@ -978,10 +979,10 @@ extension Agent {
         let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
         let currentReservation =
             currentEntry.map {
-                VMHostReservation.forManifestEntry($0, architecture: .current)
+                VMHostReservation.forManifestEntry($0, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             } ?? HostReservation()
         let desiredReservation = VMHostReservation.forSpec(
-            realizedSpec, hypervisorType: desired.hypervisorType, architecture: .current)
+            realizedSpec, hypervisorType: desired.hypervisorType, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
@@ -1059,7 +1060,8 @@ extension Agent {
         managedVMs[item.id] = VMManifestEntry(
             hypervisorType: desired.hypervisorType, spec: realizedSpec,
             realizedMemoryReservationBytes: desired.hypervisorType == .qemu
-                ? desiredReservation.memoryBytes : nil,
+                ? QEMUMemoryReservation.reservedBytes(memoryBytes: realizedSpec.memoryBytes,
+                    maxMemoryBytes: realizedSpec.maxMemoryBytes, architecture: .current) : nil,
             vsockCID: lease.cid,
             appliedEdges: appliedEdges,
             firecrackerMMDSPolicyApplied: desired.hypervisorType == .firecracker ? true : nil,
@@ -1097,9 +1099,9 @@ extension Agent {
             throw HypervisorServiceError.vmNotFound(item.id)
         }
         let currentReservation = VMHostReservation.forManifestEntry(
-            entry, architecture: .current)
+            entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let desiredReservation = VMHostReservation.forSpec(
-            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let bootClaim = bootCapacityClaims.removeValue(forKey: item.id)
         let claim: HostCapacityClaim?
         if let bootClaim {

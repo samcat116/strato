@@ -246,7 +246,7 @@ struct SchedulerReservationTests {
     private func agent(
         id: String,
         availableCPU: Int = 4,
-        availableMemory: Int64 = 8192,
+        availableMemory: Int64 = 8192 + WorkloadMemoryReservation.defaultQEMUOverheadBytes,
         availableDisk: Int64 = 50000
     ) -> SchedulableAgent {
         SchedulableAgent(
@@ -254,7 +254,7 @@ struct SchedulerReservationTests {
             name: id,
             totalCPU: 8,
             availableCPU: availableCPU,
-            totalMemory: 16384,
+            totalMemory: 16384 + WorkloadMemoryReservation.defaultQEMUOverheadBytes,
             availableMemory: availableMemory,
             totalDisk: 100_000,
             availableDisk: availableDisk,

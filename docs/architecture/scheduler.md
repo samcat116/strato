@@ -335,3 +335,36 @@ Potential improvements for future versions:
 - **VM Controller**: `control-plane/Sources/App/Controllers/VMController.swift`
 - **Configuration**: `control-plane/Sources/App/configure.swift`
 - **VM Model**: `control-plane/Sources/App/Models/vm.swift`
+
+### Host memory accounting (STR-265, wire v65)
+
+The agent reports `HostMemoryAccounting`: `physicalBytes`, `hostReservedBytes`,
+`workloadEffectiveBytes`, and `remainingAllocatableBytes`. The last operand is
+`max(0, physical - host reserve - workload effective)`; an unknown inventory
+reports zero remaining bytes. `AgentResources.totalMemory` remains physical and
+`availableMemory` is already net of both reservations. Placement subtracts only
+coordination claims from that available value, never the host reserve again.
+
+`WorkloadMemoryReservation` defines each workload commitment. QEMU reserves its
+architecture-aligned virtio-mem region plus the host's configured QEMU allowance
+(default 512 MiB). Firecracker VMs and sandboxes reserve current guest RAM plus
+128 MiB. Ordinary Firecracker VMs currently launch unjailed and share the agent
+cgroup; their 128 MiB is a budgeting allowance, not a newly enforced process
+ceiling. Sandboxes use the same allowance as their jailer's memory ceiling.
+Tenant quota continues to count guest memory.
+
+`host_memory_reserve_mb` defaults to 1024 MiB and accepts nonnegative values.
+The agent applies configuration at startup. Reserve changes affect new placement,
+creates, boots, and positive growth; they do not restart, resize, or migrate
+running guests. Capacity blocked by other workloads or the configured reserve
+remains retryable at the same generation (STR-262). An individual footprint
+larger than physical capacity remains permanent.
+
+Manifests retain QEMU's realized **guest** reservation. Overhead is added when
+accounting, so adoption and backend inventory reconciliation take the larger
+per-workload reservation rather than adding the same domain twice. Provisional
+claims use effective bytes and retire after the durable manifest commit. The
+control plane exports `strato_agent_memory_{physical,host_reserved,workload_effective,remaining_allocatable}_bytes`
+from the agent's report; all operands also appear in memory admission refusals.
+Agent and control plane must deploy matching wire-v65 builds together; v64 is
+reserved for the concurrent guest-configuration change.

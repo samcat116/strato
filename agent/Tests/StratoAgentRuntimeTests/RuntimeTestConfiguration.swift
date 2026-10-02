@@ -34,6 +34,7 @@ func runtimeTestConfiguration(
         hypervisorType: hypervisorType,
         hardwareAccelerationEnabled: true,
         qemuMemoryOverheadBytes: Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
+        hostMemoryReserveBytes: 1024 * 1024 * 1024,
         simulation: simulation,
         installMode: .detect(),
         spiffeConfig: nil,

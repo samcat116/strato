@@ -263,8 +263,10 @@ public struct AgentResources: Codable, Sendable {
         case totalDisk
         case availableDisk
         case physicalFreeDisk
+        case memoryAccounting
     }
 
+    public let memoryAccounting: HostMemoryAccounting?
     public let totalCPU: Int
     public let availableCPU: Int
     public let totalMemory: Int64
@@ -282,8 +284,10 @@ public struct AgentResources: Codable, Sendable {
         availableMemory: Int64,
         totalDisk: Int64,
         availableDisk: Int64,
-        physicalFreeDisk: Int64? = nil
+        physicalFreeDisk: Int64? = nil,
+        memoryAccounting: HostMemoryAccounting? = nil
     ) {
+        self.memoryAccounting = memoryAccounting
         self.totalCPU = totalCPU
         self.availableCPU = availableCPU
         self.totalMemory = totalMemory
@@ -295,6 +299,7 @@ public struct AgentResources: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.memoryAccounting = try container.decodeIfPresent(HostMemoryAccounting.self, forKey: .memoryAccounting)
         self.totalCPU = try container.decode(Int.self, forKey: .totalCPU)
         self.availableCPU = try container.decode(Int.self, forKey: .availableCPU)
         self.totalMemory = try container.decode(Int64.self, forKey: .totalMemory)

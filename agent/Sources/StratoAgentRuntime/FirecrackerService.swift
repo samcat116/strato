@@ -446,9 +446,10 @@ actor FirecrackerService: HypervisorService {
     }
 
     func reservationInventory() -> HypervisorReservationInventory? {
-        let reserved = vmSpecs.values.reservedResources
+        let workloads = vmSpecs.mapValues { VMHostReservation.forSpec($0, hypervisorType: .firecracker, architecture: .current) }
         return HypervisorReservationInventory(
-            reservation: HostReservation(cpus: reserved.vcpus, memoryBytes: reserved.memoryBytes))
+            reservation: workloads.values.reduce(HostReservation()) { $0.addingSaturating($1) },
+            workloadReservations: workloads)
     }
 
     // MARK: - Orphan Re-adoption (issue #433)

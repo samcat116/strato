@@ -199,7 +199,7 @@ extension Agent {
             // Nothing here touches Firecracker itself.
             logger.info("Simulation mode: registering mock hypervisor backend(s)")
             for type in HypervisorType.allCases {
-                hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type)
+                hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             }
 
             // The mock sandbox runtime (issue #470), so simulated agents host
@@ -247,7 +247,7 @@ extension Agent {
                     "detail": .string(
                         "this host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only")
                 ])
-            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             #endif
 
             #if os(Linux)

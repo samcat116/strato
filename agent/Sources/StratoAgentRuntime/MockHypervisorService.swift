@@ -24,6 +24,7 @@ import StratoShared
 /// lifecycle transition (so the reconciler converges instead of looping).
 actor MockHypervisorService: HypervisorService {
     private let logger: Logger
+    private let qemuOverheadBytes: Int64
 
     /// The hypervisor type this mock stands in for. Lets the mock report the
     /// same `hypervisorType` the real driver would, so routing is unaffected.
@@ -48,11 +49,13 @@ actor MockHypervisorService: HypervisorService {
     init(
         logger: Logger,
         hypervisorType: HypervisorType = .qemu,
+        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes,
         bootDelay: Duration = .milliseconds(500),
         shutdownDelay: Duration = .milliseconds(200)
     ) {
         self.logger = logger
         self.hypervisorType = hypervisorType
+        self.qemuOverheadBytes = max(0, qemuOverheadBytes)
         self.bootDelay = bootDelay
         self.shutdownDelay = shutdownDelay
         logger.warning(
@@ -221,8 +224,8 @@ actor MockHypervisorService: HypervisorService {
         vm.spec = spec
         if hypervisorType == .qemu {
             let requested = VMHostReservation.forSpec(
-                spec, hypervisorType: hypervisorType, architecture: .current
-            ).memoryBytes
+                spec, hypervisorType: hypervisorType, architecture: .current, qemuOverheadBytes: qemuOverheadBytes
+            ).memoryBytes - qemuOverheadBytes
             vm.realizedMemoryReservationBytes = max(
                 vm.realizedMemoryReservationBytes ?? 0, requested)
         }
@@ -278,18 +281,20 @@ actor MockHypervisorService: HypervisorService {
     private var workloadReservations: [String: HostReservation] {
         vms.mapValues { vm in
             let current = VMHostReservation.forSpec(
-                vm.spec, hypervisorType: hypervisorType, architecture: .current)
-            let fixed = vm.realizedMemoryReservationBytes ?? current.memoryBytes
+                vm.spec, hypervisorType: hypervisorType, architecture: .current, qemuOverheadBytes: qemuOverheadBytes)
+            guard hypervisorType == .qemu else { return current }
+            let fixed = vm.realizedMemoryReservationBytes ?? max(0, current.memoryBytes - qemuOverheadBytes)
             return HostReservation(
                 cpus: current.cpus,
-                memoryBytes: max(vm.spec.memoryBytes, fixed))
+                memoryBytes: WorkloadMemoryReservation(guestBytes: max(vm.spec.memoryBytes, fixed),
+                    backendOverheadBytes: qemuOverheadBytes).effectiveBytes)
         }
     }
 
     private func initialMemoryReservation(for spec: VMSpec) -> Int64? {
         guard hypervisorType == .qemu else { return nil }
         return VMHostReservation.forSpec(
-            spec, hypervisorType: hypervisorType, architecture: .current
-        ).memoryBytes
+            spec, hypervisorType: hypervisorType, architecture: .current, qemuOverheadBytes: qemuOverheadBytes
+        ).memoryBytes - qemuOverheadBytes
     }
 }

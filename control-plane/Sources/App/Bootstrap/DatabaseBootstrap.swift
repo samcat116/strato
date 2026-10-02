@@ -211,6 +211,7 @@ extension Application {
         // STR-278: preserve both committed disk availability and the physical
         // filesystem headroom sparse volumes can consume later.
         migrations.add(AddAgentPhysicalFreeDisk())
+        migrations.add(AddAgentMemoryAccounting())
 
         // STR-278: placement and quota admission need the guest-visible size
         // encoded by sparse image artifacts, not their stored object bytes.

@@ -30,6 +30,7 @@ struct SchedulableAgent: Sendable {
     let totalDisk: Int64
     let availableDisk: Int64
     let physicalFreeDisk: Int64
+    let qemuOverheadBytes: Int64
     let status: AgentStatus
     let runningVMCount: Int
     /// Hypervisor backends this agent can actually run, from its structured registration report.
@@ -68,6 +69,7 @@ struct SchedulableAgent: Sendable {
         totalDisk: Int64,
         availableDisk: Int64,
         physicalFreeDisk: Int64? = nil,
+        qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes,
         status: AgentStatus,
         runningVMCount: Int,
         supportedHypervisors: [HypervisorType] = [.qemu],
@@ -89,6 +91,7 @@ struct SchedulableAgent: Sendable {
         self.totalDisk = totalDisk
         self.availableDisk = availableDisk
         self.physicalFreeDisk = physicalFreeDisk ?? availableDisk
+        self.qemuOverheadBytes = qemuOverheadBytes
         self.status = status
         self.runningVMCount = runningVMCount
         self.supportedHypervisors = supportedHypervisors
@@ -147,6 +150,7 @@ struct SchedulableAgent: Sendable {
             totalDisk: totalDisk,
             availableDisk: max(0, availableDisk - reserved.disk),
             physicalFreeDisk: physicalFreeDisk,
+            qemuOverheadBytes: qemuOverheadBytes,
             status: status,
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
@@ -167,6 +171,14 @@ struct SchedulableAgent: Sendable {
 struct VMPlacementRequirements: Sendable {
     let cpu: Int
     let memory: Int64
+    let maxMemory: Int64
+
+    func effectiveMemory(on agent: SchedulableAgent) -> Int64 {
+        if requiresSandboxRuntime { return WorkloadMemoryReservation.sandbox(memoryBytes: memory).effectiveBytes }
+        return WorkloadMemoryReservation.vm(memoryBytes: memory, maxMemoryBytes: maxMemory,
+            hypervisorType: hypervisorType, architecture: architecture ?? agent.architecture ?? .current,
+            qemuOverheadBytes: agent.qemuOverheadBytes).effectiveBytes
+    }
     let disk: Int64
     /// Hypervisor backend the VM must run under. Hard constraint — agents
     /// that don't support it are never eligible.
@@ -210,6 +222,7 @@ struct VMPlacementRequirements: Sendable {
     init(
         cpu: Int,
         memory: Int64,
+        maxMemory: Int64? = nil,
         disk: Int64,
         hypervisorType: HypervisorType = .qemu,
         architecture: CPUArchitecture? = nil,
@@ -223,6 +236,7 @@ struct VMPlacementRequirements: Sendable {
     ) {
         self.cpu = cpu
         self.memory = memory
+        self.maxMemory = maxMemory ?? memory
         self.disk = disk
         self.hypervisorType = hypervisorType
         self.architecture = architecture
@@ -355,6 +369,7 @@ final class SchedulerService: Sendable {
         VMPlacementRequirements(
             cpu: vm.cpu,
             memory: vm.memory,
+            maxMemory: vm.maxMemory,
             disk: diskBytes ?? vm.disk,
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
@@ -389,8 +404,6 @@ final class SchedulerService: Sendable {
         strategy: SchedulingStrategy? = nil,
         vmName: String = "unnamed"
     ) async throws -> String {
-        let amounts = ReservationAmounts(
-            cpu: requirements.cpu, memory: requirements.memory, disk: requirements.disk)
 
         // Apply categorical and raw-capacity constraints before touching the
         // coordination store. Reservations can only reduce availability, so
@@ -424,6 +437,8 @@ final class SchedulerService: Sendable {
                 disk: selectedAgent.availableDisk
             )
 
+            let amounts = ReservationAmounts(cpu: requirements.cpu,
+                memory: requirements.effectiveMemory(on: selectedAgent), disk: requirements.disk)
             if await coordination.reserveCapacity(
                 agentId: selectedId, vmId: vmId, amounts: amounts, capacity: capacity)
             {
@@ -643,7 +658,7 @@ final class SchedulerService: Sendable {
         }
 
         let eligible = metadataCapable.filter { agent in
-            agent.availableCPU >= requirements.cpu && agent.availableMemory >= requirements.memory
+            agent.availableCPU >= requirements.cpu && agent.availableMemory >= requirements.effectiveMemory(on: agent)
                 && agent.availableDisk >= requirements.disk
         }
         guard !eligible.isEmpty else {

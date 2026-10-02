@@ -376,7 +376,7 @@ extension Agent {
                 reservations, orphan in
                 guard orphan.value.hypervisorType == type else { return }
                 reservations[orphan.key] = VMHostReservation.forManifestEntry(
-                    orphan.value, architecture: .current)
+                    orphan.value, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             }
             if let observed {
                 // A daemon inventory with membership can also prove that a
@@ -386,7 +386,7 @@ extension Agent {
                 if observed.workloadIDs != nil {
                     for (vmId, entry) in managedVMs where entry.hypervisorType == type {
                         durableReservations[vmId] = VMHostReservation.forManifestEntry(
-                            entry, architecture: .current)
+                            entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
                     }
                 }
                 reserved = reserved.addingSaturating(
@@ -408,7 +408,7 @@ extension Agent {
         for entry in orphanedVMs.values {
             guard !backendsWithInventory.contains(entry.hypervisorType) else { continue }
             reserved = reserved.addingSaturating(
-                VMHostReservation.forManifestEntry(entry, architecture: .current))
+                VMHostReservation.forManifestEntry(entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes))
         }
 
         // Sandbox reservations always come from the manifest (managed and
@@ -416,11 +416,11 @@ extension Agent {
         // and the manifest entry is authoritative for the workload's sizing.
         for entry in managedSandboxes.values {
             reserved = reserved.addingSaturating(
-                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
+                SandboxHostReservation.forSpec(entry.spec))
         }
         for entry in orphanedSandboxes.values {
             reserved = reserved.addingSaturating(
-                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
+                SandboxHostReservation.forSpec(entry.spec))
         }
 
         // Workloads whose manifest entry this build cannot route (STR-138) are
@@ -430,7 +430,9 @@ extension Agent {
         for entry in quarantinedWorkloads.values {
             reserved = reserved.addingSaturating(
                 HostReservation(
-                    cpus: entry.cpus, memoryBytes: entry.memoryBytes,
+                    cpus: entry.cpus, memoryBytes: WorkloadMemoryReservation(guestBytes: entry.memoryBytes,
+                        backendOverheadBytes: entry.effectiveKind == .sandbox || entry.hypervisorTypeRawValue == HypervisorType.firecracker.rawValue
+                            ? WorkloadMemoryReservation.firecrackerOverheadBytes : configuration.qemuMemoryOverheadBytes).effectiveBytes,
                     diskBytes: entry.diskBytes))
         }
 
@@ -589,7 +591,9 @@ extension Agent {
             total: HostReservation(
                 cpus: totalCPU, memoryBytes: totalMemory, diskBytes: totalDisk),
             reserved: reserved, inventoryKnown: manifestReadFailure == nil,
-            diskInventoryKnown: diskInventoryKnown && manifestReadFailure == nil)
+            diskInventoryKnown: diskInventoryKnown && manifestReadFailure == nil,
+            hostReservedMemoryBytes: configuration.hostMemoryReserveBytes,
+            qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
     }
 
     func getAgentResources() async -> AgentResources {
@@ -600,7 +604,8 @@ extension Agent {
             total: raw.total,
             reserved: raw.reserved.addingSaturating(capacityAdmissionLedger.provisionalReservation),
             inventoryKnown: raw.inventoryKnown,
-            diskInventoryKnown: raw.diskInventoryKnown)
+            diskInventoryKnown: raw.diskInventoryKnown, hostReservedMemoryBytes: raw.hostReservedMemoryBytes,
+            qemuOverheadBytes: raw.qemuOverheadBytes)
         let available = accounted.available
 
         let disk = HostResources.diskCapacity(forPath: configuration.volumeStoragePath)
@@ -613,7 +618,8 @@ extension Agent {
             availableMemory: available.memoryBytes,
             totalDisk: raw.total.diskBytes,
             availableDisk: available.diskBytes,
-            physicalFreeDisk: physicalFreeDisk
+            physicalFreeDisk: physicalFreeDisk,
+            memoryAccounting: accounted.memoryAccounting
         )
     }
 
@@ -624,7 +630,7 @@ extension Agent {
             HostReservation()
         ) { partial, entry in
             partial.addingSaturating(
-                VMHostReservation.forManifestEntry(entry, architecture: .current))
+                VMHostReservation.forManifestEntry(entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes))
         }
         return (reserved.cpus, reserved.memoryBytes)
     }
