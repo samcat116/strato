@@ -832,6 +832,12 @@ extension FirecrackerSandboxRuntime {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
         if let record = try loadSuspensionRecord(sandboxId: sandboxId),
+            record.guestFence?.blocksWorkloadAdmission == true,
+            record.phase == .capturing || record.phase == .resumed
+        {
+            try await recoverAutomaticSuspensionRollback(record)
+        }
+        if let record = try loadSuspensionRecord(sandboxId: sandboxId),
             [.suspended, .restoring, .resuming, .destroying, .verified].contains(record.phase)
         {
             try await resumeSuspendedSandbox(sandboxId: sandboxId)

@@ -220,6 +220,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     var idleResidentSince: [String: Date] = [:]
     var idleSuspensionAdmissions: [String: SandboxIdleSuspensionAdmission] = [:]
     var suspending: Set<String> = []
+    let automaticSuspensionTransport: (any SandboxAutomaticSuspensionTransport)?
     var suspensionRecords: [String: SandboxSuspensionRecord] = [:]
     var restoreAdmission = SandboxRestoreAdmission()
     let suspensionRestoreTimeoutSeconds: Int
@@ -291,12 +292,14 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         warmCacheBudgetBytes: Int64? = nil,
         snapshotTransfer: SnapshotArtifactTransfer? = nil,
         suspensionRestoreLimit: Int = 2,
-        suspensionRestoreTimeoutSeconds: Int = StageBudget.checkpointSeconds
+        suspensionRestoreTimeoutSeconds: Int = StageBudget.checkpointSeconds,
+        automaticSuspensionTransport: (any SandboxAutomaticSuspensionTransport)? = nil
     ) throws {
         guard (5...StageBudget.checkpointSeconds).contains(suspensionRestoreTimeoutSeconds) else {
             throw SandboxSuspensionGuard.GateError.stale
         }
         self.suspensionRestoreTimeoutSeconds = suspensionRestoreTimeoutSeconds
+        self.automaticSuspensionTransport = automaticSuspensionTransport
         self.restoreAdmission = try SandboxRestoreAdmission(limit: suspensionRestoreLimit)
         self.logger = logger
         self.client = client

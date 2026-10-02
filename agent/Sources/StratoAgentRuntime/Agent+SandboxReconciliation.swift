@@ -29,10 +29,23 @@ extension Agent {
     /// STR-312/313 entry point. The runtime guard owns lifecycle serialization;
     /// this wrapper owns host admission, including the paused validation VMM
     /// and durable checkpoint bytes. Policy must never call the driver directly.
-    func sandboxReconcileSuspend(_ item: ReconcileWorkItem, automatic: Bool = false) async throws {
+    func sandboxReconcileSuspend(
+        _ item: ReconcileWorkItem, automatic: Bool = false,
+        fence: SandboxAutomaticSuspensionFence? = nil
+    ) async throws {
         guard let desired = item.desiredSandbox,
             var entry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
         else { throw SandboxSuspensionGuard.GateError.unknownIntent }
+        guard automatic == (fence != nil) else {
+            throw SandboxRuntimeError.notSnapshottable("automatic suspension requires a journaled guest fence")
+        }
+        if let fence {
+            guard fence.generation == desired.generation, desired.desiredStatus == .suspended,
+                desired.spec.network == nil, fence.guestProtocolVersion == 5
+            else {
+                throw SandboxSuspensionGuard.GateError.stale
+            }
+        }
         if let snapshotId = desired.suspensionAfterSnapshotId {
             guard !snapshotInventoryUnreadable, let snapshot = snapshotRecords[snapshotId],
                 snapshot.kind == .sandboxSnapshot, snapshot.parentId == UUID(uuidString: item.id)
@@ -40,6 +53,9 @@ extension Agent {
         }
         let runtime = try requireSandboxRuntime()
         if let record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase == .suspended {
+            if let fence {
+                guard record.guestFence?.request == fence else { throw SandboxSuspensionGuard.GateError.stale }
+            }
             entry.sandboxSuspension = record
             managedSandboxes[item.id] = entry
             guard persistManifest() else {
@@ -78,8 +94,11 @@ extension Agent {
             }
         }
         do {
-            try await runtime.suspendSandbox(
-                sandboxId: item.id, generation: desired.generation, automatic: automatic)
+            if let fence {
+                try await runtime.suspendSandbox(sandboxId: item.id, fence: fence)
+            } else {
+                try await runtime.suspendSandbox(sandboxId: item.id, generation: desired.generation, automatic: false)
+            }
         } catch {
             entry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
             managedSandboxes[item.id] = entry

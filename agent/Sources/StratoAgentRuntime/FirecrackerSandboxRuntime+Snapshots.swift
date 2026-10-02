@@ -402,6 +402,9 @@ extension FirecrackerSandboxRuntime {
                 expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
         }
         sandboxes[sandboxId]?.guestControlProtocolVersion = response.controlProtocolVersion
+        if let record = try loadSuspensionRecord(sandboxId: sandboxId), record.guestFence != nil {
+            _ = try await releaseAutomaticSuspensionFence(record, restoredCopy: true)
+        }
         if !internalArchive, var record = try loadSuspensionRecord(sandboxId: sandboxId) {
             record.phase = .resumed
             record.lastRestoreFailure = nil
