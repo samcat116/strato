@@ -137,6 +137,17 @@ extension FirecrackerSandboxRuntime {
             // support it and a full copy otherwise.
             try await reflinkCopy(from: managed.rootfsPath, to: archiveRootfs)
             try await reflinkCopy(from: managed.configPath, to: archiveConfig)
+
+            // Local checkpoints need durability/integrity evidence before any
+            // future STR-312 suspend can consume them. Hashing guest memory is
+            // blocking I/O; keep it off this actor's cooperative executor.
+            // This evidence is not a Firecracker restore-validation proof.
+            _ = try await Task.detached {
+                try SandboxCheckpointManifest.publish(
+                    directory: archiveDir, sandboxId: sandboxId, snapshotId: snapshotId,
+                    identityNonce: managed.identityNonce, firecrackerVersion: info.vmlinuxVersion,
+                    guestControlProtocolVersion: guestControlProtocolVersion)
+            }.value
         } catch {
             // Failed checkpoint: drop partial artifacts and put the guest
             // back the way it was found.
@@ -224,6 +235,11 @@ extension FirecrackerSandboxRuntime {
             throw GuestControlError.identityMismatch(
                 expected: sandboxId, got: archivedConfig.sandboxId)
         }
+        _ = try await Task.detached {
+            try SandboxCheckpointManifest.verifyIfPresent(
+                directory: archiveDir, sandboxId: sandboxId, snapshotId: snapshotId,
+                identityNonce: archivedConfig.identityNonce)
+        }.value
 
         logger.info(
             "Restoring sandbox from snapshot",
@@ -236,7 +252,17 @@ extension FirecrackerSandboxRuntime {
         // Tear down the current Firecracker process. For a jailed sandbox
         // this removes the whole chroot subtree, which the staging below
         // rebuilds from the archive.
-        try? await client.destroyVM(vmId: sandboxId)
+        // The client's process-identity checks and bounded exit wait are the
+        // teardown proof. Never stage or spawn a replacement when they fail.
+        do {
+            try await client.destroyVM(vmId: sandboxId)
+        } catch FirecrackerError.vmNotFound {
+            // A retry after failed staging can have no registered VMM. That
+            // is not itself process-death evidence: scan both the id and the
+            // recorded jail identity before permitting a replacement.
+            try await confirmNoSandboxProcessBeforeReportingGone(
+                sandboxId, jailUID: managed.jail?.uid)
+        }
 
         let newManager: FirecrackerManager
         if let plan = managed.jail {
