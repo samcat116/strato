@@ -1,0 +1,20 @@
+control-plane/Sources/App/Services/RateLimitService.swift
+  h_a84d4ff76cadd1 10-13,35-37,41,54,60-61,66,85-87,102,188-189,195-199,210,216-219,251,259-263,274,279-282,285,291-300,303-304,306-308,310-327,329-333,337,351
+control-plane/Tests/AppPlatformTests/RateLimitValkeyWindowTests.swift
+  h_a84d4ff76cadd1 1-42
+control-plane/Tests/AppPlatformTests/RateLimitWindowRolloverTests.swift
+  h_a84d4ff76cadd1 1-188
+docs/architecture/multi-replica.md
+  h_a84d4ff76cadd1 252-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "25709839a58bafe03090913359d03ac552660a3f",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
