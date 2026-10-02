@@ -103,6 +103,32 @@ class Tests(unittest.TestCase):
         with self.assertRaisesRegex(p.ProfileError, 'unsupported:'):
             p.apply(self.host, self.config)
 
+    def test_write_only_reset_and_reactivation(self):
+        reset = '/sys/block/zram0/reset'
+        self.host.path(reset).chmod(0o200)
+        original_read = self.host.read
+        def read(path):
+            if path == reset:
+                raise PermissionError('write-only sysfs control')
+            return original_read(path)
+        self.host.read = read
+        p.apply(self.host, self.config)
+        self.host.command(['swapoff', '/dev/zram0'])
+        original_write = self.host.write
+        def write(path, value):
+            if path == '/sys/block/zram0/disksize' and int(self.host.read(path)):
+                raise p.ProfileError('kernel_disksize_already_initialized')
+            original_write(path, value)
+        self.host.write = write
+        p.apply(self.host, self.config)
+        self.assertIn('/dev/zram0', self.host.swaps())
+        self.assertEqual(sum(call[0] == 'mkswap' for call in self.host.calls), 1)
+        p.disable(self.host)
+        self.assertEqual(self.host.swaps(), {'/operator': -2})
+        self.host.path(reset).unlink()
+        with self.assertRaisesRegex(p.ProfileError, 'unsupported:'):
+            p.apply(self.host, self.config)
+
     def test_disabled_mglru_and_secondary_bits(self):
         self.config['require_mglru'] = True
         for enabled in ('0', '0x0006'):

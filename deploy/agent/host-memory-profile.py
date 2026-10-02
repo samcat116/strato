@@ -67,6 +67,14 @@ class Host:
         except FileNotFoundError:
             raise ProfileError('unsupported:' + path) from None
 
+    def require_writable(self, path):
+        try:
+            mode = self.path(path).stat().st_mode
+        except FileNotFoundError:
+            raise ProfileError('unsupported:' + path) from None
+        if not mode & stat.S_IWUSR:
+            raise ProfileError('unsupported_write_control:' + path)
+
     def write(self, path, value):
         self.path(path).write_text(str(value) + '\n')
 
@@ -126,7 +134,7 @@ def preflight(host, config):
             raise ProfileError('zram_size_requires_host_page_alignment')
         # Do not load modules or take ownership of an operator's active zram.
         host.read('/sys/block/zram0/disksize')
-        host.read('/sys/block/zram0/reset')
+        host.require_writable('/sys/block/zram0/reset')
         if host.path(ZSWAP + 'enabled').exists():
             host.read(ZSWAP + 'enabled')  # Avoid stacking zswap over zram.
     if config.get('ksm', False):
@@ -175,8 +183,9 @@ def apply(host, config):
         if host.path(ZSWAP + 'enabled').exists():
             host.write(ZSWAP + 'enabled', 0)
         if '/dev/zram0' not in swaps:
-            host.write('/sys/block/zram0/disksize', config.get('zram_bytes', 1073741824))
-            host.runner(['mkswap', '-L', 'strato-density', '/dev/zram0'])
+            if not size:
+                host.write('/sys/block/zram0/disksize', config.get('zram_bytes', 1073741824))
+                host.runner(['mkswap', '-L', 'strato-density', '/dev/zram0'])
             host.runner(['swapon', '--priority', '100', '/dev/zram0'])
     else:
         host.write(ZSWAP + 'max_pool_percent', config.get('zswap_pool_percent', 20))
