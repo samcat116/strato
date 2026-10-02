@@ -244,6 +244,10 @@ actor InMemoryRateLimitStore: RateLimitStore {
     private var windows: [String: Window] = [:]
     private var values: [String: StoredValue] = [:]
     private var lastSweep: Double = 0
+    // One conservative overflow horizon preserves newly armed lockouts even
+    // after another entry expires and capacity becomes available. It cannot
+    // track per-key exceptions without exceeding the memory bound.
+    private var overflowLockoutUntil: Int = 0
 
     func hit(_ key: String, window: Int) -> RateLimitCount {
         let now = Date().timeIntervalSince1970
@@ -279,6 +283,7 @@ actor InMemoryRateLimitStore: RateLimitStore {
         let now = Date().timeIntervalSince1970
         sweepIfNeeded(now)
         guard let stored = values[key], stored.expiresAt > now else {
+            if overflowLockoutUntil > Int(now) { return overflowLockoutUntil }
             if values[key] == nil, values.count >= maxEntries {
                 return Int(now) + 60
             }
@@ -291,7 +296,11 @@ actor InMemoryRateLimitStore: RateLimitStore {
     func writeInt(_ key: String, value: Int, ttl: Int) {
         let now = Date().timeIntervalSince1970
         sweepIfNeeded(now)
-        guard values[key] != nil || values.count < maxEntries else { return }
+        guard values[key] != nil || values.count < maxEntries else {
+            let safeTTL = max(1, min(ttl, Int.max - Int(now)))
+            overflowLockoutUntil = max(overflowLockoutUntil, max(value, Int(now) + safeTTL))
+            return
+        }
         values[key] = StoredValue(value: value, expiresAt: now + Double(max(1, ttl)))
     }
 

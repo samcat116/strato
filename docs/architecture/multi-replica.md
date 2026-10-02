@@ -252,7 +252,8 @@ healthy, and locally armed lockouts are written before contacting Valkey.
 Limits become per-replica (up to N times the fleet-wide allowance); a lockout
 created exclusively on another replica cannot be discovered during a partition.
 Local overflow denies new keys conservatively instead of evicting active
-security state. A restart loses the shadow, as with a Valkey-less deployment.
+security state. An overflow lockout retains a single conservative expiry
+horizon for unknown keys, including after capacity becomes available. A restart loses the shadow, as with a Valkey-less deployment.
 
 Desired-state assembly writes the union of VM and volume image grants in one
 TTL-refreshing store script. VM placement reserves capacity before opening its

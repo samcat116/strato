@@ -116,8 +116,12 @@ struct CoordinationFailureGateTests {
         #expect(await store.hit("overflow", window: 60).count == Int.max)
         #expect(await store.hit("first", window: 60).count == 2)
         await store.writeInt("armed", value: 100, ttl: 60)
-        await store.writeInt("overflow", value: 200, ttl: 60)
+        let overflowExpiry = Int(Date().timeIntervalSince1970) + 600
+        await store.writeInt("overflow", value: overflowExpiry, ttl: 600)
         #expect(await store.readInt("armed") == 100)
-        #expect(await store.readInt("overflow") != nil)
+        #expect(await store.readInt("overflow") == overflowExpiry)
+        await store.reset("armed")
+        // Freeing a slot must not erase a lockout already armed at capacity.
+        #expect(await store.readInt("overflow") == overflowExpiry)
     }
 }
