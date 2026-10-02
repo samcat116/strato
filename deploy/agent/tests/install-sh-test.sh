@@ -49,6 +49,7 @@ HARNESS="$WORK_DIR/harness.sh"
   extract_function version_ge
   extract_function render_spire_guest_identity_config
   extract_function apt_packages
+  extract_function install_unit
 } > "$HARNESS"
 # shellcheck source=/dev/null
 . "$HARNESS"
@@ -56,6 +57,27 @@ HARNESS="$WORK_DIR/harness.sh"
 # --- redeem_enrollment ------------------------------------------------------
 # A fresh host has no jq or Strato binary yet. Pin the line protocol and prove
 # the parser fills every formerly pasted value without evaluating shell text.
+
+echo "install_unit: shared traversal without systemd"
+STRATO_STATE_DIR="$WORK_DIR/manual-state"
+USE_SYSTEMD=0
+install_unit
+check "fresh manual-supervisor state root permits traversal" 711 "$(file_mode "$STRATO_STATE_DIR")"
+mkdir "$STRATO_STATE_DIR/private-child"
+chmod 700 "$STRATO_STATE_DIR" "$STRATO_STATE_DIR/private-child"
+install_unit
+check "existing manual-supervisor root gets shared traversal" 711 "$(file_mode "$STRATO_STATE_DIR")"
+check "private children retain their modes" 700 "$(file_mode "$STRATO_STATE_DIR/private-child")"
+STRATO_STATE_DIR="$WORK_DIR/missing-systemctl-state"
+USE_SYSTEMD=1
+(
+  command() {
+    if [ "${2:-}" = systemctl ]; then return 1; fi
+    builtin command "$@"
+  }
+  install_unit
+)
+check "missing systemctl still prepares the state root" 711 "$(file_mode "$STRATO_STATE_DIR")"
 
 echo "redeem_enrollment: one token derives every bootstrap value"
 BOOTSTRAP_FIXTURE="$WORK_DIR/bootstrap.txt"

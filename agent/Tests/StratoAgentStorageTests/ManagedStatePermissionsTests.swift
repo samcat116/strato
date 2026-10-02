@@ -166,6 +166,28 @@ struct ManagedStatePermissionsTests {
         }
     }
 
+    @Test func legacyMigrationIgnoresPlantedKnownVMEntries() async throws {
+        try await fixture { root async throws in
+            let linkedID = UUID().uuidString
+            let foreignID = UUID().uuidString
+            let target = root + "/operator"
+            try FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: false)
+            let link = root + "/cloud-init-" + linkedID
+            try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+            let foreign = root + "/cloud-init-" + foreignID
+            try FileManager.default.createDirectory(atPath: foreign, withIntermediateDirectories: false)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: foreign)
+            try Data("operator bytes".utf8).write(to: URL(fileURLWithPath: foreign + "/user-data"))
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: foreign + "/user-data")
+            try ManagedStatePermissions.migrateLegacyStaging(
+                in: root, vmIds: [linkedID, foreignID], effectiveUID: geteuid() ^ 1)
+            #expect(try mode(foreign) == 0o755)
+            #expect(try mode(foreign + "/user-data") == 0o644)
+            #expect(try String(contentsOfFile: foreign + "/user-data", encoding: .utf8) == "operator bytes")
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link) == target)
+        }
+    }
+
     @Test func migrationPreservesForeignManifestStaging() async throws {
         try await fixture { root async throws in
             let staging = ["vm-manifest.json.tmp", "vm-manifest.json.tmp." + UUID().uuidString]

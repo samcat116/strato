@@ -562,11 +562,14 @@ bookkeeping files and UUID directories identified by QEMU manifest entries, seed
 only the seed ISO is chmod'ed inside those directories. Disk images, NVRAM, backing
 chains, sockets, sandbox directories, operator files, and existing ancestors retain
 their modes. Manifest staging leftovers (the legacy fixed name and UUID names) are also
-restricted without deleting their contents. Legacy `cloud-init-<UUID>` directories
+restricted without deleting their contents when owned by the agent; foreign-owned
+crash candidates retain their modes and contents. Legacy `cloud-init-<UUID>` directories
 in the system temporary directory are migrated only when owned by the current
 agent account; their known seed documents become `0600`, with other contents
-preserved. Foreign legacy staging for a known VM and symlinks or hardlinks at
-managed secret paths abort startup. Unmanaged UUID files and links are preserved.
+preserved. Foreign or linked legacy temporary entries are skipped without following
+them, even for known VMs, so shared temporary namespaces cannot block startup.
+Symlinks or hardlinks at canonical managed secret paths abort startup.
+Unmanaged UUID files and links are preserved.
 
 QEMU VM directories are created or tightened to `0700`. This relies on the
 supported installer contract that QEMU and the agent share an account, with

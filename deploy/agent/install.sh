@@ -961,6 +961,14 @@ preflight
 # --- systemd unit ------------------------------------------------------------
 
 install_unit() {
+  # Shared traversal is also required under manual/container supervisors.
+  # Do not recursively chmod secret-bearing children or backing storage.
+  if [ "$(id -u)" -eq 0 ] || [ -w "$STRATO_STATE_DIR" ] || [ -w "$(dirname "$STRATO_STATE_DIR")" ]; then
+    install -d -m 0711 "$STRATO_STATE_DIR"
+  else
+    # Preserve the supported unprivileged binary-only installation flow.
+    warn "state root requires a privileged install before running the agent"
+  fi
   [ "$USE_SYSTEMD" -eq 1 ] || { log "Skipping systemd unit (--no-systemd)"; return 0; }
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found; skipping systemd unit. Run 'strato-agent' under your init/supervisor of choice."
@@ -968,9 +976,6 @@ install_unit() {
     return 0
   fi
   install -d "$STRATO_CONF_DIR"
-  # Shared traversal for jailed sandbox identities; secret-bearing children
-  # are private to the agent/QEMU account. Do not recursively chmod storage.
-  install -d -m 0711 "$STRATO_STATE_DIR"
   log "Installing $UNIT_FILE"
   # The agent's mTLS credential comes from spire-agent's Workload API, so it
   # must not start without it.

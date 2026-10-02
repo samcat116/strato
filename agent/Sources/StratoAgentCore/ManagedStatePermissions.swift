@@ -65,7 +65,7 @@ public enum ManagedStatePermissions {
         }
     }
 
-    private static func migrateLegacyStaging(in root: String, vmIds: Set<String>) throws {
+    static func migrateLegacyStaging(in root: String, vmIds: Set<String>, effectiveUID: uid_t = geteuid()) throws {
         let parent = try directory(at: root, create: false)
         defer { _ = close(parent) }
         let legacyIds = try FileManager.default.contentsOfDirectory(atPath: root).compactMap { name -> String? in
@@ -78,26 +78,29 @@ public enum ManagedStatePermissions {
         for vmId in vmIds.union(legacyIds) where UUID(uuidString: vmId) != nil {
             let name = "cloud-init-" + vmId
             let path = root + "/" + name
+            var info = stat()
+            if fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) != 0 {
+                if errno == ENOENT { continue }
+                throw failure("inspect legacy seed staging", path)
+            }
+            // Shared temporary namespaces can contain entries planted by
+            // other accounts. Refuse to migrate them without blocking startup.
+            guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR), info.st_uid == effectiveUID else { continue }
             let descriptor = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            if descriptor < 0, errno == ENOENT { continue }
+            if descriptor < 0, errno == ENOENT || errno == ELOOP || errno == ENOTDIR { continue }
             guard descriptor >= 0 else {
-                if !vmIds.contains(vmId), errno == ELOOP || errno == ENOTDIR { continue }
                 throw failure("open legacy seed staging", path)
             }
             defer { _ = close(descriptor) }
-            var info = stat()
             guard fstat(descriptor, &info) == 0 else { throw failure("inspect legacy seed staging", path) }
-            guard info.st_uid == geteuid() else {
-                if !vmIds.contains(vmId) { continue }
-                throw DurableFileWriteError(operation: "refuse foreign legacy staging", path: path, errorNumber: EPERM)
-            }
+            guard info.st_uid == effectiveUID else { continue }
             try restrict(descriptor, mode: 0o700, path: path)
             for name in ["meta-data", "user-data", "network-config"] {
                 if fstatat(descriptor, name, &info, AT_SYMLINK_NOFOLLOW) != 0 {
                     if errno == ENOENT { continue }
                     throw failure("inspect legacy seed document", path + "/" + name)
                 }
-                try restrictFile(name, in: descriptor, path: path + "/" + name)
+                try restrictFile(name, in: descriptor, path: path + "/" + name, ownedBy: effectiveUID)
             }
         }
     }
