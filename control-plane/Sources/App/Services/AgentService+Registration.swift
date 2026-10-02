@@ -84,6 +84,9 @@ extension AgentService {
             .filter(\.$name == agentName)
             .first()
         {
+            guard !existingAgent.administrativelyOffline else {
+                throw Abort(.forbidden, reason: "Agent is administratively offline")
+            }
             // Update existing agent
             agent = existingAgent
             previousDependencyObservations = existingAgent.dependencyObservations
@@ -234,7 +237,7 @@ extension AgentService {
             }
         }
 
-        try await agent.save(on: db)
+        try await saveActiveAgent(agent, on: db)
 
         // A site with no designated network controller reconciles no topology
         // at all, so the first OVN-capable node to join one takes the job
@@ -403,9 +406,9 @@ extension AgentService {
         try await agent.save(on: db)
         let agentKey = agent.identity.key
 
-        app.websocketManager.removeConnection(agentKey: agentKey)
+        _ = app.websocketManager.closeConnection(agentKey: agentKey, code: .normalClosure)
         // The eventual socket close skips its cleanup once the connection is
-        // gone (`removeConnection(ifCurrent:)` no longer matches), so console
+        // gone (`removeClosedConnection(ifCurrent:)` no longer matches), so console
         // and attached exec sessions must be torn down here for the
         // graceful-unregister path. Captured commands remain pending because a
         // terminal frame may already be in flight; their deadline is the safe
@@ -436,45 +439,61 @@ extension AgentService {
     /// silently — and since nothing is keyed by name any more, the lookup below
     /// missed and every teardown step was skipped. A dedicated type makes that
     /// mistake a compile error rather than a silent no-op.
-    func forceUnregisterAgent(_ identity: AgentIdentity) async {
+    func forceUnregisterAgent(_ identity: AgentIdentity) async throws {
         let agentKey = identity.key
-        guard let agentId = await agentId(forKey: agentKey) else {
-            app.logger.warning(
-                "Cannot force unregister: agent not found by identity key",
-                metadata: ["strato.agent.identity": .string(agentKey)])
-            return
+        // Capture routing before local cleanup clears claims. This works even
+        // after the agent row and enrollment have been deleted.
+        let owner = await app.coordination.agentRoute(agentKey: agentKey)
+        var failure: (any Error)?
+        do {
+            if let owner, owner != app.replicaID {
+                try await app.replicaBridge.disconnectAgent(agentKey: agentKey, owner: owner)
+            }
+        } catch {
+            failure = error
+            app.logger.error("Agent revocation acknowledgement failed: \(error)")
         }
-
-        if let agentUUID = UUID(uuidString: agentId),
-            let agent = try? await Agent.find(agentUUID, on: app.db)
-        {
-            Telemetry.recordDependenciesUnavailable(
-                agentName: agent.name, observations: agent.dependencyObservations)
+        await disconnectLocalAgent(agentKey: agentKey)
+        if let owner {
+            await app.coordination.clearAgentRoute(agentKey: agentKey, replicaId: owner)
         }
+        if failure != nil {
+            throw Abort(
+                .serviceUnavailable, reason: "Agent revocation is durable, but socket teardown was not acknowledged")
+        }
+    }
 
-        app.websocketManager.removeConnection(agentKey: agentKey)
-        // Same reasoning as `unregisterAgent`: the socket-close handler will
-        // not run its interactive-session cleanup once the connection entry is
-        // gone. Captured commands keep waiting for a terminal frame or their
-        // deadline.
-        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.guestExecSessionManager.closeAllSessions(
-            forAgent: agentKey, reason: "agent unregistered")
-        // Drop both cluster-visible claims immediately. The route clear is a
-        // compare-and-delete, so it cannot remove a successor connection.
+    /// The bridge calls only this local half; never route a received RPC again.
+    func disconnectLocalAgent(agentKey: String) async {
+        await app.websocketManager.closeConnection(agentKey: agentKey)?.value
+        app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent revoked")
+        await app.guestExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent revoked")
+        // Captured commands retain their terminal-event/deadline contract.
         await endObservedInventorySession(for: agentKey)
         presenceRefreshedAt.removeValue(forKey: agentKey)
         routeRefreshedAt.removeValue(forKey: agentKey)
         await app.coordination.clearAgentPresence(agentKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)
-
-        app.logger.info(
-            "Agent force unregistered",
-            metadata: ["strato.agent.id": .string(agentId), "strato.agent.identity": .string(agentKey)])
+        Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+        // Telemetry is conditional; a missing/deleted row must never skip the
+        // identity-keyed teardown above.
+        do {
+            if let identity = AgentIdentity(key: agentKey),
+                let agent = try await Agent.query(on: app.db)
+                    .filter(\.$trustDomain == identity.trustDomain)
+                    .filter(\.$name == identity.name).first()
+            {
+                Telemetry.recordDependenciesUnavailable(
+                    agentName: agent.name, observations: agent.dependencyObservations)
+            }
+        } catch {
+            app.logger.warning("Unable to project revoked agent dependency telemetry: \(error)")
+        }
+        app.logger.info("Agent revoked", metadata: ["strato.agent.identity": .string(agentKey)])
     }
 
     /// Socket-close cleanup. Only reached when this socket was still the
-    /// agent's current *local* connection — `removeConnection(ifCurrent:)` in
+    /// agent's current *local* connection — `removeClosedConnection(ifCurrent:)` in
     /// the close handler already drops a delayed close superseded by a
     /// same-replica reconnect.
     ///
@@ -578,14 +597,34 @@ extension AgentService {
             to: agent,
             at: instant)
         {
-            try await agent.save(on: db)
+            try await saveActiveAgent(agent, on: db)
         }
 
+        guard !agent.administrativelyOffline else { return }
         // Refresh the agent's presence key so its liveness stays visible
         // cluster-wide, not just to the process holding this socket.
         await refreshAgentPresenceIfNeeded(agentKey: agentKey)
 
         app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentId)])
+    }
+
+    /// Serialize report writes with the operator's durable state transition.
+    /// Re-read under a row lock rather than trusting the pre-await snapshot.
+    func saveActiveAgent(_ agent: Agent, on db: any Database) async throws {
+        try await db.transaction { tx in
+            guard let sql = tx as? any SQLDatabase else { throw Abort(.internalServerError) }
+            if let id = agent.id, agent.$id.exists {
+                guard
+                    let row = try await sql.raw(
+                        "SELECT administratively_offline FROM agents WHERE id = \(bind: id) FOR UPDATE"
+                    ).first()
+                else { throw Abort(.forbidden, reason: "Agent was deregistered") }
+                guard try !row.decode(column: "administratively_offline", as: Bool.self) else {
+                    throw Abort(.forbidden, reason: "Agent is administratively offline")
+                }
+            }
+            try await agent.save(on: tx)
+        }
     }
 
     /// Apply the mutable fields from a periodic agent report. A real state
@@ -598,6 +637,7 @@ extension AgentService {
         to agent: Agent,
         at instant: ClusterInstant
     ) -> Bool {
+        guard !agent.administrativelyOffline else { return false }
         var changed = agent.updateAvailableResources(resources)
         let now = instant.date
         if let dependencyObservations {
@@ -709,6 +749,12 @@ extension AgentService {
     /// half TTL. Their success timestamps are independent: either failed write
     /// retries on the next incoming frame even when the other one landed.
     func refreshAgentPresenceIfNeeded(agentKey: String, force: Bool = false) async {
+        guard let identity = AgentIdentity(key: agentKey),
+            let agent = try? await Agent.query(on: app.db)
+                .filter(\.$trustDomain == identity.trustDomain)
+                .filter(\.$name == identity.name).first(),
+            !agent.administrativelyOffline
+        else { return }
         let now = ContinuousClock.now
         let presenceDue =
             force

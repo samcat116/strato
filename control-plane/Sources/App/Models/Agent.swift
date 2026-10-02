@@ -29,6 +29,10 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Enum(key: "status")
     var status: AgentStatus
 
+    /// Operator intent; only the explicit resume action clears it.
+    @Field(key: "administratively_offline")
+    var administrativelyOffline: Bool
+
     @Field(key: "total_cpu")
     var totalCPU: Int
 
@@ -298,6 +302,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.version = version
         self.$site.id = siteID
         self.status = status
+        self.administrativelyOffline = false
         self.totalCPU = resources.totalCPU
         self.totalMemory = resources.totalMemory
         self.totalDisk = resources.totalDisk
@@ -455,7 +460,7 @@ extension Agent {
         totalDisk = registration.resources.totalDisk
         _ = updateAvailableResources(registration.resources)
         lastHeartbeat = receivedAt
-        status = .online
+        status = administrativelyOffline ? .offline : .online
     }
 
     /// Create an agent from a registration message.
@@ -494,6 +499,7 @@ extension Agent {
     /// Check whether the agent is considered online using the same cluster
     /// clock that stamped its heartbeat.
     func isOnline(at instant: ClusterInstant) -> Bool {
+        guard !administrativelyOffline else { return false }
         guard let lastHeartbeat = lastHeartbeat else { return false }
         let heartbeatAge = instant.date.timeIntervalSince(lastHeartbeat)
         return heartbeatAge >= 0 && heartbeatAge < 60
@@ -612,6 +618,7 @@ extension Agent {
     /// response DTOs, while registration/heartbeat handling and the stale-agent
     /// monitor own durable status transitions.
     func statusBasedOnHeartbeat(at instant: ClusterInstant) -> AgentStatus {
+        guard !administrativelyOffline else { return .offline }
         if isOnline(at: instant) && status == .offline {
             return .online
         } else if !isOnline(at: instant) && status == .online {
@@ -690,6 +697,7 @@ struct AgentResponse: Content {
     let hostname: String
     let version: String
     let status: AgentStatus
+    let administrativelyOffline: Bool
     let resources: AgentResources
     let architecture: CPUArchitecture?
     let operatingSystem: OperatingSystem?
@@ -807,6 +815,7 @@ struct AgentResponse: Content {
         self.hostname = agent.hostname
         self.version = agent.version
         self.status = agent.statusBasedOnHeartbeat(at: instant)
+        self.administrativelyOffline = agent.administrativelyOffline
         self.resources = agent.resources
         self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
         self.operatingSystem = agent.hostOperatingSystem

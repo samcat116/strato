@@ -14,9 +14,11 @@ struct CurrentSchemaBaselineTests {
     // its queue index, and the VM tag GIN index. The frozen baseline stays fixed.
     private static let expectedPreFleetCatalogMD5 = "f719976e5b1c327d005f411e78e38144"
     private static let expectedFleetCatalogMD5 = "39c7c80bcc0b73465f941a6bd5cdc9a1"
-    // Preview retention adds one partial (deadline, id) index; historical
-    // catalogs and the frozen baseline remain independently asserted below.
-    private static let expectedCurrentCatalogMD5 = "538901d3e0b1233cce4ad8557d4e0cd0"
+    // Session admission adds two tables; preview retention adds one partial
+    // (deadline, id) index; administrative revocation adds one agents column.
+    // Historical catalogs and the frozen baseline remain
+    // independently asserted below.
+    private static let expectedCurrentCatalogMD5 = "c8b380fc024ddac8fea050b9b9d41e37"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -68,11 +70,11 @@ struct CurrentSchemaBaselineTests {
             let upgradedCounts = try await catalogCounts(on: app.db)
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
-            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
-            #expect(upgradedCounts.tables == 80)
-            #expect(upgradedCounts.columns == 1049)
-            #expect(upgradedCounts.constraints == 376)
-            #expect(upgradedCounts.indexes == 247)
+            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Observed current catalog: \(upgradedMD5)")
+            #expect(upgradedCounts.tables == 82)
+            #expect(upgradedCounts.columns == 1060)
+            #expect(upgradedCounts.constraints == 379)
+            #expect(upgradedCounts.indexes == 252)
             #expect(upgradedCounts.enums == baselineCounts.enums)
             #expect(upgradedCounts.triggers == baselineCounts.triggers)
             #expect(upgradedCounts.functions == baselineCounts.functions)

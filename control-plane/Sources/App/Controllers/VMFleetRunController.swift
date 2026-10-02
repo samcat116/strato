@@ -165,6 +165,10 @@ struct VMFleetRunController: RouteCollection {
             guard current.deadline > now.date else {
                 throw Abort(.conflict, reason: "Fleet preview expired; resolve again")
             }
+            let targetIDs = current.entries.filter { $0.state == "ready" }.map(\.vmID)
+            let targets = targetIDs.isEmpty ? [] : try await VM.query(on: db).filter(\.$id ~~ targetIDs).all()
+            try await VMExecSessionLimits.lockProjectBudgets(
+                projectIDs: targets.map { $0.$project.id }, on: db)
             var audits: [VMGuestExecutionAuditContext] = []
             for index in current.entries.indices where current.entries[index].state == "ready" {
                 do {

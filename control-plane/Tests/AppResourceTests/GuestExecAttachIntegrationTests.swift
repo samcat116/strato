@@ -19,6 +19,8 @@ import AppTestSupport
 @Suite("Guest Exec Attach Integration", .serialized, .postgresFixture)
 struct GuestExecAttachIntegrationTests {
 
+    enum ExecEnd: CaseIterable, Sendable { case exit, operatorTermination }
+
     enum VMAttachRejection: CaseIterable, Sendable {
         case invalidResourceID
         case sessionNotFound
@@ -238,11 +240,15 @@ struct GuestExecAttachIntegrationTests {
 
     @Test(
         "VM and sandbox routes preserve raw framing and support multiplexed framing",
-        arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine],
-        ExecTestOutputMode.allCases)
+        arguments: [GuestResourceKind.sandbox, GuestResourceKind.virtualMachine].flatMap { resource in
+            ExecTestOutputMode.allCases.flatMap { output in
+                ExecEnd.allCases.map { (resource, output, $0) }
+            }
+        })
     func attachRelaysExecStartAndFrames(
         resourceKind: GuestResourceKind,
-        outputMode: ExecTestOutputMode
+        outputMode: ExecTestOutputMode,
+        end: ExecEnd
     ) async throws {
         try await withRunningExecApp { app, port in
             // A real agent socket, registered through the production handshake:
@@ -512,6 +518,39 @@ struct GuestExecAttachIntegrationTests {
             #expect(eof.sessionId == session.sessionId)
             #expect(eof.rawData == nil)
             #expect(eof.eof == true)
+
+            if resourceKind == .virtualMachine, end == .operatorTermination {
+                let vmID = try #require(UUID(uuidString: resourceId))
+                let live = try await VMExecSessionLimits.list(vmID: vmID, on: app.db)
+                #expect(live.count == 1)
+                #expect(live.first?.userId == user.id)
+                let terminateURL = URI(
+                    string:
+                        "http://127.0.0.1:\(port)/api/vms/\(resourceId)/exec-sessions/\(session.sessionId)/terminate")
+                for _ in 0..<2 {
+                    let response = try await app.client.post(terminateURL) { req in
+                        req.headers.bearerAuthorization = .init(token: apiKey)
+                    }
+                    #expect(response.status == .accepted)
+                }
+                await app.guestExecSessionManager.maintainSessions()
+                let closed = try await agent.nextEnvelope(skipping: [.desiredState])
+                #expect(closed.type == .guestExecClose)
+                #expect(try closed.decode(as: GuestExecCloseMessage.self).sessionId == session.sessionId)
+                #expect(try await browser.nextControlFrame().type == "error")
+                try await browser.waitForClose()
+                #expect(app.guestExecSessionManager.getSession(sessionId: session.sessionId) == nil)
+                #expect(try await VMExecSessionLimits.list(vmID: vmID, on: app.db).isEmpty)
+                // An agent terminal report after the operator claim is idempotent.
+                await app.guestExecSessionManager.handleExit(
+                    sessionId: session.sessionId, fromAgentKey: "spiffe://strato.local/agent/\(agentName)", exitCode: 0)
+                await app.audit.flush()
+                let ended = try await AuditEvent.query(on: app.db).filter(\.$eventType == "vm.exec.ended").all()
+                #expect(ended.count == 1)
+                #expect(ended.first?.metadata?["outcome"] == "terminated")
+                try await agent.close()
+                return
+            }
 
             // Exit tears the session down and closes the browser socket.
             agent.send(

@@ -14,6 +14,10 @@ extension Application {
         // the handler cancels it at shutdown (if the service was ever created).
         lifecycle.use(AgentServiceLifecycleHandler())
 
+        // Session presence has a shorter deadline than general reconciliation;
+        // slow maintenance sweeps must not delay lease renewal.
+        lifecycle.use(GuestExecSessionMaintenanceLifecycleHandler())
+
         // Workload telemetry must shed and cancel before database/HTTP teardown.
         lifecycle.use(WorkloadLogIngestorLifecycle())
 

@@ -265,3 +265,78 @@ row-locked transaction, then revalidates placement requirements and storage
 inputs under the lock. Changed inputs release the reservation and replan with a
 bounded budget. This optimistic replan does not retry database transaction
 errors; database abort retries and idle transaction timeouts are owned by #1418.
+
+## VM guest execution admission and presence (STR-89)
+
+PostgreSQL serializes VM exec admission with a VM row lock. Four slots per VM
+are shared by pending interactive reservations, attached interactive sessions,
+and pending recorded commands. The node agent independently enforces the same
+four-slot bound across live and connecting guest bridges, including recorded
+commands surviving a control-plane disconnect. Retained terminal result buffers
+do not consume live slots. A durable command timeout does not prove the guest
+has exited; the agent gate remains authoritative in that case.
+
+Recorded command acceptance also locks a per-project rate row and retains only
+the last minute's accepted timestamps (at most 60). Rejected transactions do
+not consume rate budget. Normal `actions/run` and fleet confirmation use the
+shared `VMController.acceptRunCommand` transaction, which calls
+`VMExecSessionLimits.admitRun` before inserting the existing `VMCommandExecution`.
+Capacity is checked before changing the rate window: Fluent nested transactions
+do not create savepoints, and fleet confirmation catches each refused child.
+Fleet confirmation locks its project budgets in UUID order before acquiring VM
+locks, preventing opposite cross-project lock acquisition. Queued children reserve
+VM slots until terminal. Dispatch and repeat confirmation reuse accepted records
+without charging admission again. Direct HTTP refusals return 429; fleet refusals
+become explicit skipped children.
+
+Interactive presence uses PostgreSQL leases. Pending reservations expire after
+60 seconds. The socket owner renews attached leases in bounded batches on an
+independent 10-second monotonic timer, so slow reconciliation sweeps cannot
+delay renewal; presence expires within 60 seconds after a replica crash.
+Explicit agent disconnect releases both pending and attached interactive leases
+by identity key, even when no agent row remains. Repeated cleanup is harmless;
+recorded command deadlines remain governed by the operation service. A renewal
+refusal or database failure requests guest teardown rather than resurrecting an
+expired reservation. `GET /api/vms/:id/exec-sessions` requires
+`vm:read` and returns attached user attribution without argv or environment.
+`POST /api/vms/:id/exec-sessions/:sessionID/terminate` requires `vm:exec` on that
+VM and sets an idempotent termination request; the owner handles it on its next
+session-renewal tick. `vm:runCommand` alone grants neither interactive attachment
+nor termination. The browser refreshes this list every five seconds; recorded
+commands remain visible through operation history.
+
+After 15 minutes without browser stdin, EOF, or resize activity, the owner
+requests termination. Guest output and WebSocket keepalives do not prolong an
+abandoned terminal. Operator and idle termination use the existing serial event
+pump, ordered after start delivery and before disconnect cleanup, and append one
+`vm.exec.ended` fact. Existing agent socket loss still closes interactive guest
+channels. These defaults are shared constants rather than deployment settings;
+no Valkey coordination, authentication, or guest wire protocol changes are needed.
+
+### Administrative agent revocation
+
+Force-offline persists `agents.administratively_offline` before disconnecting;
+only `POST /api/agents/{id}/actions/resume` releases the hold. Registration,
+periodic reports, HTTP mTLS authorization, and presence refresh refuse held
+agents. Resume permits normal reconnect but does not assert online status.
+Report saves recheck the hold under a PostgreSQL row lock so an in-flight report
+cannot overwrite the operator's status transition.
+
+Operator teardown captures the socket replica route and sends an acknowledged
+revocation RPC before clearing claims. The owner detaches outbound delivery,
+stops the frame processor, discards queued frames, and closes the socket on its
+event loop. It waits for the active handler before clearing presence, routes,
+inventory sessions, and interactive console/exec sessions. Captured command
+records keep their existing terminal-event/deadline contract. Ordinary EOF still
+drains accepted final frames. Identity-keyed cleanup runs even after row deletion;
+an unacknowledged remote close returns 503 rather than claiming success.
+
+Live sockets periodically recheck durable agent/enrollment authority; operator
+teardown stops queued frame processing before acknowledging revocation. A
+deregistered agent's still-valid SVID cannot recreate its workload registration: authentication
+requires a surviving agent or enrollment and holds a shared row lock while
+establishing the registry mapping. Forwarded leaf certificates also schedule
+socket close at `notValidAfter`, allowing the agent's ordinary reconnect to
+present its rotated SVID. URI-only Envoy forwarding retains its existing trust
+model and revalidates durable registration and trust-domain authority every 20
+seconds, including idle connections whose route was unavailable during teardown.
