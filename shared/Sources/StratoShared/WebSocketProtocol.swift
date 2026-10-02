@@ -129,6 +129,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// Periodic, feature-scoped software dependency health. This is also sent
     /// at registration so a newly connected agent is not placement-eligible in
     /// the window before its first heartbeat.
+    /// Nil/empty advertises no burstable support. STR272 must supply verified backend evidence.
+    public let resourceClassEnforcement: [WorkloadResourceClassEnforcement]?
     public let dependencyObservations: [NodeDependencyObservation]
 
     public init(
@@ -149,6 +151,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         hostInfo: HostInfo? = nil,
         resolverCapable: Bool = false,
         metadataServiceCapable: Bool = false,
+        resourceClassEnforcement: [WorkloadResourceClassEnforcement]? = nil,
         dependencyObservations: [NodeDependencyObservation] = []
     ) {
         self.requestId = requestId
@@ -168,6 +171,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.hostInfo = hostInfo
         self.resolverCapable = resolverCapable
         self.metadataServiceCapable = metadataServiceCapable
+        self.resourceClassEnforcement = resourceClassEnforcement
         self.dependencyObservations = dependencyObservations
     }
 

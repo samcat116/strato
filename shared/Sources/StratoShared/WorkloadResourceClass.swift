@@ -93,7 +93,9 @@ public struct WorkloadResourceClassPolicy: Codable, Sendable, Equatable {
         // Preserve guaranteed Int64 operands without a lossy floating-point round trip.
         guard kind == .burstable else { return raw }
         return WorkloadMemoryReservation(
-            guestBytes: Self.ceilingSaturating(Double(raw.guestBytes) / memoryAllocationRatio),
+            guestBytes: Self.ceilingSaturating(
+                (raw.guestBytes > 9_007_199_254_740_992 ? Double(raw.guestBytes).nextUp : Double(raw.guestBytes))
+                    / memoryAllocationRatio),
             backendOverheadBytes: raw.backendOverheadBytes)
     }
 
@@ -221,7 +223,7 @@ public struct WorkloadAdmittedReservation: Codable, Sendable, Equatable {
     }
 
     public func growing(cpus: Int, memory: WorkloadMemoryReservation, policy: WorkloadResourceClassPolicy) -> Self {
-        let additionalCPU = policy.cpuMicroUnits(cpus: max(0, cpus - grantedCPUs))
+        let additionalCPU = policy.cpuMicroUnits(cpus: cpus > grantedCPUs ? cpus - grantedCPUs : 0)
         let additionalMemory = policy.memoryReservation(
             WorkloadMemoryReservation(
                 guestBytes: max(0, memory.guestBytes - guestCommitmentBytes), backendOverheadBytes: 0)
@@ -249,5 +251,34 @@ public struct WorkloadAdmittedReservation: Codable, Sendable, Equatable {
             throw WorkloadResourceClassError.invalidPolicy
         }
         self.init(cpus: cpus, guest: guest, cpuMicroUnits: cpu, discountedGuest: discounted, overhead: overhead)
+    }
+}
+
+/// Each backend must prove the whole contract before it can be used for burstable work.
+/// Ordinary unjailed Firecracker VMs have no corresponding eligible backend case.
+public enum WorkloadResourceClassBackend: String, Codable, Sendable {
+    case qemuVM
+    case jailedFirecrackerSandbox
+}
+
+public struct WorkloadResourceClassEnforcement: Codable, Sendable, Equatable {
+    public let backend: WorkloadResourceClassBackend
+    public let controllersDelegated: Bool
+    public let stableOwnership: Bool
+    public let preExecutionEnforcement: Bool
+    public let effectiveReadback: Bool
+    public var supportsBurstable: Bool {
+        controllersDelegated && stableOwnership && preExecutionEnforcement && effectiveReadback
+    }
+
+    public init(
+        backend: WorkloadResourceClassBackend, controllersDelegated: Bool,
+        stableOwnership: Bool, preExecutionEnforcement: Bool, effectiveReadback: Bool
+    ) {
+        self.backend = backend
+        self.controllersDelegated = controllersDelegated
+        self.stableOwnership = stableOwnership
+        self.preExecutionEnforcement = preExecutionEnforcement
+        self.effectiveReadback = effectiveReadback
     }
 }
