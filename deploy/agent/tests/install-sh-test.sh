@@ -69,14 +69,16 @@ install_unit
 check "existing manual-supervisor root gets shared traversal" 711 "$(file_mode "$STRATO_STATE_DIR")"
 check "private children retain their modes" 700 "$(file_mode "$STRATO_STATE_DIR/private-child")"
 STRATO_STATE_DIR="$WORK_DIR/missing-systemctl-state"
-USE_SYSTEMD=1
-(
+MISSING_SYSTEMCTL_MODE=$(
+  USE_SYSTEMD=1
   command() {
     if [ "${2:-}" = systemctl ]; then return 1; fi
     builtin command "$@"
   }
   install_unit
+  printf '%s' "$USE_SYSTEMD"
 )
+check "missing systemctl disables unit installation" 0 "$MISSING_SYSTEMCTL_MODE"
 check "missing systemctl still prepares the state root" 711 "$(file_mode "$STRATO_STATE_DIR")"
 
 echo "redeem_enrollment: one token derives every bootstrap value"
