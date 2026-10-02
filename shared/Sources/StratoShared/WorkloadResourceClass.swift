@@ -139,6 +139,24 @@ public struct WorkloadResourceClassPolicy: Codable, Sendable, Equatable {
 }
 
 public struct WorkloadRuntimeLimits: Codable, Sendable, Equatable {
+    /// Kernel memory counters use base pages. Both drivers must normalize before
+    /// applying or comparing readback; libvirt then expresses these exact pages in KiB.
+    public func aligned(pageSizeBytes: Int64) throws -> Self {
+        guard pageSizeBytes >= 1024, pageSizeBytes & (pageSizeBytes - 1) == 0,
+            memoryHighBytes > 0, memoryHighBytes < memoryMaxBytes
+        else {
+            throw WorkloadResourceClassError.invalidRuntimeLimit
+        }
+        let high = (memoryHighBytes / pageSizeBytes) * pageSizeBytes
+        let remainder = memoryMaxBytes % pageSizeBytes
+        let (maximum, overflow) = memoryMaxBytes.addingReportingOverflow(
+            remainder == 0 ? 0 : pageSizeBytes - remainder)
+        guard !overflow, high > 0, high < maximum else {
+            throw WorkloadResourceClassError.invalidRuntimeLimit
+        }
+        return Self(memoryHighBytes: high, memoryMaxBytes: maximum, cpuWeight: cpuWeight)
+    }
+
     public let memoryHighBytes: Int64
     public let memoryMaxBytes: Int64
     public let cpuWeight: Int

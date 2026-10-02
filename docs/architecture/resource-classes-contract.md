@@ -135,11 +135,24 @@ and `maxTelemetryAgeSeconds` (default 60, range 15...300). Missing or malformed
 explicit fields fail decoding. Built-in class IDs are UUIDs ending in 0001
 (guaranteed) and 0002 (burstable), scoped by siteID.
 
-For QEMU/libvirt, quantize memory.high **down** to KiB (by at most 1023 bytes)
-and memory.max **up** to KiB. Validate the representable soft limit is positive
-and strictly below the representable hard limit. Jailer cgroup values retain
-exact bytes. Desired/applied diagnostics must distinguish the byte intent from
-backend representable values; readback compares the latter.
+Normalize to the host's base page size `S` before either backend applies
+limits: `alignedHigh = floor(rawHigh / S) * S` and
+`alignedMax = ceil(rawMax / S) * S`. Checked arithmetic rejects overflow and
+requires `0 < alignedHigh < alignedMax`. For example, raw 9900/10000 becomes
+8192/12288 with S=4096. Shared `WorkloadRuntimeLimits.aligned(pageSizeBytes:)`
+implements this contract. Libvirt uses aligned targets divided by 1024;
+the jailer uses aligned bytes. Telemetry retains raw intent and applied
+page-aligned values; readback compares aligned targets. This avoids collapse
+when the [kernel parser](https://raw.githubusercontent.com/torvalds/linux/master/mm/page_counter.c)
+divides limits by PAGE_SIZE.
+
+Registration's optional `resourceClassEnforcement` array has entries with
+`backend` (`qemuVM` or `jailedFirecrackerSandbox`), `controllersDelegated`,
+`stableOwnership`, `preExecutionEnforcement`, and `effectiveReadback`.
+`supportsBurstable` requires all four booleans. Nil/empty is unsupported.
+This branch sends none and retains unconditional burstable refusal until the
+complete STR272 runtime is integrated and validated. Listing root controllers
+or setting one backend flag cannot enable placement.
 
 ## Exact source integration points
 

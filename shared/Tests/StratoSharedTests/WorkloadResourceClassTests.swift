@@ -154,3 +154,39 @@ struct WorkloadResourceClassTests {
             reclaimReclaimedPagesTotal: .unavailable, oomKillsTotal: .unavailable, mglruEnabled: .unavailable)
     }
 }
+
+@Suite("Resource class page-normalized enforcement")
+struct WorkloadResourceClassPageTests {
+    @Test func thresholdsDoNotCollapseAfterKernelPageParsing() throws {
+        let policy = try WorkloadResourceClassPolicy(kind: .burstable, memoryHighPercent: 99)
+        let raw = try policy.runtimeLimits(guestBytes: 10000, backendOverheadBytes: 0)
+        let aligned = try raw.aligned(pageSizeBytes: 4096)
+        #expect(raw.memoryHighBytes == 9900)
+        #expect(raw.memoryMaxBytes == 10000)
+        #expect(aligned.memoryHighBytes == 8192)
+        #expect(aligned.memoryMaxBytes == 12288)
+        #expect(aligned.memoryHighBytes / 1024 == 8)
+        #expect(aligned.memoryMaxBytes / 1024 == 12)
+    }
+
+    @Test func invalidAndOverflowingAlignmentFailsClosed() throws {
+        let raw = try WorkloadResourceClassPolicy.burstable.runtimeLimits(guestBytes: 10000, backendOverheadBytes: 0)
+        for size: Int64 in [0, -1, 512, 4095, 65536] {
+            #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) { try raw.aligned(pageSizeBytes: size) }
+        }
+        let extreme = try WorkloadResourceClassPolicy.burstable.runtimeLimits(guestBytes: .max, backendOverheadBytes: 0)
+        #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) { try extreme.aligned(pageSizeBytes: 4096) }
+    }
+
+    @Test func partialBackendEvidenceIsInsufficient() {
+        let partial = WorkloadResourceClassEnforcement(
+            backend: .qemuVM, controllersDelegated: true,
+            stableOwnership: true, preExecutionEnforcement: true, effectiveReadback: false)
+        #expect(partial.supportsBurstable == false)
+        #expect(
+            WorkloadResourceClassEnforcement(
+                backend: .jailedFirecrackerSandbox, controllersDelegated: true,
+                stableOwnership: true, preExecutionEnforcement: true, effectiveReadback: true
+            ).supportsBurstable)
+    }
+}
