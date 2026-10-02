@@ -336,6 +336,13 @@ final class SiteTests {
             let site = try await self.makeSite(app: app, name: "dc-dereg")
             let controllerId = try await self.registerAgent(app: app, named: "dereg-ctl", siteID: site.id)
             let peerId = try await self.registerAgent(app: app, named: "dereg-peer", siteID: site.id)
+            // Database-only registration does not invent socket ownership.
+            // This topology test supplies known local teardown ownership;
+            // unknown routes remain covered by revocation's 503 guard tests.
+            for id in [controllerId, peerId] {
+                let agent = try #require(try await Agent.find(UUID(uuidString: id), on: app.db))
+                #expect(await app.coordination.recordAgentRoute(agentKey: agent.identity.key, replicaId: app.replicaID))
+            }
             site.$networkControllerAgent.id = UUID(uuidString: controllerId)
             try await site.save(on: app.db)
 
