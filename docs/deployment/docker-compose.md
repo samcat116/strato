@@ -92,7 +92,7 @@ docker compose run --rm bootstrap grant-platform-admin \
 
 # ...or promote and mint a fresh passkey link for an account that has none
 docker compose run --rm bootstrap grant-platform-admin \
-  --email bootstrap@localhost --claim --env production
+  --email bootstrap@localhost.invalid --claim --env production
 ```
 
 The `bootstrap` service is just a one-shot control-plane container with the

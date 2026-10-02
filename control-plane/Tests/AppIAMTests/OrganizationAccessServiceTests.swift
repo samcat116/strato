@@ -64,12 +64,12 @@ final class OrganizationAccessServiceTests {
     func testRequireMember() async throws {
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
-            let member = try await builder.createUser(username: "m", email: "m@example.com")
+            let member = try await builder.createUser(username: "user-m", email: "m@example.com")
             try await builder.addUserToOrganization(user: member, organization: org, role: "member")
             try await OrganizationAccessService.requireMember(
                 organizationID: org.id!, on: self.authedRequest(app, user: member))
 
-            let outsider = try await builder.createUser(username: "m2", email: "m2@example.com")
+            let outsider = try await builder.createUser(username: "user-m2", email: "m2@example.com")
             await self.expectAbort(.forbidden, reason: "Not a member of this organization") {
                 try await OrganizationAccessService.requireMember(
                     organizationID: org.id!, on: self.authedRequest(app, user: outsider))
@@ -81,12 +81,12 @@ final class OrganizationAccessServiceTests {
     func testRequireAdmin() async throws {
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
-            let admin = try await builder.createUser(username: "a", email: "a@example.com")
+            let admin = try await builder.createUser(username: "user-a", email: "a@example.com")
             try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
             try await OrganizationAccessService.requireAdmin(
                 organizationID: org.id!, on: self.authedRequest(app, user: admin))
 
-            let member = try await builder.createUser(username: "a2", email: "a2@example.com")
+            let member = try await builder.createUser(username: "user-a2", email: "a2@example.com")
             try await builder.addUserToOrganization(user: member, organization: org, role: "member")
             await self.expectAbort(.forbidden, reason: "Admin access required") {
                 try await OrganizationAccessService.requireAdmin(
@@ -118,7 +118,7 @@ final class OrganizationAccessServiceTests {
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
             let project = try await builder.createProject(name: "P", description: "d", organization: org)
-            let user = try await builder.createUser(username: "m", email: "m@example.com")
+            let user = try await builder.createUser(username: "user-m", email: "m@example.com")
             let req = self.authedRequest(app, user: user)
 
             try await RoleBindingService.grant(
@@ -127,7 +127,7 @@ final class OrganizationAccessServiceTests {
             try await OrganizationAccessService.requireProjectMember(project: project, on: req)
 
             // A user with no binding anywhere — the check must fail.
-            let outsider = try await builder.createUser(username: "m3", email: "m3@example.com")
+            let outsider = try await builder.createUser(username: "user-m3", email: "m3@example.com")
             await self.expectAbort(.forbidden, reason: "Not a member of this organization") {
                 try await OrganizationAccessService.requireProjectMember(
                     project: project, on: self.authedRequest(app, user: outsider))
@@ -140,7 +140,7 @@ final class OrganizationAccessServiceTests {
         try await withAccessTestApp { app, builder in
             let org = try await builder.createOrganization()
             let project = try await builder.createProject(name: "P", description: "d", organization: org)
-            let user = try await builder.createUser(username: "a", email: "a@example.com")
+            let user = try await builder.createUser(username: "user-a", email: "a@example.com")
             let req = self.authedRequest(app, user: user)
 
             try await RoleBindingService.grant(
@@ -149,7 +149,7 @@ final class OrganizationAccessServiceTests {
             try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
 
             // Editors may update project metadata, but cannot administer IAM policy.
-            let editor = try await builder.createUser(username: "a2", email: "a2@example.com")
+            let editor = try await builder.createUser(username: "user-a2", email: "a2@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: editor.id!, role: .editor,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
@@ -161,7 +161,7 @@ final class OrganizationAccessServiceTests {
             }
 
             // A viewer can see the project but cannot administer it.
-            let viewer = try await builder.createUser(username: "a3", email: "a3@example.com")
+            let viewer = try await builder.createUser(username: "user-a3", email: "a3@example.com")
             try await RoleBindingService.grant(
                 principalType: .user, principalID: viewer.id!, role: .viewer,
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)

@@ -7494,14 +7494,20 @@ export interface components {
         UserSource: "local" | "scim" | "oidc";
         /** @description Self-registration payload for `POST /api/users/register`. */
         SelfRegisterUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName: string;
         };
         /** @description Admin invitation payload. `role` only applies when `organizationId` is set. */
         AdminCreateUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName: string;
             /** @default false */
             isSystemAdmin: boolean;
@@ -7526,8 +7532,11 @@ export interface components {
         };
         /** @description Partial update; omitted fields are left unchanged. */
         UpdateUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username?: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName?: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email?: string;
         };
         /** @description The user behind the current session. */

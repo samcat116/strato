@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import Testing
 import Vapor
 import VaporTesting
@@ -52,6 +53,98 @@ struct SCIMProvisioningIntegrationTests {
     /// AuthorizationMiddleware rejection (Vapor's generic `{"error":true,…}`
     /// body synthesized from the thrown Abort).
     private let scimErrorSchema = "urn:ietf:params:scim:api:messages:2.0:Error"
+
+    @Test("Legacy identity data cannot block SCIM offboarding", arguments: [false, true])
+    func legacyOffboarding(put: Bool) async throws {
+        try await withTestApp { app in
+            let fixture = try await makeSCIMFixture(app)
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(username: "legacy-user", email: "legacy@example.com")
+            try await builder.addUserToOrganization(user: user, organization: fixture.organization, role: "member")
+            let token = try await user.generateAPIKey(on: app.db)
+            let userID = try user.requireID()
+            let sql = try #require(app.db as? any SQLDatabase)
+            // Historic grammar violations fit the forward migration's length constraints.
+            try await sql.raw(
+                "UPDATE users SET username = 'person@example.com', email = 'legacy@localhost', display_name = '   ' WHERE id = \(bind: userID)"
+            ).run()
+            let path = "/organizations/\(fixture.organization.id!)/scim/v2/Users/\(userID)"
+            let payload =
+                put
+                ? "{\"schemas\":[\"urn:ietf:params:scim:schemas:core:2.0:User\"],\"userName\":\"person@example.com\",\"displayName\":\"   \",\"emails\":[{\"value\":\"legacy@localhost\",\"primary\":true}],\"active\":false}"
+                : "{\"schemas\":[\"urn:ietf:params:scim:api:messages:2.0:PatchOp\"],\"Operations\":[{\"op\":\"replace\",\"path\":\"active\",\"value\":false}]}"
+            for _ in 0..<2 {
+                try await app.test(put ? .PUT : .PATCH, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.rawToken)
+                    req.headers.contentType = HTTPMediaType(type: "application", subType: "scim+json")
+                    req.body = ByteBufferAllocator().buffer(string: payload)
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+            let disabled = try #require(try await User.find(userID, on: app.db))
+            #expect(!disabled.scimActive)
+            #expect(disabled.disabledAt != nil)
+            #expect(disabled.sessionEpoch == user.sessionEpoch + 1)
+            #expect(disabled.username == "person@example.com")
+            #expect(disabled.email == "legacy@localhost")
+            #expect(disabled.displayName == "   ")
+            try await app.test(.GET, "/api/users/me/passkeys") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            // Actual changes are validated independently of unrelated legacy data.
+            for (field, value, expected) in [
+                ("userName", "new/bad", HTTPStatus.badRequest),
+                ("displayName", "  ", .badRequest),
+                ("emails", "bad-email", .badRequest),
+                ("userName", " scimadmin ", .conflict),
+                ("userName", " repaired-user ", .ok),
+            ] {
+                let replacement: Any = field == "emails" ? [["value": value, "primary": true]] : value
+                let data = try JSONSerialization.data(withJSONObject: [
+                    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                    "Operations": [["op": "replace", "path": field, "value": replacement]],
+                ])
+                try await app.test(.PATCH, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.rawToken)
+                    req.headers.contentType = HTTPMediaType(type: "application", subType: "scim+json")
+                    req.body = ByteBufferAllocator().buffer(bytes: data)
+                } afterResponse: { res in
+                    #expect(res.status == expected)
+                    if expected == .badRequest { #expect(res.body.string.contains("invalidValue")) }
+                }
+            }
+            let repaired = try #require(try await User.find(userID, on: app.db))
+            #expect(repaired.username == "repaired-user")
+            #expect(repaired.email == "legacy@localhost")
+            #expect(repaired.displayName == "   ")
+            #expect(!repaired.scimActive)
+            #expect(repaired.disabledAt != nil)
+            #expect(repaired.sessionEpoch == disabled.sessionEpoch)
+
+        }
+    }
+
+    @Test("SCIM rejects malformed identities with protocol invalidValue errors")
+    func invalidIdentity() async throws {
+        try await withTestApp { app in
+            let fixture = try await makeSCIMFixture(app)
+            let orgID = fixture.organization.id!.uuidString
+            for name in ["bad/name", String(repeating: "a", count: 3000)] {
+                let payload = "{\"schemas\":[\"urn:ietf:params:scim:schemas:core:2.0:User\"],\"userName\":\"\(name)\"}"
+                try await app.test(.POST, "/organizations/\(orgID)/scim/v2/Users") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.rawToken)
+                    req.headers.contentType = HTTPMediaType(type: "application", subType: "scim+json")
+                    req.body = ByteBufferAllocator().buffer(string: payload)
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("invalidValue"))
+                }
+            }
+        }
+    }
 
     @Test("Valid scim_ token lists users through the full middleware stack")
     func validTokenListsUsers() async throws {
