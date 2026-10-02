@@ -10,7 +10,7 @@ import AppTestSupport
 /// enumerated from `role_bindings` plus the resource tree — and the
 /// arbitrary-principal form of `can-i`, which since the evaluator unification
 /// answers through `IAMDecisionEngine` (the enforcement decision itself).
-@Suite("IAM Who-Can Tests", .serialized)
+@Suite("IAM Who-Can Tests", .serialized, .postgresFixture)
 final class IAMWhoCanTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

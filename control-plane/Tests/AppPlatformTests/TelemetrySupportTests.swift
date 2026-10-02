@@ -8,6 +8,31 @@ import Testing
 @Suite("Telemetry support")
 struct TelemetrySupportTests {
 
+    @Test("workload log pressure metrics count losses and clear queue gauges")
+    func workloadLogMetrics() throws {
+        let metrics = TestMetrics()
+        Telemetry.recordWorkloadLogQueue(kind: "sandbox", count: 4, bytes: 1024, factory: metrics)
+        let depth = try metrics.expectGauge("strato_workload_log_queue_depth", [("kind", "sandbox")])
+        let bytes = try metrics.expectGauge("strato_workload_log_queue_bytes", [("kind", "sandbox")])
+        #expect(depth.lastValue == 4)
+        #expect(bytes.lastValue == 1024)
+        Telemetry.recordWorkloadLogQueue(kind: "sandbox", count: 0, bytes: 0, factory: metrics)
+        #expect(depth.lastValue == 0)
+        #expect(bytes.lastValue == 0)
+        Telemetry.workloadLogsDropped(kind: "sandbox", reason: "overflow", count: 7, factory: metrics)
+        #expect(
+            try metrics.expectCounter(
+                "strato_workload_log_dropped_total", [("kind", "sandbox"), ("reason", "overflow")]
+            ).totalValue == 7)
+        Telemetry.workloadLogPushFailed(kind: "sandbox", factory: metrics)
+        #expect(
+            try metrics.expectCounter("strato_workload_log_push_failures_total", [("kind", "sandbox")]).totalValue == 1)
+        Telemetry.workloadLogBatchCompleted(kind: "sandbox", elapsed: .milliseconds(25), factory: metrics)
+        #expect(
+            try metrics.expectTimer("strato_workload_log_batch_duration_seconds", [("kind", "sandbox")]).values.count
+                == 1)
+    }
+
     @Test("Coordination gauge clears on recovery and degraded operations are counted")
     func coordinationDegradationMetrics() throws {
         let metrics = TestMetrics()

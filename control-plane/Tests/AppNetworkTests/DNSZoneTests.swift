@@ -11,7 +11,7 @@ import AppTestSupport
 /// The DNS record model (issue #770): zone CRUD, zone↔network attachment, the
 /// primary-zone pointer, authored records with their conflict rules, VM
 /// hostnames, and the derived ∪ authored assembler.
-@Suite("DNS Zone Tests", .serialized)
+@Suite("DNS Zone Tests", .serialized, .postgresFixture)
 final class DNSZoneTests {
 
     private struct ErrorBody: Content {

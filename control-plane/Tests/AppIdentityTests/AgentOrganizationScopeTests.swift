@@ -14,7 +14,7 @@ import AppTestSupport
 /// registration (and its refusal/durability rules), the persisted
 /// agent/site parentage the Cedar hierarchy is built from, the org-delegated
 /// enrollment API, and the system-admin reassignment endpoint.
-@Suite("Agent Organization Scope Tests", .serialized)
+@Suite("Agent Organization Scope Tests", .serialized, .postgresFixture)
 final class AgentOrganizationScopeTests {
 
     private func withScopedApp(

@@ -14,7 +14,7 @@ import AppTestSupport
 /// easy to miss: `GET /api/organizations/:id/path/...` was not touched at all,
 /// and `/resources/summary` narrowed `resourceUsage` per row while handing the
 /// same organization-wide totals straight back through `quotaCompliance`.
-@Suite("Hierarchy Path and Quota Usage Visibility", .serialized)
+@Suite("Hierarchy Path and Quota Usage Visibility", .serialized, .postgresFixture)
 final class HierarchyPathVisibilityTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

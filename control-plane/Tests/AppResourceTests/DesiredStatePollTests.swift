@@ -17,7 +17,7 @@ import AppTestSupport
 /// from a loopback peer, and Vapor's in-memory `test()` harness has no remote
 /// address at all, so neither the accept nor the reject path can be reached
 /// through it.
-@Suite("Desired-state long-poll", .serialized)
+@Suite("Desired-state long-poll", .serialized, .postgresFixture)
 struct DesiredStatePollTests {
 
     private static let path = "/agent/desired-state"

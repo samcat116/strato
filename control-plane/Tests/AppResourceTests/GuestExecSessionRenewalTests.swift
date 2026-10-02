@@ -38,7 +38,7 @@ private actor RenewalLatch {
     }
 }
 
-@Suite("Guest exec lease renewal", .serialized, .timeLimit(.minutes(1)))
+@Suite("Guest exec lease renewal", .serialized, .postgresFixture, .timeLimit(.minutes(1)))
 struct GuestExecSessionRenewalTests {
     private func seed(
         count: Int, on sql: any SQLDatabase, now: Date = Date()

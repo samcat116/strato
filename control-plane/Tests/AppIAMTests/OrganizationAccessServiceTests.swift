@@ -10,7 +10,7 @@ import AppTestSupport
 /// `role_bindings`. These tests assert the wrapper's behavior: the right check
 /// is made, the documented `.forbidden` reason is thrown on denial, and
 /// system admins are allowed through the platform policy.
-@Suite("OrganizationAccessService Tests", .serialized)
+@Suite("OrganizationAccessService Tests", .serialized, .postgresFixture)
 final class OrganizationAccessServiceTests {
 
     func withAccessTestApp(_ test: (Application, TestDataBuilder) async throws -> Void) async throws {

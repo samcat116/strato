@@ -13,7 +13,7 @@ import AppTestSupport
 /// the `GuestExecSessionManager` pending/attach lifecycle, agent-ownership
 /// anti-spoofing, and the sandbox logs endpoint's Loki gating. The
 /// browser-attach relay has a separate live-WebSocket integration suite.
-@Suite("Guest Exec and Sandbox Log Tests", .serialized)
+@Suite("Guest Exec and Sandbox Log Tests", .serialized, .postgresFixture)
 final class GuestExecTests {
 
     /// Same harness shape as `SandboxTests`: full middleware stack,

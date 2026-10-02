@@ -8,7 +8,7 @@ import AppTestSupport
 /// Tests for the Valkey coordination layer (issue #258) against the in-memory
 /// store, which mirrors the Valkey store's semantics: TTL expiry, NX lock
 /// acquisition, and atomic capacity reservation.
-@Suite("CoordinationService Tests")
+@Suite("CoordinationService Tests", .postgresFixture)
 struct CoordinationServiceTests {
 
     private func makeService() -> CoordinationService {
@@ -232,7 +232,7 @@ struct CoordinationServiceTests {
 }
 
 /// Scheduler placement with the reservation step (issue #258).
-@Suite("Scheduler Reservation Tests")
+@Suite("Scheduler Reservation Tests", .postgresFixture)
 struct SchedulerReservationTests {
 
     private func makeScheduler() -> SchedulerService {
@@ -356,7 +356,7 @@ struct SchedulerReservationTests {
 /// The deadline that bounds coordination-store operations (issues #731 and
 /// STR-206). Without it readiness and fail-open request paths inherit
 /// valkey-swift's 30s `commandTimeout` during a connection drop.
-@Suite("Coordination store timeout")
+@Suite("Coordination store timeout", .postgresFixture)
 struct StoreTimeoutTests {
     private struct ProbeTestError: Error {}
 
