@@ -18,7 +18,7 @@ struct CurrentSchemaBaselineTests {
     // (deadline, id) index; administrative revocation adds one agents column.
     // Historical catalogs and the frozen baseline remain
     // independently asserted below.
-    private static let expectedCurrentCatalogMD5 = "PENDING_CURRENT"
+    private static let expectedCurrentCatalogMD5 = "22d904826d3675338e7746f58fddd3ef"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -103,10 +103,10 @@ struct CurrentSchemaBaselineTests {
             let suspension = AddSandboxSuspension()
             try await fences.revert(on: app.db)
             let preFence = try await catalogMD5(on: app.db)
-            #expect(preFence == "PENDING_PREFENCE", "Observed pre-fence catalog: \(preFence)")
+            #expect(preFence == "3abaf317919a073262b8c1b5440c3e1e", "Observed pre-fence catalog: \(preFence)")
             try await idle.revert(on: app.db)
             let preIdle = try await catalogMD5(on: app.db)
-            #expect(preIdle == "PENDING_PREIDLE", "Observed pre-idle catalog: \(preIdle)")
+            #expect(preIdle == "faebc4bf2ba3571ee37a1b5f81fce2cc", "Observed pre-idle catalog: \(preIdle)")
             try await suspension.revert(on: app.db)
             #expect(try await catalogMD5(on: app.db) == "c8b380fc024ddac8fea050b9b9d41e37")
             try await suspension.prepare(on: app.db)
