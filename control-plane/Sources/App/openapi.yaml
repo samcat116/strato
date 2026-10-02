@@ -15461,7 +15461,7 @@ components:
       properties:
         id:
           type: string
-          enum: [spire, libvirt, ovn_ovs, frr, ceph_client, ceph_cluster]
+          enum: [spire, libvirt, ovn_ovs, frr, ceph_client, ceph_cluster, host_memory_profile]
         role:
           type: string
           enum: [identity, compute, networking, routing, storage]
@@ -16076,6 +16076,45 @@ components:
           $ref: "#/components/schemas/ResourceTelemetryValue"
         mglruEnabled:
           $ref: "#/components/schemas/ResourceTelemetryFlag"
+        memoryProfile:
+          $ref: "#/components/schemas/HostMemoryProfileObservation"
+        swapInPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        swapOutPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        zramOriginalBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        swapInPagesPerSecond: { type: number, nullable: true }
+        swapOutPagesPerSecond: { type: number, nullable: true }
+        memoryWarnings:
+          type: array
+          items: { type: string, enum: [swap_thrashing, oom_kill] }
+
+    HostMemoryProfileConfiguration:
+      type: object
+      additionalProperties: false
+      required: [tier, tenant_class, nvme_swap]
+      properties:
+        tier: { type: string, enum: [zswap, zram] }
+        tenant_class: { type: string, enum: [single, multi] }
+        zram_bytes: { type: integer, format: int64, minimum: 1048576, maximum: 1099511627776 }
+        zswap_pool_percent: { type: integer, minimum: 1, maximum: 50 }
+        nvme_swap: { type: string }
+        ksm: { type: boolean }
+        require_mglru: { type: boolean }
+        ksm_pages_to_scan: { type: integer, minimum: 1, maximum: 1000 }
+        ksm_sleep_millisecs: { type: integer, minimum: 50, maximum: 60000 }
+
+    HostMemoryProfileObservation:
+      type: object
+      additionalProperties: false
+      properties:
+        configured:
+          $ref: "#/components/schemas/HostMemoryProfileConfiguration"
+        effectiveTier: { type: string, enum: [zswap, zram], nullable: true }
+        thpPolicy: { type: string, nullable: true }
+        ksmRunning: { type: boolean, nullable: true }
+        reason: { type: string, nullable: true }
 
     WorkloadMemoryEventsTelemetry:
       type: object

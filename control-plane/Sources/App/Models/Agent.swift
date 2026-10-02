@@ -553,13 +553,26 @@ extension Agent {
         }
     }
 
+    /// Memory profile failures (especially KSM unmerging) fence every backend,
+    /// including Firecracker VMs and sandboxes without networking.
+    func hostMemoryProfileAllowsPlacement(at instant: ClusterInstant) -> Bool {
+        guard let profile = dependencyObservations.first(where: { $0.id == .hostMemoryProfile }) else {
+            return resourceTelemetry?.memoryProfile == nil
+        }
+        guard let receivedAt = dependencyObservationsReceivedAt else { return false }
+        return profile.allowsNewWork(
+            receivedAt: receivedAt, at: instant.date,
+            staleAfter: Self.dependencyObservationStaleAfter)
+    }
+
     /// Hypervisor backends this agent can actually run. Agents probe each
     /// backend before reporting it, so an empty list means the agent cannot
     /// run VMs at all — it stays registered but is never eligible for
     /// placement. No QEMU fallback here: assuming QEMU for an empty list
     /// would defeat the agent-side probe in exactly the case it exists for.
     func supportedHypervisors(at instant: ClusterInstant) -> [HypervisorType] {
-        hypervisors.filter { support in
+        guard hostMemoryProfileAllowsPlacement(at: instant) else { return [] }
+        return hypervisors.filter { support in
             guard support.available else { return false }
             return support.type != .qemu || dependencyAllows(.qemuPlacement, at: instant)
         }.map(\.type)
@@ -617,6 +630,7 @@ extension Agent {
     /// both Firecracker snapshot support and the separately probed sandbox
     /// runtime; a Firecracker binary alone cannot load Strato's guest image.
     func supportsSnapshotArtifact(_ kind: SnapshotArtifactKind, at instant: ClusterInstant) -> Bool {
+        guard hostMemoryProfileAllowsPlacement(at: instant) else { return false }
         let backend: HypervisorType
         switch kind {
         case .volumeSnapshot, .vmCheckpoint:

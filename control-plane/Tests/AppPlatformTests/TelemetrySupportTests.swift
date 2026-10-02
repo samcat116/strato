@@ -247,7 +247,12 @@ struct TelemetrySupportTests {
             reclaimScannedPagesTotal: .available(8),
             reclaimReclaimedPagesTotal: .available(4),
             oomKillsTotal: .available(0),
-            mglruEnabled: .available(false))
+            mglruEnabled: .available(false),
+            swapInPagesTotal: .available(20),
+            swapOutPagesTotal: .available(40),
+            swapInPagesPerSecond: 2,
+            swapOutPagesPerSecond: 4,
+            memoryWarnings: ["swap_thrashing"])
 
         Telemetry.recordHostResourceTelemetry(
             agentID: "agent-1", telemetry: telemetry, factory: metrics)
@@ -264,6 +269,13 @@ struct TelemetrySupportTests {
                 "strato_agent_pressure_total_seconds",
                 base + [("resource", "cpu"), ("stall", "some")]
             ).lastValue == 2.5)
+        #expect(try metrics.expectGauge("strato_agent_swap_in_pages_per_second", base).lastValue == 2)
+        #expect(try metrics.expectGauge("strato_agent_swap_out_pages_per_second", base).lastValue == 4)
+        #expect(
+            try metrics.expectGauge("strato_agent_memory_warning", base + [("warning", "swap_thrashing")]).lastValue
+                == 1)
+        #expect(try metrics.expectGauge("strato_agent_memory_warning", base + [("warning", "oom_kill")]).lastValue == 0)
+        #expect(try metrics.expectGauge("strato_agent_memory_profile_enabled", base).lastValue == 0)
         #expect(try metrics.expectGauge("strato_agent_swap_used_bytes", base).lastValue == 0)
         #expect(
             try metrics.expectGauge(

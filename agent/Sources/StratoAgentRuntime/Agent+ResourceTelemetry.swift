@@ -17,11 +17,12 @@ extension Agent {
     func runResourceTelemetryObservationLoop() async {
         while !Task.isCancelled, !shutdownRequested {
             let targets = resourceTelemetryProbeTargets()
+            let previousHost = hostResourceTelemetry
             // Procfs/sysfs reads are synchronous. Keep them off the agent
             // actor so neither heartbeats nor desired-state reconciliation
             // wait behind a slow filesystem read.
             let snapshot = await Task.detached(priority: .utility) {
-                ResourceTelemetryProbe.live.sample(targets: targets)
+                ResourceTelemetryProbe.live.sample(targets: targets, previousHost: previousHost)
             }.value
             guard !Task.isCancelled, !shutdownRequested else { return }
             hostResourceTelemetry = snapshot.host

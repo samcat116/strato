@@ -1654,3 +1654,9 @@ snapshot. Disconnected/failed active sends also increment the same loss counter 
 per-line errors. Stop discards pending telemetry and cancels the pump. This policy
 applies only to sandbox workload log lines; interactive terminal/session bytes
 retain their separate lossless delivery and overflow contracts (STR-89).
+
+## Host memory density policy
+
+The [opt-in bootstrap profile](../deployment/host-memory-profile.md) owns persistent
+compressed swap, THP, and tenant-safe KSM settings. Runtime observation is read-only
+and profile failures fence all hypervisor placement, including KSM unmerge transitions.

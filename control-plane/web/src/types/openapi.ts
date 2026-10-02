@@ -8713,7 +8713,7 @@ export interface components {
         };
         NodeDependencyObservation: {
             /** @enum {string} */
-            id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster";
+            id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster" | "host_memory_profile";
             /** @enum {string} */
             role: "identity" | "compute" | "networking" | "routing" | "storage";
             /** @enum {string} */
@@ -9004,6 +9004,35 @@ export interface components {
             reclaimReclaimedPagesTotal: components["schemas"]["ResourceTelemetryValue"];
             oomKillsTotal: components["schemas"]["ResourceTelemetryValue"];
             mglruEnabled: components["schemas"]["ResourceTelemetryFlag"];
+            memoryProfile?: components["schemas"]["HostMemoryProfileObservation"];
+            swapInPagesTotal?: components["schemas"]["ResourceTelemetryValue"];
+            swapOutPagesTotal?: components["schemas"]["ResourceTelemetryValue"];
+            zramOriginalBytes?: components["schemas"]["ResourceTelemetryValue"];
+            swapInPagesPerSecond?: number | null;
+            swapOutPagesPerSecond?: number | null;
+            memoryWarnings?: ("swap_thrashing" | "oom_kill")[];
+        };
+        HostMemoryProfileConfiguration: {
+            /** @enum {string} */
+            tier: "zswap" | "zram";
+            /** @enum {string} */
+            tenant_class: "single" | "multi";
+            /** Format: int64 */
+            zram_bytes?: number;
+            zswap_pool_percent?: number;
+            nvme_swap: string;
+            ksm?: boolean;
+            require_mglru?: boolean;
+            ksm_pages_to_scan?: number;
+            ksm_sleep_millisecs?: number;
+        };
+        HostMemoryProfileObservation: {
+            configured?: components["schemas"]["HostMemoryProfileConfiguration"];
+            /** @enum {string|null} */
+            effectiveTier?: "zswap" | "zram" | null;
+            thpPolicy?: string | null;
+            ksmRunning?: boolean | null;
+            reason?: string | null;
         };
         WorkloadMemoryEventsTelemetry: {
             availability: components["schemas"]["ResourceTelemetryAvailability"];

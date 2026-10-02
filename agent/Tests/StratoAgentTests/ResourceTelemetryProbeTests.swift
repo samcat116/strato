@@ -160,3 +160,110 @@ struct ResourceTelemetryProbeTests {
             average300: average10, totalMicroseconds: 0)
     }
 }
+
+@Suite("Host memory profile observation")
+struct HostMemoryProfileObservationTests {
+    private func probe(_ overrides: [String: String] = [:]) -> ResourceTelemetryProbe {
+        let defaults = [
+            "/etc/strato/host-memory-profile.json":
+                #"{"tier":"zram","tenant_class":"multi","nvme_swap":"/dev/nvme0n1p1"}"#,
+            "/proc/swaps":
+                "Filename Type Size Used Priority\n/dev/zram0 partition 1024 0 100\n/dev/nvme0n1p1 partition 2048 0 10\n",
+            "/sys/module/zswap/parameters/enabled": "N",
+            "/sys/block/zram0/disksize": "1073741824",
+            "/sys/kernel/mm/transparent_hugepage/enabled": "always [madvise] never",
+            "/sys/kernel/mm/ksm/run": "0",
+            "/sys/kernel/mm/ksm/pages_shared": "0",
+            "/sys/kernel/mm/ksm/pages_sharing": "0",
+            "/sys/kernel/mm/lru_gen/enabled": "0x0006",
+        ].merging(overrides) { _, new in new }
+        return ResourceTelemetryProbe(read: { defaults[$0] }, listDirectory: { _ in [] })
+    }
+
+    @Test("configured and effective tiers agree; secondary MGLRU bits do not mean enabled")
+    func configuredEffective() {
+        let host = probe().sample(targets: []).host
+        #expect(host.memoryProfile?.reason == nil)
+        #expect(host.memoryProfile?.configured?.tier == .zram)
+        #expect(host.memoryProfile?.effectiveTier == .zram)
+        #expect(host.mglruEnabled == .available(false))
+    }
+
+    @Test("zram on a kernel without zswap remains supported")
+    func zramOnlyKernel() {
+        let files: [String: String] = [
+            "/etc/strato/host-memory-profile.json":
+                #"{"tier":"zram","tenant_class":"multi","nvme_swap":"/dev/nvme0n1p1"}"#,
+            "/proc/swaps":
+                "Filename Type Size Used Priority\n/dev/zram0 partition 1024 0 100\n/dev/nvme0n1p1 partition 2048 0 10",
+            "/sys/block/zram0/disksize": "1073741824",
+            "/sys/kernel/mm/transparent_hugepage/enabled": "always [madvise] never",
+            "/sys/kernel/mm/ksm/run": "0",
+            "/sys/kernel/mm/ksm/pages_shared": "0",
+            "/sys/kernel/mm/ksm/pages_sharing": "0",
+        ]
+        let observer = ResourceTelemetryProbe(read: { files[$0] }, listDirectory: { _ in [] })
+        #expect(observer.memoryProfileObservation()?.reason == nil)
+        #expect(observer.memoryProfileObservation()?.effectiveTier == .zram)
+    }
+
+    @Test("unsafe tenant and unmerge transition are observable failures")
+    func tenantTransition() {
+        #expect(
+            probe(["/sys/kernel/mm/ksm/pages_sharing": "10"]).memoryProfileObservation()?.reason
+                == "ksm_unmerge_pending_no_hostile_placement")
+        #expect(
+            probe([
+                "/etc/strato/host-memory-profile.json":
+                    #"{"tier":"zram","tenant_class":"multi","nvme_swap":"/dev/nvme0n1p1","ksm":true}"#
+            ]).memoryProfileObservation()?.reason == "ksm_multitenant_forbidden")
+    }
+
+    @Test("pressure fixture observes compressed tier before disk fallback, rate, thrash and OOM")
+    func pressureWarnings() {
+        let start = Date(timeIntervalSince1970: 100)
+        let before = probe([
+            "/proc/vmstat": "pswpin 10\npswpout 20\noom_kill 0",
+            "/proc/meminfo": "Zswap: 0 kB\nZswapped: 0 kB\n",
+        ]).sample(targets: [], at: start).host
+        let compressed = ResourceTelemetryProbe(
+            read: { path in
+                [
+                    "/sys/block/zram0/mm_stat": "4096 1024 2048 0 0 0 0 0",
+                    "/proc/swaps":
+                        "Filename Type Size Used Priority\n/dev/zram0 partition 1024 4 100\n/dev/nvme0n1p1 partition 2048 0 10",
+                    "/proc/vmstat": "pswpin 40\npswpout 80\noom_kill 1",
+                    "/proc/pressure/memory": "full avg10=0.50 avg60=0.10 avg300=0.01 total=100",
+                ][path]
+            }, listDirectory: { _ in ["zram0"] }
+        )
+        .sample(targets: [], at: start.addingTimeInterval(15), previousHost: before).host
+        #expect(compressed.zramOriginalBytes == .available(4096))
+        #expect(compressed.zramUsedBytes == .available(2048))
+        #expect(compressed.swapInPagesPerSecond == 2)
+        #expect(compressed.swapOutPagesPerSecond == 4)
+        #expect(compressed.memoryWarnings == ["swap_thrashing", "oom_kill"])
+        let reset = probe(["/proc/vmstat": "pswpin 0\npswpout 0\noom_kill 0"])
+            .sample(targets: [], at: start.addingTimeInterval(30), previousHost: compressed).host
+        #expect(reset.swapInPagesPerSecond == nil)
+        #expect(reset.memoryWarnings == [])
+    }
+
+    @Test("profile dependency is observe-only and withholds placement for a failed profile")
+    func dependency() async {
+        let module = HostMemoryProfileDependencyModule(observation: {
+            probe(["/sys/kernel/mm/ksm/run": "1"]).memoryProfileObservation()
+        })
+        #expect(module.ownership == .observeOnly)
+        let result = await module.inspect()
+        #expect(result.functionalState == .unhealthy)
+        #expect(result.compatibility == .incompatible)
+        #expect(module.affectedCapabilities.contains(.qemuPlacement))
+        let disabled = HostMemoryProfileDependencyModule(observation: { nil })
+        #expect(await disabled.inspect().functionalState == .healthy)
+        let warning = HostMemoryProfileDependencyModule(
+            observation: { probe().memoryProfileObservation() }, warnings: { ["swap_thrashing"] })
+        #expect(await warning.inspect().functionalState == .degraded)
+        #expect(await warning.inspect().compatibility == .compatible)
+    }
+}

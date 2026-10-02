@@ -80,9 +80,10 @@ public struct ResourceTelemetryProbe: Sendable {
 
     public func sample(
         targets: [WorkloadTelemetryProbeTarget],
-        at sampledAt: Date = Date()
+        at sampledAt: Date = Date(),
+        previousHost: HostResourceTelemetry? = nil
     ) -> ResourceTelemetrySnapshot {
-        let host = sampleHost(at: sampledAt)
+        let host = sampleHost(at: sampledAt, previous: previousHost)
         var workloads: [String: WorkloadResourceTelemetry] = [:]
         var limitsEvidence: [String: WorkloadResourceLimitsEvidence] = [:]
         for target in targets {
@@ -101,7 +102,7 @@ public struct ResourceTelemetryProbe: Sendable {
 
     // MARK: - Host
 
-    private func sampleHost(at sampledAt: Date) -> HostResourceTelemetry {
+    private func sampleHost(at sampledAt: Date, previous: HostResourceTelemetry?) -> HostResourceTelemetry {
         let cpuPressure = pressure(at: "\(procRoot)/pressure/cpu")
         let memoryPressure = pressure(at: "\(procRoot)/pressure/memory")
         let ioPressure = pressure(at: "\(procRoot)/pressure/io")
@@ -131,12 +132,30 @@ public struct ResourceTelemetryProbe: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             let value = parseInteger(raw)
         {
-            mglruEnabled = .available(value != 0)
+            mglruEnabled = .available(value & 1 != 0)
         } else {
             mglruEnabled = .unavailable
         }
 
         let zramUsed = zramUsage()
+        let elapsed = previous.map { sampledAt.timeIntervalSince($0.sampledAt) }
+        func rate(_ current: ResourceTelemetryValue, _ prior: ResourceTelemetryValue?) -> Double? {
+            guard let elapsed, elapsed > 0, let value = current.value,
+                let old = prior?.value, value >= old
+            else { return nil }
+            return (Double(value) - Double(old)) / elapsed
+        }
+        let swapIn = integerValue(vmstat["pswpin"])
+        let swapOut = integerValue(vmstat["pswpout"])
+        let inRate = rate(swapIn, previous?.swapInPagesTotal)
+        let outRate = rate(swapOut, previous?.swapOutPagesTotal)
+        var warnings: [String] = []
+        if (inRate ?? 0) > 0 && (outRate ?? 0) > 0 && (memoryPressure.full?.average10 ?? 0) >= 0.5 {
+            warnings.append("swap_thrashing")
+        }
+        if let current = oomKills.value, let old = previous?.oomKillsTotal.value, current > old {
+            warnings.append("oom_kill")
+        }
         let health = Self.health(
             cpu: cpuPressure, memory: memoryPressure, io: ioPressure)
         return HostResourceTelemetry(
@@ -154,10 +173,17 @@ public struct ResourceTelemetryProbe: Sendable {
             reclaimScannedPagesTotal: reclaimScanned,
             reclaimReclaimedPagesTotal: reclaimReclaimed,
             oomKillsTotal: oomKills,
-            mglruEnabled: mglruEnabled)
+            mglruEnabled: mglruEnabled,
+            memoryProfile: memoryProfileObservation(),
+            swapInPagesTotal: integerValue(vmstat["pswpin"]),
+            swapOutPagesTotal: integerValue(vmstat["pswpout"]),
+            zramOriginalBytes: zramUsage(field: 0),
+            swapInPagesPerSecond: inRate,
+            swapOutPagesPerSecond: outRate,
+            memoryWarnings: warnings)
     }
 
-    private func zramUsage() -> ResourceTelemetryValue {
+    private func zramUsage(field: Int = 2) -> ResourceTelemetryValue {
         guard let devices = listDirectory("\(sysRoot)/block")?.filter({ $0.hasPrefix("zram") }),
             !devices.isEmpty
         else { return .unavailable }
@@ -169,7 +195,7 @@ public struct ResourceTelemetryProbe: Sendable {
                 let line = read("\(sysRoot)/block/\(device)/mm_stat")?
                     .split(whereSeparator: \Character.isWhitespace),
                 line.count >= 3,
-                let used = Int64(line[2])
+                let used = Int64(line[field])
             else { continue }
             let result = total.addingReportingOverflow(used)
             total = result.overflow ? Int64.max : result.partialValue
@@ -387,5 +413,105 @@ public struct ResourceTelemetryProbe: Sendable {
             return Int64(raw.dropFirst(2), radix: 16)
         }
         return Int64(raw)
+    }
+}
+
+extension ResourceTelemetryProbe {
+    public func memoryProfileObservation() -> HostMemoryProfileObservation? {
+        guard let raw = read("/etc/strato/host-memory-profile.json") else {
+            // A rollback interrupted while KSM pages are unmerging must remain visible.
+            guard read("/var/lib/strato/host-memory-profile.json") != nil else { return nil }
+            return HostMemoryProfileObservation(
+                configured: nil, effectiveTier: nil, thpPolicy: nil,
+                ksmRunning: nil, reason: "profile_rollback_pending")
+        }
+        let config = try? JSONDecoder().decode(HostMemoryProfileConfiguration.self, from: Data(raw.utf8))
+        let thp = read("\(sysRoot)/kernel/mm/transparent_hugepage/enabled")?
+            .split(separator: " ").first { $0.hasPrefix("[") }?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]\n"))
+        let ksmRun = read("\(sysRoot)/kernel/mm/ksm/run").flatMap {
+            Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let enabled = read("\(sysRoot)/module/zswap/parameters/enabled")?.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        let swaps =
+            read("\(procRoot)/swaps")?.split(separator: "\n").dropFirst().map {
+                $0.split(whereSeparator: \.isWhitespace)
+            } ?? []
+        let zramActive = swaps.contains { $0.first == "/dev/zram0" && $0.count >= 5 && Int($0[4]) == 100 }
+        let effective: HostMemoryProfileConfiguration.Tier? =
+            enabled == "Y" || enabled == "1" ? .zswap : (zramActive ? .zram : nil)
+        var reason: String?
+        if let config {
+            if thp == nil {
+                reason = "thp_unsupported"
+            } else if ksmRun == nil {
+                reason = "ksm_unsupported"
+            } else if enabled == nil && config.tier == .zswap {
+                reason = "zswap_unsupported"
+            } else if config.ksm == true && config.tenantClass != .single {
+                reason = "ksm_multitenant_forbidden"
+            } else if effective != config.tier {
+                reason = "compressed_tier_inactive"
+            } else if !swaps.contains(where: { $0.first.map(String.init) == config.nvmeSwap }) {
+                reason = "nvme_fallback_inactive"
+            } else if thp != "madvise" {
+                reason = "thp_madvise_inactive"
+            } else if ksmRun == 2 {
+                reason = "ksm_unmerge_pending_no_hostile_placement"
+            } else if config.ksm == true && ksmRun != 1 {
+                reason = "ksm_scanner_inactive"
+            } else if config.ksm != true {
+                let shared = read("\(sysRoot)/kernel/mm/ksm/pages_shared").flatMap {
+                    Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                let sharing = read("\(sysRoot)/kernel/mm/ksm/pages_sharing").flatMap {
+                    Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                if ksmRun != 0 || shared != 0 || sharing != 0 { reason = "ksm_unmerge_pending_no_hostile_placement" }
+            }
+            if reason == nil && config.tier == .zram {
+                let size = read("\(sysRoot)/block/zram0/disksize").flatMap {
+                    Int64($0.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                if size != (config.zramBytes ?? 1_073_741_824) { reason = "zram_size_mismatch_or_unsupported" }
+                if swaps.contains(where: { $0.first != "/dev/zram0" && $0.count >= 5 && (Int($0[4]) ?? 100) >= 100 }) {
+                    reason = "operator_swap_priority_conflict"
+                }
+            }
+            if reason == nil && config.tier == .zswap {
+                let pool = read("\(sysRoot)/module/zswap/parameters/max_pool_percent").flatMap {
+                    Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                if pool != (config.zswapPoolPercent ?? 20) { reason = "zswap_pool_mismatch_or_unsupported" }
+            }
+            if reason == nil && config.ksm == true {
+                let pages = read("\(sysRoot)/kernel/mm/ksm/pages_to_scan").flatMap {
+                    Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                let sleep = read("\(sysRoot)/kernel/mm/ksm/sleep_millisecs").flatMap {
+                    Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                if pages != (config.ksmPagesToScan ?? 100) || sleep != (config.ksmSleepMilliseconds ?? 100)
+                    || !(1...1000).contains(pages ?? 0) || !(50...60000).contains(sleep ?? 0)
+                {
+                    reason = "ksm_scanner_bounds_mismatch"
+                }
+            }
+            if reason == nil && config.requireMGLRU == true {
+                if let raw = read("\(sysRoot)/kernel/mm/lru_gen/enabled")?.trimmingCharacters(
+                    in: .whitespacesAndNewlines),
+                    let bits = parseInteger(raw), bits & 1 != 0
+                {
+                } else {
+                    reason = "mglru_disabled_or_unsupported"
+                }
+            }
+        } else {
+            reason = "invalid_memory_profile"
+        }
+        return HostMemoryProfileObservation(
+            configured: config, effectiveTier: effective, thpPolicy: thp,
+            ksmRunning: ksmRun.map { $0 == 1 }, reason: reason)
     }
 }

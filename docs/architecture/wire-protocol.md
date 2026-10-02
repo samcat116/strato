@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 63). The required registration fields
+currently 65). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,6 +61,12 @@ contract change.** Both sides require exact equality with `currentVersion` and
 refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
+
+Wire v65 adds optional host memory profile observations, swap counters/rates,
+compressed zram original bytes, and bounded memory warnings. It includes wire v64's
+generation-guarded GuestConfig vocabulary. Matching v65 builds include both
+schemas, but do not advertise guest configuration realization. v64 peers are
+rejected before state exchange.
 
 Wire v63 requires first-boot installation of the selected Strato guest-agent
 release for opted-in VMs across ISO and IMDS delivery, and adds independent
@@ -592,9 +598,10 @@ expected encode/decode flows and compatibility behavior.
 ## Managed VM guest configuration (STR-90, staged for wire v64)
 
 STR-90 introduces shared vocabulary, not a live realization capability. Its
-model-only build remains on wire v63. STR-91 must introduce wire v64 together
-with the agent consumer; exact registration then rejects model-only agents
-before exchanging desired state. Do not publish v64 from a model-only build.
+standalone model-only build remains on wire v63. This compute integration uses
+wire v67 for host observations, accounting, and resource classes while retaining
+the staged model. STR-91 must introduce a subsequent exact version together
+with the agent consumer. GuestConfig vocabulary does not advertise realization.
 
 `DesiredVMState.guestConfig: GuestConfig?` extends the VM's existing desired
 state. It uses **the enclosing VM generation**: every accepted edit must bump
@@ -652,8 +659,8 @@ capability checks, generation guarding, and content-free observations. STR-92
 owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
-remain decodable. Realization-capable live peers will require exact wire v64
-registration once STR-91 lands; the staged model does not advertise that version.
+remain decodable. Realization-capable live peers require a later coordinated
+wire version together with the STR-91 consumer.
 
 STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
 host-reserved, workload-effective, remaining allocatable, and QEMU allowance
