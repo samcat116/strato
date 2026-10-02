@@ -1,6 +1,11 @@
 import Foundation
 import Synchronization
 import Testing
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 
 @testable import StratoAgentCore
 
@@ -36,6 +41,10 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     private let state: Mutex<State>
     let errorNumber: CInt = 5
+
+    // This fake models interleaved inode operations rather than kernel locks.
+    // Real filesystem and killed-process fixtures exercise lock ownership.
+    func prepareWrite(to path: String) throws -> CInt? { nil }
 
     init(existingDirectories: Set<String> = ["/state"]) {
         self.state = Mutex(
@@ -281,6 +290,106 @@ struct DurableFileWriterTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["state"])
         let attributes = try FileManager.default.attributesOfItem(atPath: path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test("A killed staging owner releases its lock and the next save reclaims its file")
+    func killedWriterReclamation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("durable-crash-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("state").path
+        let staging = destination + ".tmp." + UUID().uuidString
+        let directory = root.path.withCString { open($0, O_RDONLY | O_DIRECTORY) }
+        #expect(directory >= 0)
+        guard directory >= 0 else { return }
+        // Prepare all pointers before fork; the child uses only POSIX calls.
+        let pid = staging.withCString { stagingPointer in
+            let child = fork()
+            if child == 0 {
+                if flock(directory, LOCK_EX) != 0 { _exit(90) }
+                let file = creat(stagingPointer, mode_t(0o600))
+                if file < 0 || fsync(file) != 0 || fsync(directory) != 0 { _exit(91) }
+                _ = kill(getpid(), SIGKILL)
+                _exit(92)
+            }
+            return child
+        }
+        _ = close(directory)
+        #expect(pid > 0)
+        guard pid > 0 else { return }
+        var status: CInt = 0
+        #expect(waitpid(pid, &status, 0) == pid)
+        #expect(status & 0x7f == SIGKILL)
+        #expect(FileManager.default.fileExists(atPath: staging))
+        try DurableFileWriter().write(Data("complete".utf8), to: destination, permissions: 0o600)
+        #expect(!FileManager.default.fileExists(atPath: staging))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: destination)) == Data("complete".utf8))
+    }
+
+    @Test("Reclamation waits for active owners and preserves operator and unsafe files")
+    func activeOwnerAndUnownedFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("durable-active-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("state").path
+        let staging = destination + ".tmp." + UUID().uuidString
+        try Data("active".utf8).write(to: URL(fileURLWithPath: staging))
+        let operatorPath = destination + ".tmp.operator"
+        let legacyPath = destination + ".tmp"
+        let otherDestination = root.appendingPathComponent("other.tmp.\(UUID())").path
+        for path in [operatorPath, legacyPath, otherDestination] {
+            try Data("preserve".utf8).write(to: URL(fileURLWithPath: path))
+        }
+        let link = destination + ".tmp." + UUID().uuidString
+        let hardLink = destination + ".tmp." + UUID().uuidString
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: operatorPath)
+        #if canImport(Glibc)
+        #expect(Glibc.link(operatorPath, hardLink) == 0)
+        #else
+        #expect(Darwin.link(operatorPath, hardLink) == 0)
+        #endif
+        let descriptor = try OwnedFileCleanup.lockDirectory(root.path)
+        let started = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        let succeeded = Mutex(false)
+        DispatchQueue.global().async {
+            started.signal()
+            do {
+                try DurableFileWriter().write(Data("new".utf8), to: destination, permissions: 0o600)
+                succeeded.withLock { $0 = true }
+            } catch {}
+            finished.signal()
+        }
+        #expect(started.wait(timeout: .now() + 5) == .success)
+        #expect(finished.wait(timeout: .now() + 0.05) == .timedOut)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: staging)) == Data("active".utf8))
+        _ = close(descriptor)
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+        #expect(succeeded.withLock { $0 })
+        #expect(!FileManager.default.fileExists(atPath: staging))
+        for path in [operatorPath, legacyPath, otherDestination, link, hardLink] {
+            #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == Data("preserve".utf8))
+        }
+    }
+
+    @Test("Configured directory aliases retain complete private publication")
+    func configuredDirectoryAlias() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("durable-alias-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let actual = root.appendingPathComponent("actual")
+        try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: false)
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
+        let destination = alias.appendingPathComponent("state").path
+        let interrupted = destination + ".tmp." + UUID().uuidString
+        try Data("interrupted".utf8).write(to: URL(fileURLWithPath: interrupted))
+        try DurableFileWriter().write(Data("complete".utf8), to: destination, permissions: 0o600)
+        #expect(try Data(contentsOf: actual.appendingPathComponent("state")) == Data("complete".utf8))
+        #expect(!FileManager.default.fileExists(atPath: interrupted))
+        #expect(
+            (try FileManager.default.attributesOfItem(atPath: destination)[.posixPermissions] as? NSNumber)?.intValue
+                == 0o600)
     }
 
     @Test("Every newly created directory is synchronized through its parent")
