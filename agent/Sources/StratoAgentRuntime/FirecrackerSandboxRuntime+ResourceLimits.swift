@@ -16,6 +16,9 @@ extension FirecrackerSandboxRuntime {
                 resourceClass: spec.resourceClass, guestGrantBytes: spec.memoryBytes,
                 backendOverheadBytes: WorkloadMemoryReservation.firecrackerOverheadBytes)
         else { return nil }
+        try BurstableGuestGrant.verify(
+            cpuCount: spec.cpus, memoryMiB: Int(spec.memoryBytes / (1024 * 1024)),
+            admittedCPUs: spec.cpus, admittedBytes: spec.memoryBytes)
         let expectedPath = JailerOptions.cgroupDirectory(firecrackerBinaryPath: firecrackerBinaryPath, vmId: sandboxId)
         let pageSize = BurstableCgroupEnforcement.hostPageSizeBytes
         // Reject an unrepresentable plan before any backend action.

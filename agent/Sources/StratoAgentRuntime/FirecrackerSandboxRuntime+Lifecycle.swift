@@ -26,7 +26,13 @@ extension FirecrackerSandboxRuntime {
         }
         // Idempotent: a replayed create for an already-defined sandbox is a
         // no-op (the Firecracker process is already configured).
-        if sandboxes[sandboxId] != nil {
+        if let existing = sandboxes[sandboxId] {
+            if spec.resourceClass?.policy.kind == .burstable {
+                guard existing.spec.resourceClass == spec.resourceClass,
+                    existing.spec.memoryBytes == spec.memoryBytes, existing.spec.cpus == spec.cpus
+                else { throw ConvergenceError.blocked("Existing sandbox does not match the admitted burstable grant") }
+                try await validateResourceLimits(sandboxId: sandboxId, spec: spec)
+            }
             return
         }
 
