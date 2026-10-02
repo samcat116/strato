@@ -485,6 +485,7 @@ extension Sandbox: ConvergingResource {
         adoptConvergenceBookkeeping(from: committed)
         lastActiveAt = committed.lastActiveAt
         createdAt = committed.createdAt
+        updatedAt = committed.updatedAt
         name = committed.name
         ttlSeconds = committed.ttlSeconds
         suspensionComputeReserved = committed.suspensionComputeReserved

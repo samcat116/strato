@@ -282,6 +282,25 @@ final class SandboxExpiryTests {
         }
     }
 
+    @Test("Retention refreshes the legacy updated-at fallback under the row lock")
+    func staleRetentionCandidateCannotDeleteRefreshedRow() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox in
+            let id = try sandbox.requireID()
+            let now = Date()
+            sandbox.status = .exited
+            sandbox.statusChangedAt = nil
+            try await sandbox.save(on: app.db)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let old = now.addingTimeInterval(-48 * 3600)
+            try await sql.raw("UPDATE sandboxes SET updated_at = \(bind: old) WHERE id = \(bind: id)").run()
+            let stale = try #require(await Sandbox.find(id, on: app.db))
+            try await SandboxActivityService.touch(id: id, on: app.db)
+            await app.agentMaintenance.expireSandbox(
+                stale, reason: .retention(hours: 24), at: .testing(now), on: app.db)
+            #expect(try await !deletionRequested(for: id, on: app.db))
+        }
+    }
+
     // MARK: - TTL expiry
 
     @Test("The sweep deletes a sandbox past its TTL, recording the deletion end to end")
