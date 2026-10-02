@@ -29,7 +29,7 @@ extension Reconciler {
             appliedEdges: appliedEdges)
         // A same-generation pass still re-observes guest drift. This step is
         // always real work: VM convergence cannot advance before its read-back.
-        for entry in desired where entry.desiredStatus == .running && entry.guestConfig != nil {
+        for entry in desired where entry.desiredStatus == .running && entry.guestConfig?.isEmpty == false {
             let id = entry.vmId.uuidString
             guard entry.generation >= (lastApplied[id] ?? 0) else { continue }
             if let index = plan.items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {

@@ -684,7 +684,8 @@ public actor Reconciler {
         case .vm(let desired):
             let observed = try await actuator.adoptVM(item)
             return Self.statusSteps(desired: desired.desiredStatus, observed: observed)
-                + (desired.desiredStatus == .running && desired.guestConfig != nil ? [.convergeGuestConfig] : [])
+                + (desired.desiredStatus == .running && desired.guestConfig?.isEmpty == false
+                    ? [.convergeGuestConfig] : [])
         case .sandbox(let desired):
             let observed = try await actuator.adoptSandbox(item)
             return Self.sandboxStatusSteps(desired: desired.desiredStatus, observed: observed)

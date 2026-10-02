@@ -67,13 +67,33 @@ struct GuestConfigClientTests {
         }
         #expect(await refused.writes.isEmpty)
     }
+    @Test func busyGuestDoesNotBurnFailureAttemptsAndEmptyIntentWithdrawsManagement() async {
+        let connection = Connection(
+            #"{"type":"error","nonce":"boot","message":"guest configuration convergence busy or unavailable"}"#)
+        let error = await #expect(throws: GuestConfigurationFailure.self) {
+            try await client(connection).converge(
+                placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+        }
+        #expect(error?.failureClassification == .waitingOnDependency)
+        #expect(await connection.closed)
+        let id = UUID()
+        let spec = VMSpec(cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil))
+        for config in [nil, GuestConfig()] as [GuestConfig?] {
+            let entry = DesiredVMState(
+                vmId: id, hypervisorType: .qemu, spec: spec, desiredStatus: .running, generation: 8, guestConfig: config
+            )
+            let plan = Reconciler.plan(
+                desired: [entry], present: [id.uuidString: .managed(.running)], lastApplied: [id.uuidString: 7])
+            #expect(!plan.items.contains { $0.steps.contains(.convergeGuestConfig) })
+        }
+    }
     @Test func plannerReobservesSameGenerationAndNeverOlderOrStoppedIntent() {
         let id = UUID()
         let spec = VMSpec(cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil), guestAgentEnabled: true)
         func desired(_ generation: Int64, _ status: DesiredVMStatus = .running) -> DesiredVMState {
             DesiredVMState(
                 vmId: id, hypervisorType: .qemu, spec: spec, desiredStatus: status, generation: generation,
-                guestConfig: GuestConfig())
+                guestConfig: GuestConfig(packages: [GuestPackage(name: "curl", state: .present)]))
         }
         let plan = Reconciler.plan(
             desired: [desired(7)], present: [id.uuidString: .managed(.running)], lastApplied: [id.uuidString: 7],

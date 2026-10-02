@@ -272,7 +272,8 @@ struct ReconciliationTests {
             Self.sync([
                 DesiredVMState(
                     vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
-                    generation: generation, guestConfig: GuestConfig())
+                    generation: generation,
+                    guestConfig: GuestConfig(packages: [GuestPackage(name: "curl", state: .present)]))
             ])
         }
         await reconciler.apply(intent(7))
@@ -300,7 +301,7 @@ struct ReconciliationTests {
             Self.sync([
                 DesiredVMState(
                     vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
-                    generation: 7, guestConfig: GuestConfig())
+                    generation: 7, guestConfig: GuestConfig(packages: [GuestPackage(name: "curl", state: .present)]))
             ]))
         _ = await actuator.waitForReports(1)
         #expect(await actuator.performed.last?.step == .convergeGuestConfig)

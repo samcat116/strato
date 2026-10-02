@@ -348,19 +348,51 @@ mod tests {
     }
 
     fn connection() -> (UnixStream, std::thread::JoinHandle<()>) {
-        let (client, server) = UnixStream::pair().expect("socket pair");
+        static JOURNAL_ID: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "strato-vm-control-{}-{}",
+            std::process::id(),
+            JOURNAL_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let (client, server) = UnixStream::pair().expect("unix pair");
         let handle = std::thread::spawn(move || {
-            handle_connection(
-                OwnedFd::from(server),
-                &identity(),
-                &Mutex::new(Converger::new(
-                    std::env::temp_dir().join("strato-unused-test-journal"),
-                    std::time::Duration::from_secs(1),
-                )),
-            )
-            .expect("serve connection");
+            let engine = Mutex::new(Converger::new(
+                root.join("journal.json"),
+                std::time::Duration::from_secs(1),
+            ));
+            let result = handle_connection(OwnedFd::from(server), &identity(), &engine);
+            let _ = std::fs::remove_dir_all(root);
+            result.expect("serve connection");
         });
         (client, handle)
+    }
+
+    #[test]
+    fn guest_configuration_exchange_shares_the_nonce_checked_control_connection() {
+        let (mut client, handle) = connection();
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        client.write_all(b"{\"type\":\"ping\"}\n").unwrap();
+        assert_eq!(read_response(&mut reader).nonce(), "boot-1");
+        client.write_all(b"{\"type\":\"converge_guest_config\",\"generation\":7,\"guest_config\":{\"packages\":[],\"files\":[],\"services\":[],\"sysctls\":[]}}\n").unwrap();
+        match read_response(&mut reader) {
+            Response::GuestConfigState { nonce, observation } => {
+                assert_eq!(nonce, "boot-1");
+                assert_eq!(observation.generation, 7);
+                assert_eq!(
+                    observation.status,
+                    strato_sandbox_init::convergence::Status::Converged
+                );
+            }
+            _ => panic!("missing guest configuration observation"),
+        }
+        client.write_all(b"{\"type\":\"get_status\"}\n").unwrap();
+        assert!(matches!(
+            read_response(&mut reader),
+            Response::Status { .. }
+        ));
+        drop(reader);
+        drop(client);
+        handle.join().unwrap();
     }
 
     #[test]
