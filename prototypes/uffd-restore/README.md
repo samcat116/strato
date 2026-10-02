@@ -1,6 +1,7 @@
 # STR-273 preparatory prototype — BLOCKED on STR-312 / #1330
 
-This directory is disconnected from production. It does not implement suspended
+This directory is disconnected from production. The native File-only preparation
+hook described below is integrated into restore; it does not implement suspended
 sandboxes, advertise a capability, provide a UFFD page server, or complete #1252.
 STR-313 idle policy is related work, not the hard prerequisite. Shared wire
 schemas are left for coordination with the parent session; wire 64 is reserved
@@ -130,6 +131,30 @@ It must not own desired status, stop policy, quota, or a parallel resume path.
    only unpinned bases. Account base cache, private deltas and staging bytes
    separately; reserve disk for verification and bound total cache bytes.
 
+## Integration update against STR-312 draft #1447
+
+Stacked on STR-312 head `0d77008c4333ffed1ac3b7098bb4a642421d3477`.
+`restoreSandboxArchive` now calls a cancellation-aware memory preparation step
+in both jailed and unjailed branches, after staging and before snapshot/load.
+The result is structurally File-only with an explicit disabled reason. There is
+no UFFD constructor, configuration switch or advertised capability to accidentally
+enable a partial backend. STR-312 retains checkpoint, admission, generation,
+resume, process teardown and quota ownership.
+
+`SandboxLazyMemoryPages` adds a native Swift page-source contract with a copied,
+digest-verified immutable base, explicit trust class, bounded private delta,
+checked page offsets and cancellation. It is currently isolated from guest
+memory. It does not track guest writes, persist artifacts, handle UFFD events,
+or prove physical sharing. Swift tests cover private data, digest/trust/bounds,
+delta exhaustion, cancellation and production File fallback.
+
+STR-312's agent-local implementation removes the missing-hook blocker, but its
+shared desired/observed Suspended representation, control-plane quota/readmission,
+wake integration and live lifecycle proof remain pending. Backend implementation
+still needs the descriptor/region receiver, seccomp-reviewed supervised page
+server/watchdog, durable digest cache and delta capture, scoped health proof,
+failure cleanup and restart recovery. The environment limitations above remain.
+
 ## Remaining proofs and acceptance blockers
 
 The upstream [loading guide](https://github.com/firecracker-microvm/firecracker/blob/v1.13.1/docs/snapshotting/handling-page-faults-on-snapshot-resume.md)
@@ -149,7 +174,14 @@ separate source cache from guest pages. Only then run disposable 1/10/100 restor
 benchmarks with latency p50/p95/p99, fault latency, handler CPU, disk reads and
 host PSS; cap admission/resources before increasing concurrency.
 
-Missing today: STR-312 implementation, approved Firecracker/jailer pin and host
+Missing today: complete STR-312 cross-service integration and live proof,
+approved Firecracker/jailer pin and host
 matrix, permitted KVM/UFFD fixture, compatible verified snapshots, end-to-end
 restore proof, physical-sharing strategy/proof and fault-injection benchmarks.
 STR-273 remains blocked and incomplete.
+
+Validation of the stacked update: Linux x86_64 Swift 6.4.0 compiled the
+changed agent core/runtime and all test products. Four SandboxLazyMemoryTests
+passed; 27 SandboxSuspensionTests/SandboxCheckpointManifestTests passed. Seven
+Python tests, C probe compilation, strict Swift formatting and whitespace checks
+passed. This was focused validation, not a full agent test run or live VM test.
