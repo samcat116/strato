@@ -19,90 +19,82 @@ actor LokiService {
 
     // MARK: - Push Logs to Loki
 
-    /// Push a VM log message to Loki. No-ops when Loki is not configured.
-    func pushLog(_ logMessage: VMLogMessage) async throws {
-        let labels = [
-            "service_name": "strato-agent",
-            "vm_id": logMessage.vmId,
-            "level": logMessage.level.rawValue,
-            "source": logMessage.source.rawValue,
-            "event_type": logMessage.eventType.rawValue,
-            "operation": logMessage.operation ?? "",
-        ].filter { !$0.value.isEmpty }
-
-        try await push(
-            labels: labels,
-            timestamp: logMessage.timestamp,
-            message: logMessage.message,
-            resourceId: logMessage.vmId
-        )
-    }
-
-    /// Push one sandbox workload stdout/stderr line to Loki (issue #423).
-    /// No-ops when Loki is not configured.
-    func pushSandboxLog(_ logMessage: SandboxLogMessage) async throws {
-        let labels = [
-            "service_name": "strato-agent",
-            "sandbox_id": logMessage.sandboxId,
-            "stream": logMessage.stream,
-            "source": "workload",
-        ].filter { !$0.value.isEmpty }
-
-        try await push(
-            labels: labels,
-            timestamp: logMessage.timestamp,
-            message: logMessage.message,
-            resourceId: logMessage.sandboxId
-        )
-    }
-
-    /// Shared push body for VM and sandbox log lines.
-    private func push(
-        labels: [String: String],
-        timestamp: Date,
-        message: String,
-        resourceId: String
-    ) async throws {
-        guard let lokiEndpoint else {
-            // Loki not deployed — silently drop rather than spamming DNS errors.
-            return
-        }
-
-        let lokiStream = LokiPushRequest(
-            streams: [
-                LokiStream(
-                    stream: labels,
-                    values: [
-                        [
-                            String(Int(timestamp.timeIntervalSince1970 * 1_000_000_000)),
-                            message,
-                        ]
-                    ]
+    /// Group by the complete Loki label set while retaining arrival order in
+    /// each stream. Labels such as level/source/operation are stream identity.
+    nonisolated static func vmBatch(_ messages: [VMLogMessage]) throws -> LokiPushRequest {
+        try batch(
+            messages.map { message in
+                (
+                    [
+                        "service_name": "strato-agent",
+                        "vm_id": message.vmId,
+                        "level": message.level.rawValue,
+                        "source": message.source.rawValue,
+                        "event_type": message.eventType.rawValue,
+                        "operation": message.operation ?? "",
+                    ].filter { !$0.value.isEmpty },
+                    message.timestamp, message.message
                 )
-            ]
-        )
+            })
+    }
 
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(lokiStream)
+    nonisolated static func sandboxBatch(_ messages: [SandboxLogMessage]) throws -> LokiPushRequest {
+        try batch(
+            messages.map { message in
+                (
+                    [
+                        "service_name": "strato-agent",
+                        "sandbox_id": message.sandboxId,
+                        "stream": message.stream,
+                        "source": "workload",
+                    ].filter { !$0.value.isEmpty },
+                    message.timestamp, message.message
+                )
+            })
+    }
 
+    private nonisolated static func batch(_ lines: [([String: String], Date, String)]) throws -> LokiPushRequest {
+        var streams: [LokiStream] = []
+        for (labels, timestamp, message) in lines {
+            let nanos = timestamp.timeIntervalSince1970 * 1_000_000_000
+            guard nanos.isFinite, nanos >= Double(Int64.min), nanos < Double(Int64.max) else {
+                throw LokiError.pushFailed("Invalid timestamp")
+            }
+            let value = [String(Int64(nanos)), message]
+            if let index = streams.firstIndex(where: { $0.stream == labels }) {
+                streams[index].values.append(value)
+            } else {
+                streams.append(LokiStream(stream: labels, values: [value]))
+            }
+        }
+        return LokiPushRequest(streams: streams)
+    }
+
+    func pushLogs(_ messages: [VMLogMessage]) async throws {
+        try await push(Self.vmBatch(messages))
+    }
+
+    func pushSandboxLogs(_ messages: [SandboxLogMessage]) async throws {
+        try await push(Self.sandboxBatch(messages))
+    }
+
+    /// Failures reach the ingestor's circuit breaker. Do not log per line or
+    /// retry here: this is lossy telemetry and a slow dependency must not hold
+    /// the control-plane drain indefinitely.
+    private func push(_ batch: LokiPushRequest) async throws {
+        guard let lokiEndpoint, !batch.streams.isEmpty else { return }
+        let body = try JSONEncoder().encode(batch)
         var request = HTTPClientRequest(url: "\(lokiEndpoint)/loki/api/v1/push")
         request.method = .POST
         request.headers.add(name: "Content-Type", value: "application/json")
         request.body = .bytes(ByteBuffer(data: body))
-
-        do {
-            let response = try await httpClient.execute(request, timeout: .seconds(10))
-            if response.status.code >= 400 {
-                app.logger.error(
-                    "Failed to push log to Loki",
-                    metadata: [
-                        "status": .stringConvertible(response.status.code),
-                        "resourceId": .string(resourceId),
-                    ])
-            }
-        } catch {
-            app.logger.error("Error pushing log to Loki: \(error)")
+        let response = try await httpClient.execute(request, timeout: .seconds(2))
+        guard (200..<300).contains(Int(response.status.code)) else {
+            throw LokiError.pushFailed("HTTP \(response.status.code)")
         }
+        // Consume the response so the HTTP connection is reusable. Never
+        // retain an unbounded backend error body in the control plane.
+        _ = try await response.body.collect(upTo: 64 * 1024)
     }
 
     // MARK: - Query Logs from Loki
@@ -224,6 +216,7 @@ enum LokiError: Error, LocalizedError {
     case invalidURL
     case notConfigured
     case queryFailed(String)
+    case pushFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -231,6 +224,8 @@ enum LokiError: Error, LocalizedError {
             return "Invalid Loki URL"
         case .notConfigured:
             return "Loki is not configured (LOKI_ENDPOINT unset)"
+        case .pushFailed(let reason):
+            return "Loki push failed: \(reason)"
         case .queryFailed(let reason):
             return "Loki query failed: \(reason)"
         }
@@ -245,7 +240,7 @@ struct LokiPushRequest: Encodable {
 
 struct LokiStream: Codable {
     let stream: [String: String]
-    let values: [[String]]
+    var values: [[String]]
 }
 
 struct LokiQueryResponse: Codable {

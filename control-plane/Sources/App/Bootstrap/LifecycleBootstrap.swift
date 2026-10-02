@@ -14,6 +14,9 @@ extension Application {
         // the handler cancels it at shutdown (if the service was ever created).
         lifecycle.use(AgentServiceLifecycleHandler())
 
+        // Workload telemetry must shed and cancel before database/HTTP teardown.
+        lifecycle.use(WorkloadLogIngestorLifecycle())
+
         // Audit retention (issue #39): when AUDIT_RETENTION_DAYS is set, an
         // hourly cluster-singleton sweep prunes audit_events rows older than the
         // cutoff. The handler arms the sweep at boot and cancels it at shutdown.
