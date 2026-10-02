@@ -52,6 +52,18 @@ struct WorkloadResourceClassTests {
                 .effectiveBytes == .max)
     }
 
+    @Test func veryLargeCommitmentsRemainBoundedAndRoundTrip() throws {
+        let raw = WorkloadMemoryReservation(guestBytes: 9_007_199_254_740_993, backendOverheadBytes: 0)
+        #expect(WorkloadResourceClassPolicy.burstable.memoryReservation(raw) == raw)
+        let nearOne = try WorkloadResourceClassPolicy(
+            kind: .burstable, memoryAllocationRatio: Double(1).nextUp, memoryHighPercent: 80)
+        let commitment = WorkloadAdmittedReservation(cpus: 1, memory: raw, policy: nearOne)
+        #expect(commitment.discountedGuestBytes <= commitment.guestCommitmentBytes)
+        #expect(
+            try JSONDecoder().decode(WorkloadAdmittedReservation.self, from: JSONEncoder().encode(commitment))
+                == commitment)
+    }
+
     @Test func runtimeGrantDenominatorAndRounding() throws {
         let limits = try WorkloadResourceClassPolicy.burstable.runtimeLimits(guestBytes: 101, backendOverheadBytes: 9)
         #expect(limits.memoryHighBytes == 89)

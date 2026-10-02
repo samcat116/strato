@@ -91,11 +91,13 @@ public struct WorkloadResourceClassPolicy: Codable, Sendable, Equatable {
 
     public func memoryReservation(_ raw: WorkloadMemoryReservation) -> WorkloadMemoryReservation {
         // Preserve guaranteed Int64 operands without a lossy floating-point round trip.
-        guard kind == .burstable else { return raw }
+        guard kind == .burstable, memoryAllocationRatio != 1 else { return raw }
         return WorkloadMemoryReservation(
-            guestBytes: Self.ceilingSaturating(
-                (raw.guestBytes > 9_007_199_254_740_992 ? Double(raw.guestBytes).nextUp : Double(raw.guestBytes))
-                    / memoryAllocationRatio),
+            guestBytes: min(
+                raw.guestBytes,
+                Self.ceilingSaturating(
+                    (raw.guestBytes > 9_007_199_254_740_992 ? Double(raw.guestBytes).nextUp : Double(raw.guestBytes))
+                        / memoryAllocationRatio)),
             backendOverheadBytes: raw.backendOverheadBytes)
     }
 
