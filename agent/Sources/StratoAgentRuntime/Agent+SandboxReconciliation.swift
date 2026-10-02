@@ -532,18 +532,27 @@ extension Agent {
                 ))
         }
 
+        let sandboxes = await observedSandboxStates(reconciler: reconciler)
+        let unrecognized = await reconciler.unrecognizedWorkloads()
+        let teardownRefusal = await reconciler.lastTeardownRefusal()
+        let volumes = await observedVolumeStates(reconciler: reconciler)
+        let snapshots = await observedSnapshotStates(reconciler: reconciler)
+        let loadBalancers = await networkService?.observedLoadBalancers()
+        let storageDevices = await storageDeviceInventory.snapshot()
+        let resourceCapture = await captureResourceEnforcement(observedVMs: observed, observedSandboxes: sandboxes)
         let report = ObservedStateReport(
             agentId: effectiveAgentID,
             vms: observed,
-            sandboxes: await observedSandboxStates(reconciler: reconciler),
-            resources: await getAgentResources(),
+            sandboxes: sandboxes,
+            resources: resourceCapture.resources,
+            resourceEnforcement: resourceCapture.enforcement,
             hostResourceTelemetry: hostResourceTelemetry,
             agentUpdateStatus: autoUpdateStatus,
             // Workloads this host holds that no sync accounted for (STR-98).
             // They also appear above — the agent is genuinely running them —
             // and stay there until the control plane decides what they are.
-            unrecognized: await reconciler.unrecognizedWorkloads(),
-            teardownRefusal: await reconciler.lastTeardownRefusal(),
+            unrecognized: unrecognized,
+            teardownRefusal: teardownRefusal,
             // What the agent's own memory of this host was able to tell it
             // (STR-138). When the manifest is unreadable this also declares
             // the lists above to be no inventory at all, so the control plane
@@ -554,17 +563,17 @@ extension Agent {
             // needs to confirm deletions — and nil when it cannot enumerate the
             // store at all, which the control plane reads as "no opinion"
             // rather than as an inventory (STR-148).
-            volumes: await observedVolumeStates(reconciler: reconciler),
+            volumes: volumes,
             // Same list-or-nil contract as `volumes`, one step more expensive
             // to get wrong: an empty list the control plane believed would reap
             // every checkpoint row it holds for this agent, and a checkpoint is
             // a point in time nothing can recreate (STR-150).
-            snapshots: await observedSnapshotStates(reconciler: reconciler),
-            loadBalancers: await networkService?.observedLoadBalancers(),
+            snapshots: snapshots,
+            loadBalancers: loadBalancers,
             networks: observedNetworkFabric.networks,
             securityGroups: observedNetworkFabric.securityGroups,
             portMemberships: observedNetworkFabric.portMemberships,
-            storageDevices: await storageDeviceInventory.snapshot()
+            storageDevices: storageDevices
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was

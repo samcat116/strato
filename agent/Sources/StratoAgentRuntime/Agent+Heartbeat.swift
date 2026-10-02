@@ -639,6 +639,10 @@ extension Agent {
 
     func getAgentResources() async -> AgentResources {
         let raw = await rawHostCapacitySnapshot()
+        return agentResources(from: raw)
+    }
+
+    func agentResources(from raw: HostCapacitySnapshot) -> AgentResources {
         // Provisional claims are not durable reservations yet, but advertising
         // them as free would invite placement into an in-flight create/resize.
         let accounted = HostCapacitySnapshot(

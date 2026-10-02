@@ -30,6 +30,33 @@ extension FirecrackerSandboxRuntime {
         }
     }
 
+    func resourceEnforcementEvidence(
+        sandboxId: String, application: ResourceEnforcementProducer.Application,
+        desired: BurstableResourceLimits
+    ) async -> WorkloadResourceLimitsEvidence {
+        do {
+            try BurstableRuntimeGate.requireSupport(
+                resourceClass: application.resourceClass, enforcement: burstableEnforcement)
+            guard let managed = sandboxes[sandboxId], managed.spec.resourceClass == application.resourceClass,
+                managed.spec.admittedReservation == application.reservation,
+                managed.spec.memoryBytes == application.guestBytes, managed.spec.cpus == application.cpuCount
+            else {
+                throw ConvergenceError.blocked("Applied sandbox snapshot/grant differs from the convergence binding")
+            }
+            let actual = try await managed.manager.getMachineConfig()
+            try BurstableGuestGrant.verify(
+                cpuCount: actual.vcpuCount, memoryMiB: actual.memSizeMib,
+                admittedCPUs: application.cpuCount, admittedBytes: application.guestBytes)
+            let evidence = await resourceLimitsEvidence(sandboxId: sandboxId, desired: desired)
+            guard sandboxes[sandboxId]?.manager === managed.manager else {
+                throw ConvergenceError.blocked("Sandbox process changed during enforcement readback")
+            }
+            return evidence
+        } catch {
+            return .sample(limits: desired, ownedPath: nil, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes)
+        }
+    }
+
     func resourceLimitsEvidence(sandboxId: String, desired: BurstableResourceLimits) async
         -> WorkloadResourceLimitsEvidence
     {

@@ -1933,6 +1933,35 @@ actor LibvirtService: HypervisorService {
         }
     }
 
+    func resourceEnforcementEvidence(
+        vmId: String, application: ResourceEnforcementProducer.Application,
+        desired: BurstableResourceLimits
+    ) async -> WorkloadResourceLimitsEvidence {
+        do {
+            try requireBurstableSupport(vmId: vmId, resourceClass: application.resourceClass)
+            return try await perform("verify resource enforcement", vmId: vmId) {
+                let dom = try await domain(vmId)
+                let persistent = try await inactiveDomainXML(dom, vmId: vmId)
+                let live = try await domainXML(dom, vmId: vmId)
+                let layout = try DomainMemoryInventory.memoryLayout(inDomainXML: live)
+                let info = try await call("libvirt-enforcement-info", vmId: vmId) { client, deadline in
+                    try await client.domainGetInfo(dom: dom, deadline: deadline)
+                }
+                guard try DomainBurstableTuning.resourceClass(in: persistent) == application.resourceClass,
+                    try DomainBurstableTuning.acknowledgedGuestGrant(in: persistent) == application.guestBytes,
+                    layout.bootBytes + (layout.virtioMem?.requestedBytes ?? 0) == application.guestBytes,
+                    Int(info.nrVirtCpu) == application.cpuCount
+                else {
+                    throw ConvergenceError.blocked(
+                        "Applied QEMU snapshot/grant differs from the convergence binding")
+                }
+                return await resourceLimitsEvidence(vmId: vmId, desired: desired)
+            }
+        } catch {
+            return .sample(limits: desired, ownedPath: nil, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes)
+        }
+    }
+
     func resourceLimitsEvidence(vmId: String, desired: BurstableResourceLimits) async -> WorkloadResourceLimitsEvidence
     {
         let pageSize = BurstableCgroupEnforcement.hostPageSizeBytes

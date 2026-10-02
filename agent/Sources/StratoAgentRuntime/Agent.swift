@@ -266,6 +266,7 @@ actor Agent {
     // applies them in receive order, so a late one would overwrite a newer
     // report's view with stale observations (issue #516).
     var observedReportEpoch: UInt64 = 0
+    var resourceEnforcementProducer = ResourceEnforcementProducer()
 
     // Last-known QEMU guest-agent info per VM (issue #563), refreshed off the
     // hot path by a throttled slow poll and read verbatim into each
