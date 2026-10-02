@@ -336,7 +336,7 @@ Potential improvements for future versions:
 - **Configuration**: `control-plane/Sources/App/configure.swift`
 - **VM Model**: `control-plane/Sources/App/Models/vm.swift`
 
-### Host memory accounting (STR-265, wire v65)
+### Host memory accounting (STR-265, wire v66)
 
 The agent reports `HostMemoryAccounting`: `physicalBytes`, `hostReservedBytes`,
 `workloadEffectiveBytes`, and `remainingAllocatableBytes`. The last operand is
@@ -366,5 +366,5 @@ per-workload reservation rather than adding the same domain twice. Provisional
 claims use effective bytes and retire after the durable manifest commit. The
 control plane exports `strato_agent_memory_{physical,host_reserved,workload_effective,remaining_allocatable}_bytes`
 from the agent's report; all operands also appear in memory admission refusals.
-Agent and control plane must deploy matching wire-v65 builds together; v64 is
-reserved for the concurrent guest-configuration change.
+Agent and control plane must deploy matching wire-v66 builds together; v64 and v65 are
+allocated to GuestConfig and host density respectively.

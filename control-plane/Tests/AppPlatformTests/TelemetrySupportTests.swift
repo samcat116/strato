@@ -345,3 +345,20 @@ struct TelemetrySupportTests {
         #expect(SchedulerService.placementOutcome(for: Unexpected()) == "error")
     }
 }
+
+@Suite("host memory accounting metrics")
+struct HostMemoryAccountingMetricsTests {
+    @Test func reportsEveryOperandWithoutDoubleSubtraction() throws {
+        let metrics = TestMetrics()
+        let accounting = HostMemoryAccounting(
+            physicalBytes: 8192, hostReservedBytes: 1024, workloadEffectiveBytes: 2048)
+        Telemetry.recordHostMemoryAccounting(agentID: "host", accounting: accounting, factory: metrics)
+        for (operand, bytes) in [
+            ("physical", 8192), ("host_reserved", 1024), ("workload_effective", 2048), ("remaining_allocatable", 5120),
+        ] {
+            #expect(
+                try metrics.expectGauge("strato_agent_memory_\(operand)_bytes", [("agent_id", "host")]).lastValue
+                    == Double(bytes))
+        }
+    }
+}

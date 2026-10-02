@@ -979,10 +979,12 @@ extension Agent {
         let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
         let currentReservation =
             currentEntry.map {
-                VMHostReservation.forManifestEntry($0, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+                VMHostReservation.forManifestEntry(
+                    $0, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             } ?? HostReservation()
         let desiredReservation = VMHostReservation.forSpec(
-            realizedSpec, hypervisorType: desired.hypervisorType, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+            realizedSpec, hypervisorType: desired.hypervisorType, architecture: .current,
+            qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
@@ -1060,7 +1062,8 @@ extension Agent {
         managedVMs[item.id] = VMManifestEntry(
             hypervisorType: desired.hypervisorType, spec: realizedSpec,
             realizedMemoryReservationBytes: desired.hypervisorType == .qemu
-                ? QEMUMemoryReservation.reservedBytes(memoryBytes: realizedSpec.memoryBytes,
+                ? QEMUMemoryReservation.reservedBytes(
+                    memoryBytes: realizedSpec.memoryBytes,
                     maxMemoryBytes: realizedSpec.maxMemoryBytes, architecture: .current) : nil,
             vsockCID: lease.cid,
             appliedEdges: appliedEdges,
@@ -1101,7 +1104,8 @@ extension Agent {
         let currentReservation = VMHostReservation.forManifestEntry(
             entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let desiredReservation = VMHostReservation.forSpec(
-            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current,
+            qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let bootClaim = bootCapacityClaims.removeValue(forKey: item.id)
         let claim: HostCapacityClaim?
         if let bootClaim {
@@ -1127,7 +1131,7 @@ extension Agent {
                 desiredReservation.memoryBytes > currentReservation.memoryBytes
             {
                 managedVMs[item.id] = entry.reservingMemory(
-                    atLeast: desiredReservation.memoryBytes)
+                    atLeast: max(0, desiredReservation.memoryBytes - configuration.qemuMemoryOverheadBytes))
                 // The persistent definition is already wider even if the
                 // sizing write below fails, so its reservation is durable now.
                 persistManifest()

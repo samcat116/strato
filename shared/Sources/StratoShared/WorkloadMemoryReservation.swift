@@ -52,7 +52,8 @@ public struct HostMemoryAccounting: Codable, Sendable, Equatable {
         self.workloadEffectiveBytes = max(0, workloadEffectiveBytes)
         self.qemuOverheadBytes = max(0, qemuOverheadBytes)
         let afterHost = self.hostReservedBytes >= self.physicalBytes ? 0 : self.physicalBytes - self.hostReservedBytes
-        self.remainingAllocatableBytes = !inventoryKnown || self.workloadEffectiveBytes >= afterHost
+        self.remainingAllocatableBytes =
+            !inventoryKnown || self.workloadEffectiveBytes >= afterHost
             ? 0 : afterHost - self.workloadEffectiveBytes
     }
 }

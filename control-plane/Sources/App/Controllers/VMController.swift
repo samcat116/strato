@@ -948,14 +948,20 @@ struct VMController: RouteCollection {
             // realize, not the raw maxMemory request. Recompute both sides with
             // the placed host's architecture so sub-block headroom is charged
             // when a stopped resize turns it into guest memory.
-            let currentReservation = QEMUMemoryReservation.reservedBytes(
+            let currentReservation = WorkloadMemoryReservation.vm(
                 memoryBytes: vm.memory,
-                maxMemoryBytes: vm.maxMemory,
-                architecture: architecture)
-            let requestedReservation = QEMUMemoryReservation.reservedBytes(
+                maxMemoryBytes: vm.maxMemory, hypervisorType: .qemu,
+                architecture: architecture,
+                qemuOverheadBytes: agent.memoryAccounting?.qemuOverheadBytes
+                    ?? WorkloadMemoryReservation.defaultQEMUOverheadBytes
+            ).effectiveBytes
+            let requestedReservation = WorkloadMemoryReservation.vm(
                 memoryBytes: newMemory,
-                maxMemoryBytes: max(vm.maxMemory, newMemory),
-                architecture: architecture)
+                maxMemoryBytes: max(vm.maxMemory, newMemory), hypervisorType: .qemu,
+                architecture: architecture,
+                qemuOverheadBytes: agent.memoryAccounting?.qemuOverheadBytes
+                    ?? WorkloadMemoryReservation.defaultQEMUOverheadBytes
+            ).effectiveBytes
             memoryGrowth = max(0, requestedReservation - currentReservation)
         } else if vm.hypervisorType == .qemu {
             // Alignment can make the recomputed reservation move upward while

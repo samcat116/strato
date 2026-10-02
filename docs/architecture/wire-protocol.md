@@ -583,8 +583,8 @@ documentation — `MessageEnvelopeTests.swift`, `ReconciliationProtocolTests.swi
 `WireProtocolTests.swift`, and `GuestExecMessageTests.swift` show the
 expected encode/decode flows and compatibility behavior.
 
-STR-265 reserves wire v65 for `AgentResources.memoryAccounting`, with physical,
+STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
 host-reserved, workload-effective, remaining allocatable, and QEMU allowance
 bytes. Remaining bytes are already net of host reserve and backend overhead.
-Control plane and agent builds must be coordinated; v64 is reserved for the
-concurrent guest-configuration contract.
+Control plane and agent builds must be coordinated; v64 and v65 are allocated to
+GuestConfig and host density respectively.

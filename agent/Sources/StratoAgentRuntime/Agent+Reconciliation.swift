@@ -719,7 +719,8 @@ extension Agent: ReconcileActuator {
         let currentReservation = VMHostReservation.forManifestEntry(
             current, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let desiredReservation = VMHostReservation.forSpec(
-            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current,
+            qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
         try capacityAdmissionLedger.validateExistingReservation(
             currentReservation, snapshot: raw, agentName: initialAgentID)
@@ -734,7 +735,8 @@ extension Agent: ReconcileActuator {
                     desiredReservation.memoryBytes > currentReservation.memoryBytes,
                     let entry = managedVMs[item.id] ?? orphanedVMs[item.id]
                 {
-                    let widened = entry.reservingMemory(atLeast: max(0, desiredReservation.memoryBytes - configuration.qemuMemoryOverheadBytes))
+                    let widened = entry.reservingMemory(
+                        atLeast: max(0, desiredReservation.memoryBytes - configuration.qemuMemoryOverheadBytes))
                     if managedVMs[item.id] != nil {
                         managedVMs[item.id] = widened
                     } else {
@@ -806,7 +808,10 @@ extension Agent: ReconcileActuator {
             var booted = entry.reservingPositiveSizingGrowth(toward: desired.spec)
             if entry.hypervisorType == .qemu {
                 booted = booted.reservingMemory(
-                    atLeast: max(0, max(currentReservation.memoryBytes, desiredReservation.memoryBytes) - configuration.qemuMemoryOverheadBytes))
+                    atLeast: max(
+                        0,
+                        max(currentReservation.memoryBytes, desiredReservation.memoryBytes)
+                            - configuration.qemuMemoryOverheadBytes))
             }
             if managedVMs[item.id] != nil {
                 managedVMs[item.id] = booted

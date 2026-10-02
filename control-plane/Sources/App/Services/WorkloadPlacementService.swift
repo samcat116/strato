@@ -444,7 +444,9 @@ actor WorkloadPlacementService {
                     totalDisk: agent.totalDisk,
                     availableDisk: agent.availableDisk,
                     physicalFreeDisk: agent.physicalFreeDisk,
-                    qemuOverheadBytes: agent.memoryAccounting?.qemuOverheadBytes ?? WorkloadMemoryReservation.defaultQEMUOverheadBytes,
+                    qemuOverheadBytes: agent.memoryAccounting?.qemuOverheadBytes
+                        ?? WorkloadMemoryReservation.defaultQEMUOverheadBytes,
+                    memoryAccounting: agent.memoryAccounting,
                     status: agent.status,
                     runningVMCount: runningVMCounts[agentId] ?? 0,
                     supportedHypervisors: agent.supportedHypervisors(at: instant),

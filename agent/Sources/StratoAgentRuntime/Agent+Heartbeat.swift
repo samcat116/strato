@@ -408,7 +408,8 @@ extension Agent {
         for entry in orphanedVMs.values {
             guard !backendsWithInventory.contains(entry.hypervisorType) else { continue }
             reserved = reserved.addingSaturating(
-                VMHostReservation.forManifestEntry(entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes))
+                VMHostReservation.forManifestEntry(
+                    entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes))
         }
 
         // Sandbox reservations always come from the manifest (managed and
@@ -416,11 +417,15 @@ extension Agent {
         // and the manifest entry is authoritative for the workload's sizing.
         for entry in managedSandboxes.values {
             reserved = reserved.addingSaturating(
-                SandboxHostReservation.forSpec(entry.spec))
+                HostReservation(
+                    cpus: entry.spec.cpus,
+                    memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: entry.spec.memoryBytes).effectiveBytes))
         }
         for entry in orphanedSandboxes.values {
             reserved = reserved.addingSaturating(
-                SandboxHostReservation.forSpec(entry.spec))
+                HostReservation(
+                    cpus: entry.spec.cpus,
+                    memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: entry.spec.memoryBytes).effectiveBytes))
         }
 
         // Workloads whose manifest entry this build cannot route (STR-138) are
@@ -430,9 +435,13 @@ extension Agent {
         for entry in quarantinedWorkloads.values {
             reserved = reserved.addingSaturating(
                 HostReservation(
-                    cpus: entry.cpus, memoryBytes: WorkloadMemoryReservation(guestBytes: entry.memoryBytes,
-                        backendOverheadBytes: entry.effectiveKind == .sandbox || entry.hypervisorTypeRawValue == HypervisorType.firecracker.rawValue
-                            ? WorkloadMemoryReservation.firecrackerOverheadBytes : configuration.qemuMemoryOverheadBytes).effectiveBytes,
+                    cpus: entry.cpus,
+                    memoryBytes: WorkloadMemoryReservation(
+                        guestBytes: entry.memoryBytes,
+                        backendOverheadBytes: entry.effectiveKind == .sandbox
+                            || entry.hypervisorTypeRawValue == HypervisorType.firecracker.rawValue
+                            ? WorkloadMemoryReservation.firecrackerOverheadBytes : configuration.qemuMemoryOverheadBytes
+                    ).effectiveBytes,
                     diskBytes: entry.diskBytes))
         }
 
@@ -630,7 +639,8 @@ extension Agent {
             HostReservation()
         ) { partial, entry in
             partial.addingSaturating(
-                VMHostReservation.forManifestEntry(entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes))
+                VMHostReservation.forManifestEntry(
+                    entry, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes))
         }
         return (reserved.cpus, reserved.memoryBytes)
     }

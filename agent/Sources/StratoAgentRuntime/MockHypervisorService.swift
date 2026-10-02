@@ -223,9 +223,10 @@ actor MockHypervisorService: HypervisorService {
         }
         vm.spec = spec
         if hypervisorType == .qemu {
-            let requested = VMHostReservation.forSpec(
-                spec, hypervisorType: hypervisorType, architecture: .current, qemuOverheadBytes: qemuOverheadBytes
-            ).memoryBytes - qemuOverheadBytes
+            let requested =
+                VMHostReservation.forSpec(
+                    spec, hypervisorType: hypervisorType, architecture: .current, qemuOverheadBytes: qemuOverheadBytes
+                ).memoryBytes - qemuOverheadBytes
             vm.realizedMemoryReservationBytes = max(
                 vm.realizedMemoryReservationBytes ?? 0, requested)
         }
@@ -286,8 +287,10 @@ actor MockHypervisorService: HypervisorService {
             let fixed = vm.realizedMemoryReservationBytes ?? max(0, current.memoryBytes - qemuOverheadBytes)
             return HostReservation(
                 cpus: current.cpus,
-                memoryBytes: WorkloadMemoryReservation(guestBytes: max(vm.spec.memoryBytes, fixed),
-                    backendOverheadBytes: qemuOverheadBytes).effectiveBytes)
+                memoryBytes: WorkloadMemoryReservation(
+                    guestBytes: max(vm.spec.memoryBytes, fixed),
+                    backendOverheadBytes: qemuOverheadBytes
+                ).effectiveBytes)
         }
     }
 

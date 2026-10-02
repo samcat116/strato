@@ -100,8 +100,10 @@ public struct HostCapacitySnapshot: Sendable, Equatable {
     public let qemuOverheadBytes: Int64
 
     public var memoryAccounting: HostMemoryAccounting {
-        HostMemoryAccounting(physicalBytes: total.memoryBytes, hostReservedBytes: hostReservedMemoryBytes,
-            workloadEffectiveBytes: reserved.memoryBytes, inventoryKnown: inventoryKnown, qemuOverheadBytes: qemuOverheadBytes)
+        HostMemoryAccounting(
+            physicalBytes: total.memoryBytes, hostReservedBytes: hostReservedMemoryBytes,
+            workloadEffectiveBytes: reserved.memoryBytes, inventoryKnown: inventoryKnown,
+            qemuOverheadBytes: qemuOverheadBytes)
     }
 
     public init(
@@ -166,7 +168,8 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
 
     public var errorDescription: String? {
         if resource == .memory, let accounting = memoryAccounting {
-            return "agent `\(agentName)` refused memory admission: physicalBytes=\(accounting.physicalBytes), hostReservedBytes=\(accounting.hostReservedBytes), workloadEffectiveBytes=\(accounting.workloadEffectiveBytes), remainingAllocatableBytes=\(accounting.remainingAllocatableBytes), requiredEffectiveBytes=\(required.memoryBytes)"
+            return
+                "agent `\(agentName)` refused memory admission: physicalBytes=\(accounting.physicalBytes), hostReservedBytes=\(accounting.hostReservedBytes), workloadEffectiveBytes=\(accounting.workloadEffectiveBytes), remainingAllocatableBytes=\(accounting.remainingAllocatableBytes), requiredEffectiveBytes=\(required.memoryBytes), qemuOverheadBytes=\(accounting.qemuOverheadBytes)"
         }
         if failureClassification == .permanent {
             switch resource {
@@ -271,8 +274,11 @@ public struct HostCapacityAdmissionLedger: Sendable {
         guard requested.memoryBytes <= effective.memoryBytes else {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: effective, required: requested,
-                memoryAccounting: HostMemoryAccounting(physicalBytes: snapshot.total.memoryBytes,
-                    hostReservedBytes: snapshot.hostReservedMemoryBytes, workloadEffectiveBytes: committedAndProvisional.memoryBytes))
+                memoryAccounting: HostMemoryAccounting(
+                    physicalBytes: snapshot.total.memoryBytes,
+                    hostReservedBytes: snapshot.hostReservedMemoryBytes,
+                    workloadEffectiveBytes: committedAndProvisional.memoryBytes,
+                    qemuOverheadBytes: snapshot.qemuOverheadBytes))
         }
         guard requested.diskBytes <= effective.diskBytes else {
             throw HostCapacityAdmissionError(
@@ -324,11 +330,13 @@ public struct HostCapacityAdmissionLedger: Sendable {
                 agentName: agentName, resource: .cpu, available: HostReservation(),
                 required: HostReservation(cpus: used.cpus - snapshot.total.cpus))
         }
-        let memoryBudget = max(0, snapshot.total.memoryBytes - min(snapshot.total.memoryBytes, snapshot.hostReservedMemoryBytes))
+        let memoryBudget = max(
+            0, snapshot.total.memoryBytes - min(snapshot.total.memoryBytes, snapshot.hostReservedMemoryBytes))
         if used.memoryBytes > memoryBudget {
             throw HostCapacityAdmissionError(
                 agentName: agentName, resource: .memory, available: HostReservation(),
-                required: HostReservation(memoryBytes: used.memoryBytes - memoryBudget), memoryAccounting: snapshot.memoryAccounting)
+                required: HostReservation(memoryBytes: used.memoryBytes - memoryBudget),
+                memoryAccounting: snapshot.memoryAccounting)
         }
         if used.diskBytes > snapshot.total.diskBytes {
             throw HostCapacityAdmissionError(
@@ -368,14 +376,18 @@ public enum VMHostReservation {
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
         guard entry.hypervisorType == .qemu else {
-            return forSpec(entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture, qemuOverheadBytes: qemuOverheadBytes)
+            return forSpec(
+                entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture,
+                qemuOverheadBytes: qemuOverheadBytes)
         }
         let legacyReservation = max(entry.spec.memoryBytes, entry.spec.maxMemoryBytes)
         let fixedReservation = entry.realizedMemoryReservationBytes ?? legacyReservation
         return HostReservation(
             cpus: entry.spec.cpus,
-            memoryBytes: WorkloadMemoryReservation(guestBytes: max(entry.spec.memoryBytes, fixedReservation),
-                backendOverheadBytes: qemuOverheadBytes).effectiveBytes)
+            memoryBytes: WorkloadMemoryReservation(
+                guestBytes: max(entry.spec.memoryBytes, fixedReservation),
+                backendOverheadBytes: qemuOverheadBytes
+            ).effectiveBytes)
     }
 }
 
@@ -384,6 +396,8 @@ public enum VMHostReservation {
 /// same reservation semantics as heartbeat accounting.
 public enum SandboxHostReservation {
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
-        HostReservation(cpus: spec.cpus, memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: spec.memoryBytes).effectiveBytes)
+        HostReservation(
+            cpus: spec.cpus,
+            memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: spec.memoryBytes).effectiveBytes)
     }
 }

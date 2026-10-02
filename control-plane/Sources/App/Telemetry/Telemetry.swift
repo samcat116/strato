@@ -752,11 +752,17 @@ enum Telemetry {
     /// here because monotonicity belongs to the agent/host and may reset when
     /// either restarts. `agent_id` is a control-plane-issued UUID; signal,
     /// resource, stall, and event are closed vocabularies.
-    static func recordHostMemoryAccounting(agentID: String, accounting: HostMemoryAccounting) {
-        for (operand, bytes) in [("physical", accounting.physicalBytes),
+    static func recordHostMemoryAccounting(
+        agentID: String, accounting: HostMemoryAccounting, factory: (any MetricsFactory)? = nil
+    ) {
+        for (operand, bytes) in [
+            ("physical", accounting.physicalBytes),
             ("host_reserved", accounting.hostReservedBytes), ("workload_effective", accounting.workloadEffectiveBytes),
-            ("remaining_allocatable", accounting.remainingAllocatableBytes)] {
-            recordGauge(label: "strato_agent_memory_\(operand)_bytes", dimensions: [("agent_id", agentID)], value: Double(bytes), factory: nil)
+            ("remaining_allocatable", accounting.remainingAllocatableBytes),
+        ] {
+            recordGauge(
+                label: "strato_agent_memory_\(operand)_bytes", dimensions: [("agent_id", agentID)],
+                value: Double(bytes), factory: factory)
         }
     }
 

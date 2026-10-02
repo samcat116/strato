@@ -157,10 +157,12 @@ struct SchedulerServiceTests {
         let scheduler = SchedulerService(logger: logger)  // defaults to leastLoaded
 
         let agents = [
+            // 75% memory utilization.
             createTestAgent(
-                id: "agent1", name: "agent1", totalMemory: 16000 * 1024 * 1024, availableMemory: 4000 * 1024 * 1024),  // 75% mem
+                id: "agent1", name: "agent1", totalMemory: 16000 * 1024 * 1024, availableMemory: 4000 * 1024 * 1024),
+            // 12.5% memory utilization.
             createTestAgent(
-                id: "agent2", name: "agent2", totalMemory: 16000 * 1024 * 1024, availableMemory: 14000 * 1024 * 1024),  // 12.5% mem
+                id: "agent2", name: "agent2", totalMemory: 16000 * 1024 * 1024, availableMemory: 14000 * 1024 * 1024),
         ]
 
         let vm = createTestVM(cpu: 1, memory: 2000 * 1024 * 1024, disk: 10000)

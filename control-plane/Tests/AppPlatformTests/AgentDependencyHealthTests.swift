@@ -231,7 +231,7 @@ struct AgentDependencyHealthTests {
             name: "node-1", hostname: "node-1", version: "test", siteID: UUID(), status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
-                totalMemory: 16_000, availableMemory: 16_000,
+                totalMemory: 16_000 * 1024 * 1024, availableMemory: 16_000 * 1024 * 1024,
                 totalDisk: 100_000, availableDisk: 100_000),
             hypervisors: [
                 HypervisorSupport(

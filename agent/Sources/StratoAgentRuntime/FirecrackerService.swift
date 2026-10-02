@@ -446,7 +446,9 @@ actor FirecrackerService: HypervisorService {
     }
 
     func reservationInventory() -> HypervisorReservationInventory? {
-        let workloads = vmSpecs.mapValues { VMHostReservation.forSpec($0, hypervisorType: .firecracker, architecture: .current) }
+        let workloads = vmSpecs.mapValues {
+            VMHostReservation.forSpec($0, hypervisorType: .firecracker, architecture: .current)
+        }
         return HypervisorReservationInventory(
             reservation: workloads.values.reduce(HostReservation()) { $0.addingSaturating($1) },
             workloadReservations: workloads)
