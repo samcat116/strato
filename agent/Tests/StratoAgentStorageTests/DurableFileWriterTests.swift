@@ -299,21 +299,22 @@ struct DurableFileWriterTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let destination = root.appendingPathComponent("state").path
         let staging = destination + ".tmp." + UUID().uuidString
+        let directory = root.path.withCString { open($0, O_RDONLY | O_DIRECTORY) }
+        #expect(directory >= 0)
+        guard directory >= 0 else { return }
         // Prepare all pointers before fork; the child uses only POSIX calls.
-        let pid = root.path.withCString { directoryPointer in
-            staging.withCString { stagingPointer in
-                let child = fork()
-                if child == 0 {
-                    let directory = open(directoryPointer, O_RDONLY | O_DIRECTORY)
-                    if directory < 0 || flock(directory, LOCK_EX) != 0 { _exit(90) }
-                    let file = open(stagingPointer, O_WRONLY | O_CREAT | O_EXCL, 0o600)
-                    if file < 0 || fsync(file) != 0 || fsync(directory) != 0 { _exit(91) }
-                    _ = kill(getpid(), SIGKILL)
-                    _exit(92)
-                }
-                return child
+        let pid = staging.withCString { stagingPointer in
+            let child = fork()
+            if child == 0 {
+                if flock(directory, LOCK_EX) != 0 { _exit(90) }
+                let file = creat(stagingPointer, mode_t(0o600))
+                if file < 0 || fsync(file) != 0 || fsync(directory) != 0 { _exit(91) }
+                _ = kill(getpid(), SIGKILL)
+                _exit(92)
             }
+            return child
         }
+        _ = close(directory)
         #expect(pid > 0)
         guard pid > 0 else { return }
         var status: CInt = 0
