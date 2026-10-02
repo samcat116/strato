@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 59). The required registration fields
+currently 63). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,6 +61,12 @@ contract change.** Both sides require exact equality with `currentVersion` and
 refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
+
+Wire v63 requires first-boot installation of the selected Strato guest-agent
+release for opted-in VMs across ISO and IMDS delivery, and adds independent
+guest-agent reachability observations. Older agents only understand the channel
+flag and cannot fulfill that installation intent. Rejecting v62 peers prevents
+an opted-in VM from being created without its guest daemon during mixed builds.
 
 Wire v44 generalized the interactive exec stream across VMs and sandboxes with
 `guest_exec_*` messages and a resource-kind discriminator on start.
