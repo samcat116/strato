@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 
 public enum CephCredentialRevocationError: Error, LocalizedError, Sendable {
     case stillReferenced(clusterId: UUID, credentialId: UUID)
@@ -59,15 +64,35 @@ public actor CephCredentialRevoker {
         // Try every sensitive path even if one removal fails. Nothing about a
         // filesystem error should leave a different secret behind merely due
         // to loop order.
-        var sensitiveCleanupFailed = false
-        for path in sensitiveFiles {
-            do {
-                try Self.removeIfPresent(path)
-            } catch {
-                sensitiveCleanupFailed = true
+        do {
+            let descriptor = try OwnedFileCleanup.lockDirectory(directory)
+            defer { _ = close(descriptor) }
+            let names = sensitiveFiles.map { ($0 as NSString).lastPathComponent }
+            try OwnedFileCleanup.removeFiles(
+                in: directory, descriptor: descriptor, rejectUnsafeMatches: true
+            ) { name in
+                if names.contains(name) { return true }
+                // Fixed staging names from pre-UUID writers are also reserved
+                // credential copies. Generic/operator `.tmp` names elsewhere
+                // are deliberately outside this credential-specific cleanup.
+                if names.contains(where: { name == $0 + ".tmp" }) { return true }
+                if (names + ["libvirt-secret.xml"]).contains(where: {
+                    OwnedFileCleanup.isStagingName(name, for: $0)
+                }) {
+                    return true
+                }
+                return CephRBDStorageBackend.isSecretValueFile(name)
             }
-        }
-        guard !sensitiveCleanupFailed else {
+            var marker = stat()
+            if fstatat(descriptor, "libvirt-secret.xml", &marker, AT_SYMLINK_NOFOLLOW) == 0 {
+                guard marker.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+                    marker.st_uid == geteuid(), marker.st_nlink == 1
+                else { throw CephCredentialRevocationError.localCleanupFailed }
+            } else if errno != ENOENT {
+                throw CephCredentialRevocationError.localCleanupFailed
+            }
+        } catch {
+            if Self.isMissingDirectory(error) { return }
             throw CephCredentialRevocationError.localCleanupFailed
         }
 
@@ -90,15 +115,20 @@ public actor CephCredentialRevoker {
             // secret already absent), remove it explicitly before deleting the
             // now-empty credential directory.
             do {
-                try Self.removeIfPresent(secretMarker)
+                let descriptor = try OwnedFileCleanup.lockDirectory(directory)
+                defer { _ = close(descriptor) }
+                try OwnedFileCleanup.removeFiles(
+                    in: directory, descriptor: descriptor, rejectUnsafeMatches: true
+                ) { $0 == "libvirt-secret.xml" }
             } catch {
+                if Self.isMissingDirectory(error) { return }
                 throw CephCredentialRevocationError.localCleanupFailed
             }
         }
 
-        do {
-            try Self.removeIfPresent(directory)
-        } catch {
+        // Never recursively remove operator files or unowned/unsafe entries.
+        // Keeping a nonempty directory does not prevent successful revocation.
+        if rmdir(directory) != 0, errno != ENOENT, errno != ENOTEMPTY, errno != EEXIST {
             throw CephCredentialRevocationError.localCleanupFailed
         }
     }
@@ -118,15 +148,27 @@ public actor CephCredentialRevoker {
         else {
             throw CephCredentialRevocationError.localCleanupFailed
         }
+        for parent in [root.path, cluster.path] {
+            var information = stat()
+            if lstat(parent, &information) == 0 {
+                guard information.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+                    throw CephCredentialRevocationError.localCleanupFailed
+                }
+            } else if errno != ENOENT {
+                throw CephCredentialRevocationError.localCleanupFailed
+            }
+        }
         return credential.path
     }
 
-    private nonisolated static func removeIfPresent(_ path: String) throws {
-        do {
-            try FileManager.default.removeItem(atPath: path)
-        } catch let error as CocoaError where error.code == .fileNoSuchFile {
-            return
+    private nonisolated static func isMissingDirectory(_ error: any Error) -> Bool {
+        // Another revocation may finish while this actor awaits libvirt. Its
+        // removal of the now-empty directory already establishes local cleanup.
+        if let error = error as? DurableFileWriteError { return error.errorNumber == ENOENT }
+        if let error = error as? CocoaError {
+            return error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
         }
+        return false
     }
 
     private nonisolated static func isMissingSecret(_ result: ProcessResult) -> Bool {

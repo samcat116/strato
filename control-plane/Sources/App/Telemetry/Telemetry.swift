@@ -13,6 +13,16 @@ import StratoShared
 ///
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
+    static func coordinationStoreUnavailable(_ unavailable: Bool, factory: (any MetricsFactory)? = nil) {
+        recordGauge(label: "strato_coordination_store_unavailable", value: unavailable ? 1 : 0, factory: factory)
+    }
+
+    static func coordinationFailOpen(operation: String, factory: (any MetricsFactory)? = nil) {
+        incrementCounter(
+            label: "strato_coordination_fail_open_total", dimensions: [("operation", operation)], count: 1,
+            factory: factory
+        )
+    }
 
     enum SecurityRecordStream: String, CaseIterable, Sendable {
         case audit

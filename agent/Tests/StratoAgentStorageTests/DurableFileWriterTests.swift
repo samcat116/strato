@@ -1,6 +1,11 @@
 import Foundation
 import Synchronization
 import Testing
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 
 @testable import StratoAgentCore
 
@@ -22,13 +27,24 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     private struct State: Sendable {
         var events: [Event] = []
+        var overlappingWrite: (@Sendable () throws -> Void)?
+        var modelFiles = false
+        var nextDescriptor: CInt = 10
+        var paths: [String: CInt] = [:]
+        var contents: [CInt: Data] = [:]
+        var publications: [Data] = []
         var fileSynchronizationFails = false
+        var failureOperation: String?
         var existingDirectories: Set<String>
         var directoryEntries: [String: [DurableDirectoryEntry]] = [:]
     }
 
     private let state: Mutex<State>
     let errorNumber: CInt = 5
+
+    // This fake models interleaved inode operations rather than kernel locks.
+    // Real filesystem and killed-process fixtures exercise lock ownership.
+    func prepareWrite(to path: String) throws -> CInt? { nil }
 
     init(existingDirectories: Set<String> = ["/state"]) {
         self.state = Mutex(
@@ -38,6 +54,26 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     var events: [Event] {
         state.withLock { $0.events }
+    }
+
+    var publications: [Data] { state.withLock { $0.publications } }
+
+    func overlapFirstWrite(with operation: @escaping @Sendable () throws -> Void) {
+        state.withLock {
+            $0.modelFiles = true
+            $0.overlappingWrite = operation
+        }
+    }
+
+    var createdPaths: [String] {
+        events.compactMap { event in
+            if case .create(let path, _) = event { return path }
+            return nil
+        }
+    }
+
+    func fail(_ operation: String) {
+        state.withLock { $0.failureOperation = operation }
     }
 
     func failFileSynchronization() {
@@ -64,13 +100,24 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
     }
 
     func removeItem(at path: String) -> CInt {
-        record(.remove(path))
+        state.withLock {
+            $0.events.append(.remove(path))
+            $0.paths.removeValue(forKey: path)
+        }
         return 0
     }
 
     func createFile(at path: String, permissions: CInt) -> CInt {
-        record(.create(path, permissions: permissions))
-        return 10
+        state.withLock {
+            $0.events.append(.create(path, permissions: permissions))
+            if $0.failureOperation == "create" { return -1 }
+            guard $0.paths[path] == nil else { return -1 }
+            let descriptor = $0.nextDescriptor
+            $0.nextDescriptor += 1
+            $0.paths[path] = descriptor
+            $0.contents[descriptor] = Data()
+            return descriptor
+        }
     }
 
     func openDirectoryForSynchronization(at path: String) -> CInt {
@@ -79,7 +126,19 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
     }
 
     func write(_ data: Data, to fileDescriptor: CInt) throws {
-        record(.write(data, fileDescriptor: fileDescriptor))
+        let overlap = state.withLock {
+            let operation = $0.overlappingWrite
+            $0.overlappingWrite = nil
+            return operation
+        }
+        try overlap?()
+        if state.withLock({ $0.failureOperation == "write" }) {
+            throw DurableFileWriteError(operation: "write", path: "descriptor", errorNumber: errorNumber)
+        }
+        state.withLock {
+            $0.events.append(.write(data, fileDescriptor: fileDescriptor))
+            $0.contents[fileDescriptor] = data
+        }
     }
 
     func synchronizeFile(_ fileDescriptor: CInt, at path: String) throws {
@@ -105,17 +164,24 @@ private final class RecordingDurableFileSystemCalls: DurableFileSystemCalls, Sen
 
     func synchronizeDirectory(_ fileDescriptor: CInt) -> CInt {
         record(.synchronizeDirectory(fileDescriptor))
-        return 0
+        return state.withLock { $0.failureOperation == "directory sync" ? -1 : 0 }
     }
 
     func close(_ fileDescriptor: CInt) -> CInt {
         record(.close(fileDescriptor))
-        return 0
+        return state.withLock { $0.failureOperation == "close" && fileDescriptor == 10 ? -1 : 0 }
     }
 
     func replaceItem(at destination: String, withItemAt source: String) -> CInt {
-        record(.replace(source: source, destination: destination))
-        return 0
+        state.withLock {
+            $0.events.append(.replace(source: source, destination: destination))
+            if $0.failureOperation == "rename" { return -1 }
+            guard $0.modelFiles else { return 0 }
+            guard let descriptor = $0.paths.removeValue(forKey: source) else { return -1 }
+            $0.paths[destination] = descriptor
+            $0.publications.append($0.contents[descriptor] ?? Data())
+            return 0
+        }
     }
 
     private func record(_ event: Event) {
@@ -133,21 +199,197 @@ struct DurableFileWriterTests {
 
         try writer.write(data, to: "/state/manifest.json", permissions: 0o600)
 
+        let temporaryPath = try #require(calls.createdPaths.first)
+        #expect(temporaryPath.hasPrefix("/state/manifest.json.tmp."))
         #expect(
             calls.events == [
                 .pathStatus("/state"),
-                .remove("/state/manifest.json.tmp"),
-                .create("/state/manifest.json.tmp", permissions: 0o600),
+                .create(temporaryPath, permissions: 0o600),
                 .write(data, fileDescriptor: 10),
                 .synchronizeFile(10),
                 .close(10),
                 .replace(
-                    source: "/state/manifest.json.tmp",
+                    source: temporaryPath,
                     destination: "/state/manifest.json"),
                 .openDirectory("/state"),
                 .synchronizeDirectory(20),
                 .close(20),
             ])
+    }
+
+    @Test("An overlapping writer cannot unlink or consume another writer's staging inode")
+    func overlappingWritesOwnTheirStagingFiles() throws {
+        let calls = RecordingDurableFileSystemCalls()
+        let writer = DurableFileWriter(systemCalls: calls)
+        let first = Data("first complete payload".utf8)
+        let second = Data("second complete payload".utf8)
+        // A has opened its staging inode when B runs to completion. With the
+        // old shared name B unlinks A's inode and consumes the shared entry,
+        // leaving A's rename to fail despite having synchronized its bytes.
+        calls.overlapFirstWrite {
+            try writer.write(second, to: "/state/manifest.json")
+        }
+
+        try writer.write(first, to: "/state/manifest.json")
+
+        #expect(Set(calls.createdPaths).count == 2)
+        #expect(calls.publications == [second, first])
+        #expect(
+            !calls.events.contains {
+                if case .remove = $0 { return true }; return false
+            })
+    }
+
+    @Test("An overlapping failed writer cleans only its staging file")
+    func overlappingFailurePreservesOtherWriter() throws {
+        let calls = RecordingDurableFileSystemCalls()
+        let writer = DurableFileWriter(systemCalls: calls)
+        let payload = Data("successful complete payload".utf8)
+        calls.overlapFirstWrite {
+            calls.fail("rename")
+            #expect(throws: DurableFileWriteError.self) {
+                try writer.write(Data("failed payload".utf8), to: "/state/manifest.json")
+            }
+            calls.fail("")
+        }
+
+        try writer.write(payload, to: "/state/manifest.json")
+
+        #expect(calls.createdPaths.count == 2)
+        #expect(Set(calls.createdPaths).count == 2)
+        #expect(calls.publications == [payload])
+        let failedStaging = try #require(calls.createdPaths.last)
+        #expect(
+            calls.events.filter {
+                if case .remove = $0 { return true }; return false
+            } == [.remove(failedStaging)])
+    }
+
+    @Test("Concurrent real writers publish complete payloads and leave no staging files")
+    func concurrentWriters() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("durable-concurrency-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let path = root.appendingPathComponent("state").path
+        let payloads = (0..<16).map { Data(repeating: UInt8($0), count: 128 * 1024) }
+        let writer = DurableFileWriter()
+        try writer.write(payloads[0], to: path, permissions: 0o600)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for payload in payloads {
+                group.addTask {
+                    try writer.write(payload, to: path, permissions: 0o600)
+                    let observed = try Data(contentsOf: URL(fileURLWithPath: path))
+                    #expect(payloads.contains(observed))
+                }
+            }
+            try await group.waitForAll()
+        }
+        #expect(payloads.contains(try Data(contentsOf: URL(fileURLWithPath: path))))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["state"])
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test("A killed staging owner releases its lock and the next save reclaims its file")
+    func killedWriterReclamation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("durable-crash-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("state").path
+        let staging = destination + ".tmp." + UUID().uuidString
+        let directory = root.path.withCString { open($0, O_RDONLY | O_DIRECTORY) }
+        #expect(directory >= 0)
+        guard directory >= 0 else { return }
+        // Prepare all pointers before fork; the child uses only POSIX calls.
+        let pid = staging.withCString { stagingPointer in
+            let child = fork()
+            if child == 0 {
+                if flock(directory, LOCK_EX) != 0 { _exit(90) }
+                let file = creat(stagingPointer, mode_t(0o600))
+                if file < 0 || fsync(file) != 0 || fsync(directory) != 0 { _exit(91) }
+                _ = kill(getpid(), SIGKILL)
+                _exit(92)
+            }
+            return child
+        }
+        _ = close(directory)
+        #expect(pid > 0)
+        guard pid > 0 else { return }
+        var status: CInt = 0
+        #expect(waitpid(pid, &status, 0) == pid)
+        #expect(status & 0x7f == SIGKILL)
+        #expect(FileManager.default.fileExists(atPath: staging))
+        try DurableFileWriter().write(Data("complete".utf8), to: destination, permissions: 0o600)
+        #expect(!FileManager.default.fileExists(atPath: staging))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: destination)) == Data("complete".utf8))
+    }
+
+    @Test("Reclamation waits for active owners and preserves operator and unsafe files")
+    func activeOwnerAndUnownedFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("durable-active-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("state").path
+        let staging = destination + ".tmp." + UUID().uuidString
+        try Data("active".utf8).write(to: URL(fileURLWithPath: staging))
+        let operatorPath = destination + ".tmp.operator"
+        let legacyPath = destination + ".tmp"
+        let otherDestination = root.appendingPathComponent("other.tmp.\(UUID())").path
+        for path in [operatorPath, legacyPath, otherDestination] {
+            try Data("preserve".utf8).write(to: URL(fileURLWithPath: path))
+        }
+        let link = destination + ".tmp." + UUID().uuidString
+        let hardLink = destination + ".tmp." + UUID().uuidString
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: operatorPath)
+        #if canImport(Glibc)
+        #expect(Glibc.link(operatorPath, hardLink) == 0)
+        #else
+        #expect(Darwin.link(operatorPath, hardLink) == 0)
+        #endif
+        let descriptor = try OwnedFileCleanup.lockDirectory(root.path)
+        let started = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        let succeeded = Mutex(false)
+        DispatchQueue.global().async {
+            started.signal()
+            do {
+                try DurableFileWriter().write(Data("new".utf8), to: destination, permissions: 0o600)
+                succeeded.withLock { $0 = true }
+            } catch {}
+            finished.signal()
+        }
+        #expect(started.wait(timeout: .now() + 5) == .success)
+        #expect(finished.wait(timeout: .now() + 0.05) == .timedOut)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: staging)) == Data("active".utf8))
+        _ = close(descriptor)
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+        #expect(succeeded.withLock { $0 })
+        #expect(!FileManager.default.fileExists(atPath: staging))
+        for path in [operatorPath, legacyPath, otherDestination, link, hardLink] {
+            #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == Data("preserve".utf8))
+        }
+    }
+
+    @Test("Configured directory aliases retain complete private publication")
+    func configuredDirectoryAlias() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("durable-alias-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let actual = root.appendingPathComponent("actual")
+        try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: false)
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
+        let destination = alias.appendingPathComponent("state").path
+        let interrupted = destination + ".tmp." + UUID().uuidString
+        try Data("interrupted".utf8).write(to: URL(fileURLWithPath: interrupted))
+        try DurableFileWriter().write(Data("complete".utf8), to: destination, permissions: 0o600)
+        #expect(try Data(contentsOf: actual.appendingPathComponent("state")) == Data("complete".utf8))
+        #expect(!FileManager.default.fileExists(atPath: interrupted))
+        #expect(
+            (try FileManager.default.attributesOfItem(atPath: destination)[.posixPermissions] as? NSNumber)?.intValue
+                == 0o600)
     }
 
     @Test("Every newly created directory is synchronized through its parent")
@@ -158,6 +400,8 @@ struct DurableFileWriterTests {
 
         try writer.write(data, to: "/root/state/records/manifest.json")
 
+        let temporaryPath = try #require(calls.createdPaths.first)
+        #expect(temporaryPath.hasPrefix("/root/state/records/manifest.json.tmp."))
         #expect(
             calls.events == [
                 .pathStatus("/root/state/records"),
@@ -171,13 +415,12 @@ struct DurableFileWriterTests {
                 .openDirectory("/root/state"),
                 .synchronizeDirectory(20),
                 .close(20),
-                .remove("/root/state/records/manifest.json.tmp"),
-                .create("/root/state/records/manifest.json.tmp", permissions: 0o666),
+                .create(temporaryPath, permissions: 0o666),
                 .write(data, fileDescriptor: 10),
                 .synchronizeFile(10),
                 .close(10),
                 .replace(
-                    source: "/root/state/records/manifest.json.tmp",
+                    source: temporaryPath,
                     destination: "/root/state/records/manifest.json"),
                 .openDirectory("/root/state/records"),
                 .synchronizeDirectory(20),
@@ -300,7 +543,32 @@ struct DurableFileWriterTests {
                 if case .replace = event { return true }
                 return false
             })
-        #expect(calls.events.last == .remove("/state/manifest.json.tmp"))
+        #expect(calls.createdPaths.count == 1)
+        #expect(calls.events.last == calls.createdPaths.first.map { .remove($0) })
+    }
+
+    @Test(
+        "Failure cleanup removes only owned unpublished staging files",
+        arguments: ["create", "write", "close", "rename", "directory sync"])
+    func failureCleanup(operation: String) throws {
+        let calls = RecordingDurableFileSystemCalls()
+        calls.fail(operation)
+        let writer = DurableFileWriter(systemCalls: calls)
+
+        #expect(throws: DurableFileWriteError.self) {
+            try writer.write(Data("state".utf8), to: "/state/manifest.json", permissions: 0o600)
+        }
+
+        let staging = try #require(calls.createdPaths.first)
+        let removals = calls.events.compactMap { event -> String? in
+            if case .remove(let path) = event { return path }
+            return nil
+        }
+        #expect(removals == (operation == "create" || operation == "directory sync" ? [] : [staging]))
+        #expect(calls.events.filter { $0 == .close(10) }.count == (operation == "create" ? 0 : 1))
+        if operation == "directory sync" {
+            #expect(calls.events.contains(.replace(source: staging, destination: "/state/manifest.json")))
+        }
     }
 
     @Test("A staged file synchronization failure never publishes the file")
