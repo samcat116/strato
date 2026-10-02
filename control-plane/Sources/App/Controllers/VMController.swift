@@ -179,6 +179,8 @@ struct VMController: RouteCollection {
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
             vm.post("exec", use: exec)
+            vm.get("exec-sessions", use: liveExecSessions)
+            vm.post("exec-sessions", ":sessionID", "terminate", use: terminateExecSession)
             vm.group("actions") { actions in
                 actions.post("run", use: runCommand)
             }
@@ -1207,6 +1209,7 @@ struct VMController: RouteCollection {
             argv: run.command,
             on: req)
         let execution = try await db.transaction { db in
+            try await VMExecSessionLimits.admitRun(projectID: vm.$project.id, vmID: vmID, on: db)
             let acceptedAt = try await ClusterClock.read(on: db)
             let execution = VMCommandExecution(
                 id: executionID,
@@ -1289,13 +1292,17 @@ struct VMController: RouteCollection {
             )
         }
 
-        let sessionId = UUID().uuidString
+        let sessionUUID = UUID()
+        let sessionId = sessionUUID.uuidString
         let auditContext = VMGuestExecutionAudit.makeContext(
             vmID: vmID,
             projectID: vm.$project.id,
             correlationID: sessionId,
             argv: execRequest.command,
             on: req)
+        try await VMExecSessionLimits.reserve(
+            id: sessionUUID, vmID: vmID, userID: try user.requireID(),
+            username: user.username, on: req.db)
         let session = req.guestExecSessionManager.createPendingSession(
             sessionId: sessionId,
             resourceKind: .virtualMachine,
@@ -1323,6 +1330,19 @@ struct VMController: RouteCollection {
                 outputMode: session.outputMode
             ))
         return response
+    }
+
+    func liveExecSessions(req: Request) async throws -> [LiveVMExecSession] {
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
+        return try await VMExecSessionLimits.list(vmID: vm.requireID(), on: req.db)
+    }
+
+    func terminateExecSession(req: Request) async throws -> HTTPStatus {
+        _ = try req.requireActingUser("Terminating a VM exec session")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:exec")
+        guard let id = req.parameters.get("sessionID", as: UUID.self) else { throw Abort(.badRequest) }
+        try await VMExecSessionLimits.requestTermination(id: id, vmID: vm.requireID(), on: req.db)
+        return .accepted
     }
 
     func delete(req: Request) async throws -> Response {

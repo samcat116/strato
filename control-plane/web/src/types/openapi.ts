@@ -493,6 +493,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/exec-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List attached interactive sessions on a VM
+         * @description Requires vm:read. Presence is shared across replicas and expires within 60 seconds after an owner crash. Pending reservations are excluded.
+         */
+        get: operations["listLiveVMExecSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/exec-sessions/{sessionID}/terminate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request termination of an attached interactive session
+         * @description Requires vm:exec on this VM. The socket owner closes the guest process and browser on its next maintenance tick. Repeating while termination is pending returns 202; an ended or foreign session returns 404.
+         */
+        post: operations["terminateVMExecSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/actions/run": {
         parameters: {
             query?: never;
@@ -6280,6 +6327,18 @@ export interface components {
          * @enum {string}
          */
         GuestExecOutputMode: "raw" | "multiplexed";
+        LiveVMExecSession: {
+            /** Format: uuid */
+            sessionId: string;
+            /** Format: uuid */
+            userId: string;
+            username?: string;
+            /** Format: date-time */
+            attachedAt: string;
+            /** Format: date-time */
+            lastActivityAt: string;
+            terminationRequested: boolean;
+        };
         GuestExecRequest: {
             command: string[];
             env?: {
@@ -11474,6 +11533,13 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description VM session cap or project command rate limit reached. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -11564,6 +11630,58 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    listLiveVMExecSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live interactive sessions, bounded by the per-VM cap. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveVMExecSession"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    terminateVMExecSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Termination requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     runVMCommand: {
         parameters: {
             query?: never;
@@ -11594,6 +11712,13 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description VM session cap or project command rate limit reached. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             503: components["responses"]["ServiceUnavailable"];
         };
     };

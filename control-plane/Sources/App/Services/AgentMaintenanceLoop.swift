@@ -99,6 +99,8 @@ actor AgentMaintenanceLoop {
                 ])
         }
 
+        await app.guestExecSessionManager.maintainSessions(now: localTime())
+        try checkTickPreconditions()
         await checkStaleAgents(at: instant)
         try checkTickPreconditions()
         await app.replicaBridge.verifySubscriptions()

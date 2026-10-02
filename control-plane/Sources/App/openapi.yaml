@@ -723,6 +723,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: VM session cap or project command rate limit reached. }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/vm-fleet-runs:
     post:
@@ -810,6 +811,45 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/exec-sessions:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: listLiveVMExecSessions
+      summary: List attached interactive sessions on a VM
+      description: Requires vm:read. Presence is shared across replicas and expires within 60 seconds after an owner crash. Pending reservations are excluded.
+      tags: [VMs]
+      responses:
+        "200":
+          description: Live interactive sessions, bounded by the per-VM cap.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 4
+                items:
+                  $ref: "#/components/schemas/LiveVMExecSession"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/vms/{vmID}/exec-sessions/{sessionID}/terminate:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: terminateVMExecSession
+      summary: Request termination of an attached interactive session
+      description: Requires vm:exec on this VM. The socket owner closes the guest process and browser on its next maintenance tick. Repeating while termination is pending returns 202; an ended or foreign session returns 404.
+      tags: [VMs]
+      responses:
+        "202": { description: Termination requested. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/vms/{vmID}/actions/run:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -843,6 +883,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: VM session cap or project command rate limit reached. }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/vms/{vmID}/snapshots:
     parameters:
@@ -10835,6 +10876,16 @@ components:
         Browser-facing output framing. Raw sends agent output bytes unchanged.
         Multiplexed prefixes each binary frame with 0x01 for stdout or 0x02 for
         stderr. Omission selects raw for compatibility with browser terminals.
+    LiveVMExecSession:
+      type: object
+      required: [sessionId, userId, attachedAt, lastActivityAt, terminationRequested]
+      properties:
+        sessionId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        username: { type: string }
+        attachedAt: { type: string, format: date-time }
+        lastActivityAt: { type: string, format: date-time }
+        terminationRequested: { type: boolean }
     GuestExecRequest:
       type: object
       required: [command]

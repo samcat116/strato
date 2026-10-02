@@ -1,5 +1,7 @@
 import Fluent
 import StratoShared
+import SQLKit
+import Synchronization
 import Testing
 import Vapor
 import VaporTesting
@@ -1434,4 +1436,204 @@ final class GuestExecTests {
             }
         }
     }
+    @Test("Shared VM admission includes pending interactive and recorded sessions and releases expired slots")
+    func sharedSessionCap() async throws {
+        try await withSandboxTestApp { app, user, project, _, _ in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "limited-vm", project: project)
+            let vmID = try vm.requireID()
+            let sql = try #require(app.db as? any SQLDatabase)
+            let run = VMCommandExecution(
+                vmID: vmID, actorID: try user.requireID(), agentKey: "test", deadline: Date().addingTimeInterval(300))
+            try await run.create(command: ["true"], on: app.db)
+            var ids: [UUID] = []
+            for _ in 0..<GuestExecLimits.maxSessionsPerVM - 1 {
+                let id = UUID()
+                try await VMExecSessionLimits.reserve(
+                    id: id, vmID: vmID, userID: user.requireID(), username: user.username, on: app.db)
+                ids.append(id)
+            }
+            await #expect(throws: Abort.self) {
+                try await VMExecSessionLimits.reserve(
+                    id: UUID(), vmID: vmID, userID: user.requireID(), username: nil, on: app.db)
+            }
+            #expect(try await VMExecSessionLimits.list(vmID: vmID, on: app.db).isEmpty)
+            try await VMExecSessionLimits.attach(id: ids[0], on: app.db)
+            #expect(try await VMExecSessionLimits.list(vmID: vmID, on: app.db).count == 1)
+            try await sql.raw(
+                "UPDATE vm_exec_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE id = \(bind: ids[1])"
+            ).run()
+            #expect(try await !VMExecSessionLimits.renew(id: ids[1], lastActivity: Date(), on: app.db))
+            try await VMExecSessionLimits.reserve(
+                id: UUID(), vmID: vmID, userID: user.requireID(), username: nil, on: app.db)
+            try await VMExecSessionLimits.remove(id: ids[0], on: app.db)
+            try await VMExecSessionLimits.reserve(
+                id: UUID(), vmID: vmID, userID: user.requireID(), username: nil, on: app.db)
+        }
+    }
+
+    @Test("Concurrent replicas cannot reserve beyond the per-VM cap")
+    func concurrentAdmission() async throws {
+        try await withSandboxTestApp { app, user, project, _, _ in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "concurrent-vm", project: project)
+            let vmID = try vm.requireID()
+            let userID = try user.requireID()
+            let admitted = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+                for _ in 0..<12 {
+                    group.addTask {
+                        do {
+                            try await VMExecSessionLimits.reserve(
+                                id: UUID(), vmID: vmID, userID: userID, username: nil, on: app.db)
+                            return true
+                        } catch { return false }
+                    }
+                }
+                var count = 0
+                for await accepted in group where accepted { count += 1 }
+                return count
+            }
+            #expect(admitted == GuestExecLimits.maxSessionsPerVM)
+        }
+    }
+
+    @Test("Project rolling rate is shared across VMs, expires, and rolls back refused acceptance")
+    func projectRunRate() async throws {
+        try await withSandboxTestApp { app, _, project, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let first = try await builder.createVM(name: "rate-a", project: project)
+            let second = try await builder.createVM(name: "rate-b", project: project)
+            let sql = try #require(app.db as? any SQLDatabase)
+            for index in 0..<GuestExecLimits.runsPerProjectPerMinute {
+                try await app.db.transaction { db in
+                    try await VMExecSessionLimits.admitRun(
+                        projectID: project.requireID(),
+                        vmID: index.isMultiple(of: 2) ? first.requireID() : second.requireID(), on: db)
+                }
+            }
+            await #expect(throws: Abort.self) {
+                try await app.db.transaction { db in
+                    try await VMExecSessionLimits.admitRun(
+                        projectID: project.requireID(), vmID: first.requireID(), on: db)
+                }
+            }
+            try await sql.raw(
+                "UPDATE vm_run_rate_limits SET accepted_at = ARRAY[clock_timestamp() - interval '61 seconds'] WHERE project_id = \(bind: project.requireID())"
+            ).run()
+            try await app.db.transaction { db in
+                try await VMExecSessionLimits.admitRun(projectID: project.requireID(), vmID: first.requireID(), on: db)
+            }
+            struct Count: Decodable { let count: Int }
+            let count = try await sql.raw(
+                "SELECT cardinality(accepted_at) AS count FROM vm_run_rate_limits WHERE project_id = \(bind: project.requireID())"
+            ).first(decoding: Count.self)
+            #expect(count?.count == 1)
+        }
+    }
+
+    @Test("Live session listing is readable, termination requires exec and cannot target another VM")
+    func liveSessionAuthorizationAndTermination() async throws {
+        try await withSandboxTestApp { app, user, project, _, token in
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "presence-vm", project: project)
+            let other = try await builder.createVM(name: "other-presence-vm", project: project)
+            let id = UUID()
+            try await VMExecSessionLimits.reserve(
+                id: id, vmID: vm.requireID(), userID: user.requireID(), username: user.username, on: app.db)
+            try await VMExecSessionLimits.attach(id: id, on: app.db)
+            try await app.test(.GET, "/api/vms/\(vm.id!)/exec-sessions") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let live = try res.content.decode([LiveVMExecSession].self)
+                #expect(live.count == 1)
+                #expect(live.first?.userId == user.id)
+                #expect(live.first?.username == user.username)
+            }
+            let path = "/api/vms/\(vm.id!)/exec-sessions/\(id)/terminate"
+            try await app.test(.POST, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+            }
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            try await app.test(.POST, "/api/vms/\(other.id!)/exec-sessions/\(id)/terminate") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+            for _ in 0..<2 {
+                try await app.test(.POST, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                }
+            }
+            #expect(
+                try await VMExecSessionLimits.list(vmID: vm.requireID(), on: app.db).first?.terminationRequested == true
+            )
+            #expect(try await !VMExecSessionLimits.renew(id: id, lastActivity: Date(), on: app.db))
+            try await VMExecSessionLimits.remove(id: id, on: app.db)
+            try await app.test(.POST, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .notFound)
+            }
+        }
+    }
+
+    @Test("Idle termination waits for the serial pump and repeated requests enqueue one close")
+    func idleTerminationIsSerialized() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let manager = app.guestExecSessionManager
+            let now = Date()
+            let session = self.mintPendingSession(manager, resourceKind: .virtualMachine, now: now)
+            _ = try manager.attachSession(
+                sessionId: session.sessionId, resourceKind: session.resourceKind, resourceId: session.resourceId,
+                userId: session.userId, websocket: nil, now: now)
+            let reasons = Mutex<[String]>([])
+            manager.noteActivity(sessionId: session.sessionId, now: now.addingTimeInterval(100))
+            // A termination requested before handler setup is retained.
+            manager.requestTermination(sessionId: session.sessionId, reason: "operator")
+            manager.setTerminationHandler(sessionId: session.sessionId) { reason in
+                reasons.withLock { $0.append(reason) }
+            }
+            manager.requestTermination(sessionId: session.sessionId, reason: "repeat")
+            #expect(reasons.withLock { $0 } == ["operator"])
+            #expect(manager.getSession(sessionId: session.sessionId) != nil)
+            await manager.endSession(sessionId: session.sessionId, outcome: .terminated, reason: "operator")
+            #expect(manager.getSession(sessionId: session.sessionId) == nil)
+        }
+    }
+
+    @Test("Input refreshes idle deadline; exact idle boundary enqueues termination and output does not extend it")
+    func idleDeadlineUsesClientActivity() async throws {
+        try await withSandboxTestApp { app, user, project, _, _ in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "idle-vm", project: project)
+            let manager = app.guestExecSessionManager
+            let now = Date()
+            let id = UUID()
+            try await VMExecSessionLimits.reserve(
+                id: id, vmID: vm.requireID(), userID: user.requireID(), username: nil, on: app.db)
+            try await VMExecSessionLimits.attach(id: id, on: app.db)
+            let session = self.mintPendingSession(
+                manager, sessionId: id.uuidString, resourceKind: .virtualMachine, resourceId: vm.id!.uuidString,
+                userId: user.id!.uuidString, now: now)
+            _ = try manager.attachSession(
+                sessionId: session.sessionId, resourceKind: session.resourceKind, resourceId: session.resourceId,
+                userId: session.userId, websocket: nil, now: now)
+            let reasons = Mutex<[String]>([])
+            manager.setTerminationHandler(sessionId: session.sessionId) { reason in
+                reasons.withLock { $0.append(reason) }
+            }
+            manager.noteActivity(sessionId: session.sessionId, now: now.addingTimeInterval(100))
+            await manager.maintainSessions(now: now.addingTimeInterval(999))
+            #expect(reasons.withLock { $0.isEmpty })
+            await manager.maintainSessions(now: now.addingTimeInterval(1000))
+            await manager.maintainSessions(now: now.addingTimeInterval(1001))
+            #expect(reasons.withLock { $0 } == ["Exec session idle timeout"])
+            await manager.endSession(sessionId: session.sessionId, outcome: .terminated, reason: "idle")
+            #expect(try await VMExecSessionLimits.list(vmID: vm.requireID(), on: app.db).isEmpty)
+        }
+    }
+
 }

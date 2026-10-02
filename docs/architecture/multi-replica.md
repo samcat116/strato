@@ -229,3 +229,40 @@ sessions are pinned to the replica that accepted the frontend's WebSocket and
 the agent socket; with multiple replicas, console connections work when both
 sockets land on the same replica (client retry re-resolves through the
 service), which is a known limitation tracked separately.
+
+## VM guest execution admission and presence (STR-89)
+
+PostgreSQL serializes VM exec admission with a VM row lock. Four slots per VM
+are shared by pending interactive reservations, attached interactive sessions,
+and pending recorded commands. The node agent independently enforces the same
+four-slot bound across live and connecting guest bridges, including recorded
+commands surviving a control-plane disconnect. Retained terminal result buffers
+do not consume live slots. A durable command timeout does not prove the guest
+has exited; the agent gate remains authoritative in that case.
+
+Recorded command acceptance also locks a per-project rate row and retains only
+the last minute's accepted timestamps (at most 60). Rejected transactions do
+not consume rate budget. Both normal `actions/run` and future fleet-run callers
+must call `VMExecSessionLimits.admitRun` inside their acceptance transaction,
+before inserting the existing `VMCommandExecution`; do not add another command
+model or bypass the per-project/per-VM gates. HTTP refusals return 429.
+
+Interactive presence uses PostgreSQL leases. Pending reservations expire after
+60 seconds. The socket owner renews attached leases every maintenance tick
+(normally 30 seconds); presence expires within 60 seconds after a replica crash.
+A renewal refusal or database failure requests guest teardown rather than
+resurrecting an expired reservation. `GET /api/vms/:id/exec-sessions` requires
+`vm:read` and returns attached user attribution without argv or environment.
+`POST /api/vms/:id/exec-sessions/:sessionID/terminate` requires `vm:exec` on that
+VM and sets an idempotent termination request; the owner handles it on its next
+maintenance tick. `vm:runCommand` alone grants neither interactive attachment
+nor termination. The browser refreshes this list every five seconds; recorded
+commands remain visible through operation history.
+
+After 15 minutes without browser stdin, EOF, or resize activity, the owner
+requests termination. Guest output and WebSocket keepalives do not prolong an
+abandoned terminal. Operator and idle termination use the existing serial event
+pump, ordered after start delivery and before disconnect cleanup, and append one
+`vm.exec.ended` fact. Existing agent socket loss still closes interactive guest
+channels. These defaults are shared constants rather than deployment settings;
+no Valkey coordination, authentication, or guest wire protocol changes are needed.

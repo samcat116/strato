@@ -39,6 +39,8 @@ final class GuestExecSessionManager: @unchecked Sendable {
 
     /// Maps sessionId -> browser WebSocket.
     private var frontendConnections: [String: WebSocket] = [:]
+    private var terminationHandlers: [String: @Sendable (String) -> Void] = [:]
+    private var terminationReasons: [String: String] = [:]
 
     /// A minted-but-not-yet-attached exec session: everything needed to build
     /// the `GuestExecStartMessage` once the browser attaches.
@@ -74,6 +76,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
         var agentConfirmedStarted: Bool
         var agentConfirmedStartedAt: Date?
         let attachedAt: Date
+        var lastActivityAt: Date
     }
 
     init(app: Application) {
@@ -195,7 +198,8 @@ final class GuestExecSessionManager: @unchecked Sendable {
                 auditContext: pending.auditContext,
                 agentConfirmedStarted: false,
                 agentConfirmedStartedAt: nil,
-                attachedAt: now
+                attachedAt: now,
+                lastActivityAt: now
             )
             if let websocket {
                 frontendConnections[sessionId] = websocket
@@ -235,6 +239,69 @@ final class GuestExecSessionManager: @unchecked Sendable {
             outcome: outcome,
             exitCode: exitCode,
             reason: reason)
+    }
+
+    /// Installed by the controller's serial pump, so termination can never
+    /// overtake a start that is currently awaiting agent delivery.
+    func setTerminationHandler(sessionId: String, handler: @escaping @Sendable (String) -> Void) {
+        let reason = lock.withLock { () -> String? in
+            guard sessions[sessionId] != nil else { return nil }
+            terminationHandlers[sessionId] = handler
+            return terminationReasons[sessionId]
+        }
+        if let reason { handler(reason) }
+    }
+
+    func requestTermination(sessionId: String, reason: String, idleAt: Date? = nil) {
+        let handler = lock.withLock { () -> (@Sendable (String) -> Void)? in
+            guard sessions[sessionId] != nil, terminationReasons[sessionId] == nil else { return nil }
+            if let idleAt, let session = sessions[sessionId],
+                idleAt.timeIntervalSince(session.lastActivityAt) < Double(GuestExecLimits.idleTimeoutSeconds)
+            {
+                return nil
+            }
+            terminationReasons[sessionId] = reason
+            return terminationHandlers[sessionId]
+        }
+        handler?(reason)
+    }
+
+    func noteActivity(sessionId: String, now: Date = Date()) {
+        lock.withLock {
+            guard var session = sessions[sessionId], terminationReasons[sessionId] == nil else { return }
+            session.lastActivityAt = now
+            sessions[sessionId] = session
+        }
+    }
+
+    /// Every replica maintains its own sockets; PostgreSQL carries requests
+    /// from any API replica to the socket owner without a Valkey dependency.
+    func maintainSessions(now: Date = Date()) async {
+        let attached = lock.withLock {
+            sweepExpiredPendingLocked(now: now)
+            return Array(sessions.values)
+        }
+        for session in attached where session.resourceKind == .virtualMachine {
+            guard let id = UUID(uuidString: session.sessionId) else { continue }
+            if now.timeIntervalSince(session.lastActivityAt) >= Double(GuestExecLimits.idleTimeoutSeconds) {
+                requestTermination(sessionId: session.sessionId, reason: "Exec session idle timeout", idleAt: now)
+                continue
+            }
+            do {
+                if try await !VMExecSessionLimits.renew(id: id, lastActivity: session.lastActivityAt, on: app.db) {
+                    requestTermination(
+                        sessionId: session.sessionId, reason: "Exec session terminated or presence lease expired")
+                }
+            } catch {
+                // Presence/admission must not silently lose authority. Close
+                // the guest through the pump when a lease cannot be renewed.
+                app.logger.warning("Could not renew VM exec presence: \(error)")
+                requestTermination(sessionId: session.sessionId, reason: "Exec session presence unavailable")
+            }
+        }
+        do { try await VMExecSessionLimits.prune(on: app.db) } catch {
+            app.logger.warning("Could not prune expired VM exec presence: \(error)")
+        }
     }
 
     /// Get attached session info.
@@ -592,6 +659,8 @@ final class GuestExecSessionManager: @unchecked Sendable {
         timestamp: Date?
     ) -> RemovedExecSession? {
         guard let session = sessions.removeValue(forKey: sessionId) else { return nil }
+        terminationHandlers.removeValue(forKey: sessionId)
+        terminationReasons.removeValue(forKey: sessionId)
         let observedAt = timestamp ?? Date()
         let endedAt: Date
         if let startedAt = session.agentConfirmedStartedAt {
@@ -618,6 +687,11 @@ final class GuestExecSessionManager: @unchecked Sendable {
         exitCode: Int? = nil,
         reason: String? = nil
     ) async {
+        if removed.session.resourceKind == .virtualMachine, let id = UUID(uuidString: removed.session.sessionId) {
+            do { try await VMExecSessionLimits.remove(id: id, on: app.db) } catch {
+                app.logger.warning("Could not release VM exec presence: \(error)")
+            }
+        }
         guard let context = removed.session.auditContext else { return }
         let auditRecord = VMGuestExecutionAudit.makeExecEndedRecord(
             context,
