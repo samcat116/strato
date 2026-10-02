@@ -62,6 +62,10 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
+Wire v65 adds optional host memory profile observations, swap counters/rates,
+compressed zram original bytes, and bounded memory warnings. Version 64 is reserved
+for concurrent GuestConfig work and must be integrated before rollout.
+
 Wire v63 requires first-boot installation of the selected Strato guest-agent
 release for opted-in VMs across ISO and IMDS delivery, and adds independent
 guest-agent reachability observations. Older agents only understand the channel

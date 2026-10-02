@@ -51,6 +51,8 @@
 #   --bin-dir DIR            Where to install binaries (default: /usr/local/bin)
 #   --network-mode MODE      ovn | user — which deps to install/require (default: ovn)
 #   --strato-agent-bin PATH  Use an existing binary instead of downloading one
+#   --host-memory-profile PATH  Opt-in host memory JSON profile (requires systemd)
+#   --host-memory-tool PATH     Reviewed host-memory-profile.py from this release
 #   --no-deps                Do not install host packages (still checks them)
 #   --no-libvirt-config      Install libvirt but leave /etc/libvirt/qemu.conf
 #                            alone (for hosts whose config is managed by
@@ -97,6 +99,8 @@ USE_SYSTEMD=1
 RUN_PREFLIGHT=1
 INSTALL_SANDBOX_GUEST=0
 CONFIGURE_LIBVIRT=1
+HOST_MEMORY_PROFILE=""
+HOST_MEMORY_TOOL=""
 
 # The account strato-agent.service runs as, and therefore the uid libvirt must
 # hand VM disks and sockets to (see configure_libvirt_conf below). Root: the default
@@ -167,6 +171,8 @@ while [ $# -gt 0 ]; do
     --bin-dir)          BIN_DIR="$2"; shift 2 ;;
     --network-mode)     NETWORK_MODE="$2"; shift 2 ;;
     --strato-agent-bin) STRATO_AGENT_BIN="$2"; shift 2 ;;
+    --host-memory-profile) HOST_MEMORY_PROFILE="$2"; shift 2 ;;
+    --host-memory-tool) HOST_MEMORY_TOOL="$2"; shift 2 ;;
     --no-deps)          INSTALL_DEPS=0; shift ;;
     --no-libvirt-config) CONFIGURE_LIBVIRT=0; shift ;;
     --no-systemd)       USE_SYSTEMD=0; shift ;;
@@ -399,6 +405,16 @@ install_binary() {
   log "Installed strato-agent to ${STRATO_AGENT_BIN}"
   "$STRATO_AGENT_BIN" --version 2>/dev/null | head -n1 || true
 }
+
+if [ -n "$HOST_MEMORY_PROFILE" ]; then
+  [ "$USE_SYSTEMD" -eq 1 ] || die "host memory profile requires systemd"
+  [ -f "$HOST_MEMORY_PROFILE" ] || die "host memory profile does not exist"
+  [ -f "$HOST_MEMORY_TOOL" ] || die "--host-memory-tool must name the reviewed host-memory-profile.py"
+  command -v python3 >/dev/null || die "host memory profile requires python3"
+  python3 "$HOST_MEMORY_TOOL" install --config "$HOST_MEMORY_PROFILE"
+elif [ -n "$HOST_MEMORY_TOOL" ]; then
+  die "--host-memory-tool requires --host-memory-profile"
+fi
 
 install_binary
 

@@ -1640,3 +1640,9 @@ readable and live adoption preserves their existing identity. A legacy NIC with
 no MAC must receive one in desired state before network realization can proceed.
 The retired `enable_hvf` TOML key is rejected: macOS uses the mock hypervisor;
 Linux still supports `enable_kvm`.
+
+## Host memory density policy
+
+The [opt-in bootstrap profile](../deployment/host-memory-profile.md) owns persistent
+compressed swap, THP, and tenant-safe KSM settings. Runtime observation is read-only
+and profile failures fence all hypervisor placement, including KSM unmerge transitions.
