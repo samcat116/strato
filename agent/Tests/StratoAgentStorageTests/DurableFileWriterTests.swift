@@ -231,6 +231,31 @@ struct DurableFileWriterTests {
             })
     }
 
+    @Test("An overlapping failed writer cleans only its staging file")
+    func overlappingFailurePreservesOtherWriter() throws {
+        let calls = RecordingDurableFileSystemCalls()
+        let writer = DurableFileWriter(systemCalls: calls)
+        let payload = Data("successful complete payload".utf8)
+        calls.overlapFirstWrite {
+            calls.fail("rename")
+            #expect(throws: DurableFileWriteError.self) {
+                try writer.write(Data("failed payload".utf8), to: "/state/manifest.json")
+            }
+            calls.fail("")
+        }
+
+        try writer.write(payload, to: "/state/manifest.json")
+
+        #expect(calls.createdPaths.count == 2)
+        #expect(Set(calls.createdPaths).count == 2)
+        #expect(calls.publications == [payload])
+        let failedStaging = try #require(calls.createdPaths.last)
+        #expect(
+            calls.events.filter {
+                if case .remove = $0 { return true }; return false
+            } == [.remove(failedStaging)])
+    }
+
     @Test("Concurrent real writers publish complete payloads and leave no staging files")
     func concurrentWriters() async throws {
         let root = FileManager.default.temporaryDirectory
