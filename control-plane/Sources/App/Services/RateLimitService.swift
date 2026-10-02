@@ -28,6 +28,13 @@ protocol RateLimitStore: Sendable {
 
     /// Delete a key (used to clear failure state after a successful auth).
     func reset(_ key: String) async throws
+    /// Retain an observed distributed count in a local shadow without extending
+    /// enforcement beyond the later of the active local/shared window expiries.
+    func observeCount(_ key: String, count: RateLimitCount) async throws
+}
+
+extension RateLimitStore {
+    func observeCount(_ key: String, count: RateLimitCount) async throws {}
 }
 
 /// Selects the shared or process-local rate-limit adapter and bounds every
@@ -39,59 +46,81 @@ struct RateLimitBackend: Sendable {
     private let fallbackStore: any RateLimitStore
     private let valkeyStore: (any RateLimitStore)?
     private let deadline: Duration
+    private let gate: CoordinationFailureGate
 
     init(
         fallbackStore: any RateLimitStore,
         valkeyStore: (any RateLimitStore)? = nil,
-        deadline: Duration = Self.defaultDeadline
+        deadline: Duration = Self.defaultDeadline,
+        gate: CoordinationFailureGate? = nil
     ) {
         self.fallbackStore = fallbackStore
         self.valkeyStore = valkeyStore
         self.deadline = deadline
+        self.gate =
+            gate
+            ?? CoordinationFailureGate(
+                deadline: deadline,
+                probe: {
+                    _ = try await valkeyStore?.readInt("health:probe")
+                })
     }
 
     func hit(_ key: String, window: Int, useValkey: Bool = true) async throws -> RateLimitCount {
-        try await call(useValkey: useValkey) { store in
-            try await store.hit(key, window: window)
-        }
+        // Shadow every hit while healthy so entering degradation cannot restart
+        // an already active window. The stricter count wins during recovery too.
+        let local = try await withStoreTimeout(deadline) { try await fallbackStore.hit(key, window: window) }
+        guard useValkey, let valkeyStore else { return local }
+        do {
+            let shared = try await gate.run(operation: "rateLimit.hit", deadline: deadline) {
+                try await valkeyStore.hit(key, window: window)
+            }
+            try await withStoreTimeout(deadline) { try await fallbackStore.observeCount(key, count: shared) }
+            return local.count > shared.count ? local : shared
+        } catch is CancellationError { throw CancellationError() } catch { return local }
     }
 
     func readInt(_ key: String, useValkey: Bool = true) async throws -> Int? {
-        try await call(useValkey: useValkey) { store in
-            try await store.readInt(key)
-        }
+        let local = try await withStoreTimeout(deadline) { try await fallbackStore.readInt(key) }
+        guard useValkey, let valkeyStore else { return local }
+        do {
+            let shared = try await gate.run(operation: "rateLimit.readInt", deadline: deadline) {
+                try await valkeyStore.readInt(key)
+            }
+            if let shared {
+                // These integers are lockout expiry epochs, so preserve the
+                // remaining lifetime rather than extending it on every read.
+                let expiry = max(local ?? shared, shared)
+                let remaining = max(1, expiry - Int(Date().timeIntervalSince1970))
+                try await withStoreTimeout(deadline) {
+                    try await fallbackStore.writeInt(key, value: expiry, ttl: remaining)
+                }
+            }
+            return [local, shared].compactMap { $0 }.max()
+        } catch is CancellationError { throw CancellationError() } catch { return local }
     }
 
     func writeInt(_ key: String, value: Int, ttl: Int, useValkey: Bool = true) async throws {
-        try await call(useValkey: useValkey) { store in
-            try await store.writeInt(key, value: value, ttl: ttl)
-        }
+        try await withStoreTimeout(deadline) { try await fallbackStore.writeInt(key, value: value, ttl: ttl) }
+        guard useValkey, let valkeyStore else { return }
+        do {
+            try await gate.run(operation: "rateLimit.writeInt", deadline: deadline) {
+                try await valkeyStore.writeInt(key, value: value, ttl: ttl)
+            }
+        } catch is CancellationError { throw CancellationError() } catch { /* The local lockout remains armed. */  }
     }
 
     func reset(_ key: String, useValkey: Bool = true) async throws {
-        try await call(useValkey: useValkey) { store in
-            try await store.reset(key)
-        }
+        try await withStoreTimeout(deadline) { try await fallbackStore.reset(key) }
+        guard useValkey, let valkeyStore else { return }
+        do {
+            try await gate.run(operation: "rateLimit.reset", deadline: deadline) {
+                try await valkeyStore.reset(key)
+            }
+        } catch is CancellationError { throw CancellationError() } catch
+        { /* Successful authentication cleared this replica's state. */  }
     }
 
-    private func call<Value: Sendable>(
-        useValkey: Bool,
-        _ operation: @escaping @Sendable (any RateLimitStore) async throws -> Value
-    ) async throws -> Value {
-        let store = useValkey ? (valkeyStore ?? fallbackStore) : fallbackStore
-        return try await withThrowingTaskGroup(of: Value.self) { group in
-            group.addTask { try await operation(store) }
-            group.addTask {
-                try await Task.sleep(for: deadline)
-                throw RateLimitError.backendTimeout(deadline)
-            }
-            defer { group.cancelAll() }
-            guard let value = try await group.next() else {
-                preconditionFailure("rate-limit backend deadline group had no tasks")
-            }
-            return value
-        }
-    }
 }
 
 /// The shared fixed-window response contract for ordinary API requests and
@@ -195,7 +224,7 @@ enum RateLimitError: Error {
 
 // MARK: - In-memory backend
 
-/// Process-local fallback used when Valkey isn't configured. Correct for a
+/// Bounded process-local shadow used when Valkey is absent or unavailable. Correct for a
 /// single control-plane instance; with multiple replicas each enforces its own
 /// counters (roughly N× the effective limit), which is why Valkey is preferred
 /// in multi-node deployments. State is swept lazily to keep memory bounded.
@@ -208,6 +237,9 @@ actor InMemoryRateLimitStore: RateLimitStore {
         var value: Int
         var expiresAt: Double
     }
+
+    private let maxEntries: Int
+    init(maxEntries: Int = 100_000) { self.maxEntries = max(1, maxEntries) }
 
     private var windows: [String: Window] = [:]
     private var values: [String: StoredValue] = [:]
@@ -223,14 +255,33 @@ actor InMemoryRateLimitStore: RateLimitStore {
             return RateLimitCount(count: count, ttl: ttlSeconds(from: now, to: existing.expiresAt))
         }
 
+        guard windows.count < maxEntries else {
+            // Never evict an active security window to admit an attacker-chosen
+            // key. Overflow receives a conservative denial until capacity frees.
+            return RateLimitCount(count: Int.max, ttl: max(1, window))
+        }
         let expiresAt = now + Double(window)
         windows[key] = Window(count: 1, expiresAt: expiresAt)
         return RateLimitCount(count: 1, ttl: window)
     }
 
+    func observeCount(_ key: String, count: RateLimitCount) {
+        let now = Date().timeIntervalSince1970
+        sweepIfNeeded(now)
+        guard windows[key] != nil || windows.count < maxEntries else { return }
+        let existing = windows[key].flatMap { $0.expiresAt > now ? $0 : nil }
+        windows[key] = Window(
+            count: max(existing?.count ?? 0, count.count),
+            expiresAt: max(existing?.expiresAt ?? now, now + Double(max(1, count.ttl))))
+    }
+
     func readInt(_ key: String) -> Int? {
         let now = Date().timeIntervalSince1970
+        sweepIfNeeded(now)
         guard let stored = values[key], stored.expiresAt > now else {
+            if values[key] == nil, values.count >= maxEntries {
+                return Int(now) + 60
+            }
             values[key] = nil
             return nil
         }
@@ -239,6 +290,8 @@ actor InMemoryRateLimitStore: RateLimitStore {
 
     func writeInt(_ key: String, value: Int, ttl: Int) {
         let now = Date().timeIntervalSince1970
+        sweepIfNeeded(now)
+        guard values[key] != nil || values.count < maxEntries else { return }
         values[key] = StoredValue(value: value, expiresAt: now + Double(max(1, ttl)))
     }
 
