@@ -76,6 +76,93 @@ struct FirecrackerAdoptionTests {
         #expect(info.state == .running)
     }
 
+    @Test("machine configuration readback uses the effective backend endpoint")
+    func machineConfigurationReadback() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = FirecrackerClient.socketPath(socketDirectory: dir, vmId: "grant")
+        let server = try FakeFirecrackerAPIServer(socketPath: path, state: "Paused")
+        server.start()
+        defer { server.stop() }
+        let (manager, _) = try await makeClient(socketDirectory: dir).adoptVM(vmId: "grant")
+        let config = try await manager.getMachineConfig()
+        #expect(config.vcpuCount == 2 && config.memSizeMib == 512)
+        #expect(server.requests.withLockedValue { $0 }.contains { $0.hasPrefix("GET /machine-config ") })
+    }
+
+    #if os(Linux)
+    @Test("restore refuses an unowned spawned process before snapshot load and confirms rollback")
+    func restoreValidatesBeforeSnapshotLoad() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let vmId = UUID().uuidString
+        let binary = dir + "/fake-firecracker"
+        let marker = dir + "/spawned"
+        try "#!/bin/sh\necho $$ > '\(marker)'\nexec /bin/sleep 60\n".write(
+            toFile: binary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary)
+        let serverTask = Task {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while !FileManager.default.fileExists(atPath: marker) {
+                guard ContinuousClock.now < deadline else {
+                    throw FakeFirecrackerAPIServer.FakeServerError.setupFailed("child did not spawn")
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let server = try FakeFirecrackerAPIServer(
+                socketPath: FirecrackerClient.socketPath(socketDirectory: dir, vmId: vmId), state: "Not started")
+            server.start()
+            return server
+        }
+        let client = FirecrackerClient(
+            firecrackerBinaryPath: binary, socketDirectory: dir, logger: Logger(label: "test"))
+        let callbackCalled = NIOLockedValueBox(false)
+        do {
+            _ = try await client.restoreVM(
+                vmId: vmId, jail: nil,
+                snapshot: SnapshotLoadConfig(snapshotPath: "/missing", memFilePath: "/missing", resumeVM: true),
+                validateCgroup: { _, _ in callbackCalled.withLockedValue { $0 = true } })
+            Issue.record("unowned restore was accepted")
+        } catch FirecrackerError.processInspectionFailed {
+            // Expected: the tracked child has no jailer ownership boundary.
+        }
+        let server = try await serverTask.value
+        defer { server.stop() }
+        #expect(!callbackCalled.withLockedValue { $0 })
+        #expect(!server.requests.withLockedValue { $0 }.contains(where: { $0.contains("/snapshot/load") }))
+        do {
+            _ = try await client.waitForVMExit(vmId: vmId, timeout: .zero)
+            Issue.record("unacknowledged spawned process was retained")
+        } catch FirecrackerError.vmNotFound {
+            // Removal is after confirmed process exit in destroyVM.
+        }
+    }
+    #endif
+
+    @Test("failed ownership validation preserves an adopted VM and its API connection")
+    func failedValidationPreservesAdoptedVM() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let vmId = UUID().uuidString
+        let jail = JailerOptions(jailerBinaryPath: "/missing", chrootBaseDir: dir, uid: 123456, gid: 123456)
+        let socket = JailerOptions.socketPath(
+            chrootBaseDir: dir, firecrackerBinaryPath: "/usr/bin/firecracker", vmId: vmId)
+        try FileManager.default.createDirectory(
+            atPath: URL(fileURLWithPath: socket).deletingLastPathComponent().path, withIntermediateDirectories: true)
+        let server = try FakeFirecrackerAPIServer(socketPath: socket, state: "Running")
+        server.start()
+        defer { server.stop() }
+        let client = makeClient(socketDirectory: dir)
+        _ = try await client.adoptVM(vmId: vmId, jail: jail)
+        await #expect(throws: FirecrackerError.self) {
+            try await client.validateOwnedCgroup(vmId: vmId) { _, _ in
+                Issue.record("unproven process reached validation")
+            }
+        }
+        let (_, info) = try await client.adoptVM(vmId: vmId, jail: jail)
+        #expect(info.state == .running)
+    }
+
     @Test("adoptVM is idempotent for an already-managed VM")
     func adoptAlreadyManagedIsIdempotent() async throws {
         let dir = try makeSocketDir()
@@ -161,6 +248,7 @@ private final class FakeFirecrackerAPIServer: Sendable {
     private let listenFD: Int32
     private let queue = DispatchQueue(label: "fake-firecracker-api")
     private let stopped = NIOLockedValueBox(false)
+    let requests = NIOLockedValueBox<[String]>([])
 
     init(socketPath: String, state: String) throws {
         self.socketPath = socketPath
@@ -245,13 +333,16 @@ private final class FakeFirecrackerAPIServer: Sendable {
             buffer.append(contentsOf: chunk.prefix(n))
             // Respond once we have a full request (headers terminated).
             while let range = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                let headers = String(decoding: buffer[..<range.lowerBound], as: UTF8.self)
+                requests.withLockedValue { $0.append(String(headers.split(separator: "\n").first ?? "")) }
                 buffer.removeSubrange(buffer.startIndex..<range.upperBound)
-                writeResponse(fd)
+                writeResponse(fd, machineConfig: headers.hasPrefix("GET /machine-config "))
             }
         }
     }
 
-    private func writeResponse(_ fd: Int32) {
+    private func writeResponse(_ fd: Int32, machineConfig: Bool) {
+        let responseBody = machineConfig ? Data(#"{"vcpu_count":2,"mem_size_mib":512}"#.utf8) : self.responseBody
         let header =
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(responseBody.count)\r\n\r\n"
         var out = Data(header.utf8)

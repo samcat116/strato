@@ -10,6 +10,7 @@ public struct WorkloadTelemetryProbeTarget: Sendable, Equatable {
     public let kind: WorkloadKind
     public let directCgroupPath: String?
     public let pidFilePath: String?
+    public let resourceLimits: BurstableResourceLimits?
     /// An independently supplied guest value. No guest source is configured
     /// today, so callers normally leave this explicitly unavailable.
     public let guestStealMicroseconds: ResourceTelemetryValue
@@ -19,12 +20,14 @@ public struct WorkloadTelemetryProbeTarget: Sendable, Equatable {
         kind: WorkloadKind,
         directCgroupPath: String? = nil,
         pidFilePath: String? = nil,
-        guestStealMicroseconds: ResourceTelemetryValue = .unavailable
+        guestStealMicroseconds: ResourceTelemetryValue = .unavailable,
+        resourceLimits: BurstableResourceLimits? = nil
     ) {
         self.workloadID = workloadID
         self.kind = kind
         self.directCgroupPath = directCgroupPath
         self.pidFilePath = pidFilePath
+        self.resourceLimits = resourceLimits
         self.guestStealMicroseconds = guestStealMicroseconds
     }
 }
@@ -32,10 +35,15 @@ public struct WorkloadTelemetryProbeTarget: Sendable, Equatable {
 public struct ResourceTelemetrySnapshot: Sendable, Equatable {
     public let host: HostResourceTelemetry
     public let workloads: [String: WorkloadResourceTelemetry]
+    public let resourceLimits: [String: WorkloadResourceLimitsEvidence]
 
-    public init(host: HostResourceTelemetry, workloads: [String: WorkloadResourceTelemetry]) {
+    public init(
+        host: HostResourceTelemetry, workloads: [String: WorkloadResourceTelemetry],
+        resourceLimits: [String: WorkloadResourceLimitsEvidence] = [:]
+    ) {
         self.host = host
         self.workloads = workloads
+        self.resourceLimits = resourceLimits
     }
 }
 
@@ -76,10 +84,19 @@ public struct ResourceTelemetryProbe: Sendable {
     ) -> ResourceTelemetrySnapshot {
         let host = sampleHost(at: sampledAt)
         var workloads: [String: WorkloadResourceTelemetry] = [:]
+        var limitsEvidence: [String: WorkloadResourceLimitsEvidence] = [:]
         for target in targets {
             workloads[target.workloadID] = sampleWorkload(target, at: sampledAt)
+            if let limits = target.resourceLimits {
+                // A PID-derived emulator leaf is not a verified controller
+                // root. QEMU applied limits stay unknown until its stable
+                // ownership authority supplies one. Jailer paths are explicit.
+                limitsEvidence[target.workloadID] = .sample(
+                    limits: limits, ownedPath: target.directCgroupPath,
+                    pageSize: BurstableCgroupEnforcement.hostPageSizeBytes, readFile: read)
+            }
         }
-        return ResourceTelemetrySnapshot(host: host, workloads: workloads)
+        return ResourceTelemetrySnapshot(host: host, workloads: workloads, resourceLimits: limitsEvidence)
     }
 
     // MARK: - Host
@@ -163,7 +180,7 @@ public struct ResourceTelemetryProbe: Sendable {
 
     // MARK: - Workload
 
-    private func sampleWorkload(
+    public func sampleWorkload(
         _ target: WorkloadTelemetryProbeTarget, at sampledAt: Date
     ) -> WorkloadResourceTelemetry {
         guard let root = cgroupRoot(for: target) else {
@@ -232,6 +249,9 @@ public struct ResourceTelemetryProbe: Sendable {
         {
             return direct
         }
+        // Burstable applied/pressure evidence needs the backend-authorized
+        // controller root; an emulator leaf cannot satisfy that contract.
+        guard target.resourceLimits == nil else { return nil }
         guard let pidFilePath = target.pidFilePath,
             let pid = read(pidFilePath)?.trimmingCharacters(in: .whitespacesAndNewlines),
             !pid.isEmpty, pid.allSatisfy(\.isNumber),

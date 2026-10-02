@@ -1,9 +1,8 @@
-# Burstable runtime enforcement foundations (STR-272)
+# Burstable runtime enforcement (STR-272)
 
 These helpers consume the executable
 [STR-267 class contract](./resource-classes-contract.md) at checkpoint
-`ea7763845b17df11c09d11fc9fb10ce71f264451` (draft PR #1455). They are not yet wired to workload
-lifecycle execution. No burstable capability is advertised or placement enabled
+`ea7763845b17df11c09d11fc9fb10ce71f264451` (draft PR #1455). They are wired to guarded workload lifecycle execution. No burstable capability is advertised or placement enabled
 by this change. Guaranteed workloads retain their existing runtime path. The
 canonical class snapshot and wire v67 belong to the coordinated STR-267
 implementation, not an additional DTO here.
@@ -66,14 +65,9 @@ memory events, memory/CPU PSI, and CPU statistics. It does not establish
 ownership, ancestor restrictions, delegation, lifecycle application, reclaim,
 OOM containment, CPU fairness, or transient-limit safety by itself.
 
-Remaining integration requires backend-supported pre-execution/live control application, stable lifecycle
-ownership, effective readback, complete capability gating, and coordinated
-telemetry. Controller listing or unit-test fixtures alone never enable support.
-Actual QEMU and jailed Firecracker kernel tests must verify create/restart/adopt,
-pressure survival, workload-local containment, and CPU fairness/idle use before
-claiming runtime acceptance.
+Production factories still supply no complete enforcement evidence. The guarded paths are implemented, but capability activation requires a supported stable QEMU ownership arrangement and real backend/kernel acceptance. Fixture controller files establish deterministic decisions, not actual kernel enforcement.
 
-## Lifecycle hook design pending canonical class integration
+## Guarded lifecycle implementation
 
 | Path | Required integration | Failure behavior |
 | --- | --- | --- |
@@ -101,9 +95,18 @@ and unlimited `cpu.max`. Missing or malformed values never acknowledge applied
 limits. This sampler does not establish ownership, ancestor behavior or write
 controls and is not yet wired to wire telemetry.
 
-The control plans are not connected to backend application. Stable QEMU
-ownership, safe live transition order, pre-execution restore and desired/applied
-wire telemetry remain implementation blockers; enabling only some of them
-would violate the canonical support gate. Unit planning tests establish
-arithmetic, persisted XML idempotence and conflict refusal; they do not establish
-actual application order, owned kernel paths, adoption safety or cleanup.
+QEMU persistent XML stores the canonical admitted snapshot and last acknowledged guest grant. Boot and checkpoint restore start paused, verify the owned controller root, then resume. Live growth widens containment, sets pressure/weight and verifies before growing the guest; shrink changes the guest first. Retry recognizes only known old/target finite phase values, then requires exact target acknowledgement. Adoption validates identity and existing effective controls without destroying an unknown workload. A per-domain operation guard prevents overlapping control transitions.
+
+QEMU ownership requires a trusted backend-supplied stable controller-root path, domain UUID/PID-file identity, unchanged process incarnation, bounded emulator membership, and controller-root process membership. It never searches arbitrary descendants or writes cgroup files. The default path provider is nil. Libvirt's resource partition provides a parent, while its machine scope includes the runtime domain identifier; a UUID-shaped guessed scope therefore does not establish stable physical ownership. An approved supported host/backend arrangement must supply this boundary before activation. See [libvirt machine cgroup setup](https://github.com/libvirt/libvirt/blob/master/src/hypervisor/domain_cgroup.c) and [QEMU machine naming](https://github.com/libvirt/libvirt/blob/master/src/qemu/qemu_domain.c).
+
+Jailed Firecracker uses the SDK's existing exact jailer cgroup helper for create, restart, adoption and cleanup. A pinned process identity surrounds readback. New-process validation happens before machine configuration or snapshot load, and failure destroys only that newly tracked process. Burstable restores load paused, verify effective restored CPU/RAM against the admitted grant, verify controls again, then resume. Failed adoption preserves the existing process. Ordinary unjailed Firecracker remains unsupported for burstable workloads.
+
+Local `WorkloadResourceLimitsEvidence` distinguishes raw desired bytes, aligned targets, applied native Int64 values, unlimited controls, ownership and acknowledgement. Missing/malformed evidence remains unknown. Existing workload pressure/events are sampled at a verified controller root; a QEMU PID's emulator leaf is never treated as that root. Structured diagnostics expose desired/applied evidence locally. Adding this evidence to shared wire telemetry remains blocked on the STR-267/reconciler owner's field and schema-version allocation; this branch allocates no additional wire version or competing class model. Wire v64 remains reserved for GuestConfig.
+
+Deterministic tests cover transition ordering, failure at each acknowledgement stage, retries from every known phase, exact ownership/process identity, persistent snapshot replay, and native integer telemetry. SDK fixtures cover refusal before snapshot load and confirmed fresh-process rollback. These are process/file fixtures, not kernel acceptance. This cloud environment has no KVM device or backend binaries and mounts cgroup-v2 read-only. No host controls, infrastructure or security configuration were changed. Actual pressure survival, local OOM containment, CPU fairness/idle borrowing and backend create/restart/adopt/delete acceptance remain unverified.
+
+## Generation and host-report acknowledgement dependency
+
+STR-267's final placement checkpoint `dff67c73f2e7272e643d2c6aab26bb16b80bf8ec` requires generation-specific enforcement acknowledgement that proves the admitted footprint appears in the same host net-resource report. Local desired/applied diagnostics alone cannot release placement or growth reservations.
+
+The proposed coordinated acknowledgement must bind workload kind/id, current desired generation, admitted class id/revision, backend, admitted reservation identity/footprint, and the enclosing host-report identity. Applied limits must equal the canonical aligned targets, CPU quota must be unlimited, ownership must be verified, and the report must account for that same admitted reservation exactly once. Unknown/failed evidence, stale generations or reports, and a mismatch between the workload acknowledgement and net-resource accounting preserve the reservation and block activation. This is an invariant proposal pending agreement with the STR-267/STR-266 owners; no wire fields/version have been allocated here. Host cgroup paths remain local diagnostics rather than an assumed wire field. Capability remains disabled until the report and rollback contracts are integrated and validated.

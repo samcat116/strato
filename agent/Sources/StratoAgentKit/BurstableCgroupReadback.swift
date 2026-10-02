@@ -51,6 +51,21 @@ public struct BurstableCgroupReadback: Sendable, Equatable {
             && cpuWeight == limits.cpuWeight && cpuQuotaUnlimited == true
     }
 
+    /// Accept only finite, known old/target phase values during an interrupted
+    /// transition. This is not a target acknowledgement; it permits a retry
+    /// to finish controls without clearing either memory limit.
+    public func matchesTransition(
+        from current: BurstableResourceLimits, to target: BurstableResourceLimits, pageSize: Int64
+    ) throws -> Bool {
+        let old = try current.kernelMemoryBytes(pageSize: pageSize)
+        let next = try target.kernelMemoryBytes(pageSize: pageSize)
+        guard let high = memoryHighBytes, let maximum = memoryMaxBytes, high < maximum,
+            let weight = cpuWeight, cpuQuotaUnlimited == true
+        else { return false }
+        return [old.high, next.high].contains(high) && [old.maximum, next.maximum].contains(maximum)
+            && [current.cpuWeight, target.cpuWeight].contains(weight)
+    }
+
     private static func canonical(_ path: String) -> Bool {
         guard path.hasPrefix("/"), !path.hasSuffix("/"), !path.contains("\0") else { return false }
         return path.dropFirst().split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
