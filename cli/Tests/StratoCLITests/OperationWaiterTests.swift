@@ -121,6 +121,60 @@ struct OperationWaiterTests {
         }
     }
 
+    @Test("Interrupting a wait stops polling without changing the accepted mutation")
+    func testInterruptedWait() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(responses: [
+                .init(statusCode: 200, json: Self.json(status: "pending")),
+                .init(statusCode: 200, json: Self.json(status: "succeeded")),
+            ])
+            let accepted = AcceptedMutation(id: Self.operationID)
+            let api = try client(transport: transport, directory: directory)
+            let interrupted = OperationWaiter(
+                pollInterval: 0, timeout: 60, sleeper: { _ in throw CancellationError() })
+
+            await #expect(throws: CancellationError.self) {
+                try await interrupted.wait(for: accepted, client: api)
+            }
+            #expect(transport.recordedRequests.count == 1)
+
+            let resumed = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
+            let final = try await resumed.wait(for: accepted, client: api)
+            #expect(final.succeeded)
+            #expect(transport.recordedRequests.count == 2)
+            #expect(
+                transport.recordedRequests.allSatisfy {
+                    $0.request.method == .get && $0.path == "/api/operations/\(Self.operationID)"
+                })
+        }
+    }
+
+    @Test("A lost poll can be resumed using the same mutation id without resubmission")
+    func testLostPollResumesObservation() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let disconnected = MockTransport(responses: [])
+            let accepted = AcceptedMutation(id: Self.operationID)
+            let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
+            await #expect(throws: (any Error).self) {
+                try await waiter.wait(
+                    for: accepted, client: try client(transport: disconnected, directory: directory))
+            }
+            #expect(disconnected.recordedRequests.count == 1)
+
+            let reconnected = MockTransport(responses: [
+                .init(statusCode: 200, json: Self.json(status: "succeeded"))
+            ])
+            let final = try await waiter.wait(
+                for: accepted, client: try client(transport: reconnected, directory: directory))
+            #expect(final.succeeded)
+            #expect(reconnected.recordedRequests.count == 1)
+            for request in disconnected.recordedRequests + reconnected.recordedRequests {
+                #expect(request.request.method == .get)
+                #expect(request.path == "/api/operations/\(Self.operationID)")
+            }
+        }
+    }
+
     @Test("Gives up at the timeout")
     func testTimeout() async throws {
         try await withTemporaryDirectoryAsync { directory in

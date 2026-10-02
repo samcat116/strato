@@ -43,20 +43,21 @@ struct MutationActor: Sendable, Equatable {
 /// Which half of a mutation's life a `ResourceEvent` row records.
 ///
 /// The table is append-only, so a mutation that finishes does not update its
-/// request — it appends a second row. Only deletes do this today, and for one
-/// reason: every other mutation's outcome is readable off the resource's own
+/// request — it appends a second row. Deletes do this because their success
+/// disappears with the resource. Most other outcomes are readable off its
 /// `conditions`, while a delete's success is the resource *not being there*,
 /// which a client cannot tell from never-existed or not-authorized (STR-147).
+/// Guest configuration also records outcomes: terminal guest failures must
+/// survive later enclosing VM goals. A failure at the same realized generation
+/// may append after completion; a later generation cannot rewrite it.
 enum ResourceEventPhase: String, Codable, CaseIterable, Sendable {
     /// A mutation was accepted. Every row written at mutation time.
     case requested
     /// The mutation reached its goal. Appended by the finalizer reap for a
-    /// delete; the resource's `conditions` say it for everything else.
+    /// delete, or after validated guest configuration and host convergence.
     case completed
-    /// The mutation will not reach its goal. Reserved: nothing appends this
-    /// yet, because a failed mutation leaves a resource whose `conditions`
-    /// carry the reason. It exists so the façade's terminal lookup does not
-    /// have to change shape when a delete gains a way to fail permanently.
+    /// A terminal guest configuration failure. Its safe reason is projected
+    /// by the facade; arbitrary guest errors are never stored in this ledger.
     case failed
 }
 

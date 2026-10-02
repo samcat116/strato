@@ -815,3 +815,66 @@ replica-local attachment is retried; a started process is never replayed.
 Cancellation and termination signals close the socket and restore terminal
 settings, including externally delivered SIGINT. Typed Ctrl-C in a raw PTY
 is forwarded as guest input.
+
+## Guest configuration controls (STR-92)
+
+`VM.guestConfig` persists the validated STR-90 shared model as optional JSON.
+`StoredGuestConfig` keeps the same JSON encoding but redacts diagnostic
+stringification, including Fluent/SQLKit bound-value debug logging. Desired-state
+assembly projects this intent onto `DesiredVMState.guestConfig`; ordinary VM
+responses do not expose file contents.
+
+The dedicated GET/PUT `/api/vms/:vmID/guest-config` routes require the deliberate
+`vm:configureGuest` action. PUT accepts `{guestConfig: ...}`; explicit null or an
+empty configuration withdraws management without reversing guest changes.
+Unknown envelope/model fields, duplicate identities, unsafe paths and bounded
+size violations are rejected using the shared validator, with rule-based errors
+that omit caller values.
+
+`VMGuestConfigMutation` compares normalized arrays under the VM row lock and
+refreshes prior intent along with reconciliation bookkeeping. A semantic change
+increments the enclosing VM generation and atomically records a `guest_config`
+resource event, a convergence deadline and any idempotency claim, then dispatches
+a desired-state doorbell. An unchanged request returns the VM without incrementing
+generation or creating an event; it does not imply convergence. Raw config
+contents are omitted from audit events and generic status responses.
+
+`StoredGuestConfigEvidence` persists the STR-91 shared observation, reporting
+placement, control-plane receipt timestamp and current availability as redacted
+JSON. The observed-state applier validates current generation/managed identities
+under the existing placement lock and also compares file content hashes before
+accepting success. Missing/invalid reports retain last-known facts but withdraw
+current proof. Same-generation guest failure remains terminal across reloads;
+only an explicit newer generation can retry it. File identity/content and
+normalized sysctl facts compare as UTF-8 bytes, preserving Linux path/hash
+semantics instead of Swift canonical Unicode equality.
+
+The VM also retains a terminal guest failure generation when a channel failure
+prevents any read-back. This creates no observed item facts. Guest request
+completion/failure is appended to the existing resource event ledger, with the
+requested intent generation. The first realization's actual VM generation is
+retained separately: a failure at that same generation overrides completion,
+while a later unrelated VM goal cannot rewrite the completed request. Explicit
+retry creates another request; the earlier failure remains failed. Operation
+history resolves these outcomes in one query bounded by the requested targets.
+
+GET projects desired and observed values independently, with matched/drift/unknown/
+stale/failed item states. Only `failedItem` marks a failed row; missing facts can be
+unattempted. Guest-chosen diagnostics remain in the redacted record. Operator
+errors use a small exact-message allowlist and a safe fallback, including in
+ordinary VM status and operation outcomes. Host/guest disconnection makes retained
+facts unavailable as current proof. The timestamp is report receipt, not a guest
+measurement timestamp.
+
+A `guest_config` operation requires both the enclosing host verdict and matching
+current guest read-back. Clearing intent succeeds from host acknowledgement alone.
+Stopped/paused desired VMs defer guest work and receive no new guest deadline.
+A later boot can realize unchanged deferred intent; a newer configuration mutation
+supersedes the earlier request. PUT's optional `retry: true` creates a new generation
+only when the current generation failed, even when intent is unchanged. Ordinary
+unchanged writes remain no-ops. No operation resubmits desired state when polling
+is interrupted.
+
+The request transport and CLI file read are bounded at 8 MiB, allowing escaped JSON
+for the shared model's bounded content/path payload; semantic limits still come
+from STR-90's shared validator.

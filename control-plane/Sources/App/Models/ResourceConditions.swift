@@ -462,6 +462,10 @@ extension VM: ConvergingResource {
         // and losing one is worse: a stale snapshot written back over a racing
         // reboot would not merely drop a generation bump, it would drop the
         // *edge*, and no later sync re-derives it.
+        guestConfig = committed.guestConfig
+        guestConfigEvidence = committed.guestConfigEvidence
+        guestConfigFailedGeneration = committed.guestConfigFailedGeneration
+        guestConfigRealizedGeneration = committed.guestConfigRealizedGeneration
         rebootGeneration = committed.rebootGeneration
         restoreGeneration = committed.restoreGeneration
         restoreSnapshotID = committed.restoreSnapshotID

@@ -168,6 +168,8 @@ struct VMController: RouteCollection {
         vms.group(":vmID") { vm in
             vm.get(use: show)
             vm.get("project-grant", use: projectGrant)
+            vm.get("guest-config", use: guestConfiguration)
+            vm.on(.PUT, "guest-config", body: .collect(maxSize: "8mb"), use: replaceGuestConfiguration)
             vm.put(use: update)
             vm.patch(use: patchMetadata)
             vm.delete(use: delete)

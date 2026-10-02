@@ -100,6 +100,12 @@ struct IdempotencyMiddleware: AsyncMiddleware {
 
         switch kind {
         case .virtualMachine:
+            // Replay runs before the route authorization middleware. Recheck
+            // the stronger guest-config grant rather than reviving access with vm:read.
+            if request.url.path.split(separator: "/").dropFirst(3).first == "guest-config" {
+                try await request.authorize(
+                    "vm:configureGuest", on: IAMNode(type: .virtualMachine, id: resourceID))
+            }
             guard let vm = try await VM.find(resourceID, on: request.db) else {
                 return try cachedResponse(from: claim)
             }

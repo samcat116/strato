@@ -340,6 +340,27 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "guest_agent_enabled")
     var guestAgentEnabled: Bool
 
+    /// Root-level guest intent; returned only by the deliberately privileged config endpoint.
+    @OptionalField(key: "guest_config")
+    private var storedGuestConfig: StoredGuestConfig?
+
+    var guestConfig: GuestConfig? {
+        get { storedGuestConfig?.value }
+        set { storedGuestConfig = newValue.map(StoredGuestConfig.init) }
+    }
+
+    @OptionalField(key: "guest_config_evidence")
+    var guestConfigEvidence: StoredGuestConfigEvidence?
+
+    /// A guest-channel failure can be terminal before any read-back exists.
+    /// Keep that generation across restart without inventing observed facts.
+    @OptionalField(key: "guest_config_failed_generation")
+    var guestConfigFailedGeneration: Int64?
+
+    /// Actual VM generation that first realized the latest guest request.
+    @OptionalField(key: "guest_config_realized_generation")
+    var guestConfigRealizedGeneration: Int64?
+
     // Graphics console (issue #566): whether the guest boots with a display
     // device and a VNC server for the web UI to attach to. Like the machine
     // profile above, the control plane records only the intent — the agent

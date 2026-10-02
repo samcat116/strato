@@ -33,6 +33,59 @@ extension ObservedStateApplier {
         let wasConverged = vm.isConverged
         let failedBefore = vm.failedGeneration
 
+        // This runs under withLockedCurrent's placement and row-generation
+        // guard. Keep last-known facts when a report is missing, but withdraw
+        // their availability so an old success cannot attest to a disconnect.
+        var guestEvidenceChanged = false
+        if let config = vm.guestConfig, !config.isEmpty {
+            let terminalGuestFailure =
+                vm.guestConfigFailedGeneration == vm.generation
+                || (vm.guestConfigEvidence?.observation.generation == vm.generation
+                    && vm.guestConfigEvidence?.observation.status == .failed)
+            if let report = observed.guestConfigObservation,
+                report.status == .failed || observed.status == .running,
+                (try? VMGuestConfigPresentation.validate(report, config: config, generation: vm.generation)) != nil,
+                report.status == .failed
+                    || VMGuestConfigPresentation.matches(report, config: config, generation: vm.generation)
+            {
+                if !terminalGuestFailure || report.status == .failed {
+                    vm.guestConfigEvidence = StoredGuestConfigEvidence(
+                        observation: report, agentID: vm.hypervisorId ?? "", receivedAt: instant.date, available: true)
+                    guestEvidenceChanged = true
+                }
+            } else if var retained = vm.guestConfigEvidence, retained.available {
+                retained.available = false
+                vm.guestConfigEvidence = retained
+                guestEvidenceChanged = true
+            }
+        }
+        let failedGuestReport =
+            vm.guestConfigEvidence?.observation.generation == vm.generation
+            && vm.guestConfigEvidence?.observation.status == .failed
+        // STR-91's terminal nonblocked failures also include loss of the
+        // guest channel before read-back. Never synthesize a report for that.
+        if vm.guestConfig?.isEmpty == false,
+            failedGuestReport
+                || (vm.desiredStatus == .running && observed.lastError != nil
+                    && observed.failedGeneration == vm.generation && observed.failureClassification != .blocked),
+            vm.guestConfigFailedGeneration != vm.generation
+        {
+            vm.guestConfigFailedGeneration = vm.generation
+            guestEvidenceChanged = true
+        }
+        let guestFailed =
+            vm.guestConfig?.isEmpty == false && vm.guestConfigFailedGeneration == vm.generation
+        // Guest-chosen errors must not flow into generic VM status, logging,
+        // audit or webhooks. Retain detailed facts only in the redacted record.
+        let effectiveError =
+            guestFailed
+            ? VMGuestConfigPresentation.safeFailure(vm.guestConfigEvidence?.observation.error)
+            : ((vm.guestConfig?.isEmpty == false || observed.guestConfigObservation != nil
+                || observed.failedGeneration.map { $0 == vm.guestConfigFailedGeneration } == true)
+                && observed.lastError != nil
+                ? VMGuestConfigPresentation.failure : observed.lastError)
+        let effectiveFailedGeneration = guestFailed ? vm.generation : observed.failedGeneration
+
         // The guest-agent view (issue #563) is orthogonal to convergence and
         // operation completion, so record it up front — before the converging
         // early-return below. A present `guestInfo` is persisted; a nil one on a
@@ -94,14 +147,19 @@ extension ObservedStateApplier {
         } else {
             bootVolumePhase = nil
         }
-        let effectivePhase = observed.convergencePhase ?? bootVolumePhase
+        let guestPhase =
+            vm.guestConfig?.isEmpty == false && vm.desiredStatus == .running
+                && !(effectiveError != nil && effectiveFailedGeneration == vm.generation)
+                && !VMGuestConfigPresentation.converged(vm)
+            ? "waiting for current guest configuration read-back" : nil
+        let effectivePhase = observed.convergencePhase ?? bootVolumePhase ?? guestPhase
         var changed = vm.recordTimestampedConvergence(
             phase: effectivePhase,
-            lastError: observed.lastError,
-            failedGeneration: observed.failedGeneration,
+            lastError: effectiveError,
+            failedGeneration: effectiveFailedGeneration,
             at: instant
         )
-        changed = resourceTelemetryChanged || changed
+        changed = guestEvidenceChanged || resourceTelemetryChanged || changed
 
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
@@ -109,6 +167,7 @@ extension ObservedStateApplier {
             if changed {
                 try await vm.save(on: db)
             }
+            try await recordGuestConfigurationOutcome(vm: vm, on: db)
             app.logger.debug(
                 "VM converging on agent",
                 metadata: [
@@ -168,7 +227,7 @@ extension ObservedStateApplier {
         }
 
         let failedCurrentGeneration =
-            observed.lastError != nil && observed.failedGeneration == vm.generation
+            effectiveError != nil && effectiveFailedGeneration == vm.generation
         // A blocked refusal is both an actionable error and an unfinished
         // convergence attempt. The agent will re-drive it at this generation,
         // so retain desired state and the deadline while persisting the
@@ -185,6 +244,7 @@ extension ObservedStateApplier {
             if changed {
                 try await vm.save(on: db)
             }
+            try await recordGuestConfigurationOutcome(vm: vm, on: db)
             await emitVMStatusTransition(statusTransition, vm: vm, on: db)
             return
         }
@@ -194,8 +254,8 @@ extension ObservedStateApplier {
             vm,
             wasConverged: wasConverged,
             changed: changed,
-            reportedError: observed.lastError,
-            reportedFailedGeneration: observed.failedGeneration,
+            reportedError: effectiveError,
+            reportedFailedGeneration: effectiveFailedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .boot,
             at: instant,
@@ -209,11 +269,50 @@ extension ObservedStateApplier {
                 Telemetry.vmEnteredError(reason: "convergence_failed")
             },
             on: db)
+        try await recordGuestConfigurationOutcome(vm: vm, on: db)
         await emitVMStatusTransition(statusTransition, vm: vm, on: db)
         if case .failed(.recorded) = settlement, enteredError {
             await WebhookEvents.emitVMStateChanged(
                 vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
         }
+    }
+
+    /// Guest failures are terminal, unlike generic host repair. Preserve
+    /// the request's outcome in the existing append-only ledger so another
+    /// VM goal or explicit retry cannot rewrite historical operation status.
+    /// Called under the VM row lock, in the observation transaction.
+    func recordGuestConfigurationOutcome(vm: VM, on db: Database) async throws {
+        let id = try vm.requireID()
+        guard
+            let request = try await ResourceEvent.query(on: db)
+                .filter(\.$resourceKind == .virtualMachine).filter(\.$resourceID == id)
+                .filter(\.$mutation == .guestConfig).filter(\.$phase == .requested)
+                .sort(\.$targetGeneration, .descending).first(),
+            let target = request.targetGeneration
+        else { return }
+        let outcomes = try await ResourceEvent.query(on: db)
+            .filter(\.$resourceKind == .virtualMachine).filter(\.$resourceID == id)
+            .filter(\.$mutation == .guestConfig).filter(\.$targetGeneration == target)
+            .filter(\.$phase != .requested).all()
+        guard !outcomes.contains(where: { $0.phase == .failed }) else { return }
+        let completed = outcomes.contains { $0.phase == .completed }
+        let failed = vm.guestConfig?.isEmpty == false && vm.guestConfigFailedGeneration == vm.generation
+        let phase: ResourceEventPhase
+        if failed && (!completed || vm.guestConfigRealizedGeneration == vm.generation) {
+            phase = .failed
+        } else if !completed && vm.convergencePhase == nil && vm.isConverged && VMGuestConfigPresentation.converged(vm)
+        {
+            phase = .completed
+            vm.guestConfigRealizedGeneration = vm.generation
+            try await vm.save(on: db)
+        } else {
+            return
+        }
+        _ = try await ResourceEvent.record(
+            .guestConfig, resourceKind: .virtualMachine, resourceID: id, actor: .system, phase: phase,
+            scope: .init(
+                organizationID: request.organizationID, projectID: request.projectID,
+                resourceName: request.resourceName, generation: target), on: db)
     }
 
     /// The control-plane half of the managed boot-volume dependency (STR-242).

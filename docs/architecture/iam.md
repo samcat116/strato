@@ -1543,3 +1543,13 @@ of principals, actions, and node types all the same.
 | Nested projects; multi-parent resources | — |
 | Free-form customer-authored Cedar | — |
 | Silent eventual consistency on grant/revoke | — |
+
+### Deliberate guest-configuration grants (STR-92)
+
+`vm:configureGuest` permits replacement of root-level guest intent and reading
+its raw file contents through `/api/vms/:vmID/guest-config`. No seeded role
+carries it. A custom role must grant it deliberately on the VM or its hierarchy;
+`vm:*` guardrails still cover it. Read-only credentials cannot use this action,
+including on the GET route. Updating also requires `vm:read` because the response
+contains the VM. Ordinary VM details contain no raw guest file contents.
+Idempotent replay rechecks this grant before returning a cached outcome.

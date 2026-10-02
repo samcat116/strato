@@ -29,13 +29,17 @@ export interface AcceptedMutationWatch {
    * which are listed under their parent and have no single-resource GET.
    */
   snapshot?: boolean;
+  /** Use a specialized mutation verdict rather than host lifecycle conditions. */
+  operation?: boolean;
 }
 
 export interface RunAcceptedMutationOptions<Resource extends { id?: string }> {
   /** Stable fingerprint of the HTTP method, target, and request body. */
   intentKey: string;
   /** The 202-returning API call. */
-  request: (idempotencyKey: string) => Promise<AcceptedMutation<Resource>>;
+  request: (idempotencyKey: string) => Promise<AcceptedMutation<Resource> | Resource>;
+  /** A synchronous no-op records no mutation and must not start a watcher. */
+  onUnchanged?: (resource: Resource) => void;
   /** The entry MutationWatcher follows to a terminal state. */
   watch: AcceptedMutationWatch;
   /** Fallback error-toast text, for failures that carry no message. */
@@ -121,13 +125,18 @@ export function useAcceptedMutation() {
           : newIdempotencyKey();
       ambiguousAttempt.current = { intentKey: options.intentKey, idempotencyKey };
       try {
-        const accepted = await options.request(idempotencyKey);
+        const result = await options.request(idempotencyKey);
         // A decoded response is definitive. The next submission is a new
         // intent even if its fields happen to be identical.
         ambiguousAttempt.current = null;
-        const { snapshot, ...watchOptions } = options.watch;
+        if (!("mutationId" in result) || !("resource" in result)) {
+          options.onUnchanged?.(result as Resource);
+          return;
+        }
+        const accepted = result as AcceptedMutation<Resource>;
+        const { snapshot, operation, ...watchOptions } = options.watch;
         watch(
-          snapshot
+          snapshot || operation
             ? acceptedSnapshotMutation(accepted, watchOptions)
             : acceptedMutation(accepted, watchOptions)
         );

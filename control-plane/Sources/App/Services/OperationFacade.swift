@@ -56,6 +56,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
         switch (self, kind) {
         case (.virtualMachine, .create): return 600
         case (.virtualMachine, .boot): return 180
+        case (.virtualMachine, .guestConfig): return 600
         case (.virtualMachine, .delete): return 300
         case (.virtualMachine, .snapshot), (.virtualMachine, .restore): return 1800
         case (.virtualMachine, .snapshotExport): return 300
@@ -109,14 +110,53 @@ enum OperationFacade {
         let conditions: ResourceConditions?
         /// The newest terminal event, if the deletion has been recorded.
         let terminal: ResourceEvent?
+        var guestConfiguration: GuestConfigurationVerdict? = nil
+        var guestOutcomes: [Int64: Verdict] = [:]
+    }
+
+    struct GuestConfigurationVerdict {
+        let generation: Int64
+        let managed: Bool
+        let converged: Bool
+        var intentGeneration: Int64? = nil
     }
 
     static func view(
-        of kind: OperationResourceKind, id: UUID, on db: any Database
+        of kind: OperationResourceKind, id: UUID, guestTargets: [Int64] = [], on db: any Database
     ) async throws -> ResourceView {
         let conditions: ResourceConditions?
+        var guestConfiguration: GuestConfigurationVerdict?
         switch kind {
-        case .virtualMachine: conditions = try await VM.find(id, on: db)?.conditions
+        case .virtualMachine:
+            let vm = try await VM.find(id, on: db)
+            conditions = vm?.conditions
+            if let vm {
+                let managed = vm.guestConfig?.isEmpty == false
+                let lastIntent = try await ResourceEvent.query(on: db)
+                    .filter(\.$resourceKind == .virtualMachine)
+                    .filter(\.$resourceID == id)
+                    .filter(\.$phase == .requested)
+                    .filter(\.$mutation == .guestConfig)
+                    .sort(\.$targetGeneration, .descending)
+                    .first()
+                var online = true
+                if managed {
+                    let instant = try await ClusterClock.read(on: db)
+                    if let agentID = vm.hypervisorId.flatMap(UUID.init(uuidString:)),
+                        let agent = try await Agent.find(agentID, on: db)
+                    {
+                        online = agent.isOnline(at: instant)
+                    } else {
+                        online = false
+                    }
+                }
+                guestConfiguration = .init(
+                    generation: vm.generation, managed: managed,
+                    converged: VMGuestConfigPresentation.converged(vm) && online
+                        && vm.guestAgentObservation?.reachable != false
+                        && vm.status == .running && vm.desiredStatus == .running,
+                    intentGeneration: lastIntent?.targetGeneration)
+            }
         case .sandbox: conditions = try await Sandbox.find(id, on: db)?.conditions
         case .volume: conditions = try await Volume.find(id, on: db)?.conditions
         case .volumeSnapshot: conditions = try await VolumeSnapshot.find(id, on: db)?.conditions
@@ -129,7 +169,22 @@ enum OperationFacade {
             conditions == nil
             ? try await ResourceEvent.latest(.completed, resourceKind: kind, resourceID: id, on: db)
             : nil
-        return ResourceView(conditions: conditions, terminal: terminal)
+        var outcomes: [Int64: Verdict] = [:]
+        if kind == .virtualMachine, !guestTargets.isEmpty {
+            let rows = try await ResourceEvent.query(on: db)
+                .filter(\.$resourceKind == kind).filter(\.$resourceID == id)
+                .filter(\.$mutation == .guestConfig).filter(\.$targetGeneration ~~ guestTargets)
+                .filter(\.$phase != .requested).all()
+            for row in rows {
+                guard let target = row.targetGeneration, outcomes[target]?.status != .failed else { continue }
+                outcomes[target] = Verdict(
+                    status: row.phase == .failed ? .failed : .succeeded,
+                    error: row.phase == .failed ? VMGuestConfigPresentation.failure : nil,
+                    completedAt: row.createdAt)
+            }
+        }
+        return ResourceView(
+            conditions: conditions, terminal: terminal, guestConfiguration: guestConfiguration, guestOutcomes: outcomes)
     }
 
     /// Synthesizes the operation view of one recorded mutation.
@@ -137,7 +192,9 @@ enum OperationFacade {
     /// `event` must be a `.requested` row; terminal rows are the *evidence*
     /// this reads, not its subject.
     static func response(for event: ResourceEvent, on db: any Database) async throws -> OperationResponse {
-        let view = try await view(of: event.resourceKind, id: event.resourceID, on: db)
+        let view = try await view(
+            of: event.resourceKind, id: event.resourceID,
+            guestTargets: event.mutation == .guestConfig ? event.targetGeneration.map { [$0] } ?? [] : [], on: db)
         return response(for: event, in: view)
     }
 
@@ -184,6 +241,11 @@ enum OperationFacade {
     /// * a resource that vanished under a non-delete → `failed`;
     /// * anything else → `pending`.
     static func verdict(for event: ResourceEvent, in view: ResourceView) -> Verdict {
+        if event.mutation == .guestConfig, let target = event.targetGeneration,
+            let outcome = view.guestOutcomes[target]
+        {
+            return outcome
+        }
         if event.mutation == .delete {
             if let terminal = view.terminal, isAfter(terminal, event) {
                 return Verdict(status: .succeeded, error: nil, completedAt: terminal.createdAt)
@@ -207,6 +269,21 @@ enum OperationFacade {
 
         if let degraded = conditions.degraded, degraded.sinceGeneration == target {
             return Verdict(status: .failed, error: degraded.reason, completedAt: nil)
+        }
+        if event.mutation == .guestConfig {
+            guard let guest = view.guestConfiguration else {
+                return Verdict(status: .pending, error: nil, completedAt: nil)
+            }
+            // A boot can advance the enclosing generation while retaining
+            // deferred guest intent. Only another config edit supersedes it.
+            if (guest.intentGeneration ?? guest.generation) > target {
+                return Verdict(
+                    status: .failed, error: "This guest configuration request was superseded by a newer generation",
+                    completedAt: nil)
+            }
+            if guest.managed && !guest.converged {
+                return Verdict(status: .pending, error: nil, completedAt: nil)
+            }
         }
         if conditions.observedGeneration >= target,
             conditions.converged || conditions.targetGeneration > target
@@ -255,7 +332,9 @@ enum OperationFacade {
             .all()
         var responses: [OperationResponse] = []
         if !events.isEmpty {
-            let view = try await view(of: resourceKind, id: resourceID, on: db)
+            let view = try await view(
+                of: resourceKind, id: resourceID,
+                guestTargets: events.filter { $0.mutation == .guestConfig }.compactMap(\.targetGeneration), on: db)
             responses.append(contentsOf: events.map { response(for: $0, in: view) })
         }
 

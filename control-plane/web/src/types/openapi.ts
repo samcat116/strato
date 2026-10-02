@@ -160,6 +160,33 @@ export interface paths {
         patch: operations["patchVMMetadata"];
         trace?: never;
     };
+    "/api/vms/{vmID}/guest-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read privileged desired guest configuration
+         * @description Requires vm:configureGuest. Contains file contents; never include in logs or status. Desired state is not proof of convergence.
+         */
+        get: operations["getVMGuestConfiguration"];
+        /**
+         * Replace desired guest configuration
+         * @description Requires vm:configureGuest and vm:read. Changes increment generation transactionally; unchanged configurations (including reordered arrays) are no-ops. Null or empty config withdraws management without reversing guest changes. Acceptance does not mean convergence.
+         */
+        put: operations["replaceVMGuestConfiguration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/project-grant": {
         parameters: {
             query?: never;
@@ -5815,7 +5842,7 @@ export interface components {
          * @description The lifecycle mutation an operation performs.
          * @enum {string}
          */
-        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "resize" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export" | "attach" | "detach" | "throttle" | "run";
+        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "resize" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export" | "attach" | "detach" | "throttle" | "run" | "guest_config";
         /**
          * @description The state of an operation. `pending` is the only non-terminal value.
          * @enum {string}
@@ -5830,6 +5857,74 @@ export interface components {
         MetadataSource: "iso" | "imds";
         /** @enum {string} */
         CPUArchitecture: "x86_64" | "arm64";
+        GuestPackage: {
+            name: string;
+            /** @enum {string} */
+            state: "present" | "absent";
+        };
+        GuestFile: {
+            /** @description Canonical absolute non-root path, no control characters or dot components. */
+            path: string;
+            /** @description UTF-8 without NUL, at most 65536 bytes per file and 262144 bytes total. */
+            content: string;
+            mode: string;
+        };
+        GuestService: {
+            name: string;
+            /** @description Boot enablement only, not running/stopped state. */
+            enabled: boolean;
+        };
+        GuestSysctl: {
+            /** @description Bounded ASCII identifier with nonempty dot-separated components. */
+            key: string;
+            /** @description One nonempty line; server measures UTF-8 bytes. */
+            value: string;
+        };
+        /** @description STR-90 shared model. Identities must be unique within each section. Nil/empty/removed entries withdraw management without reversing guest changes. Arrays compare independently of order. */
+        GuestConfig: {
+            packages: components["schemas"]["GuestPackage"][];
+            files: components["schemas"]["GuestFile"][];
+            services: components["schemas"]["GuestService"][];
+            sysctls: components["schemas"]["GuestSysctl"][];
+        };
+        ReplaceVMGuestConfigurationRequest: {
+            guestConfig: components["schemas"]["GuestConfig"] | null;
+            /** @description Explicitly retry a failed generation, even when intent is unchanged. */
+            retry?: boolean;
+        };
+        VMGuestConfiguration: {
+            /** Format: uuid */
+            vmId: string;
+            /** Format: int64 */
+            desiredGeneration: number;
+            guestConfig?: components["schemas"]["GuestConfig"] | null;
+            /** @enum {string} */
+            status: "unmanaged" | "pending" | "deferred" | "unavailable" | "stale" | "converged" | "failed";
+            /** Format: int64 */
+            observedGeneration?: number | null;
+            /**
+             * Format: date-time
+             * @description When the control plane received the retained report; not a guest measurement timestamp.
+             */
+            reportReceivedAt?: string | null;
+            /** Format: int64 */
+            failureGeneration?: number | null;
+            /** @description Safe operator-facing reason, never guest-chosen error text. */
+            error?: string | null;
+            items: components["schemas"]["VMGuestConfigurationItem"][];
+        };
+        VMGuestConfigurationItem: {
+            /** @enum {string} */
+            section: "packages" | "files" | "services" | "sysctls";
+            identity: string;
+            /** @description Desired value or file hash/mode; never file contents. */
+            desired: string;
+            /** @description Last-known fact, which can be stale. Missing facts are unknown. */
+            observed?: string | null;
+            /** @enum {string} */
+            state: "matched" | "drift" | "unknown" | "stale" | "failed";
+            error?: string | null;
+        };
         CreateVMRequest: {
             name: string;
             /** @description The VM's DNS label. Defaults to a slugified `name`, disambiguated with a numeric suffix against whatever already registers into the target network's primary zone. An explicit value is instead held to strict uniqueness and answers `409` on a collision. */
@@ -11048,6 +11143,83 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getVMGuestConfiguration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Desired configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMGuestConfiguration"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    replaceVMGuestConfiguration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceVMGuestConfigurationRequest"];
+            };
+        };
+        responses: {
+            /** @description Unchanged desired configuration; does not imply convergence. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMDetail"];
+                };
+            };
+            202: components["responses"]["AcceptedVMMutation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description VM being deleted, not opted in or unsupported. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Guest configuration violates shared validation rules. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getVMProjectGrant: {
