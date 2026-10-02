@@ -4,7 +4,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("HealthController Tests", .serialized)
+@Suite("HealthController Tests", .serialized, .postgresFixture)
 struct HealthControllerTests {
 
     @Test("Readiness reports observed coordination degradation without probing the store")

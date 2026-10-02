@@ -6,7 +6,7 @@ import Testing
 
 @testable import App
 
-@Suite("Steady-state divergence sweep", .serialized)
+@Suite("Steady-state divergence sweep", .serialized, .postgresFixture)
 struct SteadyStateDivergenceTests {
     @Test("The sweep honors grace and exclusions, detects both kinds, and deduplicates episodes")
     func detectsSustainedDivergence() async throws {

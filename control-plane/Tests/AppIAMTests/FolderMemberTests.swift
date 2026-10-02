@@ -42,7 +42,7 @@ struct OverlappingGuardrailAnalyzer: GuardrailAnalyzer {
     }
 }
 
-@Suite("Folder Member Tests", .serialized)
+@Suite("Folder Member Tests", .serialized, .postgresFixture)
 struct FolderMemberTests {
 
     /// An org with an `engineering` folder holding one project, a sibling

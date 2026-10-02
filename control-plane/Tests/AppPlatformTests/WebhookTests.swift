@@ -59,7 +59,7 @@ private func makeSubscription(
 
 // MARK: - Subscription CRUD API
 
-@Suite("Webhook Subscription API Tests", .serialized)
+@Suite("Webhook Subscription API Tests", .serialized, .postgresFixture)
 struct WebhookSubscriptionAPITests {
 
     @Test("Create returns the signing secret exactly once and echoes the config")
@@ -372,7 +372,7 @@ struct WebhookSubscriptionAPITests {
 
 // MARK: - Outbox enqueue
 
-@Suite("Webhook Outbox Tests", .serialized)
+@Suite("Webhook Outbox Tests", .serialized, .postgresFixture)
 struct WebhookOutboxTests {
 
     @Test("The pending ceiling drops each subscription's oldest rows independently")
@@ -852,6 +852,25 @@ struct WebhookOutboxTests {
 
 // MARK: - Delivery sweep
 
+/// Deterministic fixture ordering, independent of database/network scheduling.
+/// The owning test releases this in both success and error cleanup paths.
+private actor HookResponseGate {
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !released else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+    }
+}
+
 /// A bare Vapor app standing in for the subscriber's endpoint, capturing
 /// every request and answering with a configurable status.
 private struct HookOrigin {
@@ -866,10 +885,15 @@ private struct HookOrigin {
     struct PlannedResponse: Sendable {
         let status: HTTPResponseStatus
         let delay: Duration?
+        let beforeRespond: (@Sendable () async -> Void)?
 
-        init(_ status: HTTPResponseStatus, delay: Duration? = nil) {
+        init(
+            _ status: HTTPResponseStatus, delay: Duration? = nil,
+            beforeRespond: (@Sendable () async -> Void)? = nil
+        ) {
             self.status = status
             self.delay = delay
+            self.beforeRespond = beforeRespond
         }
     }
 
@@ -909,6 +933,7 @@ private struct HookOrigin {
             )
             captured.withLockedValue { $0.append(request) }
             if let planned = responseForRequest?(request) {
+                if let beforeRespond = planned.beforeRespond { await beforeRespond() }
                 if let delay = planned.delay { try? await Task.sleep(for: delay) }
                 return Response(status: planned.status)
             }
@@ -932,7 +957,7 @@ private struct HookOrigin {
     }
 }
 
-@Suite("Webhook Delivery Sweep Tests", .serialized)
+@Suite("Webhook Delivery Sweep Tests", .serialized, .postgresFixture)
 struct WebhookDeliverySweepTests {
 
     @Test("The sweep POSTs a correctly signed payload and records success")
@@ -1215,6 +1240,7 @@ struct WebhookDeliverySweepTests {
 
     @Test("A concurrent success prevents a stale sibling failure from disabling the subscription")
     func concurrentSuccessAndFailure() async throws {
+        let failureGate = HookResponseGate()
         let origin = try await HookOrigin.start { request in
             if request.body.contains("succeeds") {
                 return HookOrigin.PlannedResponse(.ok)
@@ -1223,7 +1249,7 @@ struct WebhookDeliverySweepTests {
             // verdict. Before per-subscription serialization, this delivery
             // retained the old failure-streak model and disabled the freshly
             // recovered subscription when it resumed.
-            return HookOrigin.PlannedResponse(.internalServerError, delay: .milliseconds(200))
+            return HookOrigin.PlannedResponse(.internalServerError, beforeRespond: { await failureGate.wait() })
         }
         do {
             try await withTestApp { app in
@@ -1247,21 +1273,29 @@ struct WebhookDeliverySweepTests {
                 let failingSweep = Task {
                     await app.webhookDelivery.sweepOnce()
                 }
-                let waitDeadline = ContinuousClock.now.advanced(by: .seconds(2))
-                while origin.captured.withLockedValue({ $0.isEmpty }),
-                    ContinuousClock.now < waitDeadline
-                {
-                    try await Task.sleep(for: .milliseconds(10))
-                }
-                #expect(!origin.captured.withLockedValue { $0.isEmpty })
+                do {
+                    let waitDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+                    while origin.captured.withLockedValue({ $0.isEmpty }),
+                        ContinuousClock.now < waitDeadline
+                    {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                    #expect(!origin.captured.withLockedValue { $0.isEmpty })
 
-                let success = WebhookDelivery(
-                    subscriptionID: subscription.id!, eventID: UUID(),
-                    eventType: .webhookTest, payload: "{\"outcome\":\"succeeds\"}")
-                success.nextAttemptAt = Date().addingTimeInterval(-1)
-                try await success.save(on: app.db)
-                await app.webhookDelivery.sweepOnce()
-                _ = await failingSweep.value
+                    let success = WebhookDelivery(
+                        subscriptionID: subscription.id!, eventID: UUID(),
+                        eventType: .webhookTest, payload: "{\"outcome\":\"succeeds\"}")
+                    success.nextAttemptAt = Date().addingTimeInterval(-1)
+                    try await success.save(on: app.db)
+                    await app.webhookDelivery.sweepOnce()
+                    await failureGate.release()
+                    _ = await failingSweep.value
+
+                } catch {
+                    await failureGate.release()
+                    _ = await failingSweep.value
+                    throw error
+                }
 
                 let reloaded = try #require(
                     try await WebhookSubscription.find(subscription.id, on: app.db))
@@ -1271,16 +1305,34 @@ struct WebhookDeliverySweepTests {
                 #expect(failingSince > Date().addingTimeInterval(-60))
             }
         } catch {
+            await failureGate.release()
             await origin.shutdown()
             throw error
         }
+        await failureGate.release()
         await origin.shutdown()
     }
 
     @Test("A pass keeps claiming due deliveries beyond the concurrency limit")
     func drainsDueQueueBeyondFanOutCapacity() async throws {
+        let firstWindowGate = HookResponseGate()
+        let arrivals = NIOLockedValueBox(0)
         let origin = try await HookOrigin.start { _ in
-            HookOrigin.PlannedResponse(.ok, delay: .milliseconds(50))
+            let ordinal = arrivals.withLockedValue {
+                $0 += 1; return $0
+            }
+            return HookOrigin.PlannedResponse(
+                .ok,
+                beforeRespond: {
+                    // Hold the first window until every slot has actually reached
+                    // the origin. A short sleep only measured arrival timing, not
+                    // the service's concurrency capacity, under database load.
+                    if ordinal == WebhookDeliveryService.maxConcurrentDeliveries {
+                        await firstWindowGate.release()
+                    } else if ordinal < WebhookDeliveryService.maxConcurrentDeliveries {
+                        await firstWindowGate.wait()
+                    }
+                })
         }
         do {
             try await withTestApp { app in
@@ -1309,9 +1361,11 @@ struct WebhookDeliverySweepTests {
                         == WebhookDeliveryService.maxConcurrentDeliveries)
             }
         } catch {
+            await firstWindowGate.release()
             await origin.shutdown()
             throw error
         }
+        await firstWindowGate.release()
         await origin.shutdown()
     }
 

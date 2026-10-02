@@ -16,7 +16,7 @@ import AppTestSupport
 /// guard sees the 302 or the final 200 decides whether those imports work at
 /// all. AsyncHTTPClient follows redirects by default, and this pins that: a
 /// stray `.disallow`, or a config change upstream, would break the catalog.
-@Suite("Image Fetch Redirect Tests", .serialized)
+@Suite("Image Fetch Redirect Tests", .serialized, .postgresFixture)
 struct ImageFetchRedirectTests {
 
     /// Minimal qcow2 header with a 10 GiB guest-visible virtual size.

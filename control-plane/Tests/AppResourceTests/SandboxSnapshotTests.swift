@@ -10,7 +10,7 @@ import AppTestSupport
 /// Tests for the sandbox snapshot / checkpoint-resume surface (issue #426):
 /// desired snapshot artifacts, quota admission, observed-state completion,
 /// restore compatibility, export storage, and deletion guards.
-@Suite("Sandbox Snapshot Tests", .serialized)
+@Suite("Sandbox Snapshot Tests", .serialized, .postgresFixture)
 final class SandboxSnapshotTests {
 
     private func withSnapshotTestApp(

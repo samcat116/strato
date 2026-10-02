@@ -14,7 +14,7 @@ import AppTestSupport
 /// to prove the reverse lookup marks a neutralised grant `ceilinged`, names the
 /// ceiling, and agrees with `can` — for matcher guardrails, hand-authored
 /// guardrails, and authored forbid policies alike.
-@Suite("IAM who-can Ceiling Tests", .serialized)
+@Suite("IAM who-can Ceiling Tests", .serialized, .postgresFixture)
 final class WhoCanCeilingTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

@@ -29,15 +29,18 @@ import AppTestSupport
 /// per-request query history (enabled on the request, not the application)
 /// records exactly the database work the handler does, and a fresh request per
 /// measurement keeps a memo from carrying between them.
-@Suite("List Authorization Scaling Tests", .serialized)
+@Suite("List Authorization Scaling Tests", .serialized, .postgresFixture)
 final class ListAuthorizationScalingTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app)
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }

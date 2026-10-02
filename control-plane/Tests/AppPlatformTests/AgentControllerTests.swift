@@ -6,7 +6,7 @@ import AppTestSupport
 @testable import App
 import Testing
 
-@Suite("Agent Controller Tests", .serialized)
+@Suite("Agent Controller Tests", .serialized, .postgresFixture)
 struct AgentControllerTests {
 
     @Test("sanitizedHost passes through a bare host")

@@ -6,7 +6,7 @@ import Testing
 import Vapor
 @testable import App
 
-@Suite("VM guest-agent opt-in exposure")
+@Suite("VM guest-agent opt-in exposure", .postgresFixture)
 struct VMGuestAgentExposureTests {
     private func vm() -> VM {
         VM(

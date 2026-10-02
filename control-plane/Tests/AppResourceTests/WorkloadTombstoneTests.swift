@@ -16,7 +16,7 @@ import AppTestSupport
 /// loudly when one does, retire claims when the host stops holding them, carry
 /// the authorized ones on the next sync, and let an operator re-point
 /// workloads that came back under a new agent record.
-@Suite("Workload Tombstone Tests", .serialized)
+@Suite("Workload Tombstone Tests", .serialized, .postgresFixture)
 final class WorkloadTombstoneTests {
 
     private func withTombstoneApp(
