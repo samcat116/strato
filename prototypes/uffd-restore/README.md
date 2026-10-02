@@ -151,9 +151,68 @@ delta exhaustion, cancellation and production File fallback.
 STR-312's agent-local implementation removes the missing-hook blocker, but its
 shared desired/observed Suspended representation, control-plane quota/readmission,
 wake integration and live lifecycle proof remain pending. Backend implementation
-still needs the descriptor/region receiver, seccomp-reviewed supervised page
-server/watchdog, durable digest cache and delta capture, scoped health proof,
-failure cleanup and restart recovery. The environment limitations above remain.
+still needs the concrete descriptor/region receiver, seccomp-reviewed UFFD
+transport/watchdog process adapter, actual dirty capture, scoped live proof and
+lifecycle cleanup integration. Local supervision, durable artifacts and negative
+proof logic are described below. The environment limitations above remain.
+
+## Additional kernel-independent implementation
+
+`SandboxPageServerSupervisor` owns a single transport lease. It bounds pending
+faults (including the active fault), serializes service, runs transport work
+outside its actor, and applies independent handshake/fault deadlines. Overflow,
+handler exit, bad response, invalid fault, and cancellation fail only that
+lease, resume every waiter once, and revoke its transport. Late results cannot
+make a failed lease healthy. Metrics include admission, service, high-water,
+failures, deadlines, overflow, bytes served and wait durations. The adapter's
+`stop` callback must be nonblocking and close owned descriptors; revocation is
+not process-death evidence. STR-312 must retain resources until its teardown
+proof completes. No production UFFD adapter is installed.
+
+`SandboxLazyMemoryStore` uses an exclusively locked, existing private directory
+and pinned directory descriptors; it rejects symlink traversal, hard-linked
+payloads, unbounded metadata and mismatched digests. Base keys hash the memory
+manifest, including trust and compatibility class. Delta keys hash a manifest
+bound to sandbox, checkpoint, generation, base and per-page digests. Files are
+created read-only to other opens, flushed, and published by a staged directory
+rename followed by parent fsync. Existing keys are verified rather than replaced.
+Returned page sources copy verified data; a pathname or read-only mode alone
+is not an immutable-source guarantee against the host owner.
+
+Disk bounds account base, private delta and unpublished staging bytes separately.
+Unique pin tokens prevent a stale release from releasing another lease. Durable
+deltas keep their base unevictable. Restart discards incomplete staging only;
+committed data must reverify with the exact identity and class. Proofs and live
+transport leases are not persisted/adopted. This implementation uses bounded
+in-memory buffers (64 MiB store default, configurable up to 1 GiB), 4 KiB pages
+and up to 4096 private pages per delta; a large-snapshot streaming adapter is
+still needed before production use. It does not allocate or release workload
+quota independently of STR-312.
+
+The candidate capability evaluator rejects absent/fixture evidence, changed
+kernel boot or agent-session scope, mismatched binary/isolation/snapshot/trust
+scope, invalid digests, expired/future evidence, lifetimes over one hour and
+missing checks. All kernel-fault API, EVENT_REMOVE, registered copy, peer/layout,
+actual load/guest read/private write, sharing/PSS, crash isolation, cancellation,
+File fallback and restart checks are required. This evaluates a receipt's
+structure; it is not receipt authenticity or a live runner. Production remains
+File-only even for a synthetically complete candidate. The future approved live
+runner must generate and retain the actual evidence behind the digest.
+
+A disposable `/bin/sleep` two-child test demonstrates local child exit/revocation
+and cleanup through the existing ProcessRunner: one child exit does not stop the
+other. That is not PID-safe production UFFD/VMM supervision, peer validation,
+actual kernel fault handling or guest isolation evidence. Production must use
+retained process identity and STR-312's teardown protocol, rather than adopt or
+kill a recorded PID after restart.
+
+The remaining live boundary is an approved Firecracker-specific adapter:
+receive/validate its SCM_RIGHTS UFFD and memory mappings under the approved jail
+and seccomp; resolve kernel page faults with the negotiated ioctls; integrate
+actual dirty tracking, remove/zero events and stop/exit proof; and demonstrate
+correct restore and clean-page sharing. The syscall probe cannot enter that
+boundary in this environment. No privilege changes are needed for the completed
+local components, and none were made.
 
 ## Remaining proofs and acceptance blockers
 
@@ -185,3 +244,12 @@ changed agent core/runtime and all test products. Four SandboxLazyMemoryTests
 passed; 27 SandboxSuspensionTests/SandboxCheckpointManifestTests passed. Seven
 Python tests, C probe compilation, strict Swift formatting and whitespace checks
 passed. This was focused validation, not a full agent test run or live VM test.
+
+Final kernel-independent progress validation: the full Linux x86_64 Swift 6.4.0
+agent suite passed all five products (920 + 344 + 70 + 45 + 531 = **1910 tests**).
+This includes native storage/supervision/candidate-proof fixtures and the final
+close-on-exec regression check. The initially timing-sensitive two-child fixture
+was changed to trigger exit only after admission; the complete final rerun
+passed. Seven Python tests, strict formatting, whitespace checks and C probe
+compilation passed. Both UFFD syscall variants still returned ENOSYS. No full
+Firecracker restore, guest-sharing/PSS or benchmark acceptance is established.
