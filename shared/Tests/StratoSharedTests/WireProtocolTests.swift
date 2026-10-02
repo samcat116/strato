@@ -17,7 +17,9 @@ struct WireProtocolTests {
 
     @Test("the current wire contract is exact")
     func currentContractVersion() {
-        #expect(WireProtocol.currentVersion == 64)
+        // Shared vocabulary alone must not advertise the future consumer's
+        // version: exact registration rejects v64 until realization ships.
+        #expect(WireProtocol.currentVersion == 63)
     }
     @Test("the sandbox guest control contract is exact")
     func sandboxGuestControlContract() {

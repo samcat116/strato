@@ -11,8 +11,10 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 64 adds optional,
-    /// generation-guarded VM guest configuration (STR-90). Version 63 requires
+    /// The only wire/schema version this build accepts. VM guest configuration
+    /// types are staged by STR-90; version 64 must ship with STR-91 realization,
+    /// so a model-only agent cannot connect to a producer of that intent.
+    /// Version 63 requires
     /// first-boot Strato guest-agent installation and carries the selected
     /// bootstrap release and independent guest-agent reachability observation.
     /// Version 62 carries the
@@ -38,7 +40,7 @@ public enum WireProtocol {
     /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
     /// contract (STR-237), and v46's authoritative native-OVN load-balancer
     /// state and observations (STR-28).
-    public static let currentVersion = 64
+    public static let currentVersion = 63
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.
