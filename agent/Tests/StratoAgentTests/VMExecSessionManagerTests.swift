@@ -391,7 +391,7 @@ struct VMExecSessionManagerTests {
 
         for index in connections.indices {
             try await manager.startExec(
-                placement: placement(), sessionId: "recorded-\(index)", sessionKind: .recorded,
+                placement: placement("vm-\(index)"), sessionId: "recorded-\(index)", sessionKind: .recorded,
                 request: request(tty: false), placementIsCurrent: { true }, events: { _ in })
         }
 
@@ -695,4 +695,84 @@ struct VMExecSessionManagerTests {
         #expect(checks.withLock { $0 } == 2)
         #expect(await connection.isClosed)
     }
+    @Test("Starting bridges reserve the VM cap and cancelled starts release their slots")
+    func perVMCapIncludesStartingConnections() async throws {
+        let gates = (0..<GuestExecLimits.maxSessionsPerVM).map { _ in SuspensionGate() }
+        let connects = Mutex(0)
+        let connections = Recorder<FakeConnection>()
+        let manager = VMExecSessionManager(logger: Self.logger) { _, _, _, _ in
+            let index = connects.withLock { count in
+                let index = count
+                count += 1
+                return index
+            }
+            await gates[index].wait()
+            let connection = FakeConnection(lines: [#"{"type":"exec_started","nonce":"test"}"#])
+            connections.append(connection)
+            return connection
+        }
+        var starts: [Task<Void, any Error>] = []
+        for index in gates.indices {
+            starts.append(
+                Task {
+                    try await manager.startExec(
+                        placement: placement(), sessionId: "pending-\(index)",
+                        sessionKind: index.isMultiple(of: 2) ? .interactive : .recorded, request: request(),
+                        placementIsCurrent: { true }, events: { _ in })
+                })
+            #expect(await eventually { await gates[index].isWaiting })
+        }
+        let error = await #expect(throws: VMExecBridgeError.self) {
+            try await manager.startExec(
+                placement: placement(), sessionId: "overflow", sessionKind: .interactive, request: request(),
+                placementIsCurrent: { true }, events: { _ in })
+        }
+        #expect(error?.localizedDescription.contains("limit reached") == true)
+        #expect(connects.withLock { $0 } == GuestExecLimits.maxSessionsPerVM)
+        for index in gates.indices {
+            await manager.closeExec(sessionId: "pending-\(index)", reason: "cancelled")
+            await gates[index].release()
+            await #expect(throws: VMExecBridgeError.self) { try await starts[index].value }
+        }
+        for connection in connections.all { #expect(await connection.isClosed) }
+        // Failed placement never connects and must release its reservation.
+        for index in 0..<8 {
+            await #expect(throws: VMExecBridgeError.self) {
+                try await manager.startExec(
+                    placement: placement(), sessionId: "failed-\(index)", sessionKind: .interactive, request: request(),
+                    placementIsCurrent: { false }, events: { _ in })
+            }
+        }
+        #expect(connects.withLock { $0 } == GuestExecLimits.maxSessionsPerVM)
+    }
+
+    @Test("Shared VM cap refuses a fifth bridge, preserves duplicate delivery, and releases a closed slot")
+    func perVMCapAndRepeatDelivery() async throws {
+        let manager = VMExecSessionManager(logger: Self.logger) { _, _, _, _ in
+            FakeConnection(lines: [#"{"type":"exec_started","nonce":"test"}"#])
+        }
+        for index in 0..<GuestExecLimits.maxSessionsPerVM {
+            try await manager.startExec(
+                placement: placement(), sessionId: "live-\(index)", sessionKind: index == 0 ? .recorded : .interactive,
+                request: request(), placementIsCurrent: { true }, events: { _ in })
+        }
+        let error = await #expect(throws: VMExecBridgeError.self) {
+            try await manager.startExec(
+                placement: placement(), sessionId: "fifth", sessionKind: .recorded, request: request(),
+                placementIsCurrent: { true }, events: { _ in })
+        }
+        #expect(error?.localizedDescription.contains("limit reached") == true)
+        try await manager.startExec(
+            placement: placement(), sessionId: "live-0", sessionKind: .recorded, request: request(),
+            placementIsCurrent: { true }, events: { _ in })
+        try await manager.startExec(
+            placement: placement("vm-2"), sessionId: "other-vm", sessionKind: .interactive, request: request(),
+            placementIsCurrent: { true }, events: { _ in })
+        await manager.closeExec(sessionId: "live-1")
+        try await manager.startExec(
+            placement: placement(), sessionId: "replacement", sessionKind: .interactive, request: request(),
+            placementIsCurrent: { true }, events: { _ in })
+        await manager.closeAll(reason: "test finished")
+    }
+
 }

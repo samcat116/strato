@@ -1120,8 +1120,13 @@ extension Agent {
         if sandboxLogPumpTask == nil {
             let lines = sandboxLogLines
             sandboxLogPumpTask = Task { [weak self] in
-                for await (sandboxId, stream, line) in lines {
-                    await self?.sendSandboxLogLine(sandboxId: sandboxId, stream: stream, line: line)
+                for await _ in lines.notifications {
+                    // One active line outside the byte-bounded queue, even if
+                    // the WebSocket send stalls. Pressure sheds telemetry only.
+                    for (sandboxId, stream, line) in lines.drain(maxCount: 1) {
+                        guard !Task.isCancelled, let self else { return }
+                        await self.sendSandboxLogLine(sandboxId: sandboxId, stream: stream, line: line)
+                    }
                 }
             }
         }
@@ -1616,13 +1621,21 @@ extension Agent {
     /// Ship one assembled workload log line. Runs on the log pump, so lines
     /// arrive at the control plane in the order the guest emitted them.
     func sendSandboxLogLine(sandboxId: String, stream: String, line: String) async {
+        guard !Task.isCancelled else {
+            sandboxLogLines.recordDrop(reason: .shutdown)
+            return
+        }
+        guard let websocketClient else {
+            sandboxLogLines.recordDrop(reason: .deliveryFailure)
+            return
+        }
         let message = SandboxLogMessage(sandboxId: sandboxId, stream: stream, message: line)
         do {
-            try await websocketClient?.sendMessage(message)
+            try await websocketClient.sendMessage(message)
         } catch {
-            logger.error(
-                "Failed to send sandbox log line",
-                metadata: ["strato.sandbox.id": .string(sandboxId), "error": .string(error.localizedDescription)])
+            // Rate-limited reporting is owned by the queue's cumulative drop
+            // counter; a broken connection must not produce one error per line.
+            sandboxLogLines.recordDrop(reason: Task.isCancelled ? .shutdown : .deliveryFailure)
         }
     }
 

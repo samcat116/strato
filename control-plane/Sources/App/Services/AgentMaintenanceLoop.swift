@@ -135,6 +135,10 @@ actor AgentMaintenanceLoop {
 
         try checkTickPreconditions()
         await sweepAgentAutoUpdates(at: instant)
+        try checkTickPreconditions()
+        do { try await VMExecSessionLimits.prune(on: app.db) } catch {
+            app.logger.warning("Could not prune expired VM exec presence: \(error)")
+        }
     }
 
     /// Throws when the current tick must stop: the task was cancelled, the

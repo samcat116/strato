@@ -164,7 +164,7 @@ struct SchedulableAgent: Sendable {
 
 /// VM placement requirements for scheduling: hard constraints (hypervisor
 /// backend, architecture, network capability) plus resource needs.
-struct VMPlacementRequirements: Sendable {
+struct VMPlacementRequirements: Sendable, Equatable {
     let cpu: Int
     let memory: Int64
     let disk: Int64

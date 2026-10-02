@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Logging
 import NIOCore
 import NIOPosix
@@ -241,8 +242,7 @@ actor Agent {
     nonisolated let sandboxExecEvents: AsyncStream<(String, GuestResourceKind, SandboxExecEvent)>
     nonisolated let sandboxExecEventsContinuation:
         AsyncStream<(String, GuestResourceKind, SandboxExecEvent)>.Continuation
-    nonisolated let sandboxLogLines: AsyncStream<(String, String, String)>
-    nonisolated let sandboxLogLinesContinuation: AsyncStream<(String, String, String)>.Continuation
+    nonisolated let sandboxLogLines: BoundedLogQueue<(String, String, String)>
     var sandboxExecPumpTask: Task<Void, Never>?
     var sandboxLogPumpTask: Task<Void, Never>?
     // Hypervisor lifecycle transitions (STR-135): one pump per backend that
@@ -443,8 +443,24 @@ actor Agent {
         self.sandboxExecEvents = execEvents
         self.sandboxExecEventsContinuation = execContinuation
 
-        let (logLines, logContinuation) = AsyncStream.makeStream(of: (String, String, String).self)
-        self.sandboxLogLines = logLines
-        self.sandboxLogLinesContinuation = logContinuation
+        let lastDropLog = Mutex(ContinuousClock.now.advanced(by: .seconds(-30)))
+        self.sandboxLogLines = BoundedLogQueue { snapshot, dropped, reason in
+            guard dropped > 0 else { return }
+            let report = lastDropLog.withLock { previous in
+                let now = ContinuousClock.now
+                guard previous.duration(to: now) >= .seconds(30) else { return false }
+                previous = now
+                return true
+            }
+            if report {
+                logger.warning(
+                    "Shedding sandbox workload logs",
+                    metadata: [
+                        "dropped_total": .stringConvertible(snapshot.dropped),
+                        "queued_bytes": .stringConvertible(snapshot.bytes),
+                        "reason": .string(reason.rawValue),
+                    ])
+            }
+        }
     }
 }

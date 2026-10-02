@@ -14,7 +14,7 @@ import AppTestSupport
 /// and a cross-tenant record of who checked what. `/api/iam` is not one of
 /// `AuthorizationMiddleware`'s guarded prefixes, which makes the controller's
 /// own `requireSystemAdmin` the sole gate and worth pinning here.
-@Suite("IAM Decision Log Endpoint Tests", .serialized)
+@Suite("IAM Decision Log Endpoint Tests", .serialized, .postgresFixture)
 final class IAMDecisionLogEndpointTests {
 
     private struct Fixture {

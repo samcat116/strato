@@ -57,7 +57,15 @@ struct VMFleetSelector: Sendable {
 }
 
 struct VMFleetPrepareRequest: Content { var selector: String; var command: [String] }
-struct VMFleetConfirmRequest: Content { var vmIDs: [UUID] }
+struct VMFleetConfirmRequest: Content, ValidatedRequestBody {
+    var vmIDs: [UUID]
+
+    mutating func validate() throws {
+        guard (1...VMFleetRunController.maxTargets).contains(vmIDs.count) else {
+            throw Abort(.badRequest, reason: "Confirm between 1 and 100 VM IDs")
+        }
+    }
+}
 
 struct VMFleetRunController: RouteCollection {
     static let maxTargets = 100
@@ -142,7 +150,7 @@ struct VMFleetRunController: RouteCollection {
     }
 
     func confirm(req: Request) async throws -> Response {
-        let body = try req.content.decode(VMFleetConfirmRequest.self)
+        let body = try req.content.decodeValidated(VMFleetConfirmRequest.self)
         let (id, audits) = try await req.db.transaction { db -> (UUID, [VMGuestExecutionAuditContext]) in
             let fleet = try await owned(req: req, on: db)
             guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
@@ -157,6 +165,10 @@ struct VMFleetRunController: RouteCollection {
             guard current.deadline > now.date else {
                 throw Abort(.conflict, reason: "Fleet preview expired; resolve again")
             }
+            let targetIDs = current.entries.filter { $0.state == "ready" }.map(\.vmID)
+            let targets = targetIDs.isEmpty ? [] : try await VM.query(on: db).filter(\.$id ~~ targetIDs).all()
+            try await VMExecSessionLimits.lockProjectBudgets(
+                projectIDs: targets.map { $0.$project.id }, on: db)
             var audits: [VMGuestExecutionAuditContext] = []
             for index in current.entries.indices where current.entries[index].state == "ready" {
                 do {

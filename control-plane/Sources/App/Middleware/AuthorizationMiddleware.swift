@@ -356,6 +356,9 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // sandbox* to delete one of its snapshots. Both guarded prefixes nest
         // snapshots at the same depth, so one rule covers them.
         let isSnapshotSubresource = pathComponents.count >= 4 && pathComponents[3] == "snapshots"
+        if resource.nodeType == .virtualMachine, pathComponents.count >= 4, pathComponents[3] == "exec-sessions" {
+            return method == .GET ? "vm:read" : (method == .POST ? "vm:exec" : nil)
+        }
 
         // The verb this path names, if any — read once and consulted by both
         // GET and POST (issue #804).

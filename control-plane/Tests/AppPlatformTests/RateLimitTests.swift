@@ -4,7 +4,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Rate Limiting Tests", .serialized)
+@Suite("Rate Limiting Tests", .serialized, .postgresFixture)
 struct RateLimitTests {
 
     /// Build a minimal app wired with only the rate-limit middleware and a couple
@@ -220,7 +220,7 @@ struct RateLimitTests {
         }
     }
 
-    @Test("An unavailable Valkey rate-limit backend fails open")
+    @Test("An unavailable Valkey rate-limit backend enforces local windows")
     func testBackendFailureFailsOpen() async throws {
         try await withRateLimitedApp(
             config: baseConfig(apiLimit: 1),
@@ -229,7 +229,10 @@ struct RateLimitTests {
             try await app.test(.GET, "/api/things") { res async throws in
                 #expect(res.status == .ok)
                 #expect(res.body.string == "ok")
-                #expect(res.headers.first(name: "X-RateLimit-Limit") == nil)
+                #expect(res.headers.first(name: "X-RateLimit-Limit") == "1")
+            }
+            try await app.test(.GET, "/api/things") { res async throws in
+                #expect(res.status == .tooManyRequests)
             }
         }
     }

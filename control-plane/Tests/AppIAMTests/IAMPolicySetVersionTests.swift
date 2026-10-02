@@ -8,7 +8,7 @@ import AppTestSupport
 
 /// IAM phase 2 (issue #479): the policy-set version log and the per-replica
 /// cache it invalidates.
-@Suite("IAM Policy Set Version Tests", .serialized)
+@Suite("IAM Policy Set Version Tests", .serialized, .postgresFixture)
 final class IAMPolicySetVersionTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

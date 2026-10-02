@@ -13,7 +13,7 @@ import AppTestSupport
 /// naming the principal, the mutation, and the generation the agent has to
 /// reach — and unlike the operation row, that record outlives the resource and
 /// is never rewritten.
-@Suite("Resource Event Tests", .serialized)
+@Suite("Resource Event Tests", .serialized, .postgresFixture)
 final class ResourceEventTests {
 
     /// Boots a configured test app with a non-admin user, org, project and one

@@ -18,6 +18,7 @@ import AppTestSupport
 ///      registered route (catches typos and removed routes).
 ///
 /// Adding a route without documenting it fails this suite, in either direction.
+@Suite(.postgresFixture)
 struct OpenAPISpecDriftTests {
     /// Routes deliberately **not** modeled as OpenAPI operations: WebSocket
     /// upgrades, which OpenAPI 3.0 cannot express, plus the agent control

@@ -7,7 +7,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Network ACL Controller Tests", .serialized)
+@Suite("Network ACL Controller Tests", .serialized, .postgresFixture)
 final class NetworkACLControllerTests {
     private static func healthyOverlayObservation(at checkedAt: Date = Date())
         -> NodeDependencyObservation

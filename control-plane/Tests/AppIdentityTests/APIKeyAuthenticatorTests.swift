@@ -5,7 +5,7 @@ import Fluent
 import AppTestSupport
 @testable import App
 
-@Suite("APIKeyAuthenticator Tests", .serialized)
+@Suite("APIKeyAuthenticator Tests", .serialized, .postgresFixture)
 struct APIKeyAuthenticatorTests {
 
     // MARK: - Test Helpers

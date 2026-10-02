@@ -18,7 +18,7 @@ import AppTestSupport
 /// stuck-operation sweep. Their replacements — the convergence deadline and
 /// `conditions.degraded` — are exercised by the stuck-convergence section
 /// below.
-@Suite("VM Operation Tests", .serialized)
+@Suite("VM Operation Tests", .serialized, .postgresFixture)
 final class VMOperationTests {
 
     private struct AttachInterfaceBody: Content {

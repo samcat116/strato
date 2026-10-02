@@ -9,7 +9,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Advisory locks", .serialized)
+@Suite("Advisory locks", .serialized, .postgresFixture)
 struct AdvisoryLockTests {
     @Test("Namespaces have unique, stable values in acquisition order")
     func namespaceValuesAreUniqueAndOrdered() {

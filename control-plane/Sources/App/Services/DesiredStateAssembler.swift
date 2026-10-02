@@ -48,6 +48,7 @@ struct DesiredStateAssembler {
     /// identical syncs diff to nothing on the agent.
     func assemble(agentId: String) async throws -> DesiredStateMessage {
         let db = app.db
+        var imageGrants: Set<UUID> = []
         guard let agentUUID = UUID(uuidString: agentId),
             let agent = try await Agent.find(agentUUID, on: db)
         else {
@@ -179,7 +180,7 @@ struct DesiredStateAssembler {
                     // download route serves an agent only the images it has a
                     // grant for (issue #562).
                     if let imageId = image.id {
-                        await app.coordination.grantImageDownload(agentId: agentId, imageId: imageId)
+                        imageGrants.insert(imageId)
                     }
                 } catch {
                     app.logger.warning(
@@ -460,7 +461,7 @@ struct DesiredStateAssembler {
 
         // The agent's authoritative volume set (STR-148) and snapshot-artifact
         // set (STR-150).
-        let volumes = try await desiredVolumes(agentId: agentId, on: db)
+        let volumes = try await desiredVolumes(agentId: agentId, on: db, imageGrants: &imageGrants)
         let snapshots = try await desiredSnapshots(agentId: agentId, on: db)
         // Credential revocations are scoped to the site's lifetime, not its
         // current cluster registration. Replay every row forever so an agent
@@ -503,6 +504,7 @@ struct DesiredStateAssembler {
             ? nil
             : try await desiredDNSZones(networkIDs: zoneNetworkIDs, on: db)
 
+        await app.coordination.grantImageDownloads(agentId: agentId, imageIds: imageGrants)
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative,

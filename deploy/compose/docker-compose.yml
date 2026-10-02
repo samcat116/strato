@@ -266,6 +266,7 @@ services:
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       # Bound every statement on every pooled connection. The application also
       # defaults to five minutes when this variable is absent.
+      COORDINATION_STORE_DEADLINE_MS: ${COORDINATION_STORE_DEADLINE_MS:-2000}
       DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-300000}
       # Allow schema changes more time only while SchemaMigrator owns its pinned
       # connection, then restore the serving budget above.

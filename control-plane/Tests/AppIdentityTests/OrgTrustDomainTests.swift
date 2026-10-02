@@ -14,7 +14,7 @@ import AppTestSupport
 /// the platform trust domain exists and behavior is identical to before. These
 /// tests lock in both halves — that the dormant path really is dormant, and
 /// that the multi-trust-domain machinery is correct when it is switched on.
-@Suite("Org Trust Domain Tests", .serialized)
+@Suite("Org Trust Domain Tests", .serialized, .postgresFixture)
 final class OrgTrustDomainTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {
@@ -474,7 +474,7 @@ final class OrgTrustDomainTests {
             // `AgentIdentity`, so repeating the mistake is a compile error.
             #expect(await app.coordination.isAgentPresent(agentKey: row.identity.key) == true)
 
-            await app.agentService.forceUnregisterAgent(row.identity)
+            try await app.agentService.forceUnregisterAgent(row.identity)
 
             #expect(await app.coordination.isAgentPresent(agentKey: row.identity.key) == false)
         }

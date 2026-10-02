@@ -11,7 +11,7 @@ import AppTestSupport
 /// through the Cedar evaluator (`org:update` / `org:read`), not through inline
 /// `UserOrganization.role` reads, and system admins bypass like everywhere
 /// else in the API.
-@Suite("Organization Member Authorization Tests", .serialized)
+@Suite("Organization Member Authorization Tests", .serialized, .postgresFixture)
 final class OrganizationMemberAuthzTests {
     private struct AddRequest: Content {
         let userEmail: String

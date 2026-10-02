@@ -227,6 +227,9 @@ extension Application {
 
         migrations.add(AddAgentInventorySession())
         migrations.add(CreateVMFleetRuns())
+        migrations.add(AddVMFleetPreviewExpiryIndex())
+        migrations.add(CreateGuestExecSessionLimits())
+        migrations.add(AddAgentAdministrativeOffline())
         migrations.add(AddSandboxSuspension())
         migrations.add(AddSandboxIdleActivity())
         migrations.add(AddSandboxIdleFences())

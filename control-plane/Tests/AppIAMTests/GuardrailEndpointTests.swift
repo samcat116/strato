@@ -7,7 +7,7 @@ import AppTestSupport
 @testable import App
 
 /// The guardrail API (`/api/iam/guardrails`, issue #479).
-@Suite("Guardrail Endpoint Tests", .serialized)
+@Suite("Guardrail Endpoint Tests", .serialized, .postgresFixture)
 final class GuardrailEndpointTests {
 
     private struct Fixture {

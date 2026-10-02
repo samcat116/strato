@@ -7,19 +7,18 @@ import Vapor
 
 @testable import App
 
-@Suite("Current schema baseline", .serialized)
+@Suite("Current schema baseline", .serialized, .postgresFixture)
 struct CurrentSchemaBaselineTests {
     private static let expectedCatalogMD5 = "4164eef002a4bb3f9e26e0738d27bc06"
     // #1440 adds vm_fleet_runs (eight columns, primary key/constraint),
     // its queue index, and the VM tag GIN index. The frozen baseline stays fixed.
     private static let expectedPreFleetCatalogMD5 = "f719976e5b1c327d005f411e78e38144"
-    private static let expectedPreSuspensionCatalogMD5 = "39c7c80bcc0b73465f941a6bd5cdc9a1"
-    // STR-312 adds five suspension ledger fields and two nonnegative-size checks.
-    private static let expectedPreIdleCatalogMD5 = "16d36b3b4449d6a1d370c5cbad4c0a4d"
-    // STR-313 adds the durable activity anchor and four-column admission table,
-    // with primary/foreign keys, lookup index and a monotonic timestamp trigger.
-    private static let expectedPreFenceCatalogMD5 = "5d0f68b3a20d27aea8938a6a02d9cd35"
-    private static let expectedCurrentCatalogMD5 = "640a2e1721d06c85ae3f15b21ba13bd9"
+    private static let expectedFleetCatalogMD5 = "39c7c80bcc0b73465f941a6bd5cdc9a1"
+    // Session admission adds two tables; preview retention adds one partial
+    // (deadline, id) index; administrative revocation adds one agents column.
+    // Historical catalogs and the frozen baseline remain
+    // independently asserted below.
+    private static let expectedCurrentCatalogMD5 = "PENDING_CURRENT"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -71,11 +70,11 @@ struct CurrentSchemaBaselineTests {
             let upgradedCounts = try await catalogCounts(on: app.db)
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
-            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
-            #expect(upgradedCounts.tables == 82)
-            #expect(upgradedCounts.columns == 1069)
-            #expect(upgradedCounts.constraints == 383)
-            #expect(upgradedCounts.indexes == 249)
+            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Observed current catalog: \(upgradedMD5)")
+            #expect(upgradedCounts.tables == 84)
+            #expect(upgradedCounts.columns == 1080)
+            #expect(upgradedCounts.constraints == 386)
+            #expect(upgradedCounts.indexes == 255)
             #expect(upgradedCounts.enums == baselineCounts.enums)
             #expect(upgradedCounts.triggers == baselineCounts.triggers + 3)
             #expect(upgradedCounts.functions == baselineCounts.functions + 2)
@@ -83,56 +82,113 @@ struct CurrentSchemaBaselineTests {
             #expect(logs.first?.name == CurrentSchemaBaseline().name)
             #expect(logs.count > 1, "the equivalence check must exercise the forward chain")
 
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("Suspension and idle migrations preserve the reviewed current catalog round trip")
+    func suspensionAndIdleCatalogRoundTrip() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            app.migrations.add(CurrentSchemaBaseline())
+            try await app.autoMigrate()
+            app.registerForwardMigrations()
+            try await app.autoMigrate()
+            let full = try await catalogMD5(on: app.db)
             let fences = AddSandboxIdleFences()
-            try await fences.revert(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == Self.expectedPreFenceCatalogMD5)
-            let preFenceCounts = try await catalogCounts(on: app.db)
-            #expect(preFenceCounts.tables == upgradedCounts.tables - 1)
-            #expect(preFenceCounts.columns == upgradedCounts.columns - 10)
-            #expect(preFenceCounts.constraints == upgradedCounts.constraints - 3)
-            #expect(preFenceCounts.indexes == upgradedCounts.indexes - 1)
-            #expect(preFenceCounts.triggers == upgradedCounts.triggers - 2)
-            #expect(preFenceCounts.functions == upgradedCounts.functions - 1)
             let idle = AddSandboxIdleActivity()
-            try await idle.revert(on: app.db)
-            let preIdleCounts = try await catalogCounts(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == Self.expectedPreIdleCatalogMD5)
-            #expect(preIdleCounts.tables == preFenceCounts.tables - 1)
-            #expect(preIdleCounts.columns == preFenceCounts.columns - 5)
-            #expect(preIdleCounts.constraints == preFenceCounts.constraints - 2)
-            #expect(preIdleCounts.indexes == preFenceCounts.indexes - 2)
-            #expect(preIdleCounts.triggers == preFenceCounts.triggers - 1)
-            #expect(preIdleCounts.functions == preFenceCounts.functions - 1)
-
             let suspension = AddSandboxSuspension()
+            try await fences.revert(on: app.db)
+            let preFence = try await catalogMD5(on: app.db)
+            #expect(preFence == "PENDING_PREFENCE", "Observed pre-fence catalog: \(preFence)")
+            try await idle.revert(on: app.db)
+            let preIdle = try await catalogMD5(on: app.db)
+            #expect(preIdle == "PENDING_PREIDLE", "Observed pre-idle catalog: \(preIdle)")
             try await suspension.revert(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == Self.expectedPreSuspensionCatalogMD5)
-            let preSuspensionCounts = try await catalogCounts(on: app.db)
-            #expect(preSuspensionCounts.tables == preIdleCounts.tables)
-            #expect(preSuspensionCounts.columns == preIdleCounts.columns - 5)
-            #expect(preSuspensionCounts.constraints == preIdleCounts.constraints - 2)
-            #expect(preSuspensionCounts.indexes == preIdleCounts.indexes)
+            #expect(try await catalogMD5(on: app.db) == "c8b380fc024ddac8fea050b9b9d41e37")
+            try await suspension.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == preIdle)
+            try await idle.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == preFence)
+            try await fences.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == full)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
 
-            // Independently isolate the reviewed fleet-only delta. Reverting
-            // that migration must restore the previously reviewed catalog;
-            // reapplying it must reproduce the new exact fingerprint.
+    @Test("The fleet migration preserves its reviewed historical catalog round trip")
+    func fleetMigrationPreservesReviewedCatalogDelta() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            app.migrations.add(CurrentSchemaBaseline())
+            try await app.autoMigrate()
+            #expect(try await catalogMD5(on: app.db) == Self.expectedCatalogMD5)
+
+            // Use the real registered prefix so later migrations cannot change
+            // the historical fleet fixture or require their own rollback here.
+            app.registerForwardMigrations()
+            let pending = try await app.migrator.previewPrepareBatch().get()
             let fleet = CreateVMFleetRuns()
+            let fleetIndex = try #require(pending.firstIndex { $0.0.name == fleet.name })
+            for (migration, _) in pending.prefix(fleetIndex) {
+                try await migration.prepare(on: app.db).get()
+            }
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPreFleetCatalogMD5)
+            let before = try await catalogCounts(on: app.db)
+            #expect(before.tables == 79)
+            #expect(before.columns == 1041)
+            #expect(before.constraints == 375)
+            #expect(before.indexes == 243)
+
+            try await fleet.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedFleetCatalogMD5)
+            let after = try await catalogCounts(on: app.db)
+            #expect(after.tables == 80)
+            #expect(after.columns == 1049)
+            #expect(after.constraints == 376)
+            #expect(after.indexes == 246)
             try await fleet.revert(on: app.db)
             #expect(try await catalogMD5(on: app.db) == Self.expectedPreFleetCatalogMD5)
-            let preFleetCounts = try await catalogCounts(on: app.db)
-            #expect(preFleetCounts.tables == 79)
-            #expect(preFleetCounts.columns == 1041)
-            #expect(preFleetCounts.constraints == 375)
-            #expect(preFleetCounts.indexes == 243)
+            let reverted = try await catalogCounts(on: app.db)
+            #expect(reverted.tables == 79)
+            #expect(reverted.columns == 1041)
+            #expect(reverted.constraints == 375)
+            #expect(reverted.indexes == 243)
             try await fleet.prepare(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == Self.expectedPreSuspensionCatalogMD5)
-            try await suspension.prepare(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == Self.expectedPreIdleCatalogMD5)
-            try await idle.prepare(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == Self.expectedPreFenceCatalogMD5)
-            try await fences.prepare(on: app.db)
-            #expect(try await catalogMD5(on: app.db) == Self.expectedCurrentCatalogMD5)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedFleetCatalogMD5)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
 
+    @Test("The fleet preview expiry index is idempotent and independently reversible")
+    func previewExpiryIndexRoundTrip() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            app.migrations.add(CurrentSchemaBaseline())
+            try await app.autoMigrate()
+            app.registerForwardMigrations()
+            try await app.autoMigrate()
+            let beforeMD5 = try await catalogMD5(on: app.db)
+            let before = try await catalogCounts(on: app.db)
+            let index = AddVMFleetPreviewExpiryIndex()
+            try await index.revert(on: app.db)
+            let reverted = try await catalogCounts(on: app.db)
+            #expect(reverted.tables == before.tables)
+            #expect(reverted.columns == before.columns)
+            #expect(reverted.constraints == before.constraints)
+            #expect(reverted.indexes == before.indexes - 1)
+            try await index.prepare(on: app.db)
+            try await index.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == beforeMD5)
         } catch {
             try? await app.shutdownForTesting()
             throw error

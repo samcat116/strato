@@ -11,7 +11,7 @@ import AppTestSupport
 /// `VM.metadataEnabled`, the default that must not change for an existing
 /// fleet, and the version gate that stops the API reporting a security control
 /// as applied when the agent behind it would ignore the field.
-@Suite("VM Metadata Opt-Out Tests", .serialized)
+@Suite("VM Metadata Opt-Out Tests", .serialized, .postgresFixture)
 final class VMMetadataOptOutTests {
 
     private func withVMTestApp(

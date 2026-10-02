@@ -9,7 +9,7 @@ import AppTestSupport
 import SQLKit
 @testable import App
 
-@Suite("Image Controller Tests", .serialized)
+@Suite("Image Controller Tests", .serialized, .postgresFixture)
 final class ImageControllerTests {
 
     // MARK: - Test Data Helpers

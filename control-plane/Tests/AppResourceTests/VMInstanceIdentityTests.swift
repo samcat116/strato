@@ -16,7 +16,7 @@ import AppTestSupport
 /// invariant these tests also pin: the registration carries no grants, so until
 /// an operator writes a role binding against the principal it authenticates and
 /// authorizes nothing.
-@Suite("VM Instance Identity Tests", .serialized)
+@Suite("VM Instance Identity Tests", .serialized, .postgresFixture)
 final class VMInstanceIdentityTests {
 
     private func withIdentityTestApp(

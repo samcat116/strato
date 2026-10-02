@@ -440,7 +440,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a fleet command without dispatch
-         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
          */
         post: operations["prepareVMFleetRun"];
         delete?: never;
@@ -460,7 +460,7 @@ export interface paths {
         };
         /**
          * Read collected fleet results
-         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
          */
         get: operations["getVMFleetRun"];
         put?: never;
@@ -484,9 +484,56 @@ export interface paths {
         put?: never;
         /**
          * Confirm the exact fleet target list
-         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
          */
         post: operations["confirmVMFleetRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/exec-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List attached interactive sessions on a VM
+         * @description Requires vm:read. Presence is shared across replicas and expires within 60 seconds after an owner crash. Pending reservations are excluded.
+         */
+        get: operations["listLiveVMExecSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/exec-sessions/{sessionID}/terminate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request termination of an attached interactive session
+         * @description Requires vm:exec on this VM. The socket owner closes the guest process and browser on its next maintenance tick. Repeating while termination is pending returns 202; an ended or foreign session returns 404.
+         */
+        post: operations["terminateVMExecSession"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4067,9 +4114,32 @@ export interface paths {
         put?: never;
         /**
          * Force an agent offline
-         * @description Drops the agent from the in-memory registry and marks it `offline` in the database. Requires `manage` on the agent, and falls back to system-admin only while the agent hosts another organization's workloads.
+         * @description Persists an administrative offline hold and closes the owning agent socket across replicas. Heartbeats and reconnects cannot clear the hold; use the resume action to release it. Requires `manage` on the agent, and falls back to system-admin only while the agent hosts another organization's workloads.
          */
         post: operations["forceAgentOffline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agentId}/actions/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release an agent's administrative offline hold
+         * @description Allows authenticated reconnect and registration again. Does not mark the agent online until it reports in. Requires manage on the agent, with the same system-admin requirement for foreign workloads as force-offline.
+         */
+        post: operations["resumeAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6284,6 +6354,18 @@ export interface components {
          * @enum {string}
          */
         GuestExecOutputMode: "raw" | "multiplexed";
+        LiveVMExecSession: {
+            /** Format: uuid */
+            sessionId: string;
+            /** Format: uuid */
+            userId: string;
+            username?: string;
+            /** Format: date-time */
+            attachedAt: string;
+            /** Format: date-time */
+            lastActivityAt: string;
+            terminationRequested: boolean;
+        };
         GuestExecRequest: {
             command: string[];
             env?: {
@@ -8711,6 +8793,8 @@ export interface components {
             /** @description The agent build currently running on the node. */
             version: string;
             status: components["schemas"]["AgentStatus"];
+            /** @description Operator hold that only the resume action clears. */
+            administrativelyOffline: boolean;
             resources: components["schemas"]["AgentResources"];
             architecture?: components["schemas"]["AgentCPUArchitecture"];
             operatingSystem?: components["schemas"]["AgentOperatingSystem"];
@@ -11503,6 +11587,13 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description VM concurrent exec session limit reached. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -11593,6 +11684,58 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    listLiveVMExecSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live interactive sessions, bounded by the per-VM cap. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveVMExecSession"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    terminateVMExecSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Termination requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     runVMCommand: {
         parameters: {
             query?: never;
@@ -11623,6 +11766,13 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description VM session cap or project command rate limit reached. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -17862,7 +18012,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured. */
+            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured, or the durable deregistration completed but the owning replica did not acknowledge socket teardown. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -17905,6 +18055,34 @@ export interface operations {
         };
     };
     forceAgentOffline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The offline hold is durable but socket teardown was not acknowledged. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    resumeAgent: {
         parameters: {
             query?: never;
             header?: never;

@@ -124,6 +124,9 @@ public struct DesiredVMState: Codable, Sendable {
     /// The checkpoint this VM should have been restored to, as a nonce
     /// (STR-151). Nil means no restore has ever been requested.
     public let restore: DesiredRestore?
+    /// Nil means no managed guest intent. Omission never reverses previous guest changes.
+    /// Changes share this VM's generation; no separate guest generation exists.
+    public let guestConfig: GuestConfig?
 
     public init(
         vmId: UUID,
@@ -134,7 +137,8 @@ public struct DesiredVMState: Codable, Sendable {
         imageInfo: ImageInfo? = nil,
         metadata: InstanceMetadata? = nil,
         rebootGeneration: Int64? = nil,
-        restore: DesiredRestore? = nil
+        restore: DesiredRestore? = nil,
+        guestConfig: GuestConfig? = nil
     ) {
         self.vmId = vmId
         self.hypervisorType = hypervisorType
@@ -145,6 +149,7 @@ public struct DesiredVMState: Codable, Sendable {
         self.metadata = metadata
         self.rebootGeneration = rebootGeneration
         self.restore = restore
+        self.guestConfig = guestConfig
     }
 }
 

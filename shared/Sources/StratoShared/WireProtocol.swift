@@ -15,6 +15,7 @@ public enum WireProtocol {
     /// Version 68 adds generation-bound sandbox suspension and storage admission.
     /// Versions 64–67 are allocated to coordinated guest configuration and host resource work.
     /// The only wire/schema version this build accepts. Version 63 requires
+
     /// first-boot Strato guest-agent installation and carries the selected
     /// bootstrap release and independent guest-agent reachability observation.
     /// Version 62 carries the

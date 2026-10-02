@@ -1,4 +1,5 @@
 import Foundation
+import X509
 import Vapor
 import StratoShared
 import NIOCore
@@ -565,6 +566,10 @@ struct AgentWebSocketController: RouteCollection {
             }
 
         } catch {
+            if let abort = error as? Abort, abort.status == .forbidden {
+                ws.eventLoop.execute { _ = ws.close(code: .policyViolation) }
+                return
+            }
             req.logger.error("Failed to handle WebSocket message: \(error)")
             sendErrorResponse(
                 ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)",
@@ -622,6 +627,16 @@ struct AgentWebSocketController: RouteCollection {
     /// Message handlers were already registered (buffering) at upgrade time; this
     /// registers close handling, records the connection, and switches the
     /// connection from buffering to routing.
+    static func certificateExpiry(req: Request) -> Date? {
+        guard let header = req.headers.first(name: "X-Forwarded-Client-Cert"),
+            let hop = XFCCElement.parseNearestHop(header: header),
+            let pem = hop.certPEM ?? hop.chainPEM,
+            let end = pem.range(of: "-----END CERTIFICATE-----"),
+            let certificate = try? Certificate(pemEncoded: String(pem[..<end.upperBound]))
+        else { return nil }
+        return certificate.notValidAfter
+    }
+
     private func setupWebSocketConnection(
         req: Request, ws: WebSocket, agent: AuthenticatedAgent, authMethod: String, state: MessageState
     ) {
@@ -645,7 +660,44 @@ struct AgentWebSocketController: RouteCollection {
                 await self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
             }
 
+            // The mTLS handshake authenticates one credential, not every future
+            // credential the agent rotates. End this socket at its leaf deadline
+            // so normal reconnect presents the current SVID.
+            let expiry = Self.certificateExpiry(req: req)
+            let expiryTask = expiry.map { deadline in
+                ws.eventLoop.scheduleTask(
+                    in: .nanoseconds(Int64(max(0, deadline.timeIntervalSinceNow) * 1_000_000_000))
+                ) {
+                    _ = processor.stopAndDiscard()
+                    _ = ws.close(code: .policyViolation)
+                }
+            }
+
+            let authorityTask = Task {
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(for: .seconds(20))
+                        guard !Task.isCancelled else { return }
+                        try await WorkloadRegistry.requireAgentRegistration(identity: agent.identity, on: req.db)
+                        guard !Task.isCancelled else { return }
+                        if let spire = req.application.spireService,
+                            let identity = SPIFFEIdentity(uri: agent.identity.key)
+                        {
+                            _ = try await spire.validateAgentIdentity(identity)
+                        }
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        _ = processor.stopAndDiscard()
+                        ws.eventLoop.execute { _ = ws.close(code: .policyViolation) }
+                        return
+                    }
+                }
+            }
+
             ws.onClose.whenComplete { result in
+                expiryTask?.cancel()
+                authorityTask.cancel()
                 switch result {
                 case .success:
                     req.logger.info(
@@ -667,9 +719,10 @@ struct AgentWebSocketController: RouteCollection {
                 // cleanup. In particular, final exec output/exit must reach
                 // the browser before its session is torn down.
                 Task {
+                    await authorityTask.value
                     await processor.finishAndDrain()
                     guard
-                        req.application.websocketManager.removeConnection(
+                        req.application.websocketManager.removeClosedConnection(
                             agentKey: agentKey, ifCurrent: ws)
                     else {
                         req.logger.debug(

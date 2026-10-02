@@ -44,7 +44,9 @@ extension Application {
             self.sessionStore = sessionStore
             sessions.use(.valkey(store: sessionStore))
 
-            coordination = CoordinationService(store: ValkeyCoordinationStore(app: self), logger: logger)
+            coordination = CoordinationService(
+                store: ValkeyCoordinationStore(app: self), logger: logger,
+                deadline: .milliseconds(controlPlaneConfiguration.int(.coordinationStoreDeadlineMS)))
             // Fail fast at boot (after the run loops start) if either endpoint is
             // unreachable. Both are fatal: coordination fails open against a runtime
             // blip, but an endpoint that is wrong at boot is a misconfiguration.

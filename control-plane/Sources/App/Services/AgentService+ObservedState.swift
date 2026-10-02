@@ -127,6 +127,8 @@ extension AgentService {
             return nil
         }
 
+        guard !agent.administrativelyOffline else { return nil }
+
         let instant: ClusterInstant
         do {
             instant = try await ClusterClock.read(on: db)
@@ -194,11 +196,12 @@ extension AgentService {
         }
         if agentChanged {
             do {
-                try await agent.save(on: db)
+                try await saveActiveAgent(agent, on: db)
             } catch {
                 app.logger.warning(
                     "Failed to persist agent resources from observed-state report: \(error)",
                     metadata: ["strato.agent.id": .string(report.agentId)])
+                return nil
             }
         }
 

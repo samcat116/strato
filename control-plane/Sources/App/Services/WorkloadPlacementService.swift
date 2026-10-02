@@ -1,6 +1,5 @@
 import Foundation
 import Fluent
-import NIOConcurrencyHelpers
 import SQLKit
 import StratoAPITypes
 import StratoShared
@@ -13,6 +12,8 @@ actor WorkloadPlacementService {
         self.app = app
     }
 
+    private struct PlacementInputsChanged: Error {}
+
     // MARK: - VM Operations
 
     /// Selects an agent, persists the VM placement, and triggers desired-state sync.
@@ -22,110 +23,148 @@ actor WorkloadPlacementService {
         strategy: SchedulingStrategy? = nil,
         image: Image? = nil
     ) async throws {
+        try await placeVM(vm: vm, db: db, strategy: strategy, image: image, attemptsRemaining: 3)
+    }
+
+    private func placeVM(
+        vm: VM, db: Database, strategy: SchedulingStrategy?, image: Image?, attemptsRemaining: Int
+    ) async throws {
         let schedulableAgents = await schedulableAgentsFromDatabase()
         let vmId = try vm.requireID().uuidString
         let imageArchitecture = image?.architecture
-        let reservedAgentId = NIOLockedValueBox<String?>(nil)
+        var reservedAgentId: String?
 
-        // Placement and API updates both take this row lock before deciding
-        // from or saving the VM. The create request's `vm` is only the snapshot
-        // captured before background dispatch: an immediate update may have
-        // switched metadata off while this task was waiting to run. Reloading
-        // under the lock makes that committed intent the scheduler input and
-        // prevents the placement save from writing the captured value back.
+        // Plan and reserve without holding a database transaction. Revalidate
+        // the captured inputs under the VM lock before persisting placement.
         let agentId: String
         do {
+            let tx = db
+            guard let plannedVM = try await VM.find(vm.id, on: db) else {
+                throw Abort(.notFound, reason: "VM no longer exists")
+            }
+            let currentVM = plannedVM
+            let currentVMID = try currentVM.requireID()
+            let bootVolumes = try await Volume.query(on: tx)
+                .filter(\.$vm.$id == currentVMID)
+                .filter(\.$volumeType == .boot)
+                .filter(\.$desiredStatus == .present)
+                .with(\.$pool)
+                .all()
+            guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "VM \(vmId) must have exactly one managed boot volume before placement")
+            }
+            guard let bootPool = bootVolume.pool else {
+                throw Abort(.internalServerError, reason: "VM \(vmId)'s boot volume has no storage pool")
+            }
+
+            // A network pinned to a site exists only in that site's OVN
+            // deployment, so it pins the VM's placement (issue #343).
+            let requiredSiteID = try await pinnedSiteID(for: currentVM, on: tx)
+            if bootPool.mode == .ceph, let requiredSiteID,
+                requiredSiteID != bootPool.$site.id
+            {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "VM \(vmId)'s network and Ceph boot pool belong to different sites")
+            }
+
+            let storageEligibleAgents: [SchedulableAgent]
+            switch bootPool.mode {
+            case .local:
+                // Historical local behavior: an empty membership list
+                // means every otherwise-schedulable agent.
+                let poolMembers = bootPool.memberAgentIds
+                storageEligibleAgents = schedulableAgents.filter { agent in
+                    poolMembers.isEmpty || poolMembers.contains(agent.id)
+                }
+            case .ceph:
+                let instant = try await ClusterClock.read(on: tx)
+                let schedulableIDs = schedulableAgents.compactMap { UUID(uuidString: $0.id) }
+                let clientRows =
+                    schedulableIDs.isEmpty
+                    ? []
+                    : try await Agent.query(on: tx)
+                        .filter(\.$id ~~ schedulableIDs)
+                        .all()
+                let reachableIDs = Set(
+                    clientRows.compactMap { agent -> String? in
+                        StoragePool.agentCanReach(
+                            agent: agent, pool: bootPool, replicaAgentIds: [], at: instant)
+                            ? agent.id?.uuidString : nil
+                    })
+                storageEligibleAgents = schedulableAgents.filter { reachableIDs.contains($0.id) }
+            case .replicated:
+                throw Abort(.conflict, reason: "Replicated boot pools are not executable")
+            }
+
+            // Reserve from an unlocked snapshot; every requirement is checked
+            // again under the row lock before this becomes desired state.
+            let plannedRequirements = SchedulerService.placementRequirements(
+                for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID,
+                diskBytes: bootPool.mode == .ceph ? 0 : nil)
+            let selectedAgentId: String
+            do {
+                selectedAgentId = try await app.scheduler.selectAndReserveAgent(
+                    requirements: plannedRequirements,
+                    vmId: vmId,
+                    from: storageEligibleAgents,
+                    coordination: app.coordination,
+                    strategy: strategy,
+                    vmName: currentVM.name
+                )
+            } catch let error as SchedulerError {
+                app.logger.error("Scheduler failed to find suitable agent: \(error)")
+                // Preserve the scheduler's reason (unsupported hypervisor,
+                // arch mismatch, insufficient resources, ...) instead of
+                // collapsing every placement failure into a generic one.
+                throw AgentServiceError.schedulingFailed(error.description)
+            }
+            reservedAgentId = selectedAgentId
+
+            let plannedGeneration = plannedVM.generation
+            let plannedVolumeGeneration = bootVolume.generation
+            let plannedPoolMode = bootPool.mode
+            let plannedPoolMembers = bootPool.memberAgentIds
+            let plannedPoolSite = bootPool.$site.id
             agentId = try await db.transaction { [self] tx in
                 guard try await vm.lockAndRefresh(on: tx),
-                    let currentVM = try await VM.find(vm.id, on: tx)
+                    let currentVM = try await VM.find(vm.id, on: tx),
+                    let currentBootVolume = try await Volume.find(bootVolume.id, on: tx),
+                    let currentBootPool = try await currentBootVolume.$pool.get(on: tx)
+                else { throw Abort(.notFound, reason: "VM placement inputs no longer exist") }
+                guard currentVM.desiredStatus != .absent else {
+                    throw Abort(.conflict, reason: "VM was deleted during placement")
+                }
+                if currentBootPool.mode == .ceph {
+                    guard let selectedUUID = UUID(uuidString: selectedAgentId) else { throw PlacementInputsChanged() }
+                    guard let selectedAgent = try await Agent.find(selectedUUID, on: tx),
+                        StoragePool.agentCanReach(
+                            agent: selectedAgent, pool: currentBootPool, replicaAgentIds: [],
+                            at: try await ClusterClock.read(on: tx))
+                    else { throw PlacementInputsChanged() }
+                }
+                let currentRequirements = SchedulerService.placementRequirements(
+                    for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID,
+                    diskBytes: currentBootPool.mode == .ceph ? 0 : nil)
+                guard currentRequirements == plannedRequirements,
+                    currentVM.$sourceImage.id == plannedVM.$sourceImage.id,
+                    currentVM.generation == plannedGeneration,
+                    currentBootVolume.generation == plannedVolumeGeneration,
+                    currentBootVolume.$vm.id == currentVM.id,
+                    currentBootVolume.$pool.id == bootVolume.$pool.id,
+                    currentBootVolume.desiredStatus == .present,
+                    currentBootVolume.volumeType == .boot,
+                    currentBootPool.mode == plannedPoolMode,
+                    currentBootPool.memberAgentIds == plannedPoolMembers,
+                    currentBootPool.$site.id == plannedPoolSite,
+                    try await pinnedSiteID(for: currentVM, on: tx) == requiredSiteID
                 else {
-                    throw Abort(.notFound, reason: "VM no longer exists")
+                    throw PlacementInputsChanged()
                 }
-
-                let currentVMID = try currentVM.requireID()
-                let bootVolumes = try await Volume.query(on: tx)
-                    .filter(\.$vm.$id == currentVMID)
-                    .filter(\.$volumeType == .boot)
-                    .filter(\.$desiredStatus == .present)
-                    .with(\.$pool)
-                    .all()
-                guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
-                    throw Abort(
-                        .internalServerError,
-                        reason: "VM \(vmId) must have exactly one managed boot volume before placement")
-                }
-                guard let bootPool = bootVolume.pool else {
-                    throw Abort(.internalServerError, reason: "VM \(vmId)'s boot volume has no storage pool")
-                }
-
-                // A network pinned to a site exists only in that site's OVN
-                // deployment, so it pins the VM's placement (issue #343).
-                let requiredSiteID = try await pinnedSiteID(for: currentVM, on: tx)
-                if bootPool.mode == .ceph, let requiredSiteID,
-                    requiredSiteID != bootPool.$site.id
-                {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "VM \(vmId)'s network and Ceph boot pool belong to different sites")
-                }
-
-                let storageEligibleAgents: [SchedulableAgent]
-                switch bootPool.mode {
-                case .local:
-                    // Historical local behavior: an empty membership list
-                    // means every otherwise-schedulable agent.
-                    let poolMembers = bootPool.memberAgentIds
-                    storageEligibleAgents = schedulableAgents.filter { agent in
-                        poolMembers.isEmpty || poolMembers.contains(agent.id)
-                    }
-                case .ceph:
-                    let instant = try await ClusterClock.read(on: tx)
-                    let schedulableIDs = schedulableAgents.compactMap { UUID(uuidString: $0.id) }
-                    let clientRows =
-                        schedulableIDs.isEmpty
-                        ? []
-                        : try await Agent.query(on: tx)
-                            .filter(\.$id ~~ schedulableIDs)
-                            .all()
-                    let reachableIDs = Set(
-                        clientRows.compactMap { agent -> String? in
-                            StoragePool.agentCanReach(
-                                agent: agent, pool: bootPool, replicaAgentIds: [], at: instant)
-                                ? agent.id?.uuidString : nil
-                        })
-                    storageEligibleAgents = schedulableAgents.filter { reachableIDs.contains($0.id) }
-                case .replicated:
-                    throw Abort(.conflict, reason: "Replicated boot pools are not executable")
-                }
-
-                // Use the freshly locked row for every placement requirement,
-                // including the v39 metadata opt-out gate. The reservation is
-                // still atomic in the coordination store (issue #258).
-                let selectedAgentId: String
-                do {
-                    selectedAgentId = try await app.scheduler.selectAndReserveAgent(
-                        requirements: SchedulerService.placementRequirements(
-                            for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID,
-                            // RBD bytes do not consume agent-local disk. CPU and
-                            // memory remain reserved, while Ceph placement is
-                            // completely described by pool reachability.
-                            diskBytes: bootPool.mode == .ceph ? 0 : nil),
-                        vmId: vmId,
-                        from: storageEligibleAgents,
-                        coordination: app.coordination,
-                        strategy: strategy,
-                        vmName: currentVM.name
-                    )
-                } catch let error as SchedulerError {
-                    app.logger.error("Scheduler failed to find suitable agent: \(error)")
-                    // Preserve the scheduler's reason (unsupported hypervisor,
-                    // arch mismatch, insufficient resources, ...) instead of
-                    // collapsing every placement failure into a generic one.
-                    throw AgentServiceError.schedulingFailed(error.description)
-                }
-                reservedAgentId.withLockedValue { $0 = selectedAgentId }
-
+                let bootVolume = currentBootVolume
                 try await self.requireNetworkAuthority(
                     forAgentId: selectedAgentId, workloadId: vmId,
                     consequence: "the VM's network would never be realized and it would never boot", on: tx)
@@ -166,8 +205,14 @@ actor WorkloadPlacementService {
             // The placement never became desired state, so nothing will ever
             // account for the reservation — release it rather than pinning
             // capacity until the TTL.
-            if let reservedAgentId = reservedAgentId.withLockedValue({ $0 }) {
+            if let reservedAgentId {
                 await app.coordination.releaseReservation(agentId: reservedAgentId, vmId: vmId)
+            }
+            if error is PlacementInputsChanged, attemptsRemaining > 1 {
+                // Retry only optimistic input validation, never a transaction
+                // abort or an ambiguous commit; generic DB retries are separate.
+                return try await placeVM(
+                    vm: vm, db: db, strategy: strategy, image: image, attemptsRemaining: attemptsRemaining - 1)
             }
             throw error
         }
@@ -377,7 +422,7 @@ actor WorkloadPlacementService {
             let reason = SiteNetworkAuthority.refusalReason(
                 authority, host: agent, consequence: consequence)
         else { return }
-        await app.coordination.releaseReservation(agentId: agentId, vmId: workloadId)
+        // The caller releases after the transaction has rolled back.
         throw AgentServiceError.schedulingFailed(reason)
     }
 
