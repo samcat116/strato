@@ -5,6 +5,33 @@ import StratoShared
 import Vapor
 
 struct VMFleetRunDispatcher {
+    static let previewCleanupBatchSize = 1000
+
+    /// Previews are disposable after their confirmation deadline. Lock and
+    /// delete one indexed batch atomically; a concurrent confirmer's locked
+    /// parent is skipped and confirmed command history is never eligible.
+    @discardableResult
+    static func reapExpiredPreviews(on db: any Database) async throws -> Int {
+        try Task.checkCancellation()
+        guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
+        let removed = try await sql.raw(
+            """
+            WITH expired AS (
+                SELECT id FROM vm_fleet_runs
+                WHERE NOT confirmed AND deadline <= CURRENT_TIMESTAMP
+                ORDER BY deadline, id
+                LIMIT \(bind: previewCleanupBatchSize)
+                FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM vm_fleet_runs AS fleet
+            USING expired
+            WHERE fleet.id = expired.id AND NOT fleet.confirmed
+            RETURNING fleet.id
+            """
+        ).all()
+        return removed.count
+    }
+
     /// Each replica competes for the same parent row lock. Claimed children
     /// remain active until terminal (including uncertain delivery); they are
     /// never put back in the queue. Existing command timeouts recover slots.
@@ -98,7 +125,9 @@ struct VMFleetRunDispatcher {
     }
 
     static func sweep(app: Application) async {
+        guard !app.didShutdown else { return }
         do {
+            try await reapExpiredPreviews(on: app.db)
             let fleets = try await VMFleetRun.query(on: app.db).filter(\.$confirmed == true)
                 .filter(.sql(unsafeRaw: "(entries -> 'values') @> '[{\"state\":\"queued\"}]'::jsonb"))
                 .sort(\.$createdAt).limit(100).all()
@@ -106,6 +135,8 @@ struct VMFleetRunDispatcher {
                 guard !app.didShutdown else { return }
                 try await advance(id: fleet.requireID(), app: app)
             }
+        } catch is CancellationError {
+            return
         } catch {
             app.logger.error("Fleet queue sweep failed: \(error)")
         }
