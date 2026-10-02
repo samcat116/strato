@@ -62,6 +62,12 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
+Wire v63 requires first-boot installation of the selected Strato guest-agent
+release for opted-in VMs across ISO and IMDS delivery, and adds independent
+guest-agent reachability observations. Older agents only understand the channel
+flag and cannot fulfill that installation intent. Rejecting v62 peers prevents
+an opted-in VM from being created without its guest daemon during mixed builds.
+
 Wire v44 generalized the interactive exec stream across VMs and sandboxes with
 `guest_exec_*` messages and a resource-kind discriminator on start.
 

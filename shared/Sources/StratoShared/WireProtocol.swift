@@ -12,7 +12,10 @@ import Foundation
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
     /// The only wire/schema version this build accepts. Version 64 adds optional,
-    /// generation-guarded VM guest configuration (STR-90). Version 62 carries the
+    /// generation-guarded VM guest configuration (STR-90). Version 63 requires
+    /// first-boot Strato guest-agent installation and carries the selected
+    /// bootstrap release and independent guest-agent reachability observation.
+    /// Version 62 carries the
     /// requested and agent-applied QEMU block-device policy. Version 61 adds
     /// physical free disk reporting and observed network-fabric outcomes
     /// (STR-294). Version 60 adds the QEMU volume-I/O-limit capability and
