@@ -691,7 +691,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Stop a sandbox */
+        /**
+         * Stop a sandbox
+         * @description Empty requests preserve pause behavior. With suspend=true, reserves internal checkpoint storage and converges to Suspended only after a verified durable checkpoint and VMM destruction. Start readmits compute.
+         */
         post: operations["stopSandbox"];
         delete?: never;
         options?: never;
@@ -733,7 +736,7 @@ export interface paths {
         put?: never;
         /**
          * Create a sandbox exec session
-         * @description Mints a short-lived, single-use session. Attach the authenticated WebSocket at `websocketPath` before `expiresAt` to start the command.
+         * @description Suspended sandboxes first return 202 with a quota-admitted wake mutation. Retry exec after that generation converges. No session exists during wake. Mints a short-lived, single-use session. Attach the authenticated WebSocket at `websocketPath` before `expiresAt` to start the command.
          */
         post: operations["createSandboxExecSession"];
         delete?: never;
@@ -6341,6 +6344,7 @@ export interface components {
             networkInterfaces?: components["schemas"]["SandboxNetworkInterface"][];
             /** @description Whether this sandbox's attached security groups are actually being enforced. Absent means the sandbox has no NIC, so there is nothing to judge — not a claim that they are unenforced. False today for every networked sandbox: sandbox guest networking is not yet enabled, so no OVN port exists to join the groups' port groups. */
             securityGroupsEnforced?: boolean;
+            suspension?: components["schemas"]["SandboxSuspensionEvidence"];
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -6375,12 +6379,26 @@ export interface components {
             /** Format: date-time */
             securityGroupLastErrorAt?: string;
         };
+        SandboxSuspensionEvidence: {
+            /** Format: uuid */
+            checkpointId: string;
+            /** Format: int64 */
+            generation: number;
+            /** Format: int64 */
+            storageBytes: number;
+            vmmDestroyed: boolean;
+            verified: boolean;
+            /** Format: int64 */
+            restoreDurationMilliseconds?: number;
+        };
         /** @enum {string} */
-        SandboxStatus: "Stopped" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
+        SandboxStatus: "Stopped" | "Suspended" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
         CreateSandboxSnapshotRequest: {
             name?: string;
             /** @description When true, checkpoint and stop; defaults to false. */
             stop?: boolean;
+            /** @description Requires stop=true; opt into durable suspension after the user snapshot is recorded. */
+            suspend?: boolean;
             /** @description How long to keep the snapshot. Omitted uses the fleet default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it until someone deletes it, overriding that default. Resolved to an absolute `expiresAt` at creation. */
             ttlSeconds?: number;
         };
@@ -11901,7 +11919,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default false */
+                    suspend?: boolean;
+                };
+            };
+        };
         responses: {
             202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
@@ -11959,6 +11984,7 @@ export interface operations {
                     "application/json": components["schemas"]["GuestExecSession"];
                 };
             };
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];

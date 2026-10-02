@@ -44,7 +44,7 @@ describe("sandboxCanBeSnapshotted", () => {
     }
   );
 
-  it.each(["Starting", "Stopping", "Error", "Unknown"] satisfies SandboxStatus[])(
+  it.each(["Suspended", "Starting", "Stopping", "Error", "Unknown"] satisfies SandboxStatus[])(
     "rejects the transitional or uncertain %s state",
     (status) => {
       expect(

@@ -289,6 +289,9 @@ struct SandboxReconciliationTests {
         #expect(Reconciler.sandboxStatusSteps(desired: .stopped, observed: SandboxStatus.running) == [.shutdown])
         #expect(Reconciler.sandboxStatusSteps(desired: .stopped, observed: SandboxStatus.stopped) == [])
         #expect(Reconciler.sandboxStatusSteps(desired: .stopped, observed: SandboxStatus.exited) == [])
+        #expect(Reconciler.sandboxStatusSteps(desired: .suspended, observed: SandboxStatus.stopped) == [.shutdown])
+        #expect(Reconciler.sandboxStatusSteps(desired: .suspended, observed: SandboxStatus.suspended) == [])
+        #expect(Reconciler.sandboxStatusSteps(desired: .running, observed: SandboxStatus.suspended) == [.boot])
         #expect(Reconciler.sandboxStatusSteps(desired: .absent, observed: SandboxStatus.running) == [.delete])
     }
 

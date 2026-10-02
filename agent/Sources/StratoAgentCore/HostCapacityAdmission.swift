@@ -369,7 +369,10 @@ public enum SandboxHostReservation {
             entry.sandboxSpec.map(forSpec)
             ?? HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes)
         guard let record = entry.sandboxSuspension else { return base }
-        let disk = max(record.checkpointBytes, record.storageReservationBytes ?? 0)
+        var disk = max(record.checkpointBytes, record.storageReservationBytes ?? 0)
+        if [.restoring, .resuming, .resumed].contains(record.phase) {
+            disk = max(disk, restorationDiskBytes(record))
+        }
         if record.phase == .suspended, let checkpoint = record.checkpoint, checkpoint.hasValidShape,
             checkpoint.sandboxId == record.sandboxId.uuidString, checkpoint.snapshotId == record.snapshotId.uuidString,
             entry.kind == .sandbox, entry.jailerUsed == true, entry.jailUID == record.jailUID,
@@ -379,6 +382,12 @@ public enum SandboxHostReservation {
             return HostReservation(diskBytes: disk)
         }
         return base.addingSaturating(HostReservation(diskBytes: disk))
+    }
+
+    /// File restore can need both the retained archive and a fresh jail copy.
+    public static func restorationDiskBytes(_ record: SandboxSuspensionRecord) -> Int64 {
+        let archive = HostReservation(diskBytes: record.checkpointBytes)
+        return archive.addingSaturating(archive).diskBytes
     }
 
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {

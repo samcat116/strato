@@ -172,6 +172,11 @@ public struct DesiredSandboxState: Codable, Sendable {
     /// This is an edge applied to a sandbox that already exists — same id, same
     /// addresses, rewound — and is consulted only while it is present.
     public let restore: DesiredRestore?
+    /// Total admitted internal checkpoint bytes, including the retained predecessor.
+    public let suspensionStorageBudgetBytes: Int64?
+    public let suspensionAfterSnapshotId: UUID?
+    /// Existing durable guest state must never be replaced by a cold OCI create.
+    public let suspensionCheckpointId: UUID?
 
     public init(
         sandboxId: UUID,
@@ -179,7 +184,10 @@ public struct DesiredSandboxState: Codable, Sendable {
         desiredStatus: DesiredSandboxStatus,
         generation: Int64,
         registryCredential: RegistryCredential? = nil,
-        restore: DesiredRestore? = nil
+        restore: DesiredRestore? = nil,
+        suspensionStorageBudgetBytes: Int64? = nil,
+        suspensionAfterSnapshotId: UUID? = nil,
+        suspensionCheckpointId: UUID? = nil
     ) {
         self.sandboxId = sandboxId
         self.spec = spec
@@ -187,6 +195,9 @@ public struct DesiredSandboxState: Codable, Sendable {
         self.generation = generation
         self.registryCredential = registryCredential
         self.restore = restore
+        self.suspensionStorageBudgetBytes = suspensionStorageBudgetBytes
+        self.suspensionAfterSnapshotId = suspensionAfterSnapshotId
+        self.suspensionCheckpointId = suspensionCheckpointId
     }
 }
 
@@ -1389,6 +1400,10 @@ public struct ObservedSandboxState: Codable, Sendable {
     public let exitCode: Int?
     /// Last host-side contention sample for this sandbox.
     public let resourceTelemetry: WorkloadResourceTelemetry?
+    public let suspension: SandboxSuspensionEvidence?
+    public let suspensionStorageReservedBytes: Int64?
+    /// Next capture estimate, based on actual local files; nil means unsupported/unavailable.
+    public let suspensionStorageEstimateBytes: Int64?
 
     public init(
         sandboxId: UUID,
@@ -1399,7 +1414,10 @@ public struct ObservedSandboxState: Codable, Sendable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
         exitCode: Int? = nil,
-        resourceTelemetry: WorkloadResourceTelemetry? = nil
+        resourceTelemetry: WorkloadResourceTelemetry? = nil,
+        suspension: SandboxSuspensionEvidence? = nil,
+        suspensionStorageReservedBytes: Int64? = nil,
+        suspensionStorageEstimateBytes: Int64? = nil
     ) {
         self.sandboxId = sandboxId
         self.status = status
@@ -1410,6 +1428,9 @@ public struct ObservedSandboxState: Codable, Sendable {
         self.failureClassification = failureClassification
         self.exitCode = exitCode
         self.resourceTelemetry = resourceTelemetry
+        self.suspension = suspension
+        self.suspensionStorageReservedBytes = suspensionStorageReservedBytes
+        self.suspensionStorageEstimateBytes = suspensionStorageEstimateBytes
     }
 }
 

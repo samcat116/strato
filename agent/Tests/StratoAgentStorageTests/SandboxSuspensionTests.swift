@@ -182,6 +182,13 @@ struct SandboxSuspensionTests {
         #expect(reservation.memoryBytes == (phase == .suspended ? 0 : spec.memoryBytes))
         #expect(reservation.cpus == (phase == .suspended ? 0 : spec.cpus))
         #expect(reservation.diskBytes == 512 * 1024 * 1024)
+        // Without a larger admitted staging plan, File restore still reserves
+        // both the immutable archive and the fresh jail copy.
+        var actualOnly = reopened
+        actualOnly.storageReservationBytes = 0
+        entry.sandboxSuspension = actualOnly
+        let copies: Int64 = [.restoring, .resuming, .resumed].contains(phase) ? 2 : 1
+        #expect(SandboxHostReservation.forManifestEntry(entry).diskBytes == actualOnly.checkpointBytes * copies)
         // Corrupt/legacy host identity cannot authorize releasing RAM.
         var legacy = VMManifestEntry(sandboxSpec: spec)
         legacy.sandboxSuspension = reopened

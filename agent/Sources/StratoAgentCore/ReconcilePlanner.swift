@@ -704,7 +704,7 @@ extension Reconciler {
         switch desired {
         case .running:
             return [.boot]
-        case .stopped:
+        case .stopped, .suspended:
             return [.shutdown]
         case .absent:
             return [.delete]
