@@ -1,9 +1,11 @@
 # Suspended sandboxes: STR-312 implementation boundary
 
 STR-312 / [#1330](https://github.com/samcat116/strato/issues/1330) is **incomplete**.
-The checkpoint integrity foundation below does not implement suspension, release
-memory quotas, advertise a capability, or unblock STR-273/STR-313. Stop still
-pauses the VMM. This document records the proposed integration contract so policy
+The local runtime now implements guarded checkpoint, paused fresh-VMM load
+validation, destruction, and restore/recovery APIs. These are not yet activated
+by stop or exposed as a coordinated wire/API contract; control-plane quota and
+operation integration remain unfinished. No capability is advertised and
+STR-273/STR-313 remain blocked. Stop still pauses the VMM. This document records the integration contract so policy
 and memory-backend work do not establish independent lifecycle owners.
 
 ## Implemented checkpoint foundation
@@ -33,11 +35,59 @@ actual snapshot/load. They cannot authorize destroying the only running copy.
 
 ## Proposed lifecycle and generation contract
 
-The following is design guidance, not an implemented public API:
+Implemented agent-local interfaces (no wire version allocated):
 
-* Reuse desired `Stopped` for the explicit stop goal; add observed `Suspended`
-  for a checkpoint-backed sandbox with confirmed VMM absence. A never-started
-  `Stopped` sandbox remains distinguishable from a suspended workload. Preserve
+```swift
+noteSandboxIntent(sandboxId: String, generation: Int64, desiredRunning: Bool)
+suspendSandbox(sandboxId: String, generation: Int64, automatic: Bool)
+suspensionRecord(sandboxId: String) -> SandboxSuspensionRecord?
+suspensionStorageEstimate(sandboxId: String) -> Int64
+resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment])
+```
+
+Each method is async; operations and record reads throw on failure. STR-313 must
+enter through `Agent.sandboxReconcileSuspend(_:automatic:)`, which reserves host
+headroom for the extra validation VMM and checkpoint staging. It must not call
+the driver directly. Runtime admission registers pending exec handshakes before
+their first await; established user exec sessions refuse suspension. Internal log
+followers drain without counting as user activity. The generation/activity commit
+is synchronous. Activity before destruction aborts capture and resumes the
+original; activity/new running intent after destruction requests restore.
+
+The runtime journals capturing/verified/destroying/suspended/restoring/resuming/
+resumed before side effects. It validates a real jailed shadow VMM through
+`PUT /snapshot/load` with `resume_vm: false`, checks Paused, and proves shadow
+teardown before original destruction. Shadow IDs/UID records reuse the existing
+warm-template crash sweep. A distinct jail/vsock filesystem prevents a duplicate
+guest identity channel; paused vCPUs do not execute the workload. Networked shadow
+validation remaps to an isolated TAP in the shadow's own namespace, attached to
+nothing; it never contends for the original single-queue TAP. Networked validation
+therefore requires Firecracker's existing network-overrides gate. This path
+still needs real Firecracker/KVM evidence; fixture tests do not prove it.
+
+Restore admission defaults to two per agent (validated range 1...32), with a
+1200-second default deadline (validated range 5...1200). Admission includes shadow
+validation. Timeout cancels and waits for side effects to unwind; permits are held
+through cleanup, so an unresponsive operation cannot race a retry. This is not a
+hard bound on uninterruptible kernel I/O. Internal restore loads paused, commits
+`resuming`, then resumes and verifies identity. A failure after that commit retains
+the guest and memory reservation instead of replaying an older checkpoint.
+
+Host manifests retain spec/UID, release guest CPU/RAM only on verified suspended
+facts, and retain checkpoint storage. Restore persists the full reservation before
+spawning. Failed reservation writes retain the admission claim for retry.
+Internal artifacts live under `<sandbox>/hibernation/<id>`; retiring a previous
+internally owned checkpoint cannot delete a user snapshot. Cold recreation is
+refused when a suspension journal represents the only copy or a guest that may
+have advanced past the checkpoint.
+
+The remaining shared/control-plane integration is design guidance:
+
+* Add desired and observed `Suspended` for a checkpoint-backed sandbox with
+  confirmed VMM absence. Explicit stop of a booted workload selects the suspended
+  goal; legacy/unstarted `Stopped` remains distinguishable and is not evidence of
+  reclamation. This avoids treating a paused intermediate state as already
+  satisfying suspension, including checkpoint-and-stop and restart recovery. Preserve
   the existing `Exited` one-shot semantics. Coordinate any shared contract and
   wire bump with the parent: guestConfig PR #1436 owns v64, and this branch
   allocates no version.

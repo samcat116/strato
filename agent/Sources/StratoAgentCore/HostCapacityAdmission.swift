@@ -364,6 +364,23 @@ public enum VMHostReservation {
 /// conversion beside the VM version makes create and boot admission use the
 /// same reservation semantics as heartbeat accounting.
 public enum SandboxHostReservation {
+    public static func forManifestEntry(_ entry: VMManifestEntry) -> HostReservation {
+        let base =
+            entry.sandboxSpec.map(forSpec)
+            ?? HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes)
+        guard let record = entry.sandboxSuspension else { return base }
+        let disk = max(record.checkpointBytes, record.storageReservationBytes ?? 0)
+        if record.phase == .suspended, let checkpoint = record.checkpoint, checkpoint.hasValidShape,
+            checkpoint.sandboxId == record.sandboxId.uuidString, checkpoint.snapshotId == record.snapshotId.uuidString,
+            entry.kind == .sandbox, entry.jailerUsed == true, entry.jailUID == record.jailUID,
+            entry.sandboxSpec?.memoryBytes == record.spec.memoryBytes,
+            entry.sandboxSpec?.cpus == record.spec.cpus
+        {
+            return HostReservation(diskBytes: disk)
+        }
+        return base.addingSaturating(HostReservation(diskBytes: disk))
+    }
+
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
         HostReservation(cpus: spec.cpus, memoryBytes: spec.memoryBytes)
     }

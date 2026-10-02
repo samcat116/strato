@@ -21,6 +21,19 @@ public struct SandboxCheckpointManifest: Codable, Sendable, Equatable {
     public let guestControlProtocolVersion: Int
     public let artifacts: [Artifact]
 
+    /// Structural checks only. Call verifyIfPresent to hash the actual files;
+    /// this value alone is never a restorable or reclamation proof.
+    public var hasValidShape: Bool {
+        version == 1 && UUID(uuidString: sandboxId) != nil && UUID(uuidString: snapshotId) != nil
+            && !identityNonce.isEmpty && !firecrackerVersion.isEmpty && guestControlProtocolVersion > 0
+            && artifacts.count == SandboxSnapshotArtifactKind.allCases.count
+            && Set(artifacts.map(\.kind)) == Set(SandboxSnapshotArtifactKind.allCases)
+            && artifacts.allSatisfy {
+                $0.sizeBytes > 0 && $0.sha256.utf8.count == 64
+                    && $0.sha256.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+            }
+    }
+
     public struct Artifact: Codable, Sendable, Equatable {
         public let kind: SandboxSnapshotArtifactKind
         public let sizeBytes: Int64
@@ -108,10 +121,7 @@ public struct SandboxCheckpointManifest: Codable, Sendable, Equatable {
             throw CheckpointError.invalidManifest
         }
         let manifest = try JSONDecoder().decode(Self.self, from: readAll(fd, limit: 65_536))
-        guard manifest.version == 1, manifest.artifacts.count == SandboxSnapshotArtifactKind.allCases.count,
-            Set(manifest.artifacts.map(\.kind)) == Set(SandboxSnapshotArtifactKind.allCases),
-            !manifest.firecrackerVersion.isEmpty, manifest.guestControlProtocolVersion > 0
-        else { throw CheckpointError.invalidManifest }
+        guard manifest.hasValidShape else { throw CheckpointError.invalidManifest }
         guard manifest.sandboxId == sandboxId, manifest.snapshotId == snapshotId,
             manifest.identityNonce == identityNonce
         else { throw CheckpointError.identityMismatch }

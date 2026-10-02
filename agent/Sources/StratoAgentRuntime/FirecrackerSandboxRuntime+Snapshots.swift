@@ -32,6 +32,13 @@ extension FirecrackerSandboxRuntime {
     func snapshotSandbox(
         sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode
     ) async throws -> SandboxSnapshotResult {
+        guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
+        return try await captureSandboxSnapshot(sandboxId: sandboxId, snapshotId: snapshotId, mode: mode)
+    }
+
+    func captureSandboxSnapshot(
+        sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode, internalArchive: Bool = false
+    ) async throws -> SandboxSnapshotResult {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
@@ -91,7 +98,10 @@ extension FirecrackerSandboxRuntime {
 
         // Stage the archive directory before touching the guest, so a
         // filesystem failure here cannot leave the sandbox paused.
-        let archiveDir = snapshotDirectory(sandboxId, snapshotId: snapshotId)
+        let archiveDir =
+            internalArchive
+            ? suspensionArchive(sandboxId: sandboxId, snapshotId: snapshotId)
+            : snapshotDirectory(sandboxId, snapshotId: snapshotId)
         // A leftover from a failed earlier attempt must not pollute this one.
         try? FileManager.default.removeItem(atPath: archiveDir)
         try FileManager.default.createDirectory(atPath: archiveDir, withIntermediateDirectories: true)
@@ -191,6 +201,17 @@ extension FirecrackerSandboxRuntime {
         artifacts: [SandboxSnapshotArtifactDescriptor]?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
+        guard !suspending.contains(sandboxId) else { throw SandboxRuntimeError.checkpointInProgress(sandboxId) }
+        try await restoreSandboxArchive(
+            sandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts,
+            networkAttachments: networkAttachments)
+    }
+
+    func restoreSandboxArchive(
+        sandboxId: String, snapshotId: String,
+        artifacts: [SandboxSnapshotArtifactDescriptor]?,
+        networkAttachments: [ResolvedNetworkAttachment], internalArchive: Bool = false
+    ) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
@@ -220,8 +241,11 @@ extension FirecrackerSandboxRuntime {
         // snapshot, otherwise a verified download of the exported copy
         // (issue #428). Either way every required file exists before the
         // live VM is destroyed, not after.
-        let archiveDir = try await stageSnapshotArchive(
-            sourceSandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts)
+        let archiveDir =
+            internalArchive
+            ? suspensionArchive(sandboxId: sandboxId, snapshotId: snapshotId)
+            : try await stageSnapshotArchive(
+                sourceSandboxId: sandboxId, snapshotId: snapshotId, artifacts: artifacts)
         let archiveMemory = archiveDir + "/" + SnapshotFile.memory
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
@@ -240,6 +264,12 @@ extension FirecrackerSandboxRuntime {
                 directory: archiveDir, sandboxId: sandboxId, snapshotId: snapshotId,
                 identityNonce: archivedConfig.identityNonce)
         }.value
+        let currentSuspension = try loadSuspensionRecord(sandboxId: sandboxId)
+        let suspensionManagedRestore = internalArchive || currentSuspension != nil
+        if !internalArchive, var record = currentSuspension {
+            record.phase = .restoring
+            try saveSuspension(record)
+        }
 
         logger.info(
             "Restoring sandbox from snapshot",
@@ -301,7 +331,7 @@ extension FirecrackerSandboxRuntime {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: true,
+                    resumeVM: !suspensionManagedRestore,
                     networkOverrides: overrides))
         } else {
             // Unjailed: replace the live rootfs with the checkpointed copy
@@ -320,7 +350,7 @@ extension FirecrackerSandboxRuntime {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: archiveVmstate,
                     memFilePath: archiveMemory,
-                    resumeVM: true,
+                    resumeVM: !suspensionManagedRestore,
                     networkOverrides: overrides))
         }
 
@@ -328,6 +358,18 @@ extension FirecrackerSandboxRuntime {
         // Whatever exit the pre-restore guest reported no longer describes
         // this guest; the restored one re-reports over vsock.
         sandboxes[sandboxId]?.lastExitCode = nil
+
+        if suspensionManagedRestore {
+            guard var record = try loadSuspensionRecord(sandboxId: sandboxId) else {
+                throw SandboxSuspensionGuard.GateError.stale
+            }
+            // After this durable commit the guest may have advanced. A timeout
+            // or failed health check must never rewind it to the checkpoint.
+            record.phase = .resuming
+            try saveSuspension(record)
+            try Task.checkCancellation()
+            try await newManager.resume()
+        }
 
         // Health check: the restored guest must answer with this sandbox's
         // identity (the checkpointed memory carries the original nonce).
@@ -337,6 +379,11 @@ extension FirecrackerSandboxRuntime {
                 expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
         }
         sandboxes[sandboxId]?.guestControlProtocolVersion = response.controlProtocolVersion
+        if !internalArchive, var record = try loadSuspensionRecord(sandboxId: sandboxId) {
+            record.phase = .resumed
+            record.lastRestoreFailure = nil
+            try saveSuspension(record)
+        }
 
         // Best-effort clock resync: the restored guest's wall clock froze at
         // checkpoint time.

@@ -77,6 +77,9 @@ public struct VMManifestEntry: Codable, Sendable {
     /// so a manifest-less re-registration cannot replay a VM's whole reboot
     /// history. See `AppliedEdgeNonces`.
     public var appliedEdges: AppliedEdgeNonces?
+    /// STR-312's durable guest-memory and internal-checkpoint reservation fact.
+    /// Nil is legacy/full reservation. Only confirmed suspension releases RAM.
+    public var sandboxSuspension: SandboxSuspensionRecord? = nil
     /// Whether this agent has applied Firecracker's pre-boot MMDS interface
     /// allow-list to the VMM represented by this entry.
     ///

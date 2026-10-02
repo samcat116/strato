@@ -356,6 +356,7 @@ actor Agent {
     // stale-snapshot race between reading host inventory and committing the
     // manifest entry that makes a successful growth visible to later reads.
     var capacityAdmissionLedger = HostCapacityAdmissionLedger()
+    var retainedSuspensionClaims: [String: HostCapacityClaim] = [:]
     var capacityManifestRevision: UInt64 = 0
     var bootCapacityClaims: [String: HostCapacityClaim] = [:]
     /// Managed identities whose historical VM-side bytes could not be adopted
