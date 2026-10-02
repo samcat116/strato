@@ -833,6 +833,11 @@ acceptance path as a single recorded command. It also rechecks VM read access,
 running state, opt-in guest-agent enablement and agent support. Inaccessible,
 denied and ineligible VMs become explicit skipped entries. No `vm:exec` grant
 is substituted. A newly matching VM never joins an already prepared run.
+Confirmation bodies must contain 1–100 IDs; empty or oversized lists return
+HTTP 400 before comparison with the snapshot, including repeat confirmations.
+Expired unconfirmed previews are deleted by maintenance in indexed batches of
+at most 1,000. Cleanup skips locked previews and preserves all confirmed runs
+and their collected command results.
 
 The parent and accepted children commit atomically. Repeat confirmations return
 the same children. A run belongs to its initiating user and exact API key (or

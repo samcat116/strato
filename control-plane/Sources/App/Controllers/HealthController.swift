@@ -110,12 +110,12 @@ struct HealthController: RouteCollection {
         }
 
         // Coordination store. Degraded-only by design: coordination fails open.
-        do {
-            _ = try await req.application.coordination.probe()
-            checks.append(HealthCheck(name: "coordination", status: "up"))
-        } catch {
-            checks.append(HealthCheck(name: "coordination", status: "degraded", error: String(reflecting: error)))
+        if await req.application.coordination.failureGate.unavailable {
+            checks.append(
+                HealthCheck(name: "coordination", status: "degraded", error: "coordination store unavailable"))
             degraded = true
+        } else {
+            checks.append(HealthCheck(name: "coordination", status: "up"))
         }
 
         // Session store. Graded on whether it can fail *independently*, because
