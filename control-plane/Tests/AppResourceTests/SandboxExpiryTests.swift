@@ -586,6 +586,120 @@ final class SandboxExpiryTests {
             #expect(events.requested?.actorType == .system)
         }
     }
+    @Test("Idle candidates use bounded stable pages and recheck admissions after selection")
+    func idleCandidatePagesAndAdmissionRace() async throws {
+        try await withSandboxTestApp { app, _, project, _ in
+            let sql = try #require(app.db as? any SQLDatabase)
+            let agent = try await TestDataBuilder(db: app.db).createAgent(named: "idle-candidate-owner")
+            let owner = try agent.requireID()
+            let inventory = UUID()
+            try await InventorySessionFence.replace(inventory, agentID: owner, on: app.db)
+            let now = try await ClusterClock.read(on: app.db)
+            func id(_ suffix: String) -> UUID { UUID(uuidString: "00000000-0000-0000-0000-0000000000" + suffix)! }
+            func insert(_ suffix: String, idleSeconds: Double = 300) async throws -> Sandbox {
+                let sandbox = Sandbox(
+                    id: id(suffix), name: "candidate-" + suffix, projectID: try project.requireID(),
+                    environment: "default", image: "fixture", cpus: 1, memory: 128 * 1024 * 1024)
+                sandbox.hypervisorId = owner.uuidString
+                sandbox.status = .running; sandbox.desiredStatus = .running
+                sandbox.generation = 7; sandbox.observedGeneration = 7
+                try await sandbox.save(on: app.db)
+                try await sql.raw(
+                    "UPDATE sandboxes SET last_active_at = \(bind: now.date.addingTimeInterval(-400)) WHERE id = \(bind: sandbox.id)"
+                ).run()
+                var policy = SandboxIdlePolicy()
+                policy.enabled = true; policy.idleSeconds = idleSeconds
+                let guest = SandboxGuestIdleActivity(
+                    sandboxId: try sandbox.requireID().uuidString, nonce: "fixture", probeId: UUID(),
+                    monitorIncarnation: UUID(), sampleSequence: 1, activityEpoch: 1,
+                    quietForMilliseconds: 400_000, coverage: .complete, trusted: true,
+                    activeExecSessionIds: [], anonymousExecCount: 0, pendingExecCount: 0,
+                    workloadCpuMicroseconds: 0, workloadReadBytes: 0, workloadWriteBytes: 0,
+                    externalSocketCount: 0, nicCount: 0)
+                let report = SandboxIdleActivityReport(
+                    agentIncarnation: UUID(), connectionEpoch: UUID(), residencyEpoch: UUID(),
+                    sequence: 1, generation: 7, activityEpoch: 1, evidenceAgeMilliseconds: 0,
+                    residentForMilliseconds: 400_000, guest: guest, activeExecSessionIds: [],
+                    pendingCommandCount: 0, snapshotOrRestoreInProgress: false, idleFenceSupported: true,
+                    hostQuietMilliseconds: 400_000, policy: policy, hostPendingCommandCount: 0,
+                    controlPlaneActivityRevision: 0)
+                let encoded = String(decoding: try WireProtocol.makeEncoder().encode(report), as: UTF8.self)
+                try await sql.raw(
+                    """
+                    INSERT INTO sandbox_idle_fences(sandbox_id, agent_key, inventory_session_id,
+                        activity_revision, report, received_at)
+                    VALUES (\(bind: sandbox.id), \(bind: owner.uuidString), \(bind: inventory), 0,
+                        \(bind: encoded)::jsonb, \(bind: now.date))
+                    """
+                ).run()
+                return sandbox
+            }
+            _ = try await insert("01", idleSeconds: 1000)  // Coarse page member, detailed threshold rejects.
+            for suffix in ["10", "20", "30", "40", "50", "60"] { _ = try await insert(suffix) }
+            let first = try await SandboxIdleFenceService.nominationCandidates(
+                after: nil, limit: 2, at: now, on: app.db)
+            #expect(first.sandboxes.compactMap(\.id) == [id("10")])
+            #expect(first.nextCursor == id("10"))
+            // Offset pagination would skip a member after this deletion. A row
+            // changing eligibility likewise must not move the continuation.
+            try await sql.raw("DELETE FROM sandboxes WHERE id = \(bind: id("10"))").run()
+            try await sql.raw(
+                "UPDATE sandboxes SET desired_status = \(bind: DesiredSandboxStatus.stopped.rawValue) WHERE id = \(bind: id("30"))"
+            ).run()
+            _ = try await insert("05")  // Behind the current cursor: discovered after wrap.
+            let second = try await SandboxIdleFenceService.nominationCandidates(
+                after: first.nextCursor, limit: 2, at: now, on: app.db)
+            #expect(Set(second.sandboxes.compactMap(\.id)) == [id("20"), id("40")])
+            #expect(second.nextCursor == id("40"))
+            let third = try await SandboxIdleFenceService.nominationCandidates(
+                after: second.nextCursor, limit: 2, at: now, on: app.db)
+            #expect(Set(third.sandboxes.compactMap(\.id)) == [id("50"), id("60")])
+            let end = try await SandboxIdleFenceService.nominationCandidates(
+                after: third.nextCursor, limit: 2, at: now, on: app.db)
+            #expect(end.sandboxes.isEmpty && end.nextCursor == nil)
+            let wrapped = try await SandboxIdleFenceService.nominationCandidates(
+                after: end.nextCursor, limit: 2, at: now, on: app.db)
+            #expect(wrapped.sandboxes.compactMap(\.id) == [id("05")])
+            let candidate = try #require(second.sandboxes.first { $0.id == id("20") })
+            // Selection is advisory; a command admitted before the row lock
+            // must invalidate nomination even though the candidate was quiet.
+            try await sql.raw(
+                """
+                INSERT INTO sandbox_activity_leases(id, sandbox_id, agent_key, expires_at)
+                VALUES (\(bind: UUID()), \(bind: id("20")), 'fixture', NULL)
+                """
+            ).run()
+            var environment = ProcessInfo.processInfo.environment
+            environment["SANDBOX_IDLE_SUSPEND_ENABLED"] = "true"
+            app.controlPlaneConfiguration = try await .load(environmentVariables: environment, for: .testing)
+            await #expect(throws: Abort.self) {
+                try await SandboxIdleFenceService.nominate(
+                    candidate, app: app, at: now,
+                    mutation: ResourceMutation(agentDispatch: FakeAgentDispatch(), logger: app.logger))
+            }
+            #expect(try await SandboxIdleFenceService.state(id: id("20"), on: app.db)?.decodedFence == nil)
+            let admitted = try await SandboxIdleFenceService.nominationCandidates(after: nil, at: now, on: app.db)
+            #expect(!admitted.sandboxes.contains { $0.id == id("20") })
+            // Stale evidence, malformed numeric fields, future evidence and a
+            // replaced inventory session never open nomination transactions.
+            try await sql.raw(
+                "UPDATE sandbox_idle_fences SET received_at = \(bind: now.date.addingTimeInterval(-31)) WHERE sandbox_id = \(bind: id("40"))"
+            ).run()
+            try await sql.raw(
+                "UPDATE sandbox_idle_fences SET report = jsonb_set(report, '{generation}', to_jsonb('unknown'::text)) WHERE sandbox_id = \(bind: id("50"))"
+            ).run()
+            try await sql.raw(
+                "UPDATE sandbox_idle_fences SET received_at = \(bind: now.date.addingTimeInterval(1)) WHERE sandbox_id = \(bind: id("60"))"
+            ).run()
+            let filtered = try await SandboxIdleFenceService.nominationCandidates(after: id("20"), at: now, on: app.db)
+            #expect(filtered.sandboxes.isEmpty)
+            try await InventorySessionFence.replace(UUID(), agentID: owner, on: app.db)
+            #expect(
+                try await SandboxIdleFenceService.nominationCandidates(after: nil, at: now, on: app.db).sandboxes
+                    .isEmpty)
+        }
+    }
+
     @Test("Automatic fence owns quota/generation and new admitted activity revokes it durably")
     func automaticAdmissionAndCancellation() async throws {
         try await withSandboxTestApp { app, _, _, sandbox in

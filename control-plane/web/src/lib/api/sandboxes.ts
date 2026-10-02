@@ -120,7 +120,9 @@ export const sandboxesApi = {
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       const sandbox = await api.get<Sandbox>(`/api/sandboxes/${id}`);
-      if (sandbox.conditions.degraded) throw new Error("Sandbox restore failed; retry after recovery");
+      if (sandbox.conditions.degraded?.sinceGeneration === result.targetGeneration) {
+        throw new Error("Sandbox restore failed; retry after recovery");
+      }
       if (sandbox.conditions.targetGeneration !== result.targetGeneration) {
         throw new Error("Sandbox wake was superseded by another mutation");
       }

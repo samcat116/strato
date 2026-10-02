@@ -301,6 +301,12 @@ struct DesiredStateAssembler {
             pullSecretsByProject = Dictionary(grouping: rows) { $0.$project.id }
         }
 
+        let sandboxIDs = try sandboxes.map { try $0.requireID() }
+        let idleStates =
+            try await sandboxIDs.isEmpty
+            ? [:]
+            : SandboxIdleFenceService.assemblyStates(
+                ids: sandboxIDs, at: ClusterClock.read(on: db), on: db)
         var sandboxEntries: [DesiredSandboxState] = []
         // Both snapshot references a sandbox entry can carry, fetched together:
         // the create-strategy `restoredFromSnapshotId` (a fork's lineage) and the
@@ -420,13 +426,12 @@ struct DesiredStateAssembler {
                     generation: sandbox.restoreGeneration, snapshotId: snapshotID, artifacts: artifacts)
             }
 
-            let idle = try await SandboxIdleFenceService.state(id: sandboxId, on: db)
+            let idle = idleStates[sandboxId]?.idle
             if idle?.fence != nil, idle?.decodedFence == nil {
                 throw Abort(.conflict, reason: "Automatic suspension provenance is unreadable")
             }
             let idleFence = idle?.decodedFence.flatMap { $0.generation == sandbox.generation ? $0 : nil }
-            let idleBusy = try await SandboxActivityService.hasAdmittedActivity(
-                id: sandboxId, at: try await ClusterClock.read(on: db), on: db)
+            let idleBusy = idleStates[sandboxId]?.hasAdmittedActivity == true
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,

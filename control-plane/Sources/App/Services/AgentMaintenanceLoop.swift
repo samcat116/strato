@@ -10,6 +10,7 @@ actor AgentMaintenanceLoop {
     private let interval: Duration
     private var task: Task<Void, Never>?
     var isShutDown = false
+    var idleSuspensionCursor: UUID?
     private var autoUpdateTargetOverride: String?
 
     init(app: Application, interval: Duration) {
