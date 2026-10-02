@@ -10,7 +10,7 @@ import Vapor
 @Suite("Current schema baseline", .serialized)
 struct CurrentSchemaBaselineTests {
     private static let expectedCatalogMD5 = "4164eef002a4bb3f9e26e0738d27bc06"
-    private static let expectedCurrentCatalogMD5 = "1172b74e9ce818877da6a52a937e25c3"
+    private static let expectedCurrentCatalogMD5 = "05b90621f2d6144decef47810d4d06cd"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -62,11 +62,11 @@ struct CurrentSchemaBaselineTests {
             let upgradedCounts = try await catalogCounts(on: app.db)
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
-            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5)
-            #expect(upgradedCounts.tables == 79)
-            #expect(upgradedCounts.columns == 1049)
-            #expect(upgradedCounts.constraints == 375)
-            #expect(upgradedCounts.indexes == 243)
+            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Current schema digest: \(upgradedMD5)")
+            #expect(upgradedCounts.tables == 80)
+            #expect(upgradedCounts.columns == 1051)
+            #expect(upgradedCounts.constraints == 377)
+            #expect(upgradedCounts.indexes == 244)
             #expect(upgradedCounts.enums == baselineCounts.enums)
             #expect(upgradedCounts.triggers == baselineCounts.triggers)
             #expect(upgradedCounts.functions == baselineCounts.functions)

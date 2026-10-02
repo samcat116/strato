@@ -166,6 +166,24 @@ extension AgentService {
             inventoryRefusal.map {
                 ObservedManifestStatus(inventoryComplete: false, quarantinedEntries: 0, reason: $0)
             } ?? report.manifestStatus
+        let admissionOutcome: ResourceAdmissionService.ReportOutcome
+        do {
+            admissionOutcome = try await ResourceAdmissionService.accept(
+                report, agentID: agentUUID, sessionID: inventorySession,
+                inventoryComplete: inventoryRefusal == nil && report.manifestStatus?.inventoryComplete != false,
+                on: db)
+            if case .refused = admissionOutcome { return nil }
+            if case .accepted(let released) = admissionOutcome {
+                // Durable net resources and claim removal committed first. A
+                // failed release only leaves conservative double charging.
+                for key in released {
+                    await app.coordination.releaseReservation(agentId: report.agentId, vmId: key)
+                }
+            }
+        } catch {
+            app.logger.warning("Resource admission report transaction failed; retaining claims: \(error)")
+            return nil
+        }
         var agentChanged = applyReportedManifestStatus(effectiveManifestStatus, to: agent, at: instant)
 
         // Reports carry the same resource snapshot as heartbeats; keep the

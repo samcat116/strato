@@ -219,14 +219,72 @@ when an aborted transaction's next generation is reused. The delta is the positi
 admitted aggregate. The producer reserves the positive delta inside the locked mutation before
 committing sizing, snapshot, ledger, quota and generation. Rollback cleanup
 only targets its mutation-owned claim; uncertain commit outcomes retain it.
-This producer is behind the unchanged burstable gate. Acknowledgement remains
-unwired while admission is disabled. Releasing a growth claim requires
-a runtime observation that proves the admitted footprint for that applied
-generation is included in the same host net-resource report. A manifest target
-generation, an ordinary workload-ID heartbeat or a readiness boolean is not
-that acknowledgement. STR272/STR266 must confirm the exact report fields,
-ordering, failure behavior and provenance; the coordinator owns this contract
-and eventual activation. Current API, scheduler and agent gates remain closed.
+This producer is behind the unchanged burstable gate.
+
+### Agreed coherent acknowledgement (wire67)
+
+`ObservedStateReport.resourceEnforcement` is optional. Its
+`ResourceEnforcementSnapshot` carries `agentBootID: UUID`, `sequence: Int64`,
+`sampledAt: Date`, `inventoryComplete: Bool` and
+`acknowledgements: [WorkloadEnforcementAcknowledgement]`. Each acknowledgement
+carries `kind`, `workloadId`, `appliedGeneration`, canonical `resourceClass`,
+`backend`, canonical `accountedReservation`, `runtimeGuestBytes`,
+`pageSizeBytes`, canonical `desiredLimits`/`appliedLimits`,
+`cpuQuotaUnlimited` and `ownershipVerified`. Shared commit
+`e109ffe88d2586a968beac839a1a09265038d7b6` publishes these exact names.
+
+The producer must capture reservation inventory, acknowledgements and the SAME
+report's net resources from a versioned snapshot. Recheck ownership/generation/
+ledger after asynchronous backend reads; retry or omit an acknowledgement on
+mutation. Each certified ledger debits net resources exactly once. Applied
+generation means successful guarded backend convergence, not a manifest target
+or matching controller-file samples. Desired limits describe that applied
+snapshot and actual grant; applied limits equal canonical page normalization.
+The observed workload must be uniquely present, running, at that generation,
+with neither convergence in progress nor a same-generation failure.
+
+PostgreSQL `agent_resource_admissions` stores ordered report state and pending
+mutation commitments. Growth adds its positive charge in the sizing/quota/
+generation transaction, serialized on the agent row. Placement and subsequent
+growth subtract pending charges from the last coherent net report (legacy
+agents retain their normal reported resources). Charges have no TTL: Valkey
+expiry/restart, CP outages and uncertain commit results never expose them as
+free. Conservative double charging while a coordination key remains is safe.
+Rollback removes the staged durable change along with the mutation.
+
+The existing authenticated inventory-session fence binds report and heartbeat
+processing to the current connection across replicas. The durable cursor
+accepts strictly increasing nonnegative sequences; a different boot ID is
+permitted only across a session transition. Restart must invalidate producer
+acknowledgements until fresh adoption/readback. Once coherent reporting is
+established, heartbeat resource fields cannot overwrite it. Agent wall-clock
+`sampledAt` is diagnostic, never a replacement for receiver freshness time.
+
+The consumer requires complete inventory, unique acknowledgements, internally
+consistent host memory accounting, precise CPU units, and acknowledged totals
+within the report's debited totals. Incomplete or inconsistent accounting zeros
+the effective placement capacity until a fresh valid report. It validates owner/site/backend readiness,
+current class snapshot, current committed generation and exact ledger, actual
+guest grant, canonical limits, verified ownership and unlimited CPU quota.
+Persisting net resources and removing proven covered durable claims is one
+transaction; exact coordination keys are released only after commit. A failed
+release leaves conservative double charging. Sequence rejection precedes any
+resource or claim changes.
+
+A newer generation covers earlier claims only through a stored monotonic
+ledger chain: every subsequent claim's previous ledger must equal its
+predecessor's admitted ledger, ending in the exact acknowledged current
+ledger/snapshot. Missing links, forks, mismatches and newer pending generations
+retain charges. No prefix deletion or ordinary observed workload-ID release
+can remove these mutation-owned keys. Missing/unknown/failed/incomplete evidence
+retains commitments. Terminal cleanup requires separate proof of absence or
+rollback; it is not a successful-enforcement acknowledgement.
+
+STR267 owns canonical DTOs and CP consumption; STR272 owns coherent production
+and runtime acknowledgement; STR266 owns detailed desired/applied telemetry.
+Production activation remains disabled pending stable QEMU ownership, complete
+backend enforcement evidence and actual kernel acceptance. The coordinator
+owns integration and eventual activation.
 
 Independent database regressions cover concurrent mixed-revision growth,
 rollback of snapshot/ledger/sizing/generation, catalog lock serialization,

@@ -3,7 +3,7 @@ import Fluent
 /// Optional snapshots preserve existing guaranteed behavior without repricing rows.
 struct AddWorkloadResourceClasses: AsyncMigration {
     func prepare(on database: Database) async throws {
-        try await database.schema("agents").field("resource_class_enforcement", .json).update()
+        try await database.schema("agents").field("resource_class_enforcement", .array(of: .json)).update()
         try await database.schema("agents").field("available_cpu_micro_units", .int64).update()
         try await database.schema("sites").field("burstable_resource_class", .json).update()
         try await database.schema("vms").field("admitted_reservation", .json).update()

@@ -128,10 +128,10 @@ enum WorkloadResourceClassService {
                     }
                     let generation = committed.generation + 1
                     let agentID = try agent.requireID().uuidString
-                    let capacity = ReservationAmounts(
-                        memory: agent.availableMemory, disk: 0,
-                        cpuMicroUnits: agent.availableCPUMicroUnits
-                            ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: agent.availableCPU))
+                    let (reservationID, capacity) = try await ResourceAdmissionService.stageGrowth(
+                        agentID: try agent.requireID(), workloadID: try committed.requireID(),
+                        generation: generation, mutationID: mutationID, admission: admission,
+                        previous: previous, backend: .qemuVM, on: db)
                     guard
                         await coordination.reserveGrowthCapacity(
                             agentId: agentID, workloadID: try committed.requireID(),
@@ -143,8 +143,7 @@ enum WorkloadResourceClassService {
                     }
                     claim = GrowthClaim(
                         agentID: agentID,
-                        reservationID: CoordinationService.growthReservationID(
-                            workloadID: try committed.requireID(), generation: generation, mutationID: mutationID),
+                        reservationID: reservationID,
                         generation: generation)
                 }
             }

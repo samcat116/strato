@@ -213,6 +213,7 @@ extension Application {
         migrations.add(AddAgentPhysicalFreeDisk())
         migrations.add(AddAgentMemoryAccounting())
         migrations.add(AddWorkloadResourceClasses())
+        migrations.add(AddDurableResourceAdmissions())
 
         // STR-278: placement and quota admission need the guest-visible size
         // encoded by sparse image artifacts, not their stored object bytes.

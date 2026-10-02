@@ -545,7 +545,17 @@ extension AgentService {
     /// the claimed `agentId` must belong to it, so one agent cannot drive another
     /// agent's resource tracking or VM reconciliation.
     func updateAgentHeartbeat(_ message: AgentHeartbeatMessage, fromAgentKey agentKey: String) async throws {
-        let db = app.db
+        guard let agentID = UUID(uuidString: message.agentId) else { return }
+        let session = observedInventorySessions[agentKey]
+        try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
+            guard try await InventorySessionFence.current(agentID: agentID, on: db) == session else { return }
+            try await self.applyFencedHeartbeat(message, fromAgentKey: agentKey, on: db)
+        }
+    }
+
+    private func applyFencedHeartbeat(
+        _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, on db: any Database
+    ) async throws {
         let instant = try await ClusterClock.read(on: db)
         guard let agentUUID = UUID(uuidString: message.agentId),
             let agent = try await Agent.find(agentUUID, on: db)
@@ -571,8 +581,12 @@ extension AgentService {
         // and observed report carry the same snapshot on the same cadence.
         // Persist only real resource/status changes or one heartbeat per half
         // TTL so identical pairs do not churn the row.
+        // Once coherent reporting is established, unordered heartbeat capacity
+        // cannot overwrite the accepted accounting snapshot. The existing
+        // session fence serializes this read/save with reports and reconnects.
+        let accepted = try await AgentResourceAdmission.find(agentUUID, on: db)?.state.resources
         if applyPeriodicAgentState(
-            message.resources,
+            accepted ?? message.resources,
             dependencyObservations: message.dependencyObservations,
             hostResourceTelemetry: message.hostResourceTelemetry,
             to: agent,

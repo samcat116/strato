@@ -443,17 +443,24 @@ actor WorkloadPlacementService {
                     }
                 } ?? agents
 
+            let durableRows = try await AgentResourceAdmission.query(on: app.db).all()
+            let durable = Dictionary(
+                uniqueKeysWithValues: durableRows.compactMap { row in
+                    row.id.map { ($0, row.state) }
+                })
             return present.compactMap { agent in
                 guard let agentId = agent.id?.uuidString else { return nil }
+                let state = agent.id.flatMap { durable[$0] } ?? ResourceAdmissionState()
+                let capacity = ResourceAdmissionService.capacity(agent: agent, state: state)
                 return SchedulableAgent(
                     id: agentId,
                     name: agent.name,
                     totalCPU: agent.totalCPU,
-                    availableCPU: agent.availableCPU,
+                    availableCPU: Int(capacity.cpuMicroUnits / 1_000_000),
                     totalMemory: agent.totalMemory,
-                    availableMemory: agent.availableMemory,
+                    availableMemory: capacity.memory,
                     totalDisk: agent.totalDisk,
-                    availableDisk: agent.availableDisk,
+                    availableDisk: capacity.disk,
                     physicalFreeDisk: agent.physicalFreeDisk,
                     qemuOverheadBytes: agent.memoryAccounting?.qemuOverheadBytes
                         ?? WorkloadMemoryReservation.defaultQEMUOverheadBytes,
@@ -469,7 +476,7 @@ actor WorkloadPlacementService {
                     supportsSandboxNetworking: agent.effectiveSandboxNetworkingCapable(at: instant),
                     supportsVTPM: agent.tpmCapable,
                     supportsVsock: agent.supportsVsock,
-                    availableCPUMicroUnits: agent.availableCPUMicroUnits
+                    availableCPUMicroUnits: capacity.cpuMicroUnits
                 )
             }
         } catch {
