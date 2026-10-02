@@ -6,7 +6,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("Fleet run durability and bounds", .serialized)
+@Suite("Fleet run durability and bounds", .serialized, .postgresFixture)
 struct VMFleetRunTests {
     private actor Deliveries {
         var ids: [String] = []
