@@ -186,6 +186,8 @@ struct ManagedStatePermissionsTests {
                 try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
             }
             try FileManager.default.createSymbolicLink(atPath: operatorLink, withDestinationPath: operatorUUID)
+            // A first-create crash can leave staging before a manifest exists.
+            try ManagedStatePermissions.migrate(at: root, legacyStagingRoot: legacyRoot)
             try ManagedStatePermissions.migrate(at: root, qemuVMIds: [vmId], legacyStagingRoot: legacyRoot)
             #expect(try mode(legacy) == 0o700)
             for path in crashFiles {
