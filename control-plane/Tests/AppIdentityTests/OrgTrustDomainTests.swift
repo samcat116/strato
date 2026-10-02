@@ -474,7 +474,7 @@ final class OrgTrustDomainTests {
             // `AgentIdentity`, so repeating the mistake is a compile error.
             #expect(await app.coordination.isAgentPresent(agentKey: row.identity.key) == true)
 
-            await app.agentService.forceUnregisterAgent(row.identity)
+            try await app.agentService.forceUnregisterAgent(row.identity)
 
             #expect(await app.coordination.isAgentPresent(agentKey: row.identity.key) == false)
         }

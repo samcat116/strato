@@ -408,6 +408,9 @@ final class WorkloadPrincipalTests {
 
             // Registering (and re-requiring) the same agent identity is
             // idempotent…
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createAgent(
+                named: nodeB.name, organizationScope: .organization(try tree.org.requireID()))
             try await WorkloadRegistry.registerAgent(identity: nodeB, on: app.db)
             try await WorkloadRegistry.requireAgentRegistration(identity: nodeB, on: app.db)
             let rows = try await WorkloadRegistration.query(on: app.db)

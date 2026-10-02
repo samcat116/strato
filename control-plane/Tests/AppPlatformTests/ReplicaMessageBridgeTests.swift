@@ -8,6 +8,10 @@ import Vapor
 /// Records what the bridge asks its owner to do, standing in for `AgentService`
 /// so the bridge can be exercised without any real agent sockets.
 private actor FakeBridgeDelegate: ReplicaBridgeDelegate {
+    private(set) var disconnectedAgentKeys: [String] = []
+
+    func disconnectLocalAgent(agentKey: String) async { disconnectedAgentKeys.append(agentKey) }
+
     private(set) var deliveredDoorbells: [String] = []
     private(set) var deliveredAgentKeys: [String] = []
 

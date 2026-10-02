@@ -5900,10 +5900,28 @@ paths:
       operationId: forceAgentOffline
       summary: Force an agent offline
       description: >-
-        Drops the agent from the in-memory registry and marks it `offline` in
-        the database. Requires `manage` on the agent, and falls back to
+        Persists an administrative offline hold and closes the owning agent socket
+        across replicas. Heartbeats and reconnects cannot clear the hold; use the
+        resume action to release it. Requires `manage` on the agent, and falls back to
         system-admin only while the agent hosts another organization's
         workloads.
+      tags: [Agents]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/agents/{agentId}/actions/resume:
+    parameters:
+      - $ref: "#/components/parameters/AgentID"
+    post:
+      operationId: resumeAgent
+      summary: Release an agent's administrative offline hold
+      description: >-
+        Allows authenticated reconnect and registration again. Does not mark the
+        agent online until it reports in. Requires manage on the agent, with the
+        same system-admin requirement for foreign workloads as force-offline.
       tags: [Agents]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -15508,6 +15526,7 @@ components:
         - hostname
         - version
         - status
+        - administrativelyOffline
         - resources
         - hypervisors
         - sandboxCapable
@@ -15534,6 +15553,9 @@ components:
           description: The agent build currently running on the node.
         status:
           $ref: "#/components/schemas/AgentStatus"
+        administrativelyOffline:
+          type: boolean
+          description: Operator hold that only the resume action clears.
         resources:
           $ref: "#/components/schemas/AgentResources"
         architecture:
