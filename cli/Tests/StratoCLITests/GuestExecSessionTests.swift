@@ -64,11 +64,13 @@ struct GuestExecSessionTests {
         #expect(terminal.transitions() == [.entered, .restored])
     }
 
-    @Test("Multiplexes output, streams stdin then EOF, preserves path prefixes, and returns exit")
-    func multiplexedSession() async throws {
+    @Test(
+        "Multiplexes output, streams stdin then EOF, preserves path prefixes, and returns exit",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func multiplexedSession(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 201, json: Self.sessionJSON(mode: "multiplexed"))
+                .init(statusCode: 201, json: Self.sessionJSON(mode: "multiplexed", resource: resource))
             ])
             let authenticated = try makeAuthenticated(transport: transport, directory: directory)
             let socket = FakeGuestExecSocket(
@@ -90,7 +92,7 @@ struct GuestExecSessionTests {
 
             let exit = try await session.run(
                 GuestExecInvocation(
-                    sandboxID: "sandbox-1",
+                    resource: resource,
                     command: ["/bin/test", "arg"],
                     environment: ["A": "B"],
                     workingDirectory: "/workspace",
@@ -114,10 +116,12 @@ struct GuestExecSessionTests {
             let call = try #require(await connector.calls().first)
             #expect(
                 call.url.absoluteString
-                    == "wss://strato.example.com/control-plane/api/sandboxes/sandbox-1/exec/session-1/attach")
+                    == "wss://strato.example.com/control-plane/api/\(Self.resourcePath(resource))/exec/session-1/attach"
+            )
             #expect(call.bearerToken == "st_test")
 
             let mint = try #require(transport.recordedRequests.first)
+            #expect(mint.path == "/api/\(Self.resourcePath(resource))/exec")
             #expect(mint.authorization == "Bearer st_test")
             let body = try #require(
                 JSONSerialization.jsonObject(with: Data(mint.bodyText.utf8))
@@ -127,11 +131,13 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Fails closed when the server does not echo multiplexed mode")
-    func requiresMultiplexNegotiation() async throws {
+    @Test(
+        "Fails closed when the server does not echo multiplexed mode",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func requiresMultiplexNegotiation(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 201, json: Self.sessionJSON(mode: nil))
+                .init(statusCode: 201, json: Self.sessionJSON(mode: nil, resource: resource))
             ])
             let authenticated = try makeAuthenticated(transport: transport, directory: directory)
             let connector = FakeGuestExecConnector(sockets: [])
@@ -146,7 +152,7 @@ struct GuestExecSessionTests {
             await #expect(throws: CLIError.self) {
                 try await session.run(
                     GuestExecInvocation(
-                        sandboxID: "sandbox-1", command: ["true"], tty: false,
+                        resource: resource, command: ["true"], tty: false,
                         outputMode: .multiplexed),
                     onOutput: { _ in })
             }
@@ -154,11 +160,13 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Terminal stdin sends EOF immediately without reading input")
-    func terminalStdinEOF() async throws {
+    @Test(
+        "Terminal stdin sends EOF immediately without reading input",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func terminalStdinEOF(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 201, json: Self.sessionJSON(mode: "multiplexed"))
+                .init(statusCode: 201, json: Self.sessionJSON(mode: "multiplexed", resource: resource))
             ])
             let authenticated = try makeAuthenticated(transport: transport, directory: directory)
             let socket = FakeGuestExecSocket(
@@ -177,7 +185,7 @@ struct GuestExecSessionTests {
 
             _ = try await session.run(
                 GuestExecInvocation(
-                    sandboxID: "sandbox-1", command: ["true"], tty: false,
+                    resource: resource, command: ["true"], tty: false,
                     outputMode: .multiplexed, input: nil, closeStdinWhenInputEnds: true),
                 onOutput: { _ in })
 
@@ -185,11 +193,13 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Attach forwards terminal resizes")
-    func forwardsResize() async throws {
+    @Test(
+        "Attach forwards terminal resizes",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func forwardsResize(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 201, json: Self.sessionJSON(mode: "raw"))
+                .init(statusCode: 201, json: Self.sessionJSON(mode: "raw", resource: resource))
             ])
             let authenticated = try makeAuthenticated(transport: transport, directory: directory)
             let socket = FakeGuestExecSocket(
@@ -208,7 +218,7 @@ struct GuestExecSessionTests {
 
             _ = try await session.run(
                 GuestExecInvocation(
-                    sandboxID: "sandbox-1", command: ["/bin/sh"], tty: true,
+                    resource: resource, command: ["/bin/sh"], tty: true,
                     initialSize: .init(rows: 24, cols: 80), outputMode: .raw,
                     resizes: Self.resizes([.init(rows: 40, cols: 120)])),
                 onOutput: { _ in })
@@ -226,11 +236,13 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Retries a replica that did not claim the single-use session")
-    func attachRetry() async throws {
+    @Test(
+        "Retries a replica that did not claim the single-use session",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func attachRetry(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 201, json: Self.sessionJSON(mode: "raw"))
+                .init(statusCode: 201, json: Self.sessionJSON(mode: "raw", resource: resource))
             ])
             let authenticated = try makeAuthenticated(transport: transport, directory: directory)
             let rejected = FakeGuestExecSocket(frames: [
@@ -251,7 +263,7 @@ struct GuestExecSessionTests {
 
             let exit = try await session.run(
                 GuestExecInvocation(
-                    sandboxID: "sandbox-1", command: ["/bin/sh"], tty: true,
+                    resource: resource, command: ["/bin/sh"], tty: true,
                     outputMode: .raw),
                 onOutput: { _ in })
 
@@ -262,8 +274,10 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Retries 503 mint failures only within the thirty-second budget")
-    func mintRetryBudget() async throws {
+    @Test(
+        "Retries 503 mint failures only within the thirty-second budget",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func mintRetryBudget(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(handler: { _ in
                 .init(statusCode: 503, json: #"{"error":true,"reason":"No agent connection"}"#)
@@ -282,7 +296,7 @@ struct GuestExecSessionTests {
             await #expect(throws: CLIError.self) {
                 try await session.run(
                     GuestExecInvocation(
-                        sandboxID: "sandbox-1", command: ["true"], tty: false,
+                        resource: resource, command: ["true"], tty: false,
                         outputMode: .multiplexed),
                     onOutput: { _ in })
             }
@@ -293,8 +307,10 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Authorization failures do not retry or open a WebSocket")
-    func authorizationFailureIsFailFast() async throws {
+    @Test(
+        "Authorization failures do not retry or open a WebSocket",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func authorizationFailureIsFailFast(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
                 .init(statusCode: 403, json: #"{"error":true,"reason":"Forbidden"}"#)
@@ -312,7 +328,7 @@ struct GuestExecSessionTests {
             await #expect(throws: CLIError.self) {
                 try await session.run(
                     GuestExecInvocation(
-                        sandboxID: "sandbox-1", command: ["true"], tty: false,
+                        resource: resource, command: ["true"], tty: false,
                         outputMode: .multiplexed),
                     onOutput: { _ in })
             }
@@ -321,11 +337,13 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Cancellation closes an attached WebSocket")
-    func cancellationClosesSocket() async throws {
+    @Test(
+        "Cancellation closes an attached WebSocket",
+        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func cancellationClosesSocket(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 201, json: Self.sessionJSON(mode: "raw"))
+                .init(statusCode: 201, json: Self.sessionJSON(mode: "raw", resource: resource))
             ])
             let authenticated = try makeAuthenticated(transport: transport, directory: directory)
             let socket = FakeGuestExecSocket(
@@ -341,7 +359,7 @@ struct GuestExecSessionTests {
             let task = Task {
                 try await session.run(
                     GuestExecInvocation(
-                        sandboxID: "sandbox-1", command: ["sleep", "30"], tty: true,
+                        resource: resource, command: ["sleep", "30"], tty: true,
                         outputMode: .raw),
                     onOutput: { _ in })
             }
@@ -362,11 +380,11 @@ struct GuestExecSessionTests {
             .remoteError,
             .malformedControl,
             .duplicateReady,
-        ])
-    func rejectsMalformedSessions(testCase: MalformedSessionCase) async throws {
+        ], [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+    func rejectsMalformedSessions(testCase: MalformedSessionCase, resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 201, json: Self.sessionJSON(mode: "multiplexed"))
+                .init(statusCode: 201, json: Self.sessionJSON(mode: "multiplexed", resource: resource))
             ])
             let authenticated = try makeAuthenticated(transport: transport, directory: directory)
             let socket = FakeGuestExecSocket(frames: testCase.frames)
@@ -382,11 +400,51 @@ struct GuestExecSessionTests {
             await #expect(throws: CLIError.self) {
                 try await session.run(
                     GuestExecInvocation(
-                        sandboxID: "sandbox-1", command: ["false"], tty: false,
+                        resource: resource, command: ["false"], tty: false,
                         outputMode: .multiplexed),
                     onOutput: { _ in })
             }
             #expect(await socket.wasClosed())
+        }
+    }
+
+    @Test(
+        "VM refusals retain their distinct server reasons and do not attach",
+        arguments: [
+            (400, "VM must be running to exec. Current state: Stopped"),
+            (400, "VM exec requires a VM created with the Strato guest agent enabled"),
+            (503, "Agent 'node' does not support VM guest exec for qemu"),
+            (403, "Forbidden: vm:exec"),
+            (404, "VM not found"),
+        ])
+    func vmRefusals(refusal: (Int, String)) async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let body = try JSONSerialization.data(withJSONObject: ["error": true, "reason": refusal.1])
+            let transport = MockTransport(handler: { _ in
+                .init(statusCode: refusal.0, json: String(decoding: body, as: UTF8.self))
+            })
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let clock = FakeGuestExecClock(now: Date(timeIntervalSince1970: 1_000))
+            let connector = FakeGuestExecConnector(sockets: [])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client, credentials: authenticated.credentials,
+                connector: connector, now: { clock.current() }, sleep: { _ in clock.advance(by: 30) })
+            do {
+                _ = try await session.run(
+                    GuestExecInvocation(
+                        resource: .virtualMachine("vm-1"), command: ["true"],
+                        tty: false, outputMode: .multiplexed), onOutput: { _ in })
+                Issue.record("Expected a VM refusal")
+            } catch let error as CLIError {
+                guard case .api(let status, let message) = error else {
+                    Issue.record("Expected HTTP refusal, got \(error)")
+                    return
+                }
+                #expect(status == refusal.0)
+                #expect(message == refusal.1)
+            }
+            #expect(await connector.calls().isEmpty)
+            #expect(transport.recordedRequests.allSatisfy { $0.path == "/api/vms/vm-1/exec" })
         }
     }
 
@@ -404,11 +462,20 @@ struct GuestExecSessionTests {
             transport: transport)
     }
 
-    private static func sessionJSON(mode: String?) -> String {
+    private static func resourcePath(_ resource: GuestExecResource) -> String {
+        switch resource {
+        case .sandbox(let id): "sandboxes/\(id)"
+        case .virtualMachine(let id): "vms/\(id)"
+        }
+    }
+
+    private static func sessionJSON(
+        mode: String?, resource: GuestExecResource = .sandbox("sandbox-1")
+    ) -> String {
         let outputMode = mode.map { #", "outputMode": "\#($0)""# } ?? ""
         return """
             {"sessionId":"session-1",
-             "websocketPath":"/api/sandboxes/sandbox-1/exec/session-1/attach",
+             "websocketPath":"/api/\(resourcePath(resource))/exec/session-1/attach",
              "expiresAt":"2099-01-01T00:00:00Z"\(outputMode)}
             """
     }

@@ -9,7 +9,7 @@ struct VMCommand: AsyncParsableCommand {
         abstract: "Manage virtual machines.",
         subcommands: [
             List.self, Get.self, Create.self, Delete.self,
-            Start.self, Stop.self, Reboot.self, Pause.self, Resume.self,
+            Start.self, Stop.self, Reboot.self, Pause.self, Resume.self, Exec.self,
         ],
         defaultSubcommand: List.self
     )

@@ -44,6 +44,10 @@ public func fileHandleDataStream(_ handle: FileHandle) -> AsyncStream<Data> {
     }
 }
 
+public func standardOutputIsTerminal() -> Bool {
+    isatty(STDOUT_FILENO) == 1
+}
+
 public func standardInputIsTerminal() -> Bool {
     isatty(STDIN_FILENO) == 1
 }
@@ -164,13 +168,15 @@ public final class TerminalTerminationMonitor: @unchecked Sendable {
     public let signals: AsyncStream<Int32>
     private let continuation: AsyncStream<Int32>.Continuation
     private let sources: [DispatchSourceSignal]
+    private let signalNumbers: [Int32]
 
-    public init() {
+    public init(signalNumbers: [Int32] = [SIGTERM, SIGHUP]) {
+        self.signalNumbers = signalNumbers
         let (signals, continuation) = AsyncStream.makeStream(of: Int32.self)
         self.signals = signals
         self.continuation = continuation
         let delivered = Mutex(false)
-        sources = [SIGTERM, SIGHUP].map { signalNumber in
+        sources = signalNumbers.map { signalNumber in
             signal(signalNumber, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
             source.setEventHandler {
@@ -191,7 +197,7 @@ public final class TerminalTerminationMonitor: @unchecked Sendable {
 
     deinit {
         continuation.finish()
-        for (source, signalNumber) in zip(sources, [SIGTERM, SIGHUP]) {
+        for (source, signalNumber) in zip(sources, signalNumbers) {
             source.cancel()
             signal(signalNumber, SIG_DFL)
         }
