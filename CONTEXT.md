@@ -382,3 +382,7 @@ use in code, tests, docs, and review. Architecture-level maps live in
   `primaryDNSZone` already means "the zone this network's VMs register into", and
   "and resolve through" is the same intent; making the operator say it twice is
   what left a correctly realized zone inert.
+
+- **Fleet run**: a confirmed immutable VM target list and argv, with a durable
+  parent record aggregating individually authorized recorded command operations.
+  Skipped targets and partial failure are normal collected outcomes.
