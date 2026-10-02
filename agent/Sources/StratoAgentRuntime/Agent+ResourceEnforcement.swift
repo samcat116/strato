@@ -72,12 +72,14 @@ extension Agent {
             if application.key.kind == .vm {
                 let records = observedVMs.filter { $0.vmId == application.key.id }
                 observedGeneration =
-                    records.count == 1 && records[0].failedGeneration != application.generation
+                    records.count == 1
+                        && ResourceEnforcementProducer.canAcknowledge(records[0], application: application)
                     ? records[0].observedGeneration : nil
             } else {
                 let records = observedSandboxes.filter { $0.sandboxId == application.key.id }
                 observedGeneration =
-                    records.count == 1 && records[0].failedGeneration != application.generation
+                    records.count == 1
+                        && ResourceEnforcementProducer.canAcknowledge(records[0], application: application)
                     ? records[0].observedGeneration : nil
             }
             guard observedGeneration == application.generation,

@@ -13,12 +13,16 @@ struct ResourceEnforcementProducerTests {
         let snapshot = try WorkloadResourceClassSnapshot(
             classID: WorkloadResourceClassSnapshot.burstableID, siteID: UUID(), revision: 3, policy: policy)
         let guest: Int64 = 512 * 1024 * 1024
+        let backend: WorkloadResourceClassBackend = key?.kind == .sandbox ? .jailedFirecrackerSandbox : .qemuVM
         return .init(
-            key: key ?? self.key, generation: generation, resourceClass: snapshot, backend: .qemuVM,
+            key: key ?? self.key, generation: generation, resourceClass: snapshot, backend: backend,
             reservation: .init(
                 cpus: 2,
                 memory: .init(
-                    guestBytes: guest, backendOverheadBytes: WorkloadMemoryReservation.defaultQEMUOverheadBytes),
+                    guestBytes: guest,
+                    backendOverheadBytes: backend == .qemuVM
+                        ? WorkloadMemoryReservation.defaultQEMUOverheadBytes
+                        : WorkloadMemoryReservation.firecrackerOverheadBytes),
                 policy: policy), guestBytes: guest)
     }
     private func accounting(
@@ -61,6 +65,69 @@ struct ResourceEnforcementProducerTests {
             evidence: evidence.map { [application.key: $0] } ?? [:], sampledAt: Date(), pageSize: 4096)
         return try #require(result)
     }
+    @Test("only exact, settled, running VM observations can authorize acknowledgement")
+    func vmObservationEligibility() throws {
+        let app = try application()
+        let valid = ObservedVMState(vmId: key.id, status: .running, observedGeneration: app.generation)
+        #expect(ResourceEnforcementProducer.canAcknowledge(valid, application: app))
+        for status in VMStatus.allCases where status != .running {
+            #expect(
+                !ResourceEnforcementProducer.canAcknowledge(
+                    ObservedVMState(vmId: key.id, status: status, observedGeneration: app.generation), application: app)
+            )
+        }
+        let invalid = [
+            ObservedVMState(vmId: UUID(), status: .running, observedGeneration: app.generation),
+            ObservedVMState(vmId: key.id, status: .running, observedGeneration: app.generation - 1),
+            ObservedVMState(
+                vmId: key.id, status: .running, observedGeneration: app.generation, convergencePhase: "resizing"),
+            ObservedVMState(vmId: key.id, status: .running, observedGeneration: app.generation, convergencePhase: ""),
+            ObservedVMState(vmId: key.id, status: .running, observedGeneration: app.generation, lastError: "failure"),
+            ObservedVMState(vmId: key.id, status: .running, observedGeneration: app.generation, lastError: ""),
+            ObservedVMState(
+                vmId: key.id, status: .running, observedGeneration: app.generation, failedGeneration: app.generation),
+            ObservedVMState(
+                vmId: key.id, status: .running, observedGeneration: app.generation, failedGeneration: app.generation - 1
+            ),
+            ObservedVMState(
+                vmId: key.id, status: .running, observedGeneration: app.generation, failureClassification: .blocked),
+        ]
+        for record in invalid { #expect(!ResourceEnforcementProducer.canAcknowledge(record, application: app)) }
+    }
+
+    @Test("only exact, settled, running sandbox observations can authorize acknowledgement")
+    func sandboxObservationEligibility() throws {
+        let sandboxKey = ResourceEnforcementProducer.Key(kind: .sandbox, id: key.id)
+        let app = try application(key: sandboxKey)
+        let valid = ObservedSandboxState(sandboxId: key.id, status: .running, observedGeneration: app.generation)
+        #expect(ResourceEnforcementProducer.canAcknowledge(valid, application: app))
+        for status in SandboxStatus.allCases where status != .running {
+            #expect(
+                !ResourceEnforcementProducer.canAcknowledge(
+                    ObservedSandboxState(sandboxId: key.id, status: status, observedGeneration: app.generation),
+                    application: app))
+        }
+        let invalid = [
+            ObservedSandboxState(sandboxId: UUID(), status: .running, observedGeneration: app.generation),
+            ObservedSandboxState(sandboxId: key.id, status: .running, observedGeneration: app.generation + 1),
+            ObservedSandboxState(
+                sandboxId: key.id, status: .running, observedGeneration: app.generation, convergencePhase: "restoring"),
+            ObservedSandboxState(
+                sandboxId: key.id, status: .running, observedGeneration: app.generation, lastError: "failure"),
+            ObservedSandboxState(
+                sandboxId: key.id, status: .running, observedGeneration: app.generation,
+                failedGeneration: app.generation),
+            ObservedSandboxState(
+                sandboxId: key.id, status: .running, observedGeneration: app.generation,
+                failedGeneration: app.generation - 1),
+            ObservedSandboxState(
+                sandboxId: key.id, status: .running, observedGeneration: app.generation, failureClassification: .blocked
+            ),
+        ]
+        for record in invalid { #expect(!ResourceEnforcementProducer.canAcknowledge(record, application: app)) }
+        #expect(!ResourceEnforcementProducer.canAcknowledge(valid, application: try application()))
+    }
+
     @Test("successful convergence binds the complete canonical footprint to the same net accounting snapshot")
     func positive() throws {
         var producer = ResourceEnforcementProducer()

@@ -56,6 +56,22 @@ public struct ResourceEnforcementProducer: Sendable {
         applications[application.key] = application
         revision &+= 1
     }
+    /// A settled running observation is necessary even when controls and
+    /// accounting match; stale errors and progress cannot authorize claims.
+    public static func canAcknowledge(_ record: ObservedVMState, application: Application) -> Bool {
+        application.key.kind == .vm && record.vmId == application.key.id
+            && record.observedGeneration == application.generation && record.status == .running
+            && record.convergencePhase == nil && record.lastError == nil
+            && record.failedGeneration == nil && record.failureClassification == nil
+    }
+
+    public static func canAcknowledge(_ record: ObservedSandboxState, application: Application) -> Bool {
+        application.key.kind == .sandbox && record.sandboxId == application.key.id
+            && record.observedGeneration == application.generation && record.status == .running
+            && record.convergencePhase == nil && record.lastError == nil
+            && record.failedGeneration == nil && record.failureClassification == nil
+    }
+
     public func capture() -> Capture { Capture(revision: revision, applications: applications) }
 
     /// The caller fences manifest identity as well as both raw accounting
