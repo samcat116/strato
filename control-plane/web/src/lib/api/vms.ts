@@ -5,6 +5,8 @@ import { listAllPages } from "./pagination";
 import { buildLogQueryString } from "./logs";
 import type {
   VM,
+  GuestExecRequest,
+  GuestExecSession,
   CreateVMRequest,
   PatchVMMetadataRequest,
   AcceptedMutation,
@@ -23,6 +25,10 @@ import type {
 // converged — or, for a delete, polls operationsApi.get(mutationId), because a
 // deleted VM has nothing left to refetch.
 export const vmsApi = {
+  exec(id: string, body: GuestExecRequest): Promise<GuestExecSession> {
+    return api.post<GuestExecSession>(`/api/vms/${id}/exec`, body);
+  },
+
   list(organizationId?: string, signal?: AbortSignal): Promise<VM[]> {
     return listAllPages<VM>(
       "/api/vms",

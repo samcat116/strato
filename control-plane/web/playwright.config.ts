@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const mockPort = 18_080;
-const appPort = 3_100;
+const mockPort = Number(process.env.E2E_MOCK_PORT ?? 18_080);
+const appPort = Number(process.env.E2E_APP_PORT ?? 3_100);
 const mockOrigin = `http://127.0.0.1:${mockPort}`;
 
 export default defineConfig({
@@ -23,6 +23,7 @@ export default defineConfig({
   webServer: [
     {
       command: "bun run test:e2e:backend",
+      env: { E2E_MOCK_PORT: String(mockPort) },
       port: mockPort,
       reuseExistingServer: !process.env.CI,
     },
