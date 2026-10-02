@@ -42,8 +42,12 @@ jobs:
         run: cargo fmt --check
       - name: Unit tests
         run: cargo test --locked
+      - name: Opt-in idle-policy v5 unit tests
+        run: cargo test --locked --features idle-policy-v5
       - name: Clippy (Linux target)
         run: cargo clippy --locked --target x86_64-unknown-linux-musl --all-targets -- -D warnings
+      - name: Opt-in idle-policy v5 Clippy (Linux target)
+        run: cargo clippy --locked --target x86_64-unknown-linux-musl --all-targets --features idle-policy-v5 -- -D warnings
       - name: Guest-agent release layout smoke test
         working-directory: sandbox-guest
         run: |

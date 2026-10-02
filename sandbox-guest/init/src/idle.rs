@@ -160,6 +160,8 @@ impl Monitor {
             nic_count: no_nic.then_some(0),
         }
     }
+    // Keep the independently validated wire claim and coverage fields explicit.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
         op: &str,
