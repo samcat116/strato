@@ -2,7 +2,7 @@
 
 These helpers consume the executable
 [STR-267 class contract](./resource-classes-contract.md) at checkpoint
-`d926f182ab59a158e2ce92a4cd0c3cedcabf330f`. They are not yet wired to workload
+`ea7763845b17df11c09d11fc9fb10ce71f264451` (draft PR #1455). They are not yet wired to workload
 lifecycle execution. No burstable capability is advertised or placement enabled
 by this change. Guaranteed workloads retain their existing runtime path. The
 canonical class snapshot and wire v67 belong to the coordinated STR-267
