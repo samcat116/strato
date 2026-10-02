@@ -762,7 +762,7 @@ final class SandboxSnapshotTests {
     func artifactUploadAndDownloadRoundTripOverAgentMTLS() async throws {
         try await withSnapshotTestApp { app, user, project, sandbox, _ in
             _ = try await TestDataBuilder(db: app.db).createAgent(
-                named: "transfer-agent", organizationScope: .organization(project.$organization.id))
+                named: "transfer-agent", organizationScope: .organization(try #require(project.$organization.id)))
             let storeRoot = NSTemporaryDirectory() + "snapshot-transfer-\(UUID().uuidString)"
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
             defer { try? FileManager.default.removeItem(atPath: storeRoot) }
@@ -1101,7 +1101,7 @@ final class SandboxSnapshotTests {
     func reExportDoesNotClearPriorExport() async throws {
         try await withSnapshotTestApp { app, user, project, sandbox, _ in
             _ = try await TestDataBuilder(db: app.db).createAgent(
-                named: "reexport-agent", organizationScope: .organization(project.$organization.id))
+                named: "reexport-agent", organizationScope: .organization(try #require(project.$organization.id)))
             let storeRoot = NSTemporaryDirectory() + "snapshot-reexport-\(UUID().uuidString)"
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
             defer { try? FileManager.default.removeItem(atPath: storeRoot) }

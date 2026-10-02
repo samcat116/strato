@@ -475,6 +475,20 @@ extension AgentService {
         await app.coordination.clearAgentPresence(agentKey: agentKey)
         await app.replicaBridge.clearRoute(agentKey: agentKey)
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+        // Telemetry is conditional; a missing/deleted row must never skip the
+        // identity-keyed teardown above.
+        do {
+            if let identity = AgentIdentity(key: agentKey),
+                let agent = try await Agent.query(on: app.db)
+                    .filter(\.$trustDomain == identity.trustDomain)
+                    .filter(\.$name == identity.name).first()
+            {
+                Telemetry.recordDependenciesUnavailable(
+                    agentName: agent.name, observations: agent.dependencyObservations)
+            }
+        } catch {
+            app.logger.warning("Unable to project revoked agent dependency telemetry: \(error)")
+        }
         app.logger.info("Agent revoked", metadata: ["strato.agent.identity": .string(agentKey)])
     }
 
