@@ -1099,7 +1099,11 @@ and restore-timeout budgets, plus explicit sandbox exclusions. This preparatory
 contract now feeds agent-local automatic suspension through
 `Agent.sandboxReconcileIdleSuspend`, which prepares a runtime eligibility claim
 and calls STR-312's host-admitted `sandboxReconcileSuspend(_:automatic:)` entry
-point. The caller must hold the existing sandbox reconciliation lane. Both the
+point. Wire 68 requires the control plane to admit checkpoint storage and publish
+a suspended desired generation before the automatic callback can act. Running,
+legacy stopped, and unbudgeted suspended intents are refused. The caller must hold
+the existing sandbox reconciliation lane. Explicit opt-in stop remains on
+STR-312's manual dispatch path; automatic provenance/dispatch is not installed. Both the
 policy and dependency readiness gate default off; no automatic timer, capability,
 wire message, or activity producer is activated. The expiry sweep and existing
 creation-anchored TTL remain unchanged until control-plane integration lands.
@@ -1140,9 +1144,12 @@ STR-312's original-guest recovery path. Repeated quiet observations can refresh
 freshness without invalidating the activity epoch. Unsupported runtimes return an
 explicit unsupported-backend verdict through the protocol default.
 
-The pending integration with #1330 must complete the coordinated desired-state
-representation, backend capability, durable activity report, quota/API wake path,
-and timeout-aware restore before automatic reclamation is enabled.
+The combined STR-312 lifecycle supplies wire-68 desired/observed suspension,
+checkpoint storage admission, retained storage/compute accounting, generation-aware
+restore, and explicit opt-in stop/exec wake. Automatic activation still requires
+versioned authoritative activity and upstream command/stream admission coordination,
+a durable distinction between automatic and explicit suspend intent, the policy
+consumer/sweep, restore-timeout configuration mapping, and real VM acceptance.
 It must persist activity monotonically, anchor user-visible `expiresAt` on that
 activity, protect active streams and queued commands during expiry, and keep
 system-attributed deletion on the existing delete path. Terminal-record retention
