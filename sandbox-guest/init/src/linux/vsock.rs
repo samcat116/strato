@@ -721,8 +721,8 @@ fn idle_response(request: Request, state: &GuestState) -> Response {
                 return error(e);
             }
             Response::IdleFence {
-                sandbox_id: sandbox_id,
-                nonce: nonce,
+                sandbox_id,
+                nonce,
                 operation_id,
                 admission_token,
                 state: "prepared".into(),
@@ -733,8 +733,8 @@ fn idle_response(request: Request, state: &GuestState) -> Response {
             admission_token,
         } => match monitor.query(&operation_id, &admission_token) {
             Ok(result) => Response::IdleFence {
-                sandbox_id: sandbox_id,
-                nonce: nonce,
+                sandbox_id,
+                nonce,
                 operation_id,
                 admission_token,
                 state: result.into(),
@@ -749,8 +749,8 @@ fn idle_response(request: Request, state: &GuestState) -> Response {
                 return error(e);
             }
             Response::IdleFence {
-                sandbox_id: sandbox_id,
-                nonce: nonce,
+                sandbox_id,
+                nonce,
                 operation_id,
                 admission_token,
                 state: "released".into(),

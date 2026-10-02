@@ -183,7 +183,7 @@ impl Monitor {
                 Err("another idle operation owns admission".into())
             };
         }
-        if self.released.get(&op.to_ascii_lowercase()).is_some() {
+        if self.released.contains_key(&op.to_ascii_lowercase()) {
             return Err("released idle operation cannot be replayed".into());
         }
         if self.released.len() >= 4096 {
