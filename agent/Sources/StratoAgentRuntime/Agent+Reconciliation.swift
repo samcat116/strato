@@ -253,8 +253,20 @@ extension Agent: ReconcileActuator {
                 presence[sandboxId] = .managed(.unknown)
                 continue
             }
-            let status = (try? await runtime.getSandboxStatus(sandboxId: sandboxId)) ?? .unknown
-            presence[sandboxId] = .managed(status)
+            do {
+                let record = try await runtime.suspensionRecord(sandboxId: sandboxId)
+                if record?.requiresOriginalGuestRollback == true {
+                    // The VMM may still run while its workload is frozen. Keep
+                    // Start level-triggered until original-guest rollback has
+                    // durably released the interrupted preparation fence.
+                    presence[sandboxId] = .managed(.starting)
+                } else {
+                    let status = try await runtime.getSandboxStatus(sandboxId: sandboxId)
+                    presence[sandboxId] = .managed(status)
+                }
+            } catch {
+                presence[sandboxId] = .managed(.unknown)
+            }
         }
         for sandboxId in orphanedSandboxes.keys where presence[sandboxId] == nil {
             presence[sandboxId] = .orphaned

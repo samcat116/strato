@@ -148,17 +148,26 @@ extension FirecrackerSandboxRuntime {
         async throws -> SandboxSuspensionRecord
     {
         guard let fence = record.guestFence else { return record }
-        guard let managed = sandboxes[record.sandboxId.uuidString] else {
+        if fence.state == .released && !restoredCopy { return record }
+        guard let managed = sandboxes[record.sandboxId.uuidString], managed.identityNonce == fence.identityNonce else {
             throw SandboxSuspensionGuard.GateError.stale
         }
         let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
         guard
             identityMatches(
                 response, sandboxId: record.sandboxId.uuidString,
-                expectedNonce: fence.identityNonce)
+                expectedNonce: fence.identityNonce),
+            case .pong(_, _, let version) = response,
+            version == SandboxGuestControlProtocol.idlePolicyVersion,
+            version == fence.request.guestProtocolVersion,
+            sandboxes[record.sandboxId.uuidString]?.identityNonce == managed.identityNonce
         else {
             throw SandboxSuspensionGuard.GateError.stale
         }
+        // A paused adopted guest has no cached capability until its first
+        // identity-verified ping after resume. Release uses the same v5
+        // transport guard as prepare, so learn the actual capability first.
+        sandboxes[record.sandboxId.uuidString]?.guestControlProtocolVersion = version
         suspensionRecords.removeValue(forKey: record.sandboxId.uuidString)
         let lifecycle = try automaticFenceLifecycle()
         let result = try await StageBudget.run(seconds: 20, stage: "automatic-suspension-release") {

@@ -481,10 +481,12 @@ extension Agent {
             snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         defer { capacityAdmissionLedger.release(claim) }
 
-        if let record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase == .capturing {
-            // Capture has not committed a checkpoint. Recover the original
-            // guest (including its paused VMM and automatic guest fence)
-            // without converting its rollback journal into a restore intent.
+        if let record = try await runtime.suspensionRecord(sandboxId: item.id),
+            record.phase == .capturing || record.requiresOriginalGuestRollback
+        {
+            // Recover the original guest after an interrupted capture or fence
+            // release. Neither a running VMM nor a resumed checkpoint proves
+            // that guest admission was durably reopened.
             try await runtime.bootSandbox(sandboxId: item.id)
             manifestEntry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
             if let manifestEntry { managedSandboxes[item.id] = manifestEntry }

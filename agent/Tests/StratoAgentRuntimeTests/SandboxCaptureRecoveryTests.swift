@@ -112,14 +112,29 @@ struct SandboxCaptureRecoveryTests {
         try await agent.eventLoopGroup.shutdownGracefully()
     }
 
-    @Test(arguments: [SandboxSuspensionGuestFence.State.preparePending, .prepared, .releasePending])
-    func interruptedCaptureBootsOriginalGuest(state: SandboxSuspensionGuestFence.State) async throws {
+    @Test(
+        arguments: [SandboxSuspensionRecord.Phase.capturing, .resumed],
+        [SandboxSuspensionGuestFence.State.preparePending, .prepared, .releasePending])
+    func interruptedCaptureBootsOriginalGuest(
+        phase: SandboxSuspensionRecord.Phase, state: SandboxSuspensionGuestFence.State
+    ) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let id = UUID()
         let spec = SandboxSpec(image: "test", cpus: 1, memoryBytes: 128 * 1024 * 1024)
         var record = SandboxSuspensionRecord(
             sandboxId: id, snapshotId: UUID(), generation: 4, activityEpoch: 0, jailUID: 100000, spec: spec)
+        record.phase = phase
+        if phase == .resumed {
+            let archive = root.appendingPathComponent("archives/checkpoint")
+            try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+            for kind in SandboxSnapshotArtifactKind.allCases {
+                try Data("fixture-\(kind.rawValue)".utf8).write(to: archive.appendingPathComponent(kind.filename))
+            }
+            record.checkpoint = try SandboxCheckpointManifest.publish(
+                directory: archive.path, sandboxId: id.uuidString, snapshotId: record.snapshotId.uuidString,
+                identityNonce: "original-guest", firecrackerVersion: "fixture", guestControlProtocolVersion: 5)
+        }
         record.guestFence = SandboxSuspensionGuestFence(
             request: SandboxAutomaticSuspensionFence(
                 operationId: UUID(), generation: 4, activityRevision: 1,
@@ -134,13 +149,23 @@ struct SandboxCaptureRecoveryTests {
             logger: Logger(label: "capture-recovery"))
         await agent.seedCaptureRecovery(runtime: runtime, record: record)
         let desired = DesiredSandboxState(sandboxId: id, spec: spec, desiredStatus: .running, generation: 5)
-        let item = ReconcileWorkItem(
-            kind: .sandbox, id: id.uuidString, generation: 5, steps: [.boot], target: .sandbox(desired))
+        let presence = await agent.observedSandboxPresence()
+        #expect(presence[id.uuidString] == .managed(.starting))
+        let plan = Reconciler.planSandboxes(
+            desired: [desired], present: presence, lastApplied: [id.uuidString: 4])
+        let item = try #require(plan.items.first)
+        #expect(item.generation == 5)
+        #expect(item.steps == [.boot])
         try await agent.sandboxReconcileBoot(item)
         #expect(await runtime.bootCount == 1)
         #expect(await runtime.resumeCount == 0)
-        #expect(await agent.captureRecoveryRecord(id)?.phase == .capturing)
+        #expect(await agent.captureRecoveryRecord(id)?.phase == phase)
         #expect(await agent.captureRecoveryRecord(id)?.guestFence?.blocksWorkloadAdmission == false)
+        let recoveredPresence = await agent.observedSandboxPresence()
+        let recoveredPlan = Reconciler.planSandboxes(
+            desired: [desired], present: recoveredPresence, lastApplied: [id.uuidString: 5])
+        #expect(recoveredPresence[id.uuidString] == .managed(.running))
+        #expect(recoveredPlan.items.allSatisfy { $0.steps.isEmpty })
         try await agent.eventLoopGroup.shutdownGracefully()
     }
 }
@@ -201,7 +226,7 @@ private actor CaptureRecoveryRuntime: SandboxRuntimeService {
     func suspensionRecord(sandboxId: String) -> SandboxSuspensionRecord? { record }
     func bootSandbox(sandboxId: String) throws {
         bootCount += 1
-        guard record.phase == .capturing else { throw SandboxSuspensionGuard.GateError.stale }
+        guard record.requiresOriginalGuestRollback else { throw SandboxSuspensionGuard.GateError.stale }
         record.guestFence?.state = .released
     }
     func resumeSuspension(sandboxId: String, networkAttachments: [ResolvedNetworkAttachment]) throws {
@@ -221,9 +246,8 @@ private actor CaptureRecoveryRuntime: SandboxRuntimeService {
     func adoptSandbox(sandboxId: String, spec: SandboxSpec) async throws -> SandboxStatus {
         try await mock.adoptSandbox(sandboxId: sandboxId, spec: spec)
     }
-    func getSandboxStatus(sandboxId: String) async throws -> SandboxStatus {
-        try await mock.getSandboxStatus(sandboxId: sandboxId)
-    }
+    // Firecracker may report Running throughout interrupted guest freeze.
+    func getSandboxStatus(sandboxId: String) async throws -> SandboxStatus { .running }
     func exitCode(sandboxId: String) async -> Int? { await mock.exitCode(sandboxId: sandboxId) }
     func snapshotSandbox(sandboxId: String, snapshotId: String, mode: SandboxSnapshotMode) async throws
         -> SandboxSnapshotResult

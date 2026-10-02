@@ -1357,6 +1357,9 @@ extension FirecrackerSandboxRuntime {
     }
 
     func getSandboxStatus(sandboxId: String) async throws -> SandboxStatus {
+        if try loadSuspensionRecord(sandboxId: sandboxId)?.requiresOriginalGuestRollback == true {
+            return .starting
+        }
         if try loadSuspensionRecord(sandboxId: sandboxId)?.phase == .suspended {
             return .suspended
         }

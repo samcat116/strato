@@ -159,6 +159,12 @@ public struct SandboxSuspensionRecord: Codable, Sendable {
         self.spec = spec
     }
 
+    /// A running VMM is not a running workload while interrupted preparation
+    /// still owns the guest admission fence. Start must recover the original.
+    public var requiresOriginalGuestRollback: Bool {
+        (phase == .capturing || phase == .resumed) && guestFence?.blocksWorkloadAdmission == true
+    }
+
     public var reservesGuestMemory: Bool { phase != .suspended }
     public var mayReplayCheckpointWithoutGuest: Bool {
         checkpoint != nil && [.verified, .destroying, .suspended, .restoring].contains(phase)
