@@ -151,6 +151,24 @@ extension Agent {
         }
     }
 
+    func prepareForWorkloadRegistration() async throws {
+        // Probe the frozen exchange before sending a workload registration DTO.
+        // Failure is retryable; ordinary registration never resolves wire skew.
+        await desiredStatePoller?.stop()
+        guard let url = URL(string: controlPlaneHTTPBase + AgentUpdateBridgeResponse.path) else {
+            throw AgentError.registrationFailed("Invalid update-only exchange URL")
+        }
+        if let bridge = try await makeMTLSArtifactDownloader().updateBridge(url: url) {
+            let update = try bridge.skewUpdate(agentWireVersion: WireProtocol.currentVersion)
+            if bridge.workloadWireVersion != WireProtocol.currentVersion {
+                logger.notice("Wire skew: workload registration refused; using staged update-only assignment")
+                await handleDesiredAgentUpdate(update, reportWorkloadStatus: false)
+                throw AgentError.registrationFailed(
+                    "Wire skew requires a staged bridge update or out-of-band installation")
+            }
+        }
+    }
+
     func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
 

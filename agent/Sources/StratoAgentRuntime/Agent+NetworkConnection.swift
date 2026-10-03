@@ -65,6 +65,7 @@ extension Agent {
                 logger.info("Network service connected after retry")
                 if assignedAgentID != nil {
                     do {
+                        try await prepareForWorkloadRegistration()
                         try await registerWithControlPlane()
                         logger.info("Re-registered with control plane to advertise recovered networking capability")
                     } catch {

@@ -162,7 +162,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // `hasPrefix`, so listing it there would silently make a future
         // `/agent/desired-state-history` public too.
         let exactPublic: Set<String> = [
-            "/api/docs", "/api/openapi.yaml", "/agent/desired-state",
+            "/api/docs", "/api/openapi.yaml", "/agent/desired-state", "/agent/update/v1",
             // The wrapper has no secret; the bootstrap exchange authenticates
             // its own short-lived `enroll_v1_` bearer in the handler.
             "/api/agent-enrollments/install", "/api/agent-enrollments/bootstrap",

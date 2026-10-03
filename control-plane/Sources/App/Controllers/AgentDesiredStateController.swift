@@ -69,6 +69,14 @@ struct AgentDesiredStateController: RouteCollection {
             throw Abort(.unauthorized, reason: "Desired state requires an agent client certificate")
         }
         let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+        // Bridge clients advertise their exact workload contract on every poll,
+        // including polls that outlive a control-plane cutover. Legacy matching
+        // clients retain their registration-only contract until bridge install.
+        if let version = req.headers.first(name: AgentUpdateBridgeResponse.wireVersionHeader),
+            version != String(WireProtocol.currentVersion)
+        {
+            throw Abort(.conflict, reason: "Workload wire version must match; use the update-only exchange")
+        }
 
         // Resolved by the SVID's full identity, not its bare name: two
         // organizations may each enroll an `agent-1` (issue #613), and one
