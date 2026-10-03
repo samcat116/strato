@@ -44,6 +44,37 @@ struct GuestConfigClientTests {
         #expect(request["generation"] as? Int == 7)
         #expect(request["guest_config"] is [String: Any])
     }
+
+    @Test func maximumEscapedContentFitsConvergenceFrame() async throws {
+        let files = (0..<4).map { index in
+            GuestFile(
+                path: "/escaped-\(index)",
+                content: String(repeating: "\u{1}", count: GuestConfig.maxFileBytes),
+                mode: "0600")
+        }
+        let config = GuestConfig(files: files)
+        try config.validate()
+        let connection = Connection(response(status: "failed", error: #""observation failed""#))
+        _ = try await client(connection).converge(
+            placement: placement, config: config, generation: 7, placementIsCurrent: { true })
+        let writes = await connection.writes
+        let request = try #require(writes.last)
+        #expect(request.count > GuestControlProtocol.Limits.maxLineBytes)
+        #expect(request.count <= GuestConfigClient.maxFrameBytes)
+    }
+
+    @Test func convergenceFrameLimitDoesNotChangeGenericGuestFrames() throws {
+        let generic = HostVsockLineFrameDecoder()
+        try generic.validate(length: GuestControlProtocol.Limits.maxLineBytes)
+        #expect(throws: HostVsockConnectionError.self) {
+            try generic.validate(length: GuestControlProtocol.Limits.maxLineBytes + 1)
+        }
+        let convergence = HostVsockLineFrameDecoder(maximumLineLength: GuestConfigClient.maxFrameBytes)
+        try convergence.validate(length: GuestConfigClient.maxFrameBytes)
+        #expect(throws: HostVsockConnectionError.self) {
+            try convergence.validate(length: GuestConfigClient.maxFrameBytes + 1)
+        }
+    }
     @Test func rejectsStaleIdentityAndGenerationAndCloses() async {
         for invalid in [response(nonce: "old-boot"), response(generation: 6), "malformed"] {
             let connection = Connection(invalid)

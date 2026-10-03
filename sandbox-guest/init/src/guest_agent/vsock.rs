@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use strato_sandbox_init::convergence::Converger;
 
 use strato_sandbox_init::protocol::{
-    decode_request, encode_line, read_request_line, Request, Response, WorkloadState,
+    decode_request, encode_line, read_vm_control_line, Request, Response, WorkloadState,
     CONTROL_PROTOCOL_VERSION, DEFAULT_VSOCK_PORT,
 };
 
@@ -150,7 +150,7 @@ fn handle_connection(
 
     let mut first = String::new();
     loop {
-        if read_request_line(&mut reader, &mut first)? == 0 {
+        if read_vm_control_line(&mut reader, &mut first)? == 0 {
             return Ok(());
         }
         if !first.trim().is_empty() {
@@ -217,7 +217,7 @@ fn serve_control(
 
     let mut line = String::new();
     loop {
-        if read_request_line(&mut reader, &mut line)? == 0 {
+        if read_vm_control_line(&mut reader, &mut line)? == 0 {
             return Ok(());
         }
         if line.trim().is_empty() {
@@ -391,6 +391,42 @@ mod tests {
             read_response(&mut reader),
             Response::Status { .. }
         ));
+        drop(reader);
+        drop(client);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn large_guest_configuration_is_accepted_as_the_first_control_frame() {
+        let config = strato_sandbox_init::convergence::GuestConfig {
+            files: (0..4)
+                .map(|index| strato_sandbox_init::convergence::File {
+                    path: format!("/escaped-{index}"),
+                    content: "\u{1}".repeat(65536),
+                    mode: "0600".into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        let mut request = serde_json::to_vec(&Request::ConvergeGuestConfig {
+            generation: 9,
+            guest_config: Some(config),
+        })
+        .unwrap();
+        request.push(b'\n');
+        assert!(request.len() > strato_sandbox_init::protocol::MAX_REQUEST_LINE_BYTES);
+
+        let (mut client, handle) = connection();
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        client.write_all(&request).unwrap();
+        match read_response(&mut reader) {
+            Response::GuestConfigState { nonce, observation } => {
+                assert_eq!(nonce, "boot-1");
+                assert_eq!(observation.generation, 9);
+            }
+            response => panic!("unexpected response: {response:?}"),
+        }
         drop(reader);
         drop(client);
         handle.join().unwrap();

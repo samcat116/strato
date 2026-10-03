@@ -424,7 +424,7 @@ chunks), live in `GuestControlProtocol.Limits`:
 
 | Bound | Value | Applies to |
 | --- | --- | --- |
-| Line length | 1 MiB | every response line; matches the transport's line framer, which fails the channel rather than accumulating an unterminated line |
+| Line length | 1 MiB normally; 4 MiB for the dedicated VM guest-configuration exchange | matches each transport line framer, which fails the channel rather than accumulating an unterminated line; the larger bound covers worst-case JSON escaping of a valid STR-90 intent and observation |
 | Decoded stdio payload | 64 KiB | `output`/`log` `data` (checked on the base64 text first, so an oversized chunk is never materialized) |
 | Identity fields | 256 B | `sandbox_id`, `nonce` |
 | `error` message | 4 KiB | **truncated with a marker**, not rejected — it is purely diagnostic, and throwing would discard the guest's actual complaint |

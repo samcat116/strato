@@ -684,8 +684,12 @@ Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`
 and `guest_config_state` (`nonce`, `observation`). These are additive to the
 sandbox guest v4 surface; sandbox init does not realize VM guest intent. An old
 VM daemon rejects the new request explicitly rather than reporting convergence.
-The same connection first performs the existing v4 ping handshake and every
-reply is checked against that boot nonce.
+The host client performs the existing v4 ping handshake on the same connection,
+and every reply is checked against that boot nonce. Generic guest-control lines
+remain bounded at 1 MiB. Only `converge_guest_config` requests and their response
+line use a 4 MiB bound, including when convergence is the first control frame.
+The bound derives from worst-case JSON escaping of the existing STR-90 field
+limits; the model and wire version remain unchanged.
 
 Item-level failures are explicit: optional `failedItem` contains `section`
 (`packages`, `files`, `services`, or `sysctls`), `identity` (package/service

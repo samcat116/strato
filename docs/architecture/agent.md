@@ -1714,6 +1714,8 @@ a reported guest failure is permanent for that generation. Fixed host log
 categories prevent guest-controlled diagnostic text from entering node logs.
 The full report includes `guestConfigObservation` alongside the existing VM
 failure fields. STR-92 owns detailed observation persistence/API projection.
+The dedicated exchange permits up to 4 MiB per line for worst-case escaped
+valid intent while every other guest-control client keeps the 1 MiB limit.
 
 The Linux guest uses a single serialized diff/apply/read-back engine, a shared
 180-second pass budget, 120-second package commands, and a durable metadata-only

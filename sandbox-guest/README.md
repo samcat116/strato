@@ -311,6 +311,12 @@ mismatches, reads them back, and returns `guest_config_state` with `nonce` and
 `lastError` / `failedGeneration` path. The control plane/API persistence and
 projection of the detailed observation belong to STR-92.
 
+Generic control frames retain their 1 MiB ceiling. The configuration request
+and response use a 4 MiB ceiling, including when convergence is the first
+control frame, so every valid STR-90 intent still fits after JSON escaping;
+oversized or unrelated frames are rejected without changing the v64 model
+contract.
+
 Observation fields use camelCase: `generation`, `status` (`converged` or
 `failed`), `error`, `packages` (`name`, nullable `version`), `files` (`path`,
 nullable `sha256` and `mode`), `services` (`name`, nullable `enabled` and

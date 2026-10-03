@@ -5,13 +5,17 @@ import StratoShared
 /// One bounded guest diff/apply/read-back exchange; injectable transport keeps
 /// tests independent of a guest or an AF_VSOCK device.
 public struct GuestConfigClient: Sendable {
+    // Worst-case JSON escaping: 6x content, 2x paths/sysctl text, plus
+    // bounded identities, records and envelope. Responses fit the same bound.
+    public static let maxFrameBytes = 4 * 1024 * 1024
     private let connector: VMExecSessionManager.Connector
     private let logger: Logger
 
     public init(
         logger: Logger,
         connector: @escaping VMExecSessionManager.Connector = { cid, port, timeout, logger in
-            try await HostVsockConnection.connect(cid: cid, port: port, timeout: timeout, logger: logger)
+            try await HostVsockConnection.connect(
+                cid: cid, port: port, timeout: timeout, maximumLineLength: Self.maxFrameBytes, logger: logger)
         }
     ) {
         self.logger = logger
@@ -46,13 +50,13 @@ public struct GuestConfigClient: Sendable {
             else { throw GuestConfigurationFailure.invalidResponse }
             guard await placementIsCurrent() else { throw VMExecBridgeError.vmNotPlaced(placement.vmId) }
             var data = try JSONEncoder().encode(Request(generation: generation, guest_config: config))
-            guard data.count < GuestControlProtocol.Limits.maxLineBytes else {
+            guard data.count < Self.maxFrameBytes else {
                 throw GuestConfigurationFailure.invalidResponse
             }
             data.append(0x0A)
             try await connection.write(data)
             guard let line = try await connection.nextLine(timeout: 190),
-                line.utf8.count <= GuestControlProtocol.Limits.maxLineBytes
+                line.utf8.count < Self.maxFrameBytes
             else { throw GuestConfigurationFailure.invalidResponse }
             // Do not feed this into malformed-line diagnostics: a guest can
             // echo file contents in an invalid response, which must not be logged.

@@ -230,19 +230,14 @@ impl Converger {
         Self { journal, budget }
     }
     fn load(&self) -> Result<Option<Journal>, String> {
-        use std::io::Read;
-        let file = match std::fs::File::open(&self.journal) {
-            Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        let (bytes, _) = match read_regular_file(&self.journal, 16384) {
+            Ok(Some(file)) => file,
+            Ok(None) => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                return Err("guest convergence journal is oversized".into())
+            }
             Err(_) => return Err("guest convergence journal is unreadable".into()),
         };
-        let mut bytes = Vec::new();
-        file.take(16385)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "guest convergence journal is unreadable")?;
-        if bytes.len() > 16384 {
-            return Err("guest convergence journal is oversized".into());
-        }
         let journal: Journal =
             serde_json::from_slice(&bytes).map_err(|_| "guest convergence journal is corrupt")?;
         if journal.generation < 0
@@ -482,40 +477,577 @@ fn normalize(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Atomic publish, including permission bits, with durable directory evidence.
-/// The temporary is create_new and never follows an existing symlink.
-pub fn atomic_write(path: &Path, content: &[u8], mode: u32) -> std::io::Result<()> {
-    use std::io::Write;
-    #[cfg(unix)]
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let parent = path
-        .parent()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no parent"))?;
-    std::fs::create_dir_all(parent)?;
-    let temporary = parent.join(format!(
-        ".strato-{}-{}",
-        std::process::id(),
-        TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let result = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(mode);
-        let mut file = options.open(&temporary)?;
-        file.write_all(content)?;
-        #[cfg(unix)]
-        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)?;
-        std::fs::File::open(parent)?.sync_all()
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result
+/// Read one regular file without following any path component. The returned
+/// mode and bytes come from the same descriptor.
+pub fn read_regular_file(path: &Path, limit: usize) -> std::io::Result<Option<(Vec<u8>, u32)>> {
+    platform_fs::read_regular_file(path, limit)
 }
+
+/// Open one existing regular file for writing without following any path
+/// component. Used for procfs sysctls as well as ordinary files.
+#[cfg(target_os = "linux")]
+pub fn open_regular_file_for_write(path: &Path) -> std::io::Result<std::fs::File> {
+    platform_fs::open_regular_file_for_write(path)
+}
+
+/// Atomic publish, including permission bits, with durable directory evidence.
+/// Linux resolves every component relative to pinned directory descriptors.
+pub fn atomic_write(path: &Path, content: &[u8], mode: u32) -> std::io::Result<()> {
+    platform_fs::atomic_write(path, content, mode)
+}
+#[cfg(test)]
 static TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(target_os = "linux")]
+mod platform_fs {
+    #[cfg(test)]
+    use super::TEMP_SEQUENCE;
+    use std::ffi::{CString, OsStr, OsString};
+    use std::io::{self, Read, Write};
+    use std::mem::MaybeUninit;
+    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::path::{Component, Path};
+    #[cfg(test)]
+    use std::sync::atomic::Ordering;
+
+    fn invalid(message: &'static str) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidInput, message)
+    }
+
+    fn cstring(value: &OsStr) -> io::Result<CString> {
+        CString::new(value.as_bytes()).map_err(|_| invalid("path contains NUL"))
+    }
+
+    fn open_directory_at(parent: RawFd, name: &OsStr, create: bool) -> io::Result<std::fs::File> {
+        let name = cstring(name)?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        // SAFETY: parent is live and name is a NUL-terminated component.
+        let mut fd = unsafe { libc::openat(parent, name.as_ptr(), flags) };
+        if fd < 0 && create && io::Error::last_os_error().kind() == io::ErrorKind::NotFound {
+            // SAFETY: arguments satisfy mkdirat; EEXIST is resolved by the
+            // no-follow open below, so a racing symlink is still rejected.
+            let result = unsafe { libc::mkdirat(parent, name.as_ptr(), 0o777) };
+            if result < 0 && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: same live descriptor and component as above.
+            fd = unsafe { libc::openat(parent, name.as_ptr(), flags) };
+        }
+        if fd < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            // SAFETY: successful openat returned a newly owned descriptor.
+            Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+        }
+    }
+
+    fn open_parent(path: &Path, create: bool) -> io::Result<(std::fs::File, OsString)> {
+        let mut components = path.components();
+        if components.next() != Some(Component::RootDir) {
+            return Err(invalid("path must be absolute"));
+        }
+        let mut names = Vec::new();
+        for component in components {
+            match component {
+                Component::Normal(name) => names.push(name.to_os_string()),
+                _ => return Err(invalid("path must be canonical")),
+            }
+        }
+        let name = names
+            .pop()
+            .ok_or_else(|| invalid("path has no file name"))?;
+        let root = CString::new("/").expect("static path");
+        // SAFETY: root is a valid NUL-terminated path.
+        let root_fd = unsafe {
+            libc::open(
+                root.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if root_fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: successful open returned a newly owned descriptor.
+        let mut directory = unsafe { std::fs::File::from_raw_fd(root_fd) };
+        for component in names {
+            directory = open_directory_at(directory.as_raw_fd(), &component, create)?;
+        }
+        Ok((directory, name))
+    }
+
+    fn open_final(
+        directory: &std::fs::File,
+        name: &OsStr,
+        flags: libc::c_int,
+        mode: libc::mode_t,
+    ) -> io::Result<std::fs::File> {
+        let name = cstring(name)?;
+        // SAFETY: directory and name remain live for the call.
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                mode,
+            )
+        };
+        if fd < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            // SAFETY: successful openat returned a newly owned descriptor.
+            Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+        }
+    }
+
+    fn require_regular(file: &std::fs::File) -> io::Result<()> {
+        if file.metadata()?.is_file() {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "path is not a regular file",
+            ))
+        }
+    }
+
+    fn read_regular_at(
+        directory: &std::fs::File,
+        name: &OsStr,
+        limit: usize,
+    ) -> io::Result<Option<(Vec<u8>, u32)>> {
+        let mut file = match open_final(directory, name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        require_regular(&file)?;
+        let mode = file.metadata()?.permissions().mode() & 0o7777;
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(limit.saturating_add(1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "file exceeds byte limit",
+            ));
+        }
+        Ok(Some((bytes, mode)))
+    }
+
+    pub(super) fn read_regular_file(
+        path: &Path,
+        limit: usize,
+    ) -> io::Result<Option<(Vec<u8>, u32)>> {
+        let (directory, name) = match open_parent(path, false) {
+            Ok(result) => result,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        read_regular_at(&directory, &name, limit)
+    }
+
+    pub(super) fn open_regular_file_for_write(path: &Path) -> io::Result<std::fs::File> {
+        let (directory, name) = open_parent(path, false)?;
+        let file = open_final(&directory, &name, libc::O_WRONLY | libc::O_NONBLOCK, 0)?;
+        require_regular(&file)?;
+        Ok(file)
+    }
+
+    fn target_is_regular_or_missing(directory: &std::fs::File, name: &OsStr) -> io::Result<()> {
+        let name = cstring(name)?;
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: pointers are valid; AT_SYMLINK_NOFOLLOW inspects the entry.
+        let result = unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            return if error.kind() == io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(error)
+            };
+        }
+        // SAFETY: fstatat initialized stat on success.
+        let stat = unsafe { stat.assume_init() };
+        if stat.st_mode & libc::S_IFMT == libc::S_IFREG {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "target is not a regular file",
+            ))
+        }
+    }
+
+    fn staging_name() -> io::Result<OsString> {
+        let mut random = [0_u8; 16];
+        let mut offset = 0;
+        while offset < random.len() {
+            // SAFETY: the remaining slice is valid writable memory.
+            let count = unsafe {
+                libc::getrandom(
+                    random[offset..].as_mut_ptr().cast(),
+                    random.len() - offset,
+                    0,
+                )
+            };
+            if count < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if count == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "getrandom returned no bytes",
+                ));
+            }
+            offset += count as usize;
+        }
+        let mut name = String::from(".strato-");
+        for byte in random {
+            use std::fmt::Write as _;
+            write!(&mut name, "{byte:02x}").expect("write to string");
+        }
+        Ok(name.into())
+    }
+
+    fn entry_matches_file(
+        directory: &std::fs::File,
+        name: &CString,
+        file: &std::fs::File,
+    ) -> io::Result<bool> {
+        let expected = file.metadata()?;
+        let mut actual = MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: pointers are valid; AT_SYMLINK_NOFOLLOW inspects the entry.
+        if unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                actual.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } < 0
+        {
+            return Ok(false);
+        }
+        // SAFETY: fstatat initialized actual on success.
+        let actual = unsafe { actual.assume_init() };
+        Ok(actual.st_dev == expected.dev() && actual.st_ino == expected.ino())
+    }
+
+    fn create_private_staging_directory(
+        directory: &std::fs::File,
+        mut next_name: impl FnMut() -> io::Result<OsString>,
+    ) -> io::Result<(std::fs::File, OsString)> {
+        for _ in 0..64 {
+            let name = next_name()?;
+            let name_c = cstring(&name)?;
+            // SAFETY: the parent descriptor and component remain live. The
+            // mode makes the payload namespace inaccessible to non-root guest
+            // processes even when the managed parent is writable by them.
+            if unsafe { libc::mkdirat(directory.as_raw_fd(), name_c.as_ptr(), 0o700) } < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    continue;
+                }
+                return Err(error);
+            }
+            let staging = open_directory_at(directory.as_raw_fd(), &name, false)?;
+            let metadata = staging.metadata()?;
+            if metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.permissions().mode() & 0o7777 != 0o700
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "staging directory ownership changed",
+                ));
+            }
+            return Ok((staging, name));
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "staging names exhausted",
+        ))
+    }
+
+    fn parent_cleanup_is_safe(directory: &std::fs::File) -> io::Result<bool> {
+        let mode = directory.metadata()?.permissions().mode();
+        // In a non-writable parent, only root can swap the staging entry. A
+        // sticky writable parent (for example /tmp) likewise protects the
+        // root-owned staging directory. Root can already replace the managed
+        // target directly and is outside this boundary.
+        Ok(mode & 0o022 == 0 || mode & 0o1000 != 0)
+    }
+
+    fn cleanup_private_staging_directory(
+        directory: &std::fs::File,
+        staging: &std::fs::File,
+        name: &CString,
+    ) {
+        if !parent_cleanup_is_safe(directory).unwrap_or(false)
+            || !entry_matches_file(directory, name, staging).unwrap_or(false)
+        {
+            return;
+        }
+        // SAFETY: untrusted processes cannot replace this entry in a parent
+        // accepted by parent_cleanup_is_safe, and it identifies our opened,
+        // now-empty directory.
+        let _ = unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+    }
+
+    fn atomic_write_at_with_names_and_hook(
+        directory: &std::fs::File,
+        target: &OsStr,
+        content: &[u8],
+        mode: u32,
+        mut next_name: impl FnMut() -> io::Result<OsString>,
+        before_publish: impl FnOnce(&std::fs::File, &OsStr) -> io::Result<()>,
+    ) -> io::Result<()> {
+        target_is_regular_or_missing(directory, target)?;
+        let target_c = cstring(target)?;
+        let (staging, staging_name) = create_private_staging_directory(directory, &mut next_name)?;
+        let staging_name_c = cstring(&staging_name)?;
+        let payload = CString::new("payload").expect("static name");
+        let mut file = match open_final(
+            &staging,
+            OsStr::new("payload"),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+            mode,
+        ) {
+            Ok(file) => file,
+            Err(error) => {
+                cleanup_private_staging_directory(directory, &staging, &staging_name_c);
+                return Err(error);
+            }
+        };
+        let mut published = false;
+        let result = (|| {
+            file.write_all(content)?;
+            file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+            file.sync_all()?;
+            before_publish(&staging, &staging_name)?;
+            // SAFETY: the source lives in the root-owned 0700 directory
+            // referenced by `staging`, so an untrusted process cannot replace
+            // it between validation and this rename. The destination parent is
+            // the pinned directory resolved from the managed path.
+            if unsafe {
+                libc::renameat(
+                    staging.as_raw_fd(),
+                    payload.as_ptr(),
+                    directory.as_raw_fd(),
+                    target_c.as_ptr(),
+                )
+            } < 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            published = true;
+            cleanup_private_staging_directory(directory, &staging, &staging_name_c);
+            directory.sync_all()
+        })();
+        if !published {
+            // SAFETY: payload is inside the descriptor-pinned private
+            // directory. Removing it cannot affect any replacement entry an
+            // attacker may have installed in the managed parent.
+            let _ = unsafe { libc::unlinkat(staging.as_raw_fd(), payload.as_ptr(), 0) };
+            cleanup_private_staging_directory(directory, &staging, &staging_name_c);
+        }
+        result
+    }
+
+    fn atomic_write_at_with_names(
+        directory: &std::fs::File,
+        target: &OsStr,
+        content: &[u8],
+        mode: u32,
+        next_name: impl FnMut() -> io::Result<OsString>,
+    ) -> io::Result<()> {
+        atomic_write_at_with_names_and_hook(directory, target, content, mode, next_name, |_, _| {
+            Ok(())
+        })
+    }
+
+    fn atomic_write_at(
+        directory: &std::fs::File,
+        target: &OsStr,
+        content: &[u8],
+        mode: u32,
+    ) -> io::Result<()> {
+        atomic_write_at_with_names(directory, target, content, mode, staging_name)
+    }
+
+    pub(super) fn atomic_write(path: &Path, content: &[u8], mode: u32) -> io::Result<()> {
+        let (directory, name) = open_parent(path, true)?;
+        atomic_write_at(&directory, &name, content, mode)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::symlink;
+
+        fn fixture(name: &str) -> std::path::PathBuf {
+            std::env::temp_dir().join(format!(
+                "strato-secure-fs-{name}-{}-{}",
+                std::process::id(),
+                TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ))
+        }
+
+        #[test]
+        fn pinned_parent_prevents_ancestor_symlink_redirect() {
+            let root = fixture("ancestor");
+            let managed = root.join("managed");
+            let outside = root.join("outside");
+            std::fs::create_dir_all(&managed).unwrap();
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::write(managed.join("config"), "inside").unwrap();
+            std::fs::write(outside.join("config"), "outside").unwrap();
+            std::fs::set_permissions(
+                managed.join("config"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+            let (parent, target) = open_parent(&managed.join("config"), false).unwrap();
+            std::fs::rename(&managed, root.join("pinned")).unwrap();
+            symlink(&outside, &managed).unwrap();
+            let (bytes, mode) = read_regular_at(&parent, &target, 64).unwrap().unwrap();
+            assert_eq!(bytes, b"inside");
+            assert_eq!(mode, 0o600);
+            atomic_write_at(&parent, &target, b"updated", 0o600).unwrap();
+            assert_eq!(
+                std::fs::read(root.join("pinned/config")).unwrap(),
+                b"updated"
+            );
+            assert_eq!(std::fs::read(outside.join("config")).unwrap(), b"outside");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn staging_collision_is_never_removed() {
+            let root = fixture("collision");
+            std::fs::create_dir_all(&root).unwrap();
+            let collision = root.join(".strato-collision");
+            std::fs::write(&collision, "unowned").unwrap();
+            let (parent, target) = open_parent(&root.join("target"), false).unwrap();
+            let mut names = [
+                OsString::from(".strato-collision"),
+                OsString::from(".strato-owned"),
+            ]
+            .into_iter();
+            atomic_write_at_with_names(&parent, &target, b"managed", 0o600, || {
+                names
+                    .next()
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no test name"))
+            })
+            .unwrap();
+            assert_eq!(std::fs::read(collision).unwrap(), b"unowned");
+            assert_eq!(std::fs::read(root.join("target")).unwrap(), b"managed");
+            assert!(!root.join(".strato-owned").exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn staging_parent_entry_swap_cannot_publish_or_delete_replacement() {
+            let root = fixture("staging-swap");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let (parent, target) = open_parent(&root.join("target"), false).unwrap();
+            let staging_name = OsString::from(".strato-private");
+            atomic_write_at_with_names_and_hook(
+                &parent,
+                &target,
+                b"managed",
+                0o600,
+                || Ok(staging_name.clone()),
+                |_, name| {
+                    std::fs::rename(root.join(name), root.join("moved-private"))?;
+                    std::fs::create_dir(root.join(name))?;
+                    std::fs::write(root.join(name).join("replacement"), b"unowned")
+                },
+            )
+            .unwrap();
+
+            assert_eq!(std::fs::read(root.join("target")).unwrap(), b"managed");
+            assert_eq!(
+                std::fs::read(root.join(&staging_name).join("replacement")).unwrap(),
+                b"unowned"
+            );
+            assert!(root.join("moved-private").is_dir());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn failed_publish_cleans_only_the_descriptor_pinned_payload() {
+            let root = fixture("staging-failure");
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let (parent, target) = open_parent(&root.join("target"), false).unwrap();
+            let staging_name = OsString::from(".strato-private");
+            let error = atomic_write_at_with_names_and_hook(
+                &parent,
+                &target,
+                b"managed",
+                0o600,
+                || Ok(staging_name.clone()),
+                |_, name| {
+                    std::fs::rename(root.join(name), root.join("moved-private"))?;
+                    std::fs::create_dir(root.join(name))?;
+                    std::fs::write(root.join(name).join("replacement"), b"unowned")?;
+                    Err(io::Error::new(io::ErrorKind::Other, "injected failure"))
+                },
+            )
+            .unwrap_err();
+
+            assert_eq!(error.to_string(), "injected failure");
+            assert!(!root.join("target").exists());
+            assert_eq!(
+                std::fs::read(root.join(&staging_name).join("replacement")).unwrap(),
+                b"unowned"
+            );
+            assert!(std::fs::read_dir(root.join("moved-private"))
+                .unwrap()
+                .next()
+                .is_none());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform_fs {
+    use std::io;
+    use std::path::Path;
+
+    pub(super) fn read_regular_file(
+        _path: &Path,
+        _limit: usize,
+    ) -> io::Result<Option<(Vec<u8>, u32)>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "secure guest convergence requires Linux descriptor-relative paths",
+        ))
+    }
+
+    pub(super) fn atomic_write(_path: &Path, _content: &[u8], _mode: u32) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "secure guest convergence requires Linux descriptor-relative paths",
+        ))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -796,6 +1328,22 @@ mod tests {
             fixture.engine().converge(2, Some(c), &mut fake).status,
             Status::Failed
         );
+        assert!(fake.effects.is_empty());
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn journal_symlink_is_rejected_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let mut fake = Fake::default();
+        std::fs::create_dir_all(&fixture.0).unwrap();
+        let target = fixture.0.join("outside.json");
+        std::fs::write(&target, "sentinel").unwrap();
+        symlink(&target, fixture.0.join("journal.json")).unwrap();
+        let observation = fixture.engine().converge(1, Some(config()), &mut fake);
+        assert!(observation.error.unwrap().contains("unreadable"));
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "sentinel");
         assert!(fake.effects.is_empty());
     }
     #[test]
