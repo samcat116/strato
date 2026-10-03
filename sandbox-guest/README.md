@@ -298,3 +298,62 @@ and its sha256 together.
 [#426]: https://github.com/samcat116/strato/issues/426
 [STR-101]: https://github.com/samcat116/strato/issues/846
 [STR-104]: https://github.com/samcat116/strato/issues/849
+
+### Managed VM guest configuration (STR-90 / STR-91)
+
+The node's per-VM serial reconciliation lane sends `converge_guest_config` over
+its existing host-only vsock control connection after a nonce-checked ping.
+The request contains `generation` (the enclosing VM generation) and
+`guest_config` (the four STR-90 arrays). The guest diffs live facts, applies only
+mismatches, reads them back, and returns `guest_config_state` with `nonce` and
+`observation`. The node forwards that observation as
+`ObservedVMState.guestConfigObservation`; failures also use the existing VM
+`lastError` / `failedGeneration` path. The control plane/API persistence and
+projection of the detailed observation belong to STR-92.
+
+Generic control frames retain their 1 MiB ceiling. The configuration request
+and response use a 4 MiB ceiling, including when convergence is the first
+control frame, so every valid STR-90 intent still fits after JSON escaping;
+oversized or unrelated frames are rejected without changing the v64 model
+contract.
+
+Observation fields use camelCase: `generation`, `status` (`converged` or
+`failed`), `error`, `packages` (`name`, nullable `version`), `files` (`path`,
+nullable `sha256` and `mode`), `services` (`name`, nullable `enabled` and
+`activeState`), and `sysctls` (`key`, nullable `value`). A failure can carry
+partial facts; a successful observation contains all managed identities. File
+contents and package-manager output never appear in diagnostics or the journal.
+
+This surface is for Linux VMs that opted into the Strato guest agent. It runs
+only while the VM's desired status is running; intent for stopped or paused VMs
+is deferred until they run. Package realization supports dpkg/apt and rpm/dnf.
+Services manage boot enablement only, never start/stop policy. Sysctls are live
+kernel values and are re-applied after reboot when a sync observes drift. File
+writes atomically publish UTF-8 content and ordinary permission bits; managed
+paths containing symlinks, nonregular files, or existing files exceeding the
+64 KiB observation bound fail explicitly. Removed entries, empty intent, and
+nil intent cease management without reversing any prior effect.
+
+Each convergence pass has a shared 180-second budget. A package command has at
+most 120 seconds; other commands have at most 10 seconds, always bounded by the
+remaining pass budget. Captured command output is capped at 64 KiB; the entire
+command group is killed and reaped on timeout/error. apt network retries are
+zero and mirror timeouts are 30 seconds. Failed generations are terminal: an
+operator submits a newer VM generation to retry after repairing the cause.
+
+`/var/lib/strato-guest-agent/convergence.json` is an atomic, fsynced write-ahead
+journal containing only the generation, intent SHA-256, state, and fixed error.
+An interrupted apply becomes a visible terminal failure after service/VM/node
+restart. A converged replay re-observes drift, so a restart never assumes old
+facts still hold. Older generations and different intent at an unchanged
+generation cannot apply. A corrupt/unreadable journal fails closed. Removing a
+journal manually discards its generation and failure guard and is not a recovery
+procedure; use a newer desired generation instead.
+
+Item-level failures are explicit: optional `failedItem` contains `section`
+(`packages`, `files`, `services`, or `sysctls`), `identity` (package/service
+name, file path, or sysctl key), and fixed `reason` matching the top-level
+`error`. It names the failed observation/apply/read-back row; other unmet rows
+were not necessarily attempted. Journal, validation, or interrupted-pass errors
+have no failed item. Failed-item identity and reason survive restart in the
+metadata journal.
