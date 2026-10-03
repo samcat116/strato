@@ -119,6 +119,7 @@ extension Agent {
                 guard let websocketClient else {
                     throw WebSocketClientError.notConnected
                 }
+                try await prepareForWorkloadRegistration()
                 let generation = try await websocketClient.connect()
                 try await registerWithControlPlane()
                 guard

@@ -3,7 +3,7 @@
 Strato updates hypervisor agents from the control plane — no SSH, no
 configuration management run. An agent's build is desired state like anything
 else: the control plane records which version an agent should run, the version
-rides that agent's desired-state sync as `desiredAgentUpdate`, and the agent
+rides that matching-version agent's desired-state sync as `desiredAgentUpdate`, and the agent
 converges on it. There are two ways a version gets assigned:
 
 - **Fleet auto-update** (issue #434): enrolled agents are advanced to the
@@ -184,7 +184,79 @@ downloads (or restart-loop on an artifact whose binary reports the wrong
 version) — and the failure is pushed immediately so the rollout halts on the
 real error rather than a timeout.
 
-### Wire protocol
+### Stable bridge exchange (STR-340)
+
+The bridge release implements `GET /agent/update/v1` on both peers. Its frozen
+JSON contains `exchangeVersion: 1`, the control plane's `workloadWireVersion`,
+and an optional artifact (`targetVersion`, `artifactURL`, `sha256`,
+`artifactKind` as `binary`/`tarball`, optional `tarballMember`). It has no
+workload envelopes, resources, credentials, or registration side effects.
+Changes to the workload contract must preserve this v1 exchange; incompatible
+changes to the exchange require another path and another staged bridge release.
+
+The route uses the existing SVID mTLS identity, trust-domain mapping, workload
+registry, and administrative revocation checks. It looks up the authenticated
+agent's existing assignment and reuses artifact resolution. It never assigns an
+update, enrolls an agent, or makes a disconnected agent eligible for a manual
+update. With no assignment it returns no artifact. Authentication errors and
+malformed exchanges fail closed. A missing route (404) on a prebridge control
+plane falls back only to the ordinary exact-version registration handshake.
+
+Before registration the bridge agent probes this route. Matching workload
+versions retain ordinary registration, desired-state updates, and status
+reports. Under skew, it stops workload polling, refuses to send a workload
+registration DTO or update status report, and applies only the staged artifact
+through `AgentUpdater`, including SHA-256 verification and the existing local
+restart gates. Every bridge desired-state poll also advertises
+`Strato-Workload-Wire-Version`; mismatches return 409 before workload assembly,
+including polls that survive a control-plane cutover. Legacy clients retain the
+registration-only contract while versions match; they are not supported across
+wire cutover. No general workload DTO compatibility window is introduced.
+
+#### Upgrade order and bootstrap limit
+
+1. While workload versions still match, install the paired bridge release on
+   the control plane first, then every agent. A prebridge control plane may
+   default-deny the unknown v1 route with 403; that denial never falls back. Existing matching agents can receive the
+   bridge artifact through ordinary updates. If they cannot use that path,
+   install the verified bridge artifact out of band. Confirm all nodes actually
+   run a bridge-capable binary before crossing a workload-version boundary.
+2. Resolve and explicitly assign the intended next release to the agents while
+   they are still online and matching. Keep the existing authorization and
+   sandbox `force` acknowledgement. For a next-release artifact before the
+   deployment target changes, use the existing explicit override fields
+   (`artifactUrl`, `sha256`, `targetVersion`, `artifactKind`, `tarballMember`)
+   with the existing `agent:updateArtifact` authorization; do not grant new
+   permissions to perform staging. Assignment may immediately start the
+   upgrade; a bridge-capable newer agent can wait in update-only mode against
+   the older control plane. The target release must also preserve v1. Do not
+   rely on the fleet sweep to assign updates to already disconnected agents.
+3. Replace the control plane with the corresponding target release. Any
+   still-old bridge agents obtain their already staged assignment via v1;
+   already-updated agents register when workload equality is restored. Perform
+   the cutover within the existing assignment health budget; this exchange
+   does not redesign fleet health gating or restart policy.
+4. Verify each agent re-registers at the target before ordinary workload
+   reconciliation resumes. A skewed node logs its required update-only mode;
+   the server logs its identity, both wire versions, and whether an artifact
+   assignment is available. No assignment, failed verification, or a blocked
+   restart requires operator intervention; logs do not claim convergence.
+
+Already deployed binaries that lack v1 do not learn it from a server change.
+They must first receive the bridge while matching, or require explicit
+out-of-band installation. Containerized agents require replacement images.
+
+#### Rollback order
+
+Keep a verified previous bridge-capable artifact or `<binary>.prev`. While the
+current peers still match, explicitly assign the rollback artifact before
+replacing the control plane with the corresponding older bridge-capable
+release. Either side can then wait in update-only mode until equality returns.
+A disconnected node with no assignment, or a rollback to a prebridge binary,
+requires out-of-band installation. Automatic downgrade is not introduced, and
+schema rollback safety remains a separate deployment requirement.
+
+### Historical workload wire fields
 
 Version 7 adds both fields, additively and backward-tolerantly:
 `DesiredStateMessage.desiredAgentUpdate` (nil = "no opinion", never
@@ -194,10 +266,10 @@ rollout nor the update endpoint assigns to one — it would burn its health
 budget against silence.
 
 Version 28 removed the imperative `agent_update` message, leaving these fields
-as the only update path. A control plane at v28 never sends the old message to
+as the only workload-channel update path. A control plane at v28 never sends the old message to
 any agent; the only skew that regresses is an *older* control plane driving a
 v28 agent, whose manual update would time out against an envelope the agent no
-longer decodes. Upgrade the control plane first.
+longer decodes. Use the staged bridge procedure above for subsequent wire transitions.
 
 ### Rollback
 
