@@ -1,0 +1,26 @@
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  h_a84d4ff76cadd1 2,11,172-176,232-258,260-263,269,705,707,709
+control-plane/Sources/App/Controllers/NetworkController.swift
+  h_a84d4ff76cadd1 213-216,449-451
+control-plane/Sources/App/Services/AdvisoryLock.swift
+  h_a84d4ff76cadd1 32-33,51
+control-plane/Tests/AppNetworkTests/OverlapAdmissionRaceTests.swift
+  h_a84d4ff76cadd1 1-230
+control-plane/Tests/AppPlatformTests/AdvisoryLockTests.swift
+  h_a84d4ff76cadd1 19
+docs/architecture/networking.md
+  h_a84d4ff76cadd1 70-82
+docs/deployment/observability.md
+  h_a84d4ff76cadd1 175,192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5220d05f7b16608e5ff06f31ac892124493fb1f",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
