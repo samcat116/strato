@@ -1,0 +1,1006 @@
+.github/workflows/sandbox-guest.yaml
+  h_a84d4ff76cadd1 45-46,49-50
+CONTEXT.md
+  h_a84d4ff76cadd1 389-398
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  h_a84d4ff76cadd1 254-255,455-465,495-496,498,521-527,614-663,1491,1518
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerManager.swift
+  h_a84d4ff76cadd1 39-48
+SwiftFirecracker/Sources/SwiftFirecracker/Models/MachineConfig.swift
+  h_a84d4ff76cadd1 7,9
+SwiftFirecracker/Tests/SwiftFirecrackerTests/FirecrackerAdoptionTests.swift
+  h_a84d4ff76cadd1 79-165,251,336-337,339,344-345
+agent/Package.swift
+  h_a84d4ff76cadd1 81,105,109
+agent/Sources/CSandboxUFFD/CSandboxUFFD.c
+  h_a84d4ff76cadd1 1-163
+agent/Sources/CSandboxUFFD/include/CSandboxUFFD.h
+  h_a84d4ff76cadd1 1-17
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  h_a84d4ff76cadd1 29,31-35,95-100,195,217-221,246,268-272,313-329
+agent/Sources/StratoAgentCore/AgentConfigLoader.swift
+  h_a84d4ff76cadd1 25,46-50,189-192,260-272,530,552-556
+agent/Sources/StratoAgentCore/BurstableCgroupEnforcement.swift
+  h_a84d4ff76cadd1 1-71
+agent/Sources/StratoAgentCore/BurstableGuestGrant.swift
+  h_a84d4ff76cadd1 1-11
+agent/Sources/StratoAgentCore/BurstableQEMUOwnership.swift
+  h_a84d4ff76cadd1 1-47
+agent/Sources/StratoAgentCore/BurstableRuntimeGate.swift
+  h_a84d4ff76cadd1 1-17
+agent/Sources/StratoAgentCore/BurstableRuntimeTransition.swift
+  h_a84d4ff76cadd1 1-34
+agent/Sources/StratoAgentCore/CephCredentialRevoker.swift
+  h_a84d4ff76cadd1 2-6,67-84,86-95,118-122,124,129-131,151-160,164-169,171
+agent/Sources/StratoAgentCore/CephRBDStorageBackend.swift
+  h_a84d4ff76cadd1 4-8,420-428,432-440,452-454
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  h_a84d4ff76cadd1 12-14,16-18,57,65,67-70,73-82,120-121,133,135,145,149,153-155,158-159,164,168
+agent/Sources/StratoAgentCore/CloudInitStaging.swift
+  h_a84d4ff76cadd1 1-271
+agent/Sources/StratoAgentCore/DurableFileWriter.swift
+  h_a84d4ff76cadd1 17,64-66,69-78,151,241-244,299-315
+agent/Sources/StratoAgentCore/GuestControlProtocol.swift
+  h_a84d4ff76cadd1 160,181-182,184,326,339,436,747
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  h_a84d4ff76cadd1 8-15,19-20,28-30,34,39,45-46,74-103,116-117,136-145,151-154,160-162,167,169-171,192,199-200,207,211-214,258-263,269-282,289-290,292,303,311-312,324-325,328-329,331,337-342,350-352,369,377-378,390-392,397-399,402-403,420-421,424-425,427-428,430-436,445-446,448-452,454-456,462-465,469,473-498,500-506
+agent/Sources/StratoAgentCore/HostMemoryProfileDependencyModule.swift
+  h_a84d4ff76cadd1 1-30
+agent/Sources/StratoAgentCore/LibvirtDomain.swift
+  h_a84d4ff76cadd1 191-192,323-324
+agent/Sources/StratoAgentCore/MTLSArtifactDownloader.swift
+  h_a84d4ff76cadd1 290-310
+agent/Sources/StratoAgentCore/ManagedStatePermissions.swift
+  h_a84d4ff76cadd1 1-194
+agent/Sources/StratoAgentCore/OwnedFileCleanup.swift
+  h_a84d4ff76cadd1 1-69
+agent/Sources/StratoAgentCore/ReconcilePlanner.swift
+  h_a84d4ff76cadd1 707
+agent/Sources/StratoAgentCore/ReconcileTypes.swift
+  h_a84d4ff76cadd1 682-683,688-689
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  h_a84d4ff76cadd1 401-407,409,465,469,713,759
+agent/Sources/StratoAgentCore/ResourceEnforcementProducer.swift
+  h_a84d4ff76cadd1 1-150
+agent/Sources/StratoAgentCore/ResourceTelemetryProbe.swift
+  h_a84d4ff76cadd1 13,23-24,30,38,40-43,46,83-84,86,88,91-98,100,105,135,141-158,176-183,186,198,209,278-280,418-517
+agent/Sources/StratoAgentCore/SandboxAutomaticSuspension.swift
+  h_a84d4ff76cadd1 1-131
+agent/Sources/StratoAgentCore/SandboxCheckpointManifest.swift
+  h_a84d4ff76cadd1 1-190
+agent/Sources/StratoAgentCore/SandboxIdleFenceTransport.swift
+  h_a84d4ff76cadd1 1-77
+agent/Sources/StratoAgentCore/SandboxIdleSampler.swift
+  h_a84d4ff76cadd1 1-62
+agent/Sources/StratoAgentCore/SandboxIdleSuspensionAdmission.swift
+  h_a84d4ff76cadd1 1-98
+agent/Sources/StratoAgentCore/SandboxJail.swift
+  h_a84d4ff76cadd1 2,292-293,295
+agent/Sources/StratoAgentCore/SandboxLazyMemory.swift
+  h_a84d4ff76cadd1 1-88
+agent/Sources/StratoAgentCore/SandboxLazyMemoryCapability.swift
+  h_a84d4ff76cadd1 1-60
+agent/Sources/StratoAgentCore/SandboxLazyMemoryStore.swift
+  h_a84d4ff76cadd1 1-419
+agent/Sources/StratoAgentCore/SandboxPageServerSupervisor.swift
+  h_a84d4ff76cadd1 1-216
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  h_a84d4ff76cadd1 18-28,81-107,162-166,233-282
+agent/Sources/StratoAgentCore/SandboxSuspension.swift
+  h_a84d4ff76cadd1 1-260
+agent/Sources/StratoAgentCore/SandboxUffdTransport.swift
+  h_a84d4ff76cadd1 1-267
+agent/Sources/StratoAgentCore/SandboxValidationProofStore.swift
+  h_a84d4ff76cadd1 1-92
+agent/Sources/StratoAgentCore/VMExecSessionManager.swift
+  h_a84d4ff76cadd1 36,52-53,184,225-231,243,245
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  h_a84d4ff76cadd1 80-82,135-136,525-526,546,596
+agent/Sources/StratoAgentCore/WorkloadResourceLimitsEvidence.swift
+  h_a84d4ff76cadd1 1-81
+agent/Sources/StratoAgentDomainXML/DomainBurstableTuning.swift
+  h_a84d4ff76cadd1 1-134
+agent/Sources/StratoAgentKit/BurstableCgroupReadback.swift
+  h_a84d4ff76cadd1 1-75
+agent/Sources/StratoAgentKit/BurstableResourceLimits.swift
+  h_a84d4ff76cadd1 1-57
+agent/Sources/StratoAgentKit/HostMemoryController.swift
+  h_a84d4ff76cadd1 2,17,20
+agent/Sources/StratoAgentRuntime/Agent+DependencyObservation.swift
+  h_a84d4ff76cadd1 68-77
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  h_a84d4ff76cadd1 344,360-361,363,381,383-392,400,405-413,415-420,423,434,436-470,480-486,644-684,689-692,697-698,700-701,709,714-716,722,727-728,730
+agent/Sources/StratoAgentRuntime/Agent+Lifecycle.swift
+  h_a84d4ff76cadd1 31-32,37-43,210-211,259-260,377,396-410,423-426,663
+agent/Sources/StratoAgentRuntime/Agent+Messages.swift
+  h_a84d4ff76cadd1 118-125,1123-1129,1624-1631,1634,1636-1638
+agent/Sources/StratoAgentRuntime/Agent+Reconciliation.swift
+  h_a84d4ff76cadd1 256-269,338-341,349-351,353-357,626-629,746,748-749,755,764-765,837-840
+agent/Sources/StratoAgentRuntime/Agent+ResourceEnforcement.swift
+  h_a84d4ff76cadd1 1-140
+agent/Sources/StratoAgentRuntime/Agent+ResourceTelemetry.swift
+  h_a84d4ff76cadd1 2,20,25,30-66,76-96,112-115,136-139
+agent/Sources/StratoAgentRuntime/Agent+SandboxIdlePolicy.swift
+  h_a84d4ff76cadd1 1-39
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  h_a84d4ff76cadd1 29-128,130-133,144-153,181,200-219,221-228,284-287,302,466-475,477,480-481,484-521,718-725,729-731,737-738,749,754-755,759,843-852,864-870
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  h_a84d4ff76cadd1 178-181,514-515,637,985-986,989-990,995,1068-1070,1108,1110-1111,1121,1137
+agent/Sources/StratoAgentRuntime/Agent.swift
+  h_a84d4ff76cadd1 2,245,269,360,447-465
+agent/Sources/StratoAgentRuntime/AgentRuntimeConfiguration.swift
+  h_a84d4ff76cadd1 57-58,63
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+GuestControl.swift
+  h_a84d4ff76cadd1 19-25
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+GuestIO.swift
+  h_a84d4ff76cadd1 20-25,29,32-34,66-71,73,126,148,160,249-254
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+IdleGuest.swift
+  h_a84d4ff76cadd1 1-120
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+IdlePolicy.swift
+  h_a84d4ff76cadd1 1-103
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+Lifecycle.swift
+  h_a84d4ff76cadd1 20-26,29-35,39-42,432-433,463-465,606-608,613-615,729-730,734-737,832-843,863-878,882-884,887,996-998,1139,1143,1174,1187-1195,1206,1208,1253-1254,1259,1263-1265,1284-1286,1289-1290,1299-1301,1360-1365
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+ResourceLimits.swift
+  h_a84d4ff76cadd1 1-100
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+Snapshots.swift
+  h_a84d4ff76cadd1 34-41,102-105,151-161,204-228,233-234,240-246,268-272,286-294,307-317,350,353-354,357-360,373,378-379,383-389,395-409,418-425,431,438-447
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+Suspension.swift
+  h_a84d4ff76cadd1 1-597
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+WarmStart.swift
+  h_a84d4ff76cadd1 448-449,471-473,483-491,507-510
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime.swift
+  h_a84d4ff76cadd1 40-41,218-242,306-325,328-329
+agent/Sources/StratoAgentRuntime/FirecrackerService.swift
+  h_a84d4ff76cadd1 83,450-452,454-455,472
+agent/Sources/StratoAgentRuntime/HypervisorProtocol.swift
+  h_a84d4ff76cadd1 63-67,412-422
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  h_a84d4ff76cadd1 126-132,193-197,200-201,210-211,314-318,603,646-663,681-687,717-724,867-874,894,898-902,919,932,938,956-957,966-971,1031-1034,1062-1064,1172-1177,1181-1195,1296-1299,1862,1887-1935,1954-2060,2327-2329,2343-2366,2370-2378,2660
+agent/Sources/StratoAgentRuntime/MockHypervisorService.swift
+  h_a84d4ff76cadd1 27,52,58,226-229,285-287,290-293,300-301
+agent/Sources/StratoAgentRuntime/StratoAgent.swift
+  h_a84d4ff76cadd1 295-296,301
+agent/Tests/StratoAgentPlatformTests/MetadataPersistenceTests.swift
+  h_a84d4ff76cadd1 114,116-118,134-138
+agent/Tests/StratoAgentRuntimeTests/BurstableBackendRefusalTests.swift
+  h_a84d4ff76cadd1 1-50
+agent/Tests/StratoAgentRuntimeTests/HostMemoryAccountingRuntimeTests.swift
+  h_a84d4ff76cadd1 1-87
+agent/Tests/StratoAgentRuntimeTests/LibvirtGuestSeedRefusalTests.swift
+  h_a84d4ff76cadd1 1-120
+agent/Tests/StratoAgentRuntimeTests/ResourceEnforcementCaptureTests.swift
+  h_a84d4ff76cadd1 1-85
+agent/Tests/StratoAgentRuntimeTests/RuntimeTestConfiguration.swift
+  h_a84d4ff76cadd1 7-8,34-35,40
+agent/Tests/StratoAgentRuntimeTests/SandboxAdoptedFenceReleaseTests.swift
+  h_a84d4ff76cadd1 1-182
+agent/Tests/StratoAgentRuntimeTests/SandboxCaptureRecoveryTests.swift
+  h_a84d4ff76cadd1 1-290
+agent/Tests/StratoAgentRuntimeTests/SandboxIdlePolicyIntegrationTests.swift
+  h_a84d4ff76cadd1 1-82
+agent/Tests/StratoAgentRuntimeTests/SandboxLogQueueTests.swift
+  h_a84d4ff76cadd1 1-45
+agent/Tests/StratoAgentRuntimeTests/SandboxValidationCleanupTests.swift
+  h_a84d4ff76cadd1 1-96
+agent/Tests/StratoAgentStorageTests/CephRBDStorageBackendTests.swift
+  h_a84d4ff76cadd1 8-63,82,99-102,246,335,339,350-351,355,362-367,437-457,499-556,943-953,959-964,978,989-1065
+agent/Tests/StratoAgentStorageTests/CloudInitStagingTests.swift
+  h_a84d4ff76cadd1 1-162
+agent/Tests/StratoAgentStorageTests/DurableFileWriterTests.swift
+  h_a84d4ff76cadd1 4-8,30-35,37,45-48,59-78,103-106,111-120,129-141,167,172,176-184,202-203,207,212,220-394,403-404,410,414,418,423,546-571
+agent/Tests/StratoAgentStorageTests/ManagedStatePermissionsTests.swift
+  h_a84d4ff76cadd1 1-262
+agent/Tests/StratoAgentStorageTests/SandboxAutomaticSuspensionTests.swift
+  h_a84d4ff76cadd1 1-211
+agent/Tests/StratoAgentStorageTests/SandboxCheckpointManifestTests.swift
+  h_a84d4ff76cadd1 1-179
+agent/Tests/StratoAgentStorageTests/SandboxIdleSuspensionAdmissionTests.swift
+  h_a84d4ff76cadd1 1-212
+agent/Tests/StratoAgentStorageTests/SandboxIdleWireTests.swift
+  h_a84d4ff76cadd1 1-124
+agent/Tests/StratoAgentStorageTests/SandboxLazyMemoryStoreTests.swift
+  h_a84d4ff76cadd1 1-235
+agent/Tests/StratoAgentStorageTests/SandboxSuspensionTests.swift
+  h_a84d4ff76cadd1 1-243
+agent/Tests/StratoAgentStorageTests/SandboxValidationProofStoreTests.swift
+  h_a84d4ff76cadd1 1-127
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  h_a84d4ff76cadd1 55-115,309-325
+agent/Tests/StratoAgentTests/BurstableLifecycleTests.swift
+  h_a84d4ff76cadd1 1-237
+agent/Tests/StratoAgentTests/BurstableResourceLimitsTests.swift
+  h_a84d4ff76cadd1 1-166
+agent/Tests/StratoAgentTests/BurstableRuntimeGateTests.swift
+  h_a84d4ff76cadd1 1-86
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  h_a84d4ff76cadd1 176-178,273,276,296,308,363,509-722
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  h_a84d4ff76cadd1 151-154,271-287
+agent/Tests/StratoAgentTests/ResourceEnforcementProducerTests.swift
+  h_a84d4ff76cadd1 1-226
+agent/Tests/StratoAgentTests/ResourceTelemetryProbeTests.swift
+  h_a84d4ff76cadd1 163-269
+agent/Tests/StratoAgentTests/SandboxLazyMemoryCapabilityTests.swift
+  h_a84d4ff76cadd1 1-77
+agent/Tests/StratoAgentTests/SandboxLazyMemoryTests.swift
+  h_a84d4ff76cadd1 1-68
+agent/Tests/StratoAgentTests/SandboxPageServerSupervisorTests.swift
+  h_a84d4ff76cadd1 1-196
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  h_a84d4ff76cadd1 292-294,446-464
+agent/Tests/StratoAgentTests/SandboxUffdTransportTests.swift
+  h_a84d4ff76cadd1 1-183
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  h_a84d4ff76cadd1 29-30,48,417-444
+agent/Tests/StratoAgentTests/VMExecSessionManagerTests.swift
+  h_a84d4ff76cadd1 394,698-777
+agent/Tests/StratoAgentTests/WorkloadResourceLimitsEvidenceTests.swift
+  h_a84d4ff76cadd1 1-53
+cli/Sources/StratoCLI/Commands/ResourceClassCommand.swift
+  h_a84d4ff76cadd1 1-84
+cli/Sources/StratoCLI/Commands/SandboxCommand.swift
+  h_a84d4ff76cadd1 91-97,114-115
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  h_a84d4ff76cadd1 114-120,180-181
+cli/Sources/StratoCLI/Strato.swift
+  h_a84d4ff76cadd1 21
+cli/Sources/StratoCLICore/API/ResourceClassReference.swift
+  h_a84d4ff76cadd1 1-12
+cli/Sources/StratoCLICore/Exec/GuestExecSession.swift
+  h_a84d4ff76cadd1 198,200-203,208-243,256-260
+cli/Tests/StratoCLITests/GuestExecSessionTests.swift
+  h_a84d4ff76cadd1 310-479,642-658
+cli/Tests/StratoCLITests/ResourceClassReferenceTests.swift
+  h_a84d4ff76cadd1 1-17
+clients/swift/Tests/StratoAPIClientTests/StratoAPIClientTests.swift
+  h_a84d4ff76cadd1 75-101
+config.toml.example
+  h_a84d4ff76cadd1 82-83,86-90
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  h_a84d4ff76cadd1 10,237-250
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  h_a84d4ff76cadd1 160-162
+control-plane/Sources/App/Bootstrap/LifecycleBootstrap.swift
+  h_a84d4ff76cadd1 17-23
+control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
+  h_a84d4ff76cadd1 47-49
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  h_a84d4ff76cadd1 48,121-122,132,300-301,303
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  h_a84d4ff76cadd1 24,64-65,81,126,166,419-426
+control-plane/Sources/App/Controllers/AgentController.swift
+  h_a84d4ff76cadd1 26,1074,1095-1100,1112-1124
+control-plane/Sources/App/Controllers/AgentSandboxIdleFenceController.swift
+  h_a84d4ff76cadd1 1-26
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  h_a84d4ff76cadd1 2,275,313,330-374,376-379,386-387,439-440,572-575,633-642,662-664,666-702,706-707,729,732
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  h_a84d4ff76cadd1 184,186-195,203-209,211-216,308-317,337-339,349,359,362,408-413
+control-plane/Sources/App/Controllers/HealthController.swift
+  h_a84d4ff76cadd1 113-115,117-118
+control-plane/Sources/App/Controllers/LogsController.swift
+  h_a84d4ff76cadd1 1,37-59
+control-plane/Sources/App/Controllers/SandboxController.swift
+  h_a84d4ff76cadd1 290-301,304-307,326-327,343-345,350-357,386-387,413-424,452-454,456,467-468
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  h_a84d4ff76cadd1 45-47,60,80,91-92,101,107-112,125-131,142-143,275,341,359,446
+control-plane/Sources/App/Controllers/SiteController.swift
+  h_a84d4ff76cadd1 2,284-302
+control-plane/Sources/App/Controllers/UserController.swift
+  h_a84d4ff76cadd1 124,194-197,301,316,325,329,916-924,927-930,937-941,944-947,970-974,1172,1186,1198,1204-1206
+control-plane/Sources/App/Controllers/VMController.swift
+  h_a84d4ff76cadd1 3,163-164,653-752,754-762,766-784,791-792,797-800,803-806,808-812,814-819,825-830,929,958,960-965,967-971,986,988-992,994-996,1229,1312-1313,1320-1322,1352-1364
+control-plane/Sources/App/Controllers/VMFleetRunController.swift
+  h_a84d4ff76cadd1 60-68,153,168-171
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  h_a84d4ff76cadd1 189,213,359-361
+control-plane/Sources/App/Migrations/AddAgentAdministrativeOffline.swift
+  h_a84d4ff76cadd1 1-14
+control-plane/Sources/App/Migrations/AddAgentMemoryAccounting.swift
+  h_a84d4ff76cadd1 1-11
+control-plane/Sources/App/Migrations/AddDurableResourceAdmissions.swift
+  h_a84d4ff76cadd1 1-13
+control-plane/Sources/App/Migrations/AddSandboxIdleActivity.swift
+  h_a84d4ff76cadd1 1-46
+control-plane/Sources/App/Migrations/AddSandboxIdleFences.swift
+  h_a84d4ff76cadd1 1-67
+control-plane/Sources/App/Migrations/AddSandboxSuspension.swift
+  h_a84d4ff76cadd1 1-52
+control-plane/Sources/App/Migrations/AddUserIdentityLengthConstraints.swift
+  h_a84d4ff76cadd1 1-52
+control-plane/Sources/App/Migrations/AddVMFleetPreviewExpiryIndex.swift
+  h_a84d4ff76cadd1 1-22
+control-plane/Sources/App/Migrations/AddWorkloadResourceClasses.swift
+  h_a84d4ff76cadd1 1-23
+control-plane/Sources/App/Migrations/CreateGuestExecSessionLimits.swift
+  h_a84d4ff76cadd1 1-38
+control-plane/Sources/App/Models/Agent.swift
+  h_a84d4ff76cadd1 32-35,158-166,314,317-318,356-357,363-364,376-378,468,478-479,483,522,556-567,574-575,633,655,734,759,853,867
+control-plane/Sources/App/Models/AgentResourceAdmission.swift
+  h_a84d4ff76cadd1 1-48
+control-plane/Sources/App/Models/ResourceConditions.swift
+  h_a84d4ff76cadd1 460-468,495-504,510-511,610-617
+control-plane/Sources/App/Models/SCIMExternalID.swift
+  h_a84d4ff76cadd1 103-107,114-131
+control-plane/Sources/App/Models/Sandbox.swift
+  h_a84d4ff76cadd1 14-19,67,73-75,100-114,211-214,246-247,274,287-288,291-306,309,319,322,365-366,418-420,472-475,489-490,492,533,539,541-544,558
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  h_a84d4ff76cadd1 390-391
+control-plane/Sources/App/Models/Site.swift
+  h_a84d4ff76cadd1 3,38-52,210-211,243-244,316,327,337,350-352
+control-plane/Sources/App/Models/User.swift
+  h_a84d4ff76cadd1 105-136
+control-plane/Sources/App/Models/vm.swift
+  h_a84d4ff76cadd1 8-13,704-707,819-822
+control-plane/Sources/App/Services/AgentLogIngestor.swift
+  h_a84d4ff76cadd1 2,13,19,23,25-27,30-46,49,52,57,62-73,79-81,85,87-107,109-112,115-151,153-154,156-162,164-165,171-172,175-180,182-199,202-203,205-206,224-228,242,260,267-272
+control-plane/Sources/App/Services/AgentMaintenanceLoop.swift
+  h_a84d4ff76cadd1 13,115-116,139-142
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  h_a84d4ff76cadd1 25-34,139-140,180-197,226,231
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  h_a84d4ff76cadd1 30-31,38-39,57-60,75-86,88,90-106,108-111,115-119,247,249,280,282-295,297-305,307-311,313-318,324-339,343,414-434,460-463,465,471,474,482-500,511,513-515,626-631,657-918
+control-plane/Sources/App/Services/AgentService.swift
+  h_a84d4ff76cadd1 203
+control-plane/Sources/App/Services/AgentWebSocketFrameProcessor.swift
+  h_a84d4ff76cadd1 92-101
+control-plane/Sources/App/Services/CoordinationFailureGate.swift
+  h_a84d4ff76cadd1 1-96
+control-plane/Sources/App/Services/CoordinationService.swift
+  h_a84d4ff76cadd1 1,31-32,36-41,57,115-120,173-177,188,205-209,225-237,300,303,377,407-411,477-479,481-483,505-509,513-515,621-622,624-627,630-644,671,677,686,690,699,704,725,730,744,748,759,763,775,780,795-797,800,811-823,835,840,855,859,880,884,905-924,933,943,958,963,982,992,1044,1050,1078,1087
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  h_a84d4ff76cadd1 51,183,304-309,429-434,442-448,469,512
+control-plane/Sources/App/Services/GuestExecSessionMaintenanceLoop.swift
+  h_a84d4ff76cadd1 1-69
+control-plane/Sources/App/Services/GuestExecSessionManager.swift
+  h_a84d4ff76cadd1 3,43-44,80,150-161,214-215,257-327,345-349,364,385-391,452-456,469-471,551,586,698-699,720-729,736-752
+control-plane/Sources/App/Services/InventorySessionFence.swift
+  h_a84d4ff76cadd1 9-12
+control-plane/Sources/App/Services/LokiService.swift
+  h_a84d4ff76cadd1 22-38,41-53,56-68,70-71,73-75,77-79,81-86,91-108,110-111,234,242-243,258
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  h_a84d4ff76cadd1 1,107-110,133-157,167-173,175,183
+control-plane/Sources/App/Services/ObservedInventoryGuard.swift
+  h_a84d4ff76cadd1 112-114,118-119,128-130,134,136-144,164-167
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  h_a84d4ff76cadd1 449-450
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  h_a84d4ff76cadd1 442-452
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  h_a84d4ff76cadd1 154,161-163,177-178
+control-plane/Sources/App/Services/RateLimitService.swift
+  h_a84d4ff76cadd1 10-13,35-41,53-54,59-61,66-73,77-88,92-108,112-118,122-126,128-129,131,188-189,195-199,210,216-219,243,251,258-264,268-271,274,279-282,285-289,291-333,337-338,340-343,351-357
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  h_a84d4ff76cadd1 18-19,122-123,178-191,197,234-240
+control-plane/Sources/App/Services/ResourceAdmissionService.swift
+  h_a84d4ff76cadd1 1-248
+control-plane/Sources/App/Services/ResourceMutation.swift
+  h_a84d4ff76cadd1 230-232,237-239
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  h_a84d4ff76cadd1 20,23,33,37-41,46-48,131-149,151,153,162-163,181-184,299-304
+control-plane/Sources/App/Services/SPIFFE/WorkloadRegistry.swift
+  h_a84d4ff76cadd1 3,130-159
+control-plane/Sources/App/Services/SandboxActivityService.swift
+  h_a84d4ff76cadd1 1-175
+control-plane/Sources/App/Services/SandboxIdleFenceService.swift
+  h_a84d4ff76cadd1 1-365
+control-plane/Sources/App/Services/SandboxSuspensionService.swift
+  h_a84d4ff76cadd1 1-71
+control-plane/Sources/App/Services/SchedulerService.swift
+  h_a84d4ff76cadd1 28,34-35,74-75,86-87,92-93,100-101,150-152,156,162-163,174-175,182-184,187-199,243,253-254,256,259,275,291,338-347,349,404,412-413,470-471,474-477,574-587,710-711
+control-plane/Sources/App/Services/StorageCarrierAssembler.swift
+  h_a84d4ff76cadd1 116-124,190
+control-plane/Sources/App/Services/Sweeps/SandboxExpirySweep.swift
+  h_a84d4ff76cadd1 26,43,79-83,119,133-135,160-179
+control-plane/Sources/App/Services/Sweeps/SandboxIdleSuspensionSweep.swift
+  h_a84d4ff76cadd1 1-30
+control-plane/Sources/App/Services/VMExecSessionLimits.swift
+  h_a84d4ff76cadd1 1-175
+control-plane/Sources/App/Services/VMFleetRunDispatcher.swift
+  h_a84d4ff76cadd1 8-34,128,130,138-139
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  h_a84d4ff76cadd1 282-284
+control-plane/Sources/App/Services/WebSocketManager.swift
+  h_a84d4ff76cadd1 39,87-96,98,105
+control-plane/Sources/App/Services/WorkloadObservedMerge.swift
+  h_a84d4ff76cadd1 473,497,521-525
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  h_a84d4ff76cadd1 16-17,26-31,36-39,42-68,70-80,82-89,91-109,111-133,135-147,149-179,186-200,235,238-243,282,363-366,368-389,391-402,404,407-412,415-421,441,498-502,505-506,511,513,515,517-519,530-531
+control-plane/Sources/App/Services/WorkloadResourceClassService.swift
+  h_a84d4ff76cadd1 1-230
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  h_a84d4ff76cadd1 16-57,797-810,853-902
+control-plane/Sources/App/Workflows/SandboxCreationWorkflow.swift
+  h_a84d4ff76cadd1 14,170,240-241,353
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  h_a84d4ff76cadd1 15,156-157,315
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 107-110,730,743-745,778-780,808-810,827-865,899,1130-1141,1173-1174,1185,5960-5961,5973-5975,5985-6007,10224-10225,10489-10502,10876-10877,10921-10922,10952-10961,11008-11009,11022-11035,11071-11072,11076-11080,11122-11123,11185-11194,11197,11207-11209,13111,13114,13117,13126,13129,13132,13171,13174,13177,15518,15682,15709-15711,15765-15766,15964-15968,15993-16015,16133-16171,16842-16849,16986-16987,19608-19659
+control-plane/Sources/App/routes.swift
+  h_a84d4ff76cadd1 31
+control-plane/Tests/AppIAMTests/AdminExceptionPathTests.swift
+  h_a84d4ff76cadd1 23
+control-plane/Tests/AppIAMTests/AuditLoggingTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIAMTests/AuthorizationCheckTests.swift
+  h_a84d4ff76cadd1 13
+control-plane/Tests/AppIAMTests/CedarPolicySetCacheTests.swift
+  h_a84d4ff76cadd1 13
+control-plane/Tests/AppIAMTests/CredentialRestrictionEnforcementTests.swift
+  h_a84d4ff76cadd1 14,20,23,26
+control-plane/Tests/AppIAMTests/CredentialRestrictionRouteTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppIAMTests/CrossOrgBindingTests.swift
+  h_a84d4ff76cadd1 16
+control-plane/Tests/AppIAMTests/CrossProjectContainmentTests.swift
+  h_a84d4ff76cadd1 27
+control-plane/Tests/AppIAMTests/EntitySliceLoaderTests.swift
+  h_a84d4ff76cadd1 25
+control-plane/Tests/AppIAMTests/FolderMemberTests.swift
+  h_a84d4ff76cadd1 45
+control-plane/Tests/AppIAMTests/FolderSubtreeTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppIAMTests/GrantPlatformAdminCommandTests.swift
+  h_a84d4ff76cadd1 12
+control-plane/Tests/AppIAMTests/GuardrailEndpointTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppIAMTests/GuardrailWriteReportTests.swift
+  h_a84d4ff76cadd1 16
+control-plane/Tests/AppIAMTests/HierarchyIntegrationTests.swift
+  h_a84d4ff76cadd1 8,18,32,35
+control-plane/Tests/AppIAMTests/HierarchyMaintenanceTests.swift
+  h_a84d4ff76cadd1 12
+control-plane/Tests/AppIAMTests/HierarchyPathResolverTests.swift
+  h_a84d4ff76cadd1 8,14,16,19
+control-plane/Tests/AppIAMTests/HierarchyPathVisibilityTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  h_a84d4ff76cadd1 15,499
+control-plane/Tests/AppIAMTests/IAMBatchDecisionTests.swift
+  h_a84d4ff76cadd1 25
+control-plane/Tests/AppIAMTests/IAMDecisionLogEndpointTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppIAMTests/IAMGuardrailTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppIAMTests/IAMPolicySetVersionTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppIAMTests/IAMRoleBindingTests.swift
+  h_a84d4ff76cadd1 13
+control-plane/Tests/AppIAMTests/IAMWhoCanTests.swift
+  h_a84d4ff76cadd1 13
+control-plane/Tests/AppIAMTests/ListAuthorizationScalingTests.swift
+  h_a84d4ff76cadd1 32,38,40,43
+control-plane/Tests/AppIAMTests/OrganizationAccessServiceTests.swift
+  h_a84d4ff76cadd1 13,67,72,84,89,121,130,143,152,164
+control-plane/Tests/AppIAMTests/OrganizationMemberAuthzTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppIAMTests/OrganizationMemberRoleTests.swift
+  h_a84d4ff76cadd1 12
+control-plane/Tests/AppIAMTests/OrganizationalUnitTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppIAMTests/PolicyEndpointTests.swift
+  h_a84d4ff76cadd1 18
+control-plane/Tests/AppIAMTests/ProjectListVisibilityTests.swift
+  h_a84d4ff76cadd1 22
+control-plane/Tests/AppIAMTests/ProjectMemberTests.swift
+  h_a84d4ff76cadd1 12
+control-plane/Tests/AppIAMTests/ProjectResolutionTests.swift
+  h_a84d4ff76cadd1 26
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  h_a84d4ff76cadd1 15,24,71,74
+control-plane/Tests/AppIAMTests/ProjectVisibilityTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppIAMTests/ResourceBindingCleanupTests.swift
+  h_a84d4ff76cadd1 18
+control-plane/Tests/AppIAMTests/RestrictedCredentialListTests.swift
+  h_a84d4ff76cadd1 25
+control-plane/Tests/AppIAMTests/RoleEndpointTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIAMTests/VMAttachTargetDisclosureTests.swift
+  h_a84d4ff76cadd1 36
+control-plane/Tests/AppIAMTests/VMAuthorizationTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppIAMTests/VolumeAuthorizationTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppIAMTests/WhoCanCeilingTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppIAMTests/WhoCanEvaluatorAgreementTests.swift
+  h_a84d4ff76cadd1 19,25,27,30
+control-plane/Tests/AppIdentityTests/APIKeyAuthenticatorTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppIdentityTests/APIKeyOwnershipTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIdentityTests/AgentOrganizationScopeTests.swift
+  h_a84d4ff76cadd1 17,509-510,536-537
+control-plane/Tests/AppIdentityTests/ConsoleSessionManagerTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppIdentityTests/GroupTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppIdentityTests/GuestIdentityTests.swift
+  h_a84d4ff76cadd1 13
+control-plane/Tests/AppIdentityTests/GuestJWTSVIDMintTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIdentityTests/JWTSVIDAuthenticationTests.swift
+  h_a84d4ff76cadd1 27
+control-plane/Tests/AppIdentityTests/LastUsedTrackingTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIdentityTests/ListPaginationTests.swift
+  h_a84d4ff76cadd1 16
+control-plane/Tests/AppIdentityTests/OAuthDeviceFlowTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppIdentityTests/OIDCAuthFlowTests.swift
+  h_a84d4ff76cadd1 274
+control-plane/Tests/AppIdentityTests/OIDCControllerTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppIdentityTests/OIDCIdentityMappingTests.swift
+  h_a84d4ff76cadd1 16,70-124
+control-plane/Tests/AppIdentityTests/OrgSPIREClientRegistryTests.swift
+  h_a84d4ff76cadd1 25
+control-plane/Tests/AppIdentityTests/OrgTrustDomainTests.swift
+  h_a84d4ff76cadd1 17,476,478
+control-plane/Tests/AppIdentityTests/PasskeyManagementTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppIdentityTests/RegistrationPolicyTests.swift
+  h_a84d4ff76cadd1 23
+control-plane/Tests/AppIdentityTests/SCIMExternalIDRetryTests.swift
+  h_a84d4ff76cadd1 1-232
+control-plane/Tests/AppIdentityTests/SCIMFilterTests.swift
+  h_a84d4ff76cadd1 15,171,173-174,176-178
+control-plane/Tests/AppIdentityTests/SCIMProvisioningIntegrationTests.swift
+  h_a84d4ff76cadd1 3,49,57-148
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  h_a84d4ff76cadd1 18,540,863,871-873,901
+control-plane/Tests/AppIdentityTests/SSFTests.swift
+  h_a84d4ff76cadd1 90,391,634,800
+control-plane/Tests/AppIdentityTests/SecretsEncryptionServiceTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppIdentityTests/ServiceAccountAPITests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppIdentityTests/UserControllerTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppIdentityTests/UserCreationAndClaimTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppIdentityTests/UserIdentityValidationTests.swift
+  h_a84d4ff76cadd1 1-94
+control-plane/Tests/AppIdentityTests/ValkeySessionDriverTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppIdentityTests/WebAuthnChallengeTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIdentityTests/WorkloadIdentityControllerTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppIdentityTests/WorkloadPrincipalTests.swift
+  h_a84d4ff76cadd1 16,411-413
+control-plane/Tests/AppNetworkTests/DNSZoneTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppNetworkTests/DesiredStateDNSZoneTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppNetworkTests/FloatingIPControllerTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppNetworkTests/LoadBalancerControllerTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppNetworkTests/NetworkACLControllerTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppNetworkTests/NetworkControllerTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppNetworkTests/SecurityGroupControllerTests.swift
+  h_a84d4ff76cadd1 16
+control-plane/Tests/AppNetworkTests/SiteTests.swift
+  h_a84d4ff76cadd1 14,342-350,1248-1371
+control-plane/Tests/AppNetworkTests/VMNetworkSelectionTests.swift
+  h_a84d4ff76cadd1 13
+control-plane/Tests/AppPlatformTests/AddAgentInventorySessionTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppPlatformTests/AddAgentPhysicalFreeDiskTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppPlatformTests/AddImageArtifactVirtualSizeTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppPlatformTests/AddMetadataSourceToVMTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppPlatformTests/AddMutableMetadataToVMTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppPlatformTests/AddVolumeBlockPolicyTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppPlatformTests/AdvisoryLockTests.swift
+  h_a84d4ff76cadd1 6,12,102-109,111,113-117,246-264
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppPlatformTests/AgentControllerTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  h_a84d4ff76cadd1 226-239,248
+control-plane/Tests/AppPlatformTests/AgentLogIngestorTests.swift
+  h_a84d4ff76cadd1 17,45,71-72,108-109,145,170-316
+control-plane/Tests/AppPlatformTests/AgentManifestQuarantineTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppPlatformTests/AgentMetadataServiceCapabilityTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppPlatformTests/AgentRevocationTests.swift
+  h_a84d4ff76cadd1 1-200
+control-plane/Tests/AppPlatformTests/AgentServiceLifecycleTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppPlatformTests/AgentUpdateEndpointTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppPlatformTests/AgentWebSocketFrameProcessorTests.swift
+  h_a84d4ff76cadd1 56-76
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  h_a84d4ff76cadd1 2-3,24,74-235,540-543,545-547,846-861
+control-plane/Tests/AppPlatformTests/AgentWorkloadClaimEnumConstraintTests.swift
+  h_a84d4ff76cadd1 20
+control-plane/Tests/AppPlatformTests/BackgroundTaskRegistryTests.swift
+  h_a84d4ff76cadd1 20
+control-plane/Tests/AppPlatformTests/BootstrapCommandTests.swift
+  h_a84d4ff76cadd1 8,27,32,106-117,122,124
+control-plane/Tests/AppPlatformTests/ClusterClockTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppPlatformTests/ControlPlaneConfigurationTests.swift
+  h_a84d4ff76cadd1 26-40
+control-plane/Tests/AppPlatformTests/CoordinationBlackholeTests.swift
+  h_a84d4ff76cadd1 1-49
+control-plane/Tests/AppPlatformTests/CoordinationFailureGateTests.swift
+  h_a84d4ff76cadd1 1-127
+control-plane/Tests/AppPlatformTests/CoordinationServiceTests.swift
+  h_a84d4ff76cadd1 11,235,249,257,359
+control-plane/Tests/AppPlatformTests/CreateLoadBalancerBackendMigrationTests.swift
+  h_a84d4ff76cadd1 10,21
+control-plane/Tests/AppPlatformTests/CreateMACAddressLedgerMigrationTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  h_a84d4ff76cadd1 10,16-24,76-80,82-83,88-139,141-158,161-165,167-173,175-194
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  h_a84d4ff76cadd1 11,31
+control-plane/Tests/AppPlatformTests/DatabaseTransactionRetryTests.swift
+  h_a84d4ff76cadd1 11,70,90
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  h_a84d4ff76cadd1 15
+control-plane/Tests/AppPlatformTests/GuestExecSessionMaintenanceLifecycleTests.swift
+  h_a84d4ff76cadd1 1-66
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  h_a84d4ff76cadd1 7,10-39
+control-plane/Tests/AppPlatformTests/IdempotencyTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  h_a84d4ff76cadd1 24
+control-plane/Tests/AppPlatformTests/ListCountBatchingTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppPlatformTests/LoggingContractTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppPlatformTests/LokiBatchTests.swift
+  h_a84d4ff76cadd1 1-39
+control-plane/Tests/AppPlatformTests/LokiPushTests.swift
+  h_a84d4ff76cadd1 1-97
+control-plane/Tests/AppPlatformTests/MACAllocatorTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppPlatformTests/NetworkFabricGenerationTests.swift
+  h_a84d4ff76cadd1 7
+control-plane/Tests/AppPlatformTests/NormalizeLegacyAgentClockTimestampsTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  h_a84d4ff76cadd1 21,34
+control-plane/Tests/AppPlatformTests/PostgresFixtureConcurrencyTests.swift
+  h_a84d4ff76cadd1 1-242
+control-plane/Tests/AppPlatformTests/RateLimitTests.swift
+  h_a84d4ff76cadd1 7,223,232-235
+control-plane/Tests/AppPlatformTests/RateLimitValkeyWindowTests.swift
+  h_a84d4ff76cadd1 1-42
+control-plane/Tests/AppPlatformTests/RateLimitWindowRolloverTests.swift
+  h_a84d4ff76cadd1 1-188
+control-plane/Tests/AppPlatformTests/RebaseLegacyClusterClockDeadlinesTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppPlatformTests/ReplicaMessageBridgeTests.swift
+  h_a84d4ff76cadd1 11-14
+control-plane/Tests/AppPlatformTests/ReplicaRoutingTests.swift
+  h_a84d4ff76cadd1 24,94
+control-plane/Tests/AppPlatformTests/ResourceAdmissionTests.swift
+  h_a84d4ff76cadd1 1-718
+control-plane/Tests/AppPlatformTests/ResourceClassPlacementTests.swift
+  h_a84d4ff76cadd1 1-158
+control-plane/Tests/AppPlatformTests/ResourceClassTransactionTests.swift
+  h_a84d4ff76cadd1 1-222
+control-plane/Tests/AppPlatformTests/SandboxIdleAssemblyTests.swift
+  h_a84d4ff76cadd1 1-139
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  h_a84d4ff76cadd1 13,35-36,79,107,110,127,148,160-165,168,183-184,186-191,194,213,239,258,274,286-287,290,306,333-334,337,373,396,409-411,414,434,529-530,546-547,571-572,640-641,831,906,925,956-1016
+control-plane/Tests/AppPlatformTests/SchemaMigratorTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppPlatformTests/SecurityHeadersTests.swift
+  h_a84d4ff76cadd1 7
+control-plane/Tests/AppPlatformTests/SteadyStateDivergenceTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppPlatformTests/StorageDeviceInventoryReconcilerTests.swift
+  h_a84d4ff76cadd1 12,208
+control-plane/Tests/AppPlatformTests/StorageDevicePersistenceTests.swift
+  h_a84d4ff76cadd1 12,176
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  h_a84d4ff76cadd1 11-48,250-255,272-278,398-414
+control-plane/Tests/AppPlatformTests/TestFixtureDiagnosticsTests.swift
+  h_a84d4ff76cadd1 1-57
+control-plane/Tests/AppPlatformTests/TracingContextPropagationTests.swift
+  h_a84d4ff76cadd1 63
+control-plane/Tests/AppPlatformTests/UserIdentityMigrationTests.swift
+  h_a84d4ff76cadd1 1-59
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  h_a84d4ff76cadd1 62,375,855-873,888,890-893,896,936,960,1243,1252,1276-1283,1285-1298,1308,1312,1318-1319,1321-1335,1364,1368
+control-plane/Tests/AppResourceTests/CephStorageTests.swift
+  h_a84d4ff76cadd1 12
+control-plane/Tests/AppResourceTests/CoordinationFixtureStore.swift
+  h_a84d4ff76cadd1 1-50
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  h_a84d4ff76cadd1 20
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  h_a84d4ff76cadd1 19,22-23,243-247,250-251,317,523-555
+control-plane/Tests/AppResourceTests/GuestExecSessionRenewalTests.swift
+  h_a84d4ff76cadd1 1-249
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  h_a84d4ff76cadd1 3-4,16,589-695,698-767,1616-1884
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  h_a84d4ff76cadd1 12
+control-plane/Tests/AppResourceTests/ImageDownloadMTLSTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  h_a84d4ff76cadd1 2,21,45-101
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppResourceTests/QuotaUsageAggregatorTests.swift
+  h_a84d4ff76cadd1 16
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppResourceTests/RequireUUIDParameterTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppResourceTests/ResourceConditionsTests.swift
+  h_a84d4ff76cadd1 13
+control-plane/Tests/AppResourceTests/ResourceEventEnumConstraintTests.swift
+  h_a84d4ff76cadd1 23
+control-plane/Tests/AppResourceTests/ResourceEventTests.swift
+  h_a84d4ff76cadd1 16
+control-plane/Tests/AppResourceTests/ResourceFinalizerTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppResourceTests/ResourceMutationTests.swift
+  h_a84d4ff76cadd1 46
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  h_a84d4ff76cadd1 8
+control-plane/Tests/AppResourceTests/SandboxExpiryTests.swift
+  h_a84d4ff76cadd1 1,16,110,144-304,556-557,563-564,576-583,589-894
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  h_a84d4ff76cadd1 13,763-765,1102-1104
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  h_a84d4ff76cadd1 16,1930-2217
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  h_a84d4ff76cadd1 25
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  h_a84d4ff76cadd1 11
+control-plane/Tests/AppResourceTests/VMCommandExecutionTests.swift
+  h_a84d4ff76cadd1 10
+control-plane/Tests/AppResourceTests/VMFleetRunTests.swift
+  h_a84d4ff76cadd1 3,10,18-136
+control-plane/Tests/AppResourceTests/VMGuestAgentExposureTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppResourceTests/VMGuestExecutionAuditTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppResourceTests/VMListScalingTests.swift
+  h_a84d4ff76cadd1 25
+control-plane/Tests/AppResourceTests/VMMetadataOptOutTests.swift
+  h_a84d4ff76cadd1 14
+control-plane/Tests/AppResourceTests/VMMutableMetadataTests.swift
+  h_a84d4ff76cadd1 25
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  h_a84d4ff76cadd1 31
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  h_a84d4ff76cadd1 49
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  h_a84d4ff76cadd1 20
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  h_a84d4ff76cadd1 21
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  h_a84d4ff76cadd1 17
+control-plane/Tests/AppResourceTests/VolumeSnapshotGuardTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppResourceTests/VolumeSnapshotListTests.swift
+  h_a84d4ff76cadd1 9
+control-plane/Tests/AppResourceTests/VolumeStuckSweepTests.swift
+  h_a84d4ff76cadd1 18
+control-plane/Tests/AppResourceTests/WorkloadSizeValidationTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppResourceTests/WorkloadTombstoneTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppTestSupport/PostgresFixtureTrait.swift
+  h_a84d4ff76cadd1 1-186
+control-plane/Tests/AppTestSupport/TestFixtureDiagnostics.swift
+  h_a84d4ff76cadd1 1-119
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  h_a84d4ff76cadd1 42-45,78-84,86-94,103,117,127-133,307-308,310,321-327,337-340,346-353,397,402,405
+control-plane/web/e2e/vm-exec-sessions.spec.ts
+  h_a84d4ff76cadd1 1-47
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  h_a84d4ff76cadd1 109,226
+control-plane/web/src/app/(dashboard)/sites/site-form-dialog.tsx
+  h_a84d4ff76cadd1 71-96
+control-plane/web/src/app/(dashboard)/sites/site-model.ts
+  h_a84d4ff76cadd1 1,23,36-37
+control-plane/web/src/components/sandboxes/create-sandbox-dialog.tsx
+  h_a84d4ff76cadd1 14,33,118,184,352
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  h_a84d4ff76cadd1 146
+control-plane/web/src/components/sandboxes/sandbox-detail-page.tsx
+  h_a84d4ff76cadd1 88,154-157
+control-plane/web/src/components/sandboxes/sandbox-status-badge.tsx
+  h_a84d4ff76cadd1 18-21
+control-plane/web/src/components/sandboxes/sandbox-ttl-card.tsx
+  h_a84d4ff76cadd1 11,13,17,28,57-58,67
+control-plane/web/src/components/terminal/guest-terminal.test.tsx
+  h_a84d4ff76cadd1 35
+control-plane/web/src/components/ui/workload-resource-class-field.tsx
+  h_a84d4ff76cadd1 1-27
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  h_a84d4ff76cadd1 14,50,232,282,330
+control-plane/web/src/components/vms/vm-detail-page.tsx
+  h_a84d4ff76cadd1 38,121,177-180
+control-plane/web/src/components/vms/vm-exec-sessions-card.test.tsx
+  h_a84d4ff76cadd1 1-46
+control-plane/web/src/components/vms/vm-exec-sessions-card.tsx
+  h_a84d4ff76cadd1 1-57
+control-plane/web/src/lib/api/sandboxes.test.ts
+  h_a84d4ff76cadd1 1-79
+control-plane/web/src/lib/api/sandboxes.ts
+  h_a84d4ff76cadd1 114-137
+control-plane/web/src/lib/sandbox-guards.test.ts
+  h_a84d4ff76cadd1 47
+control-plane/web/src/types/api.ts
+  h_a84d4ff76cadd1 339-341
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 443,463,487,496-542,741-744,786,4117,4126-4148,6001,6117-6128,6331,6355,6371-6382,6404,6408-6419,6437,6439-6442,6444-6448,6466,6501-6512,6514,6519-6520,7526,7528,7530,7535,7537,7539,7564,7566,7568,8754,8831-8832,8854,8947-8951,8977-8992,9045-9073,9378-9380,9449,10728-10773,11726-11732,11823-11874,11905-11911,12219-12226,12284,18151,18205-18232
+deploy/agent/host-memory-profile.py
+  h_a84d4ff76cadd1 1-288
+deploy/agent/install.sh
+  h_a84d4ff76cadd1 54-55,102-103,174-175,409-418,980-987,994
+deploy/agent/tests/host-memory-profile-test.py
+  h_a84d4ff76cadd1 1-235
+deploy/agent/tests/host-memory-profile-test.sh
+  h_a84d4ff76cadd1 1-3
+deploy/agent/tests/install-sh-test.sh
+  h_a84d4ff76cadd1 52,61-84
+deploy/compose/docker-compose.yml
+  h_a84d4ff76cadd1 269,271-272
+docs/architecture/agent.md
+  h_a84d4ff76cadd1 558-593,1679-1698
+docs/architecture/burstable-runtime.md
+  h_a84d4ff76cadd1 1-118
+docs/architecture/control-plane.md
+  h_a84d4ff76cadd1 836-840,864-898
+docs/architecture/iam.md
+  h_a84d4ff76cadd1 1546-1564
+docs/architecture/multi-replica.md
+  h_a84d4ff76cadd1 232-348
+docs/architecture/overview.md
+  h_a84d4ff76cadd1 5-7
+docs/architecture/resource-classes-contract.md
+  h_a84d4ff76cadd1 1-332
+docs/architecture/sandbox-suspension.md
+  h_a84d4ff76cadd1 1-148
+docs/architecture/sandboxes.md
+  h_a84d4ff76cadd1 25-27,1079,1094-1208
+docs/architecture/scheduler.md
+  h_a84d4ff76cadd1 338-372
+docs/architecture/wire-protocol.md
+  h_a84d4ff76cadd1 54,65-71,598-670
+docs/deployment/agents.md
+  h_a84d4ff76cadd1 524-525,528-534
+docs/deployment/docker-compose.md
+  h_a84d4ff76cadd1 95,247,259,262,264-266,273-278,417
+docs/deployment/host-memory-profile.md
+  h_a84d4ff76cadd1 1-122
+helm/strato-control-plane/templates/deployment.yaml
+  h_a84d4ff76cadd1 188-189
+helm/strato-control-plane/values.yaml
+  h_a84d4ff76cadd1 949-952
+prototypes/uffd-restore/.gitignore
+  h_a84d4ff76cadd1 1
+prototypes/uffd-restore/README.md
+  h_a84d4ff76cadd1 1-290
+prototypes/uffd-restore/model.py
+  h_a84d4ff76cadd1 1-67
+prototypes/uffd-restore/probe.c
+  h_a84d4ff76cadd1 1-27
+prototypes/uffd-restore/test_model.py
+  h_a84d4ff76cadd1 1-62
+sandbox-guest/init/Cargo.toml
+  h_a84d4ff76cadd1 31-35
+sandbox-guest/init/src/guest_agent/vsock.rs
+  h_a84d4ff76cadd1 155,371,432
+sandbox-guest/init/src/idle.rs
+  h_a84d4ff76cadd1 1-681
+sandbox-guest/init/src/lib.rs
+  h_a84d4ff76cadd1 23-24
+sandbox-guest/init/src/linux/exec.rs
+  h_a84d4ff76cadd1 61,81-89,104,176,179-182,188,264,409,421,456-586
+sandbox-guest/init/src/linux/mod.rs
+  h_a84d4ff76cadd1 135,177,179-184,212,235-238
+sandbox-guest/init/src/linux/vsock.rs
+  h_a84d4ff76cadd1 54,174-177,184,196,254-258,281-284,353-357,676-761
+sandbox-guest/init/src/protocol.rs
+  h_a84d4ff76cadd1 87-103,107-108,137-140,255-271,351-353,597,615,629
+scripts/check-burstable-cgroup.py
+  h_a84d4ff76cadd1 1-60
+shared/Sources/StratoShared/BoundedLogQueue.swift
+  h_a84d4ff76cadd1 1-155
+shared/Sources/StratoShared/GuestConfig.swift
+  h_a84d4ff76cadd1 1-262
+shared/Sources/StratoShared/GuestExecLimits.swift
+  h_a84d4ff76cadd1 1-6
+shared/Sources/StratoShared/HostMemoryProfile.swift
+  h_a84d4ff76cadd1 1-50
+shared/Sources/StratoShared/NodeDependency.swift
+  h_a84d4ff76cadd1 14
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  h_a84d4ff76cadd1 127-129,140-141,152,180-187,195-201,209-214,1417-1421,1432-1436,1447-1450,1878-1879,1947,1967
+shared/Sources/StratoShared/ResourceEnforcementSnapshot.swift
+  h_a84d4ff76cadd1 1-62
+shared/Sources/StratoShared/ResourceTelemetry.swift
+  h_a84d4ff76cadd1 131-137,154-161,178-184
+shared/Sources/StratoShared/SandboxGuestControlProtocol.swift
+  h_a84d4ff76cadd1 12-15
+shared/Sources/StratoShared/SandboxIdleActivityProtocol.swift
+  h_a84d4ff76cadd1 1-202
+shared/Sources/StratoShared/SandboxIdlePolicy.swift
+  h_a84d4ff76cadd1 1-95
+shared/Sources/StratoShared/SandboxModels.swift
+  h_a84d4ff76cadd1 54-55,105-107,109-110,169-170,191,216-217,235-236
+shared/Sources/StratoShared/SandboxSuspensionEvidence.swift
+  h_a84d4ff76cadd1 1-34
+shared/Sources/StratoShared/VMSpec.swift
+  h_a84d4ff76cadd1 25-28,110-112,114-115,138,165-167,192-193
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  h_a84d4ff76cadd1 132-133,154,174,270,273-274,292-294,296-297,309-310
+shared/Sources/StratoShared/WireProtocol.swift
+  h_a84d4ff76cadd1 14-22,46
+shared/Sources/StratoShared/WorkloadMemoryReservation.swift
+  h_a84d4ff76cadd1 1-59
+shared/Sources/StratoShared/WorkloadResourceClass.swift
+  h_a84d4ff76cadd1 1-313
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  h_a84d4ff76cadd1 288-294
+shared/Tests/StratoSharedTests/BoundedLogQueueTests.swift
+  h_a84d4ff76cadd1 1-77
+shared/Tests/StratoSharedTests/GuestConfigTests.swift
+  h_a84d4ff76cadd1 1-108
+shared/Tests/StratoSharedTests/ResourceEnforcementSnapshotTests.swift
+  h_a84d4ff76cadd1 1-25
+shared/Tests/StratoSharedTests/SandboxIdlePolicyTests.swift
+  h_a84d4ff76cadd1 1-119
+shared/Tests/StratoSharedTests/SandboxSuspensionEvidenceTests.swift
+  h_a84d4ff76cadd1 1-48
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  h_a84d4ff76cadd1 20-21
+shared/Tests/StratoSharedTests/WorkloadMemoryReservationTests.swift
+  h_a84d4ff76cadd1 1-61
+shared/Tests/StratoSharedTests/WorkloadResourceClassTests.swift
+  h_a84d4ff76cadd1 1-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a96d3db239cfc605733ca0ac8f0676adbfe0d99",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
