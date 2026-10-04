@@ -160,7 +160,12 @@ struct LoadBalancerController: RouteCollection {
         let loadBalancer = try await find(req, action: "loadbalancer:delete")
         let id = try loadBalancer.requireID()
         let networkID = loadBalancer.$logicalNetwork.id
+        let projectID = loadBalancer.$project.id
         try await req.db.transaction { db in
+            // Network updates take project admission before the network row.
+            // Deletion must join that order before its row/cascade locks and
+            // generation write, rather than first acquiring admission at release.
+            try await QuotaEnforcementService.lockProjectNetworkMutations(projectID: projectID, on: db)
             // FloatingIP.load_balancer_id is SET NULL: deleting the load
             // balancer withdraws external exposure without releasing the
             // project's reserved floating address.
