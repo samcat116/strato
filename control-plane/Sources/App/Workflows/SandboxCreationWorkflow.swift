@@ -374,13 +374,13 @@ enum SandboxCreationWorkflow {
         let accepted: ResourceMutation.Accepted
         do {
             let initialGeneration = sandbox.generation
-            accepted = try await VMController.retryingOnConstraintFailure {
+            accepted = try await DatabaseTransactionRetry.retrying(
+                on: req.db, uniqueConstraints: DatabaseTransactionRetry.workloadCreateConstraints
+            ) {
                 // A retried attempt reuses this model after its insert was
                 // rolled back: reset the id/exists/generation so every attempt
                 // starts as a fresh insert (see the VM create path).
-                sandbox.id = nil
-                sandbox.$id.exists = false
-                sandbox.generation = initialGeneration
+                DatabaseTransactionRetry.resetNewResource(sandbox, generation: initialGeneration)
                 return try await req.db.transaction { db -> ResourceMutation.Accepted in
                     try await IdempotencyService.reserve(
                         req.idempotencyContext, actor: .user(userID), on: db)

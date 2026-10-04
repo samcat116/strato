@@ -84,7 +84,7 @@ struct LoadBalancerController: RouteCollection {
         let creatorID = try user.requireID()
         let loadBalancer: LoadBalancer
         do {
-            loadBalancer = try await req.db.transaction { db in
+            loadBalancer = try await DatabaseTransactionRetry.run(on: req.db) { db in
                 try await QuotaEnforcementService.reserveLoadBalancer(for: project, on: db)
                 let allocation = try await IPAMService.allocateIP(for: network, on: db)
                 let row = LoadBalancer(
@@ -135,7 +135,7 @@ struct LoadBalancerController: RouteCollection {
         try request.healthCheck?.validate()
 
         do {
-            try await req.db.transaction { db in
+            try await DatabaseTransactionRetry.run(on: req.db) { db in
                 let current = try await Self.locked(id, on: db)
                 if let name { current.name = name }
                 if let protocolName = request.protocol { current.protocolName = protocolName }
@@ -161,15 +161,16 @@ struct LoadBalancerController: RouteCollection {
         let id = try loadBalancer.requireID()
         let networkID = loadBalancer.$logicalNetwork.id
         let projectID = loadBalancer.$project.id
-        try await req.db.transaction { db in
+        try await DatabaseTransactionRetry.run(on: req.db) { db in
             // Network updates take project admission before the network row.
             // Deletion must join that order before its row/cascade locks and
             // generation write, rather than first acquiring admission at release.
             try await QuotaEnforcementService.lockProjectNetworkMutations(projectID: projectID, on: db)
+            let current = try await Self.locked(id, on: db)
             // FloatingIP.load_balancer_id is SET NULL: deleting the load
             // balancer withdraws external exposure without releasing the
             // project's reserved floating address.
-            try await loadBalancer.delete(on: db)
+            try await current.delete(on: db)
             // The LB and its cascading floating-IP detach both disappear from
             // this network's authoritative desired state. Advance the network
             // ordering key in the same transaction so an older payload cannot
@@ -177,7 +178,7 @@ struct LoadBalancerController: RouteCollection {
             try await DesiredStateGenerationWriter.advanceOrThrow(
                 schema: LogicalNetwork.schema, id: networkID, resource: "Network", on: db)
             try await RoleBindingService.revokeAll(nodeType: .loadBalancer, nodeID: id, on: db)
-            try await QuotaEnforcementService.release(for: loadBalancer, on: db)
+            try await QuotaEnforcementService.release(for: current, on: db)
         }
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
@@ -205,7 +206,8 @@ struct LoadBalancerController: RouteCollection {
         let listener = LoadBalancerListener(
             loadBalancerID: loadBalancerID, port: request.port, backendPort: request.backendPort)
         do {
-            try await req.db.transaction { db in
+            try await DatabaseTransactionRetry.run(on: req.db) { db in
+                DatabaseTransactionRetry.resetNewModel(listener)
                 try await listener.save(on: db)
                 try await Self.markPendingAndBump(loadBalancerID, on: db)
             }
@@ -225,7 +227,7 @@ struct LoadBalancerController: RouteCollection {
         let loadBalancerID = try loadBalancer.requireID()
         let listener = try await findListener(req, loadBalancerID: loadBalancerID)
         do {
-            try await req.db.transaction { db in
+            try await DatabaseTransactionRetry.run(on: req.db) { db in
                 listener.port = request.port
                 listener.backendPort = request.backendPort
                 try await listener.save(on: db)
@@ -243,8 +245,9 @@ struct LoadBalancerController: RouteCollection {
         let loadBalancer = try await find(req, action: "loadbalancer:update")
         let loadBalancerID = try loadBalancer.requireID()
         let listener = try await findListener(req, loadBalancerID: loadBalancerID)
-        try await req.db.transaction { db in
-            try await listener.delete(on: db)
+        let listenerID = try listener.requireID()
+        try await DatabaseTransactionRetry.run(on: req.db) { db in
+            try await LoadBalancerListener.query(on: db).filter(\.$id == listenerID).delete()
             try await Self.markPendingAndBump(loadBalancerID, on: db)
         }
         await req.application.agentService.syncDesiredStateToFleet()
@@ -270,7 +273,8 @@ struct LoadBalancerController: RouteCollection {
             interfaceID: target.interface?.id,
             address: target.address)
         do {
-            try await req.db.transaction { db in
+            try await DatabaseTransactionRetry.run(on: req.db) { db in
+                DatabaseTransactionRetry.resetNewModel(backend)
                 try await backend.save(on: db)
                 try await Self.markPendingAndBump(loadBalancerID, on: db)
             }
@@ -287,13 +291,13 @@ struct LoadBalancerController: RouteCollection {
         let loadBalancerID = try loadBalancer.requireID()
         let backendID = try req.requireUUIDParameter("backendId", reason: "Invalid backend ID")
         guard
-            let backend = try await LoadBalancerBackend.query(on: req.db)
+            let _ = try await LoadBalancerBackend.query(on: req.db)
                 .filter(\.$id == backendID)
                 .filter(\.$loadBalancer.$id == loadBalancerID)
                 .first()
         else { throw Abort(.notFound, reason: "Backend not found on this load balancer") }
-        try await req.db.transaction { db in
-            try await backend.delete(on: db)
+        try await DatabaseTransactionRetry.run(on: req.db) { db in
+            try await LoadBalancerBackend.query(on: db).filter(\.$id == backendID).delete()
             try await Self.markPendingAndBump(loadBalancerID, on: db)
         }
         await req.application.agentService.syncDesiredStateToFleet()

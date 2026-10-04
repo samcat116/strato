@@ -33,6 +33,9 @@ extension Application {
         // respective pillar is disabled, so they are always safe to register.
         middleware.use(TracingMiddleware())
         middleware.use(MetricsMiddleware())
+        // Classify database aborts before they unwind through request logging
+        // and metrics, so observability sees the same 503 as the client.
+        middleware.use(DatabaseTransientErrorMiddleware())
 
         configureBrowserTransportSecurity()
         try bootstrapStateStores()

@@ -6,6 +6,38 @@ import Vapor
 
 @Suite("Control-plane configuration")
 struct ControlPlaneConfigurationTests {
+    @Test("Database lock and idle transaction budgets have bounded defaults and reject malformed values")
+    func databaseSessionBudgets() async throws {
+        let defaults = try await ControlPlaneConfiguration.load(environmentVariables: [:], for: .testing)
+        #expect(defaults.int(.databaseLockTimeoutMS) == 5_000)
+        #expect(defaults.int(.databaseIdleInTransactionTimeoutMS) == 60_000)
+        for key in ["DATABASE_LOCK_TIMEOUT_MS", "DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS"] {
+            for value in ["0", "-1", "2147483648", "invalid"] {
+                do {
+                    _ = try await ControlPlaneConfiguration.load(environmentVariables: [key: value], for: .testing)
+                    Issue.record("Expected invalid database timeout to stop startup")
+                } catch {
+                    #expect(String(describing: error).contains(key))
+                }
+            }
+        }
+    }
+
+    @Test("Serving lock budget must be shorter than the statement budget")
+    func lockBudgetPrecedesStatementBudget() async throws {
+        for lock in ["5000", "6000"] {
+            await #expect(throws: ControlPlaneConfigurationError.self) {
+                _ = try await ControlPlaneConfiguration.load(
+                    environmentVariables: ["DATABASE_STATEMENT_TIMEOUT_MS": "5000", "DATABASE_LOCK_TIMEOUT_MS": lock],
+                    for: .testing)
+            }
+        }
+        let configured = try await ControlPlaneConfiguration.load(
+            environmentVariables: ["DATABASE_STATEMENT_TIMEOUT_MS": "5000", "DATABASE_LOCK_TIMEOUT_MS": "1000"],
+            for: .testing)
+        #expect(configured.int(.databaseLockTimeoutMS) == 1000)
+    }
+
     @Test("Malformed values fail with the setting name and accepted input")
     func malformedValueIsActionable() async {
         do {

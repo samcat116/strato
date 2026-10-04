@@ -142,26 +142,6 @@ struct VMController: RouteCollection {
         return userData
     }
 
-    /// Runs `body` again (up to `attempts` total) when it fails with a
-    /// database constraint violation. Used around the VM-create transaction:
-    /// two concurrent creates can race IPAM to the same address, and the
-    /// loser's unique-index violation is only recoverable by rerunning the
-    /// whole transaction with a fresh read of the used set. A violation that
-    /// persists through every attempt propagates.
-    static func retryingOnConstraintFailure<T>(
-        attempts: Int = 3, _ body: () async throws -> T
-    ) async throws -> T {
-        precondition(attempts >= 1)
-        for attempt in 1...attempts {
-            do {
-                return try await body()
-            } catch let error as any DatabaseError where error.isConstraintFailure && attempt < attempts {
-                continue
-            }
-        }
-        preconditionFailure("unreachable: the final attempt either returns or throws")
-    }
-
     func boot(routes: any RoutesBuilder) throws {
         let vms = routes.grouped("api", "vms")
         vms.get(use: index)
@@ -232,7 +212,9 @@ struct VMController: RouteCollection {
             request.securityGroupIds, projectID: projectID, on: req.db)
         let userID = try user.requireID()
 
-        let accepted = try await Self.retryingOnConstraintFailure {
+        let accepted = try await DatabaseTransactionRetry.retrying(
+            on: req.db, uniqueConstraints: DatabaseTransactionRetry.ipamConstraints
+        ) {
             try await req.resourceMutation.accept(
                 .attach, on: vm, actor: .user(userID), dispatch: .stateSync,
                 on: req.db, app: req.application
