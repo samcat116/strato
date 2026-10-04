@@ -243,18 +243,6 @@ public struct MTLSArtifactDownloader: Sendable {
         }
     }
 
-    /// Only a missing v1 route falls back to the legacy exact registration.
-    /// Auth failures and malformed exchanges never bypass this preflight.
-    public func updateBridge(url: URL) async throws -> AgentUpdateBridgeResponse? {
-        let response = try await withClient(purpose: "update bridge") { client in
-            try await pollWithClient(
-                client, url: url, ifNoneMatch: nil,
-                maximumBodyBytes: 64 << 10, allowNotFound: true)
-        }
-        guard response.status != 404 else { return nil }
-        return try JSONDecoder().decode(AgentUpdateBridgeResponse.self, from: response.body)
-    }
-
     /// Placement-checked guest JWT-SVID minting through the control plane's
     /// existing agent-mTLS route (STR-57). The response is tiny and bounded;
     /// bearer tokens are returned to the caller only and never logged here.
@@ -321,7 +309,7 @@ public struct MTLSArtifactDownloader: Sendable {
     }
 
     private func pollWithClient(
-        _ client: HTTPClient, url: URL, ifNoneMatch: String?, maximumBodyBytes: Int, allowNotFound: Bool = false
+        _ client: HTTPClient, url: URL, ifNoneMatch: String?, maximumBodyBytes: Int
     ) async throws -> DesiredStatePollResponse {
         var request = HTTPClientRequest(url: url.absoluteString)
         request.headers.add(
@@ -341,7 +329,6 @@ public struct MTLSArtifactDownloader: Sendable {
         let etag = response.headers.first(name: "ETag")
         guard
             response.status == .ok || response.status == .notModified
-                || (allowNotFound && response.status == .notFound)
         else {
             let transient =
                 response.status.code >= 500 || response.status.code == 408 || response.status.code == 429

@@ -164,7 +164,16 @@ extension Agent {
         if let fetchBridge {
             bridge = try await fetchBridge()
         } else {
-            bridge = try await makeMTLSArtifactDownloader().updateBridge(url: url)
+            guard let svidManager, let spiffe = configuration.spiffeConfig else {
+                throw AgentError.spiffeConfigurationError("no SPIFFE identity is available for the update bridge")
+            }
+            // One snapshot supplies both client credentials and expected peer
+            // roots, including federation, across credential rotation.
+            let svid = try await svidManager.getSVID()
+            bridge = try await SPIFFEUpdateBridge.fetch(
+                url: url, svid: svid,
+                expectedSPIFFEID: spiffe.resolvedControlPlaneSPIFFEID,
+                on: eventLoopGroup, logger: logger)
         }
         if let bridge {
             guard bridge.exchangeVersion == 1 else {

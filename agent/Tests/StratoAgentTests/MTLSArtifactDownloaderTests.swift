@@ -109,39 +109,6 @@ struct MTLSArtifactDownloaderTests {
         return Set(contents.filter { $0.hasPrefix("strato-artifact-") })
     }
 
-    @Test("Bridge preflight permits only a missing route to use legacy exact registration")
-    func bridgeFallback() async throws {
-        try await withOrigin(status: .notFound) { port in
-            let response = try await makeDownloader().updateBridge(
-                url: URL(string: "http://127.0.0.1:\(port)/agent/update/v1")!)
-            #expect(response == nil)
-        }
-        for status in [HTTPResponseStatus.unauthorized, .forbidden] {
-            try await withOrigin(status: status) { port in
-                await #expect(throws: MTLSArtifactDownloader.DownloadFailure.self) {
-                    try await makeDownloader().updateBridge(
-                        url: URL(string: "http://127.0.0.1:\(port)/agent/update/v1")!)
-                }
-            }
-        }
-    }
-
-    @Test("Bridge preflight receives frozen skew data and refuses malformed responses")
-    func bridgeResponse() async throws {
-        try await withOrigin(body: #"{"exchangeVersion":1,"workloadWireVersion":70}"#) { port in
-            let response = try #require(
-                try await makeDownloader().updateBridge(
-                    url: URL(string: "http://127.0.0.1:\(port)/agent/update/v1")!))
-            #expect(response.workloadWireVersion == 70)
-            #expect(try response.skewUpdate(agentWireVersion: 69) == nil)
-        }
-        try await withOrigin(body: "invalid") { port in
-            await #expect(throws: DecodingError.self) {
-                try await makeDownloader().updateBridge(url: URL(string: "http://127.0.0.1:\(port)/agent/update/v1")!)
-            }
-        }
-    }
-
     // MARK: - Streaming
 
     @Test("A 200 response streams its body to a temporary file")

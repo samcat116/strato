@@ -204,6 +204,13 @@ update. With no assignment it returns no artifact. Authentication errors and
 malformed exchanges fail closed. A missing route (404) on a prebridge control
 plane falls back only to the ordinary exact-version registration handshake.
 
+The agent authenticates the server's exact configured control-plane SPIFFE ID
+with the same chain-and-identity verifier as its WebSocket. Each probe derives
+client credentials and peer-domain roots (including federation) from one fresh
+SVID snapshot. The bridge requires HTTPS, does not follow redirects, bounds the
+body to 64 KiB and the whole request to 15 seconds, and closes the connection on
+completion, cancellation or failure. An unverified 404 cannot enable fallback.
+
 Before registration the bridge agent probes this route. A failed probe during
 network capability refresh leaves the existing exact-version session and its
 poller active; explicit skew stops polling before an update is applied.

@@ -211,6 +211,7 @@ let package = Package(
             name: "StratoAgentSPIFFETests",
             dependencies: [
                 "StratoAgentSPIFFE",
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "NIOCore", package: "swift-nio"),
