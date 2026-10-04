@@ -69,8 +69,12 @@ info:
     issue `stop` while a `pause` is in flight, both are recorded and the stop's
     `targetGeneration` is the higher one.
 
-    Send an `Idempotency-Key` of at most 255 characters with a mutation when
-    the caller may retry it. The key is scoped to the authenticated principal
+    Send an `Idempotency-Key` of at most 255 characters only on operations
+    that declare the `IdempotencyKey` header parameter below. Other POST, PUT,
+    PATCH, and DELETE routes reject the header with `400 Bad Request` and
+    `{"error":true,"reason":"Idempotency-Key is not supported for this route"}`
+    before the handler executes. Omitting the header preserves normal behavior.
+    On supported operations the key is scoped to the authenticated principal
     and retained for 24 hours. Repeating the same request replays its original
     resource identity, target generation, and mutation id; reusing the key for
     a different method, path, or JSON body answers `422`.
@@ -100,6 +104,9 @@ info:
     an upgrade. Both are documented here as prose:
 
     - `GET /agent/ws` — agent reconciliation channel (SPIFFE mTLS).
+    - `GET /agent/update/v1` — update-only bootstrap exchange (SPIFFE mTLS),
+      independent of the workload wire version. As a read it does not
+      participate in mutation replay; `Idempotency-Key` is ignored.
     - `GET /agent/desired-state` — the desired-state long-poll (SPIFFE mTLS).
       Returns `200` with a `MessageEnvelope` wrapping a `DesiredStateMessage`
       and an `ETag`, or `304` when the agent's `If-None-Match` still matches
@@ -9003,7 +9010,9 @@ components:
       in: header
       required: false
       description: >-
-        Opaque caller-generated token for replay-safe mutation retries. Scoped
+        Opaque caller-generated token for replay-safe mutation retries on this
+        explicitly participating operation only. Unsupported mutation routes
+        reject this header with `400` before handler side effects. Scoped
         to the authenticated principal and retained for 24 hours. Reuse with a
         different method, path, or JSON body is rejected with `422`.
       schema:

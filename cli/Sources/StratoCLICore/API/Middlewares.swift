@@ -2,11 +2,49 @@ import Foundation
 import HTTPTypes
 import OpenAPIRuntime
 
-/// Gives each generated mutation call one replay identity. This middleware is
+/// Gives each explicitly supported generated mutation call one replay identity. This middleware is
 /// outside authentication in the client chain, so a token-refresh replay keeps
 /// the same key and body rather than becoming a second mutation.
 struct IdempotencyKeyMiddleware: ClientMiddleware {
     private static let header = HTTPField.Name("Idempotency-Key")!
+
+    // Keep automatic retries within the server's declared guarantee. Structural
+    // tests compare this set with the shared OpenAPI IdempotencyKey parameters.
+    // Explicit caller headers always pass through, including unsupported ones.
+    static let supportedOperationIDs: Set<String> = [
+        "createVM",
+        "updateVM",
+        "deleteVM",
+        "startVM",
+        "attachVMNetworkInterface",
+        "detachVMNetworkInterface",
+        "retryVMNetworkInterfaceMutation",
+        "stopVM",
+        "restartVM",
+        "pauseVM",
+        "resumeVM",
+        "createVMSnapshot",
+        "deleteVMSnapshot",
+        "restoreVMSnapshot",
+        "createSandbox",
+        "deleteSandbox",
+        "startSandbox",
+        "stopSandbox",
+        "restartSandbox",
+        "createSandboxSnapshot",
+        "deleteSandboxSnapshot",
+        "restoreSandboxSnapshot",
+        "exportSandboxSnapshot",
+        "createVolume",
+        "deleteVolume",
+        "attachVolume",
+        "detachVolume",
+        "resizeVolume",
+        "setVolumeIOLimits",
+        "createVolumeSnapshot",
+        "cloneVolume",
+        "deleteVolumeSnapshot",
+    ]
 
     func intercept(
         _ request: HTTPRequest,
@@ -18,7 +56,9 @@ struct IdempotencyKeyMiddleware: ClientMiddleware {
                 HTTPResponse, HTTPBody?
             )
     ) async throws -> (HTTPResponse, HTTPBody?) {
-        guard ["POST", "PUT", "PATCH", "DELETE"].contains(request.method.rawValue) else {
+        guard Self.supportedOperationIDs.contains(operationID),
+            ["POST", "PUT", "PATCH", "DELETE"].contains(request.method.rawValue)
+        else {
             return try await next(request, body, baseURL)
         }
         var keyed = request

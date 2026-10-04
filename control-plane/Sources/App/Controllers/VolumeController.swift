@@ -14,22 +14,22 @@ struct VolumeController: RouteCollection {
 
         // Volume CRUD operations
         protected.get(use: listVolumes)
-        protected.post(use: createVolume)
+        protected.post(use: createVolume).supportsIdempotency()
         protected.get(":volumeId", use: getVolume)
         protected.put(":volumeId", use: updateVolume)
-        protected.delete(":volumeId", use: deleteVolume)
+        protected.delete(":volumeId", use: deleteVolume).supportsIdempotency()
 
         // Volume actions
-        protected.post(":volumeId", "attach", use: attachVolume)
-        protected.post(":volumeId", "detach", use: detachVolume)
-        protected.post(":volumeId", "resize", use: resizeVolume)
-        protected.post(":volumeId", "io-limits", use: setIOLimits)
-        protected.post(":volumeId", "snapshot", use: createSnapshot)
-        protected.post(":volumeId", "clone", use: cloneVolume)
+        protected.post(":volumeId", "attach", use: attachVolume).supportsIdempotency()
+        protected.post(":volumeId", "detach", use: detachVolume).supportsIdempotency()
+        protected.post(":volumeId", "resize", use: resizeVolume).supportsIdempotency()
+        protected.post(":volumeId", "io-limits", use: setIOLimits).supportsIdempotency()
+        protected.post(":volumeId", "snapshot", use: createSnapshot).supportsIdempotency()
+        protected.post(":volumeId", "clone", use: cloneVolume).supportsIdempotency()
 
         // Snapshot operations
         protected.get(":volumeId", "snapshots", use: listSnapshots)
-        protected.delete(":volumeId", "snapshots", ":snapshotId", use: deleteSnapshot)
+        protected.delete(":volumeId", "snapshots", ":snapshotId", use: deleteSnapshot).supportsIdempotency()
         protectedSnapshots.get(use: listProjectSnapshots)
     }
 

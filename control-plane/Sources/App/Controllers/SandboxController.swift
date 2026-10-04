@@ -12,29 +12,29 @@ struct SandboxController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let sandboxes = routes.grouped("api", "sandboxes")
         sandboxes.get(use: index)
-        sandboxes.post(use: create)
+        sandboxes.post(use: create).supportsIdempotency()
         sandboxes.group(":sandboxID") { sandbox in
             sandbox.get(use: show)
             sandbox.put(use: update)
-            sandbox.delete(use: delete)
-            sandbox.post("start", use: start)
-            sandbox.post("stop", use: stop)
-            sandbox.post("restart", use: restart)
+            sandbox.delete(use: delete).supportsIdempotency()
+            sandbox.post("start", use: start).supportsIdempotency()
+            sandbox.post("stop", use: stop).supportsIdempotency()
+            sandbox.post("restart", use: restart).supportsIdempotency()
             sandbox.get("status", use: status)
             sandbox.get("operations", use: listOperations)
             sandbox.post("exec", use: exec)
             // Snapshots / checkpoint-resume (issue #426); handlers live in
             // SandboxSnapshotController.swift.
-            sandbox.post("snapshots", use: createSnapshot)
+            sandbox.post("snapshots", use: createSnapshot).supportsIdempotency()
             sandbox.get("snapshots", use: listSnapshots)
             sandbox.group("snapshots", ":snapshotID") { snapshot in
-                snapshot.delete(use: deleteSnapshot)
-                snapshot.post("restore", use: restoreSnapshot)
+                snapshot.delete(use: deleteSnapshot).supportsIdempotency()
+                snapshot.post("restore", use: restoreSnapshot).supportsIdempotency()
                 // Snapshot mobility (issue #428); handlers live in
                 // SandboxSnapshotTransferController.swift. The artifact
                 // routes are signed agent routes (streamed bodies, no
                 // session — see the AuthorizationMiddleware carve-out).
-                snapshot.post("export", use: exportSnapshot)
+                snapshot.post("export", use: exportSnapshot).supportsIdempotency()
                 snapshot.on(.PUT, "artifacts", ":artifactKind", body: .stream, use: uploadSnapshotArtifact)
                 snapshot.get("artifacts", ":artifactKind", use: downloadSnapshotArtifact)
             }
