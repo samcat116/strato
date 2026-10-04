@@ -98,6 +98,7 @@ enum SchemaMigrator {
     struct StatementTimeouts: Sendable {
         let normal: DatabaseStatementTimeout
         let migration: DatabaseStatementTimeout
+        var session: DatabaseSessionTimeouts = .defaults
     }
 
     // MARK: - Entry point
@@ -186,6 +187,7 @@ enum SchemaMigrator {
         body: () async throws -> Void
     ) async throws {
         try await timeouts.migration.apply(on: connection).get()
+        try await timeouts.session.apply(on: connection, migration: true).get()
 
         var bodyError: (any Error)?
         do {
@@ -196,6 +198,7 @@ enum SchemaMigrator {
 
         do {
             try await timeouts.normal.apply(on: connection).get()
+            try await timeouts.session.apply(on: connection).get()
         } catch {
             guard let bodyError else { throw error }
             logger.error(
@@ -449,7 +452,7 @@ enum SchemaMigrationError: Error, CustomStringConvertible {
         // 42P07 duplicate_table, 42701 duplicate_column, 42710 duplicate_object,
         // 42P06 duplicate_schema.
         let duplicateStates: Set<String> = ["42P07", "42701", "42710", "42P06"]
-        if let psql = error as? PSQLError, let state = psql.serverInfo?[.sqlState] {
+        if let state = DatabaseTransactionFailure.sqlState(error) {
             return duplicateStates.contains(state)
         }
         return String(reflecting: error).contains("already exists")

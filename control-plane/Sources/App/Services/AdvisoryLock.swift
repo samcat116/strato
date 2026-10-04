@@ -167,6 +167,21 @@ enum AdvisoryLock {
 
         let clock = ContinuousClock()
         let started = clock.now
+        defer {
+            let seconds = started.duration(to: clock.now).seconds
+            if seconds >= 1 {
+                db.logger.warning(
+                    "Slow PostgreSQL advisory lock wait",
+                    metadata: [
+                        "namespace": .string(key.namespace.name),
+                        "waitSeconds": .stringConvertible(seconds),
+                    ])
+                Counter(
+                    label: "strato_advisory_lock_slow_waits_total",
+                    dimensions: [("namespace", key.namespace.name)]
+                ).increment()
+            }
+        }
         try await sql.raw(
             "SELECT pg_advisory_xact_lock(\(bind: key.namespace.rawValue)::int4, \(bind: key.objectDigest)::int4)"
         ).run()

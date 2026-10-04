@@ -209,7 +209,9 @@ struct NetworkController: RouteCollection {
             // The creator's explicit, revocable binding on the network, in the
             // same transaction as the row (issue #477).
             let creatorID = user.id!
-            try await req.db.transaction { db in
+            try await DatabaseTransactionRetry.run(on: req.db) { db in
+                DatabaseTransactionRetry.resetNewModel(network)
+                network.resolverIndex = nil
                 // Serialize sibling overlap checks before quota and allocation locks.
                 try await QuotaEnforcementService.lockProjectNetworkMutations(projectID: projectId, on: db)
                 try await Self.assertNoSubnetOverlap(
@@ -445,7 +447,7 @@ struct NetworkController: RouteCollection {
             // successive generations instead of saving one stale model over
             // the other.
             let prepared = network
-            let committed = try await req.db.transaction { db -> (LogicalNetwork, Int) in
+            let committed = try await DatabaseTransactionRetry.run(on: req.db) { db -> (LogicalNetwork, Int) in
                 // Project admission precedes the row lock, matching create/delete
                 // and quota admission.
                 try await QuotaEnforcementService.lockProjectNetworkMutations(projectID: prepared.$project.id, on: db)
@@ -704,11 +706,15 @@ struct NetworkController: RouteCollection {
             )
         }
 
-        try await req.db.transaction { db in
+        let networkID = try network.requireID()
+        try await DatabaseTransactionRetry.run(on: req.db) { db in
             try await QuotaEnforcementService.lockProjectNetworkMutations(
                 projectID: network.$project.id, on: db)
-            try await network.delete(on: db)
-            try await QuotaEnforcementService.release(for: network, on: db)
+            guard let current = try await LogicalNetwork.find(networkID, on: db) else {
+                throw Abort(.notFound, reason: "Network no longer exists")
+            }
+            try await current.delete(on: db)
+            try await QuotaEnforcementService.release(for: current, on: db)
             // Bindings have no FK to the resources they protect, so drop
             // them with the node.
             try await RoleBindingService.revokeAll(
