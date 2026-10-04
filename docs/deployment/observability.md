@@ -172,6 +172,7 @@ stable `classid` mapping in PostgreSQL's two-`int4` advisory-lock space is:
 | 4 | `sandbox_snapshot_lineage` | 10 | `volume_attachment` |
 | 5 | `quota` | 11 | `security_group_membership` |
 | 6 | `ipam` | 12 | `agent_enrollment` |
+| 13 | `floating_ip_site_admission` | | |
 
 List held and waiting Strato locks with signed digests that match the
 application's logs:
@@ -188,7 +189,7 @@ SELECT pid,
 FROM pg_locks
 WHERE locktype = 'advisory'
   AND objsubid = 2
-  AND classid::bigint BETWEEN 1 AND 12
+  AND classid::bigint BETWEEN 1 AND 13
 ORDER BY granted, namespace, object_digest;
 ```
 

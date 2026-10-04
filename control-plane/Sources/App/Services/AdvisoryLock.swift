@@ -29,6 +29,8 @@ enum AdvisoryLockNamespace: Int32, CaseIterable, Sendable {
     case volumeAttachment = 10
     case securityGroupMembership = 11
     case agentEnrollment = 12
+    // Site-wide CIDR admission is distinct from per-pool address allocation.
+    case floatingIPSiteAdmission = 13
 
     /// Stable, bounded label used in logs, metrics, and operator tooling.
     var name: String {
@@ -46,6 +48,7 @@ enum AdvisoryLockNamespace: Int32, CaseIterable, Sendable {
         case .volumeAttachment: "volume_attachment"
         case .securityGroupMembership: "security_group_membership"
         case .agentEnrollment: "agent_enrollment"
+        case .floatingIPSiteAdmission: "floating_ip_site_admission"
         }
     }
 }
