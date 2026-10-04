@@ -230,7 +230,15 @@ public actor FileSystemStorageBackend: StorageBackend {
             throw StorageBackendError.imageSourceUnavailable
         }
 
-        let sourcePath = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
+        let cachedPath = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
+        let prepared: ImportedDiskImageValidation.PreparedImage
+        do {
+            prepared = try ImportedDiskImageValidation.prepare(filePath: cachedPath)
+        } catch {
+            throw StorageBackendError.createFailed("Image import validation failed: \(error.localizedDescription)")
+        }
+        defer { prepared.remove() }
+        let sourcePath = prepared.path
         let sourceFormat = try await detectFormat(of: sourcePath)
 
         let destinationDirectory = (path as NSString).deletingLastPathComponent

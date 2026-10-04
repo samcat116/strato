@@ -31,13 +31,16 @@ final class ImageControllerTests {
         buffer.writeInteger(UInt32(0), endianness: .big)
 
         // Cluster bits
-        buffer.writeInteger(UInt32(16), endianness: .big)
+        buffer.writeInteger(UInt32(9), endianness: .big)
 
         // Virtual size (10GB)
         buffer.writeInteger(UInt64(10 * 1024 * 1024 * 1024), endianness: .big)
 
-        // Fill remaining with zeros
-        let remaining = max(0, size - buffer.writerIndex)
+        buffer.writeRepeatingByte(0, count: 68)
+        buffer.writeInteger(UInt32(104), endianness: .big)
+
+        // Complete the first cluster and leave an end-of-extensions marker.
+        let remaining = max(0, max(size, 512) - buffer.writerIndex)
         if remaining > 0 {
             buffer.writeRepeatingByte(0, count: remaining)
         }
@@ -439,6 +442,80 @@ final class ImageControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
+        }
+    }
+
+    @Test(arguments: [15, 79, 104])
+    func rejectsExternalQcowMetadataOnBothUploadRoutes(offset: Int) async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            var bytes = Self.createQCOW2Buffer()
+            bytes.setInteger(UInt8(4), at: offset)
+            if offset == 104 { bytes.setInteger(UInt32(0x44415441), at: offset, endianness: .big) }
+            let imageID = try await Self.createEmptyImage(app: app, project: project, authToken: authToken)
+            for route in [
+                "/api/projects/\(project.id!)/images",
+                "/api/projects/\(project.id!)/images/\(imageID)/artifacts?kind=disk-image",
+            ] {
+                let (body, boundary) = Self.createMultipartFormData(
+                    name: "unsafe", description: nil,
+                    filename: "unsafe.qcow2", fileContent: bytes)
+                try await app.test(.POST, route) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    req.headers.contentType = .init(
+                        type: "multipart", subType: "form-data",
+                        parameters: ["boundary": boundary])
+                    req.body = ByteBuffer(data: body)
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                }
+            }
+            let artifacts = try await ImageArtifact.query(on: app.db).filter(\.$image.$id == imageID).all()
+            #expect(artifacts.isEmpty)
+        }
+    }
+
+    @Test func rejectedArtifactReplacementPreservesPublishedBytes() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, storagePath in
+            let imageID = try await Self.createEmptyImage(app: app, project: project, authToken: authToken)
+            let original = Self.createQCOW2Buffer()
+            let ready = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID,
+                authToken: authToken, kind: "disk-image", filename: "same.qcow2", fileContent: original)
+            #expect(ready.status == .ready)
+            let key = ImageObjectKey.artifact(
+                projectId: project.id!, imageId: imageID,
+                kind: "disk-image", filename: "same.qcow2")
+            let path = URL(fileURLWithPath: storagePath).appendingPathComponent(key)
+            let oldBytes = try Data(contentsOf: path)
+            var unsafe = original; unsafe.setInteger(UInt64(1 << 2), at: 72, endianness: .big)
+            let (body, boundary) = Self.createArtifactMultipartFormData(
+                kind: "disk-image",
+                filename: "same.qcow2", fileContent: unsafe)
+            try await app.test(.POST, "/api/projects/\(project.id!)/images/\(imageID)/artifacts") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = .init(
+                    type: "multipart", subType: "form-data",
+                    parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            #expect(try Data(contentsOf: path) == oldBytes)
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db).filter(\.$image.$id == imageID).first())
+            #expect(artifact.status == .ready)
+            #expect(artifact.checksum == ready.artifacts.first?.checksum)
+        }
+    }
+
+    @Test func opaqueKernelRemainsOpaqueEvenWithDiskMagic() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let imageID = try await Self.createEmptyImage(app: app, project: project, authToken: authToken)
+            let response = try await Self.uploadArtifact(
+                app: app, project: project, imageID: imageID,
+                authToken: authToken, kind: "kernel", filename: "vmlinux",
+                fileContent: ByteBuffer(bytes: ImageValidationService.qcow2Magic))
+            #expect(response.artifacts.first?.format == nil)
         }
     }
 

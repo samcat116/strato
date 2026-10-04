@@ -29,6 +29,7 @@ struct ImageFetchRedirectTests {
                 UInt8(truncatingIfNeeded: virtualSize >> UInt64($0 * 8))
             })
         bytes.append(contentsOf: [UInt8](repeating: 0x00, count: 480))
+        bytes[7] = 3; bytes[23] = 9; bytes[103] = 104
         return bytes
     }
 
@@ -47,6 +48,11 @@ struct ImageFetchRedirectTests {
                 status: .ok,
                 headers: ["Content-Type": "application/octet-stream"],
                 body: .init(buffer: ByteBuffer(bytes: payload)))
+        }
+        origin.get("unsafe.qcow2") { _ -> Response in
+            var unsafe = payload
+            unsafe[79] = 1 << 2
+            return Response(status: .ok, body: .init(buffer: ByteBuffer(bytes: unsafe)))
         }
         // /redirect -> /hop/n -> ... -> /image.qcow2, the way a mirror
         // redirector bounces a request onward.
@@ -171,6 +177,17 @@ struct ImageFetchRedirectTests {
         let last = try await Image.find(imageID, on: app.db)
         Issue.record("Fetch did not settle; last status \(String(describing: last?.status))")
         throw ImageError.downloadFailed("timed out waiting for fetch")
+    }
+
+    @Test func unsafeUrlImageNeverBecomesReady() async throws {
+        try await withFetchApp { app, port in
+            let ids = try await makePendingImage(app: app, sourceURL: "http://127.0.0.1:\(port)/unsafe.qcow2")
+            try await app.imageFetchService.startArtifactFetch(artifactId: ids.artifactID)
+            let (image, artifact) = try await waitForTerminalStatus(app: app, imageID: ids.imageID)
+            #expect(image.status == .error)
+            #expect(artifact.status == .error)
+            #expect(artifact.errorMessage?.contains("external data") == true)
+        }
     }
 
     @Test("A 302 to the real image is followed and the image becomes ready")

@@ -172,7 +172,14 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             image: Self.temporaryImageName(prefix: Self.importImagePrefix, volumeId: volumeId))
         try await removeImageIfPresent(staging, operation: "rbd import staging cleanup")
         let source = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
-        let preparedSource = try await rawImportSource(from: source)
+        let imported: ImportedDiskImageValidation.PreparedImage
+        do {
+            imported = try ImportedDiskImageValidation.prepare(filePath: source)
+        } catch {
+            throw StorageBackendError.createFailed("Image import validation failed: \(error.localizedDescription)")
+        }
+        defer { imported.remove() }
+        let preparedSource = try await rawImportSource(from: imported.path)
         defer {
             if let directory = preparedSource.temporaryDirectory {
                 try? FileManager.default.removeItem(at: directory)
