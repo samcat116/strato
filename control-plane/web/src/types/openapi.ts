@@ -10908,7 +10908,7 @@ export interface components {
         };
     };
     parameters: {
-        /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+        /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
         IdempotencyKey: string;
         /** @description The virtual machine's id. */
         VMID: string;
@@ -11249,7 +11249,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -11300,7 +11300,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11343,7 +11343,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11424,7 +11424,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11473,7 +11473,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11500,7 +11500,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11524,7 +11524,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11548,7 +11548,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11571,7 +11571,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11594,7 +11594,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11617,7 +11617,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11948,7 +11948,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11975,7 +11975,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12000,7 +12000,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12080,7 +12080,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -12161,7 +12161,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12184,7 +12184,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12207,7 +12207,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12237,7 +12237,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12383,7 +12383,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12410,7 +12410,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12435,7 +12435,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12460,7 +12460,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12912,7 +12912,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -13019,7 +13019,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -13042,7 +13042,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -13069,7 +13069,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -13092,7 +13092,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -13119,7 +13119,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -13146,7 +13146,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -13173,7 +13173,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -13232,7 +13232,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {

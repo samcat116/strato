@@ -70,6 +70,99 @@ struct StratoClientTests {
         #expect(requests[1].headerFields[header] == "command-invocation-key")
     }
 
+    @Test("automatic keyed operation inventory agrees with OpenAPI declarations")
+    func supportedIdempotencyOperationsMatchSpec() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let yaml = try String(
+            contentsOf: root.appendingPathComponent("control-plane/Sources/App/openapi.yaml"), encoding: .utf8)
+        var operation = ""
+        var declared: Set<String> = []
+        for line in yaml.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("operationId:") {
+                operation = trimmed.dropFirst("operationId:".count).trimmingCharacters(in: .whitespaces)
+            }
+            if line.contains("#/components/parameters/IdempotencyKey") {
+                declared.insert(operation)
+            }
+        }
+        #expect(declared.count == 32)
+        #expect(IdempotencyKeyMiddleware.supportedOperationIDs == declared)
+    }
+
+    @Test("sandbox exec and unsupported CLI mutations remain headerless; explicit keys pass through")
+    func unsupportedMutationsStayHeaderless() async throws {
+        let header = HTTPField.Name("Idempotency-Key")!
+        let captured = Mutex<[HTTPRequest]>([])
+        let next: @concurrent @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?) = {
+            request, _, _ in
+            captured.withLock { $0.append(request) }
+            return (HTTPResponse(status: .created), nil)
+        }
+        let middleware = IdempotencyKeyMiddleware()
+        for (method, path, operation) in [
+            (HTTPRequest.Method.post, "/api/sandboxes/one/exec", "createSandboxExecSession"),
+            (.post, "/api/sandboxes/one/exec", "createSandboxExecSession"),  // repeat after wake
+            (.put, "/api/volumes/one", "updateVolume"),
+            (.post, "/api/api-keys", "createAPIKey"),
+            (.post, "/future", "futureMutation"),
+        ] {
+            _ = try await middleware.intercept(
+                HTTPRequest(method: method, scheme: nil, authority: nil, path: path), body: nil, baseURL: baseURL,
+                operationID: operation, next: next)
+        }
+        #expect(captured.withLock { $0 }.allSatisfy { $0.headerFields[header] == nil })
+        var explicit = HTTPRequest(method: .post, scheme: nil, authority: nil, path: "/api/api-keys")
+        explicit.headerFields[header] = "caller-guarantee"
+        _ = try await middleware.intercept(
+            explicit, body: nil, baseURL: baseURL, operationID: "createAPIKey", next: next)
+        #expect(captured.withLock { $0.last?.headerFields[header] } == "caller-guarantee")
+    }
+
+    @Test("supported mutation retains one key and body across the existing token-refresh replay")
+    func supportedMutationRefreshKeepsKey() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let store = CredentialStore(directory: directory)
+            try store.store(StoredCredentials(accessToken: "st_old", refreshToken: "rt_old"), for: "test")
+            let tokenTransport = MockTransport(responses: [.init(statusCode: 200, json: Self.tokenJSON)])
+            let session = StratoClient.authenticatedSession(
+                serverURL: baseURL, contextName: "test", credentialStore: store, transport: tokenTransport
+            ).credentials
+            let auth = AuthenticationMiddleware(session: session)
+            let captured = Mutex<[(HTTPRequest, Data?)]>([])
+            let terminal:
+                @concurrent @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?) = {
+                    request, body, _ in
+                    let bytes: Data?
+                    if let body { bytes = try await Data(collecting: body, upTo: 1024) } else { bytes = nil }
+                    let first = captured.withLock { state in
+                        state.append((request, bytes))
+                        return state.count == 1
+                    }
+                    return (HTTPResponse(status: first ? .unauthorized : .created), nil)
+                }
+            let signed: @concurrent @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?) =
+                { request, body, url in
+                    try await auth.intercept(request, body: body, baseURL: url, operationID: "createVM", next: terminal)
+                }
+            let body = Data(#"{"name":"retry"}"#.utf8)
+            _ = try await IdempotencyKeyMiddleware().intercept(
+                HTTPRequest(method: .post, scheme: nil, authority: nil, path: "/api/vms"), body: HTTPBody(body),
+                baseURL: baseURL, operationID: "createVM", next: signed)
+            let requests = captured.withLock { $0 }
+            #expect(requests.count == 2)
+            let header = HTTPField.Name("Idempotency-Key")!
+            let key = try #require(requests[0].0.headerFields[header])
+            #expect(UUID(uuidString: key) != nil)
+            #expect(requests[1].0.headerFields[header] == key)
+            #expect(requests[0].1 == body)
+            #expect(requests[1].1 == body)
+            #expect(requests[0].0.headerFields[.authorization] == "Bearer st_old")
+            #expect(requests[1].0.headerFields[.authorization] == "Bearer st_new")
+        }
+    }
+
     @Test("Sends bearer token, builds the operation's path, and decodes the response")
     func testAuthenticatedGet() async throws {
         try await withTemporaryDirectoryAsync { directory in
