@@ -190,7 +190,9 @@ The bridge release implements `GET /agent/update/v1` on both peers. Its frozen
 JSON contains `exchangeVersion: 1`, the control plane's `workloadWireVersion`,
 and an optional artifact (`targetVersion`, `artifactURL`, `sha256`,
 `artifactKind` as `binary`/`tarball`, optional `tarballMember`). It has no
-workload envelopes, resources, credentials, or registration side effects.
+workload envelopes, resources, or newly issued credentials. It does not create a
+workload registration session. The existing authenticator may persist the
+principal mapping for an already enrolled identity in the workload registry.
 Changes to the workload contract must preserve this v1 exchange; incompatible
 changes to the exchange require another path and another staged bridge release.
 
@@ -202,8 +204,10 @@ update. With no assignment it returns no artifact. Authentication errors and
 malformed exchanges fail closed. A missing route (404) on a prebridge control
 plane falls back only to the ordinary exact-version registration handshake.
 
-Before registration the bridge agent probes this route. Matching workload
-versions retain ordinary registration, desired-state updates, and status
+Before registration the bridge agent probes this route. A failed probe during
+network capability refresh leaves the existing exact-version session and its
+poller active; explicit skew stops polling before an update is applied.
+Matching workload versions retain ordinary registration, desired-state updates, and status
 reports. Under skew, it stops workload polling, refuses to send a workload
 registration DTO or update status report, and applies only the staged artifact
 through `AgentUpdater`, including SHA-256 verification and the existing local

@@ -151,18 +151,32 @@ extension Agent {
         }
     }
 
-    func prepareForWorkloadRegistration() async throws {
+    func prepareForWorkloadRegistration(
+        fetchBridge: (@Sendable () async throws -> AgentUpdateBridgeResponse?)? = nil,
+        updater: AgentUpdater? = nil
+    ) async throws {
         // Probe the frozen exchange before sending a workload registration DTO.
         // Failure is retryable; ordinary registration never resolves wire skew.
-        await desiredStatePoller?.stop()
         guard let url = URL(string: controlPlaneHTTPBase + AgentUpdateBridgeResponse.path) else {
             throw AgentError.registrationFailed("Invalid update-only exchange URL")
         }
-        if let bridge = try await makeMTLSArtifactDownloader().updateBridge(url: url) {
-            let update = try bridge.skewUpdate(agentWireVersion: WireProtocol.currentVersion)
+        let bridge: AgentUpdateBridgeResponse?
+        if let fetchBridge {
+            bridge = try await fetchBridge()
+        } else {
+            bridge = try await makeMTLSArtifactDownloader().updateBridge(url: url)
+        }
+        if let bridge {
+            guard bridge.exchangeVersion == 1 else {
+                throw AgentUpdateBridgeResponse.BridgeError.unsupportedExchange
+            }
             if bridge.workloadWireVersion != WireProtocol.currentVersion {
+                // Preserve the established exact-version session on a failed
+                // probe. Only verified skew can withdraw its workload poller.
+                await desiredStatePoller?.stop()
+                let update = try bridge.skewUpdate(agentWireVersion: WireProtocol.currentVersion)
                 logger.notice("Wire skew: workload registration refused; using staged update-only assignment")
-                await handleDesiredAgentUpdate(update, reportWorkloadStatus: false)
+                await handleDesiredAgentUpdate(update, reportWorkloadStatus: false, updater: updater)
                 throw AgentError.registrationFailed(
                     "Wire skew requires a staged bridge update or out-of-band installation")
             }
