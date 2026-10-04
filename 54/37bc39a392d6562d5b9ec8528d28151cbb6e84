@@ -1,0 +1,16 @@
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 107-116
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  h_a84d4ff76cadd1 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5437bc39a392d6562d5b9ec8528d28151cbb6e84",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
