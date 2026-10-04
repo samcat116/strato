@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import NIOCore
+import Vapor
 @testable import App
 
 @Suite("ImageValidationService Tests", .serialized)
@@ -70,6 +71,18 @@ final class ImageValidationServiceTests {
     /// Removes a temporary file
     static func removeTempFile(_ path: String) {
         try? FileManager.default.removeItem(atPath: path)
+    }
+
+    @Test func structuralImportGatePreservesRawAndRejectsQcowReferences() throws {
+        try ImageValidationService.validateImport(headerBytes: [1, 2, 3, 4])
+        var bytes = [UInt8](repeating: 0, count: 512)
+        bytes.replaceSubrange(0..<4, with: ImageValidationService.qcow2Magic)
+        bytes[7] = 3; bytes[23] = 9; bytes[103] = 104
+        try ImageValidationService.validateImport(headerBytes: bytes)
+        for offset in [15, 79] {
+            var unsafe = bytes; unsafe[offset] = 4
+            #expect(throws: Abort.self) { try ImageValidationService.validateImport(headerBytes: unsafe) }
+        }
     }
 
     // MARK: - Format Detection (ByteBuffer) Tests

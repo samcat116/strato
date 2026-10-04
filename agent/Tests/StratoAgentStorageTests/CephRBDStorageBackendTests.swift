@@ -71,6 +71,9 @@ private actor CephCommandRecorder {
     private var images: Set<String> = []
     private var snapshots: Set<String> = []
     private var imageMetadata: [String: [String: String]] = [:]
+    private var replacement: (String, Data)?
+    private(set) var probedBytes: Data?
+    func replaceBeforeProbe(path: String, bytes: Data) { replacement = (path, bytes) }
     private let sourceFormat: String
     private let allImagesExist: Bool
     private let features: [String]
@@ -93,6 +96,11 @@ private actor CephCommandRecorder {
     func run(_ executable: URL, _ arguments: [String]) -> ProcessResult {
         invocations.append(Invocation(executable: executable.path, arguments: arguments))
         if executable.lastPathComponent == "qemu-img", arguments.first == "info" {
+            if let (path, bytes) = replacement {
+                try? bytes.write(to: URL(fileURLWithPath: path), options: .atomic)
+                replacement = nil
+            }
+            if let path = arguments.last { probedBytes = try? Data(contentsOf: URL(fileURLWithPath: path)) }
             return success("{\"format\":\"\(sourceFormat)\"}")
         }
         if executable.lastPathComponent == "virsh" {
@@ -600,13 +608,45 @@ struct CephRBDStorageBackendTests {
         #expect(CephRBDStorageBackend.sizeArgument(bytes: 1_048_577) == "2M")
     }
 
+    @Test(arguments: [8, 72, 104])
+    func imageImportRejectsExternalReferencesBeforeQemu(offset: Int) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("unsafe-import-\(UUID())").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        var bytes = [UInt8](repeating: 0, count: 512)
+        bytes.replaceSubrange(0..<4, with: [0x51, 0x46, 0x49, 0xFB])
+        bytes[7] = 3; bytes[23] = 9; bytes[103] = 104
+        if offset == 104 {
+            bytes.replaceSubrange(104..<108, with: [0x44, 0x41, 0x54, 0x41])
+        } else {
+            bytes[offset + 7] = 4
+        }
+        let source = "\(root)/unsafe.qcow2"
+        try Data(bytes).write(to: URL(fileURLWithPath: source))
+        let recorder = CephCommandRecorder()
+        let backend = makeBackend(root: root, recorder: recorder, imageSource: CephStaticImageSource(path: source))
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.createVolumeFromImage(
+                volumeId: Self.volumeId, imageInfo: imageInfo(),
+                format: .raw, artifactKind: .diskImage)
+        }
+        let calls = await recorder.invocations
+        #expect(!calls.contains { $0.executable.hasSuffix("qemu-img") || $0.arguments.contains("import") })
+    }
+
     @Test("A qcow2 image is converted to protected raw staging before import")
     func imageImportConvertsNonRawSource() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ceph-import-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: root) }
-        let source = "/cache/source.qcow2"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        let source = "\(root)/source.qcow2"
+        var bytes = [UInt8](repeating: 0, count: 512)
+        bytes.replaceSubrange(0..<4, with: [0x51, 0x46, 0x49, 0xFB])
+        bytes[7] = 3; bytes[23] = 9; bytes[103] = 104
+        try Data(bytes).write(to: URL(fileURLWithPath: source))
         let recorder = CephCommandRecorder(sourceFormat: "qcow2")
+        await recorder.replaceBeforeProbe(path: source, bytes: Data([0x51, 0x46, 0x49, 0xFB]))
         let backend = makeBackend(
             root: root, recorder: recorder,
             imageSource: CephStaticImageSource(path: source))
@@ -616,6 +656,10 @@ struct CephRBDStorageBackendTests {
             artifactKind: .diskImage)
 
         let calls = await recorder.invocations
+        #expect(await recorder.probedBytes == Data(bytes))
+        let inspected = try #require(calls.first { $0.executable.hasSuffix("qemu-img") }?.arguments.last)
+        #expect(inspected != source)
+        #expect(!FileManager.default.fileExists(atPath: inspected))
         let conversion = try #require(
             calls.first {
                 $0.executable.hasSuffix("qemu-img") && $0.arguments.first == "convert"
@@ -640,11 +684,14 @@ struct CephRBDStorageBackendTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ceph-import-failure-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: root) }
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        let source = "\(root)/source.raw"
+        try Data("raw-image".utf8).write(to: URL(fileURLWithPath: source))
         let recorder = CephCommandRecorder()
         await recorder.failImportAfterMutation()
         let backend = makeBackend(
             root: root, recorder: recorder,
-            imageSource: CephStaticImageSource(path: "/cache/source.raw"))
+            imageSource: CephStaticImageSource(path: source))
 
         do {
             _ = try await backend.createVolumeFromImage(

@@ -8,8 +8,8 @@ import Vapor
 /// The alternative — `req.body.collect()` then `FormDataDecoder` — needs the
 /// whole body contiguous in memory, so a 4 GiB image cost 4 GiB of control-plane
 /// RAM before a single byte was stored, and concurrent uploads multiplied that.
-/// Here the file part is written to the store as it arrives; peak memory is a
-/// single body chunk.
+/// Here the file part is written to the store as it arrives; retained memory is
+/// a single body chunk plus the bounded image-validation prefix.
 ///
 /// `MultipartParser`'s callbacks are synchronous and non-throwing, so they can't
 /// write to the store (async) or fail. They instead append to a pending buffer
@@ -75,6 +75,7 @@ enum StreamingMultipartReceiver {
         into store: any ImageObjectStore,
         fileFieldName: String,
         maxBytes: Int64,
+        validate: @Sendable ([UInt8], [String: String]) throws -> Void = { _, _ in },
         key makeKey: @Sendable (String, [String: String]) throws -> String
     ) async throws -> Result {
         guard let boundary = req.headers.contentType?.parameters["boundary"] else {
@@ -142,6 +143,9 @@ enum StreamingMultipartReceiver {
             try state.throwIfFailed()
             try await flush()
 
+            // Validate before replacing an existing object at this key. Abort
+            // leaves its previous bytes intact when a replacement is rejected.
+            try validate(headerBytes, state.fieldsBeforeFile)
             try await writer?.finish()
         } catch {
             await writer?.abort()

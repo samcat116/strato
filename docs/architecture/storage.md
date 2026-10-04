@@ -280,6 +280,17 @@ image share a download instead of racing to publish it. Materialization
 always copies/converts out of the cache — cached files are never used as
 qcow2 backing files — so evicting an entry can't break an existing VM.
 
+Untrusted qcow2 image imports pass a shared structural gate at upload, artifact
+upload, and URL ingestion, and independently at both filesystem and Ceph agent
+import before the first `qemu-img` invocation. Agents copy imports into private
+scratch and validate those exact bytes, so a concurrent cache publication cannot
+replace the validated input. Upload validation runs before object publication,
+including same-name artifact replacements. The bounded first-cluster parser
+rejects backing-file references, external data flags/header extensions, and
+truncated or unsupported header structures. Same-format copying remains available
+after this check. Owned volume and snapshot chains retain their backing files;
+the gate applies only to untrusted imported artifacts.
+
 The cache is bounded by `image_cache_max_size_gb` (unset = unbounded): before
 each download, least-recently-used image directories are evicted (shared
 `DiskCacheLRU` helper in `StratoAgentCore`) until the cache plus the incoming

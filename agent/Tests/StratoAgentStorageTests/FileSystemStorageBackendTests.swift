@@ -28,6 +28,9 @@ private actor SubprocessRecorder {
     /// overlay over a live volume needs no `-U` of its own — only the format
     /// detection ahead of it does.
     private var imageIsHeldByAnotherProcess = false
+    private var replacement: (String, Data)?
+
+    func replaceBeforeProbe(path: String, bytes: Data) { replacement = (path, bytes) }
 
     func stub(subcommand: String, result: ProcessResult) {
         results[subcommand] = result
@@ -40,6 +43,10 @@ private actor SubprocessRecorder {
 
     func record(executable: URL, arguments: [String]) -> ProcessResult {
         invocations.append(Invocation(executable: executable.path, arguments: arguments))
+        if arguments.first == "info", let (path, bytes) = replacement {
+            try? bytes.write(to: URL(fileURLWithPath: path), options: .atomic)
+            replacement = nil
+        }
         if imageIsHeldByAnotherProcess, arguments.first == "info", !arguments.contains("-U") {
             return ProcessResult(
                 terminationStatus: 1,
@@ -404,14 +411,38 @@ struct FileSystemStorageBackendTests {
         }
     }
 
+    @Test(arguments: [UInt64(1) << 2, UInt64(1) << 63])
+    func importRejectsUnsafeMetadataBeforeQemu(features: UInt64) async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        var bytes = [UInt8](repeating: 0, count: 512)
+        bytes.replaceSubrange(0..<4, with: [0x51, 0x46, 0x49, 0xFB])
+        bytes[7] = 3; bytes[23] = 9; bytes[103] = 104
+        for index in 0..<8 { bytes[72 + index] = UInt8(truncatingIfNeeded: features >> ((7 - index) * 8)) }
+        let source = "\(root)/unsafe.qcow2"
+        try Data(bytes).write(to: URL(fileURLWithPath: source))
+        let recorder = SubprocessRecorder()
+        let backend = makeBackend(root: root, recorder: recorder, imageSource: StaticImageSource(path: source))
+        let target = "\(root)/target.qcow2"
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.materializeDisk(at: target, from: makeImageInfo(), format: .qcow2)
+        }
+        #expect(await recorder.invocations.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: target))
+    }
+
     @Test func materializeDiskCopiesWhenFormatsMatch() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
         let sourcePath = "\(root)/cached-image.qcow2"
-        FileManager.default.createFile(atPath: sourcePath, contents: Data("image-bytes".utf8))
+        var bytes = [UInt8](repeating: 0, count: 512)
+        bytes.replaceSubrange(0..<4, with: [0x51, 0x46, 0x49, 0xFB])
+        bytes[7] = 3; bytes[23] = 9; bytes[103] = 104
+        try Data(bytes).write(to: URL(fileURLWithPath: sourcePath))
 
         let recorder = SubprocessRecorder()
         await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        await recorder.replaceBeforeProbe(path: sourcePath, bytes: Data([0x51, 0x46, 0x49, 0xFB]))
         let backend = makeBackend(
             root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath))
 
@@ -422,7 +453,7 @@ struct FileSystemStorageBackendTests {
         // Same format: plain copy, no qemu-img convert.
         let subcommands = await recorder.invocations.map { $0.arguments.first }
         #expect(!subcommands.contains("convert"))
-        #expect(FileManager.default.contents(atPath: target) == Data("image-bytes".utf8))
+        #expect(FileManager.default.contents(atPath: target) == Data(bytes))
     }
 
     @Test func materializeDiskCopyENOSPCIsBlocked() async throws {
@@ -527,7 +558,10 @@ struct FileSystemStorageBackendTests {
         #expect(attachment.fileFormat == .raw)
         // The conversion writes to a staging path, then publishes via rename.
         let convert = await recorder.invocations.first { $0.arguments.first == "convert" }
-        #expect(convert?.arguments == ["convert", "-f", "qcow2", "-O", "raw", sourcePath, "\(target).partial"])
+        #expect(convert?.arguments.prefix(5) == ["convert", "-f", "qcow2", "-O", "raw"])
+        let inspected = try #require(await recorder.invocations.first { $0.arguments.first == "info" }?.arguments.last)
+        #expect(inspected != sourcePath)
+        #expect(convert?.arguments.suffix(2) == [inspected, "\(target).partial"])
         #expect(FileManager.default.fileExists(atPath: target))
         #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
     }

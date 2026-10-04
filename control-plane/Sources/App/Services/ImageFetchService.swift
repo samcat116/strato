@@ -77,7 +77,8 @@ actor ImageFetchService: ImageFetchServiceProtocol {
 
         do {
             let (size, checksum, format, headerBytes) = try await downloadFile(
-                from: url, to: artifact.storagePath, in: store
+                from: url, to: artifact.storagePath, in: store,
+                validateDisk: artifact.kind == .diskImage || artifact.kind == .rootfs
             ) {
                 [weak self] progress in
                 try await self?.updateArtifactProgress(artifactId: artifactId, progress: progress, db: db)
@@ -181,6 +182,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         from url: URL,
         to key: String,
         in store: any ImageObjectStore,
+        validateDisk: Bool,
         onProgress: @escaping (Int) async throws -> Void
     ) async throws -> DownloadResult {
         let guarded = app.guardedHTTPClient
@@ -228,7 +230,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 }
                 return .completed(
                     try await self.streamBody(
-                        of: response, to: key, in: store, onProgress: onProgress))
+                        of: response, to: key, in: store, validateDisk: validateDisk, onProgress: onProgress))
             }
 
             switch outcome {
@@ -248,6 +250,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         of response: HTTPClientResponse,
         to key: String,
         in store: any ImageObjectStore,
+        validateDisk: Bool,
         onProgress: @escaping (Int) async throws -> Void
     ) async throws -> DownloadResult {
         // Get expected content length if available
@@ -313,6 +316,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 }
             }
 
+            if validateDisk { try ImageValidationService.validateImport(headerBytes: headerBytes) }
             try await writer.finish()
         } catch {
             // A partial object must never become visible at the real key: an
