@@ -1,0 +1,40 @@
+agent/Sources/StratoAgentCore/CephRBDStorageBackend.swift
+  h_a84d4ff76cadd1 175-182
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  h_a84d4ff76cadd1 233-241
+agent/Tests/StratoAgentStorageTests/CephRBDStorageBackendTests.swift
+  h_a84d4ff76cadd1 74-76,99-103,611-636,642-647,649,659-662,687-689,694
+agent/Tests/StratoAgentStorageTests/FileSystemStorageBackendTests.swift
+  h_a84d4ff76cadd1 31-33,46-49,414-433,438-441,445,456,561-564
+control-plane/Sources/App/Controllers/ImageController.swift
+  h_a84d4ff76cadd1 344-345,525-531
+control-plane/Sources/App/Services/ImageFetchService.swift
+  h_a84d4ff76cadd1 80-81,185,233,253,319
+control-plane/Sources/App/Services/ImageValidationService.swift
+  h_a84d4ff76cadd1 4-5,27-36
+control-plane/Sources/App/Services/StreamingMultipartReceiver.swift
+  h_a84d4ff76cadd1 11-12,78,146-148
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  h_a84d4ff76cadd1 34,39-43,448-521
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  h_a84d4ff76cadd1 32,52-56,182-192
+control-plane/Tests/AppResourceTests/ImageValidationServiceTests.swift
+  h_a84d4ff76cadd1 4,76-87
+docs/architecture/storage.md
+  h_a84d4ff76cadd1 283-293
+shared/Sources/StratoShared/ImportedDiskImageValidation.swift
+  h_a84d4ff76cadd1 1-96
+shared/Tests/StratoSharedTests/ImportedDiskImageValidationTests.swift
+  h_a84d4ff76cadd1 1-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "023d3508a5674d4677d9c133219718d90abca318",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
