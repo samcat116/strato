@@ -90,9 +90,9 @@ struct OverlapAdmissionRaceTests {
         }
         // Await completion even if the waiter observation failed, so no task
         // can escape the fixture lifetime. No arbitrary release delay is used.
-        let results = try await [tasks[0].value, tasks[1].value]
+        let completed = await [tasks[0].result, tasks[1].result]
         #expect(reachedAdmission, "Both handlers must reach the shared admission lock before release")
-        return results
+        return try completed.map { try $0.get() }
     }
 
     @Test(
@@ -179,6 +179,53 @@ struct OverlapAdmissionRaceTests {
             #expect(results.filter { $0 == .conflict }.count == (conflicting ? 1 : 0))
             let pools = try await FloatingIPPool.query(on: app.db).filter(\.$site.$id == siteID).all()
             #expect(pools.count == (conflicting ? 1 : 2))
+        }
+    }
+
+    @Test("Load balancer deletion takes admission before row locks held by network updates")
+    func loadBalancerDeletionAndNetworkUpdate() async throws {
+        try await withFixture { app, user, _, project, site in
+            let projectID = try project.requireID()
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "load-balancer-network", project: project, subnet: "10.42.0.0/24", gateway: "10.42.0.1",
+                site: site)
+            network.resolverEnabled = false
+            try await network.save(on: app.db)
+            let networkID = try network.requireID()
+            let initialGeneration = network.generation
+            let loadBalancer = LoadBalancer(
+                name: "deleting", projectID: projectID, logicalNetworkID: networkID,
+                vip: "10.42.0.10", protocolName: .tcp)
+            try await loadBalancer.save(on: app.db)
+            let loadBalancerID = try loadBalancer.requireID()
+            let updateRequest = try request(
+                app: app, user: user, body: UpdateNetworkRequest(metadataEnabled: false),
+                parameter: ("networkId", networkID))
+            let deleteRequest = try request(
+                app: app, user: user, body: UpdateNetworkRequest(),
+                parameter: ("loadBalancerId", loadBalancerID))
+            let key = AdvisoryLockKey.object(.projectNetwork, id: projectID)
+            let (tasks, observed) = try await app.db.transaction { held in
+                try await AdvisoryLock.acquireTransactionLock(key, on: held)
+                let update = Task {
+                    try await status { _ = try await NetworkController().updateNetwork(req: updateRequest) }
+                }
+                // Queue the network update first. Before the fix, deletion then
+                // held the network row while waiting behind it for admission:
+                // releasing admission forced a project/row deadlock cycle.
+                let firstWaiting = try await waitForWaiters(1, key: key, on: app.db)
+                let delete = Task { try await LoadBalancerController().delete(req: deleteRequest) }
+                let bothWaiting = try await waitForWaiters(2, key: key, on: app.db)
+                return ([update, delete], firstWaiting && bothWaiting)
+            }
+            let completed = await [tasks[0].result, tasks[1].result]
+            #expect(observed, "Update must wait for admission before deletion enters the queue")
+            let results = try completed.map { try $0.get() }
+            #expect(results == [.ok, .noContent])
+            let current = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            #expect(!current.metadataEnabled)
+            #expect(current.generation == initialGeneration + 2)
+            #expect(try await LoadBalancer.find(loadBalancerID, on: app.db) == nil)
         }
     }
 

@@ -71,7 +71,9 @@ What genuinely remains missing (details in §Known gaps):
 
 Network create and update serialize sibling subnet checks and writes in one
 transaction under the project's network-mutation admission lock, before row,
-quota, resolver, and DNS locks. IPv4 and IPv6 are checked independently within
+quota, resolver, and DNS locks. Load-balancer deletion also takes project
+admission before its row/cascade locks and network generation write, preventing
+a cycle with network updates during its later quota release. IPv4 and IPv6 are checked independently within
 the project; legacy project-less rows retain their existing overlap behavior.
 
 External pool create and site moves check and save under a transaction-scoped
