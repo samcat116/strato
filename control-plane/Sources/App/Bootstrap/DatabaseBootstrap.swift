@@ -7,8 +7,10 @@ extension Application {
     /// Configures PostgreSQL, registers the ordered schema history, and runs it
     /// through the control plane's serialized migration runner.
     func bootstrapDatabase() async throws {
-        databases.middleware.use(UserIdentityMiddleware(), on: .psql)
         let databaseStatementTimeouts = try configureDatabaseDriver()
+        // Fluent attaches model middleware to an existing configuration. Test
+        // fixtures already register .psql, but normal startup must do so first.
+        databases.middleware.use(UserIdentityMiddleware(), on: .psql)
         registerMigrations()
 
         // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
