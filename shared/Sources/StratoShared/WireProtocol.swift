@@ -3,8 +3,10 @@ import Foundation
 /// The exact control-plane to agent wire contract and its canonical JSON coders.
 ///
 /// Registration is the single version handshake. Both peers require
-/// `protocolVersion == currentVersion` before any state is exchanged; envelopes
-/// carry only message routing and payload data. Strato therefore deploys matching
+/// `protocolVersion == currentVersion` before workload state is exchanged; envelopes
+/// carry only message routing and payload data. The separate frozen update-only
+/// bridge can repair supported skew without decoding workload DTOs.
+/// Strato therefore deploys matching
 /// control-plane and agent builds as one coordinated change.
 ///
 /// All wire values use `makeEncoder()` and `makeDecoder()` so both processes share

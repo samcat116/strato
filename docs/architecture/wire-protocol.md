@@ -668,3 +668,12 @@ host-reserved, workload-effective, remaining allocatable, and QEMU allowance
 bytes. Remaining bytes are already net of host reserve and backend overhead.
 Control plane and agent builds must be coordinated; v65 carries host density. GuestConfig remains staged vocabulary; no
 consumer or realization capability is advertised by this build.
+
+## Update-only bridge
+
+`GET /agent/update/v1` is a separate frozen, SVID-authenticated contract for
+bridge-capable binaries. It carries only the control plane's workload version
+and an already authorized update artifact. It neither registers a workload
+session nor relaxes exact workload equality. Bridge desired-state polls carry
+`Strato-Workload-Wire-Version`; mismatches are rejected before assembly.
+See [staging and bootstrap limits](./agent-updates.md#stable-bridge-exchange-str-340).

@@ -73,6 +73,8 @@ struct DesiredStatePollTests {
         let header = xfccHeader(identity: identity)
         return try await app.client.get(URI(string: "http://127.0.0.1:\(port)\(Self.path)")) { req in
             req.headers.add(name: header.name, value: header.value)
+            req.headers.add(
+                name: AgentUpdateBridgeResponse.wireVersionHeader, value: String(WireProtocol.currentVersion))
             if let ifNoneMatch {
                 req.headers.add(name: "If-None-Match", value: ifNoneMatch)
             }
@@ -85,6 +87,65 @@ struct DesiredStatePollTests {
             MessageEnvelope.self, from: Data(body.readableBytesView))
         #expect(envelope.type == .desiredState)
         return try envelope.decode(as: DesiredStateMessage.self)
+    }
+
+    @Test("Wire-skewed bridge receives only its staged artifact and cannot fetch workloads")
+    func bridgeSkew() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            let agent = try await self.registerAgentRow(app: app, name: "poll-agent")
+            agent.version = "old"
+            agent.updateDesiredVersion = "new"
+            agent.updateArtifactOverride = ResolvedAgentArtifact(
+                url: "https://example.test/agent", sha256: String(repeating: "ab", count: 32),
+                kind: .binary, tarballMember: "")
+            try await agent.save(on: app.db)
+            let skew = String(WireProtocol.currentVersion + 1)
+            let headers: HTTPHeaders = [
+                "X-Forwarded-Client-Cert": "URI=spiffe://strato.local/agent/poll-agent",
+                AgentUpdateBridgeResponse.wireVersionHeader: skew,
+            ]
+            let bridge = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path), headers: headers)
+            #expect(bridge.status == .ok)
+            let body = try #require(bridge.body)
+            let response = try JSONDecoder().decode(AgentUpdateBridgeResponse.self, from: Data(body.readableBytesView))
+            #expect(response.update?.targetVersion == "new")
+            #expect(response.update?.sha256 == String(repeating: "ab", count: 32))
+            let refused = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + Self.path), headers: headers)
+            #expect(refused.status == .conflict)
+            agent.administrativelyOffline = true
+            try await agent.save(on: app.db)
+            let revoked = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path), headers: headers)
+            #expect(revoked.status == .forbidden)
+            let anonymous = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path))
+            #expect(anonymous.status == .unauthorized)
+        }
+    }
+
+    @Test("Legacy matching-version polls and unassigned bridge fetches retain ordinary behavior")
+    func matchingLegacyAndUnassignedBridge() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            _ = try await self.registerAgentRow(app: app, name: "poll-agent")
+            let headers: HTTPHeaders = ["X-Forwarded-Client-Cert": "URI=spiffe://strato.local/agent/poll-agent"]
+            let ordinary = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + Self.path), headers: headers)
+            #expect(ordinary.status == .ok)
+            _ = try self.decodeSync(ordinary)
+            let bridge = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path), headers: headers)
+            let body = try #require(bridge.body)
+            let response = try JSONDecoder().decode(AgentUpdateBridgeResponse.self, from: Data(body.readableBytesView))
+            #expect(response.update == nil)
+            #expect(response.workloadWireVersion == WireProtocol.currentVersion)
+            let keys = try #require(
+                try JSONSerialization.jsonObject(with: Data(body.readableBytesView)) as? [String: Any])
+            #expect(Set(keys.keys) == ["exchangeVersion", "workloadWireVersion"])
+        }
     }
 
     // MARK: Payload

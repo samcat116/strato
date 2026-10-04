@@ -104,9 +104,16 @@ info:
     an upgrade. Both are documented here as prose:
 
     - `GET /agent/ws` — agent reconciliation channel (SPIFFE mTLS).
-    - `GET /agent/update/v1` — update-only bootstrap exchange (SPIFFE mTLS),
-      independent of the workload wire version. As a read it does not
-      participate in mutation replay; `Idempotency-Key` is ignored.
+    - `GET /agent/update/v1` — frozen update-only exchange for bridge-capable
+      agents (SPIFFE mTLS), independent of the exact workload wire version.
+      Returns only exchange/workload versions and an existing authorized
+      artifact assignment; no workload DTOs. Agents pin the configured
+      control-plane SPIFFE ID and its peer-domain roots before accepting the
+      response, including a legacy-fallback `404`. HTTPS only, no redirects,
+      64 KiB body and 15-second request limits. See
+      `docs/architecture/agent-updates.md` for staged bridge installation and
+      older binaries requiring out-of-band installation. As a read it does
+      not participate in mutation replay; `Idempotency-Key` is ignored.
     - `GET /agent/desired-state` — the desired-state long-poll (SPIFFE mTLS).
       Returns `200` with a `MessageEnvelope` wrapping a `DesiredStateMessage`
       and an `ETag`, or `304` when the agent's `If-None-Match` still matches
