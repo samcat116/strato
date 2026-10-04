@@ -165,18 +165,18 @@ struct VMController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let vms = routes.grouped("api", "vms")
         vms.get(use: index)
-        vms.post(use: create)
+        vms.post(use: create).supportsIdempotency()
         vms.group(":vmID") { vm in
             vm.get(use: show)
             vm.get("project-grant", use: projectGrant)
-            vm.put(use: update)
+            vm.put(use: update).supportsIdempotency()
             vm.patch(use: patchMetadata)
-            vm.delete(use: delete)
-            vm.post("start", use: start)
-            vm.post("stop", use: stop)
-            vm.post("restart", use: restart)
-            vm.post("pause", use: pause)
-            vm.post("resume", use: resume)
+            vm.delete(use: delete).supportsIdempotency()
+            vm.post("start", use: start).supportsIdempotency()
+            vm.post("stop", use: stop).supportsIdempotency()
+            vm.post("restart", use: restart).supportsIdempotency()
+            vm.post("pause", use: pause).supportsIdempotency()
+            vm.post("resume", use: resume).supportsIdempotency()
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
             vm.post("exec", use: exec)
@@ -186,18 +186,18 @@ struct VMController: RouteCollection {
                 actions.post("run", use: runCommand)
             }
             vm.get("interfaces", use: listInterfaces)
-            vm.post("interfaces", use: attachInterface)
+            vm.post("interfaces", use: attachInterface).supportsIdempotency()
             vm.group("interfaces", ":interfaceID") { interface in
-                interface.delete(use: detachInterface)
-                interface.post("retry", use: retryInterfaceMutation)
+                interface.delete(use: detachInterface).supportsIdempotency()
+                interface.post("retry", use: retryInterfaceMutation).supportsIdempotency()
             }
             // Full-VM checkpoints (issue #564); handlers live in
             // VMSnapshotController.swift.
-            vm.post("snapshots", use: createSnapshot)
+            vm.post("snapshots", use: createSnapshot).supportsIdempotency()
             vm.get("snapshots", use: listSnapshots)
             vm.group("snapshots", ":snapshotID") { snapshot in
-                snapshot.delete(use: deleteSnapshot)
-                snapshot.post("restore", use: restoreSnapshot)
+                snapshot.delete(use: deleteSnapshot).supportsIdempotency()
+                snapshot.post("restore", use: restoreSnapshot).supportsIdempotency()
             }
         }
     }
