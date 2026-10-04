@@ -1,0 +1,38 @@
+cli/Sources/StratoCLICore/API/Middlewares.swift
+  h_a84d4ff76cadd1 5,11-48,59-61
+cli/Tests/StratoCLITests/StratoClientTests.swift
+  h_a84d4ff76cadd1 73-165
+control-plane/Sources/App/Controllers/SandboxController.swift
+  h_a84d4ff76cadd1 15,19-22,28,31-32,37
+control-plane/Sources/App/Controllers/VMController.swift
+  h_a84d4ff76cadd1 168,172,174-179,189,191-192,196,199-200
+control-plane/Sources/App/Controllers/VolumeController.swift
+  h_a84d4ff76cadd1 17,20,23-28,32
+control-plane/Sources/App/Middleware/IdempotencyMiddleware.swift
+  h_a84d4ff76cadd1 16-21,73
+control-plane/Sources/App/Middleware/IdempotencyRoute.swift
+  h_a84d4ff76cadd1 1-18
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 72-77,107-109,9013-9015
+control-plane/Tests/AppPlatformTests/IdempotencyRouteTests.swift
+  h_a84d4ff76cadd1 1-188
+control-plane/Tests/AppPlatformTests/IdempotencyTests.swift
+  h_a84d4ff76cadd1 348-349
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  h_a84d4ff76cadd1 4,2046-2087
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 10911,11252,11303,11346,11427,11476,11503,11527,11551,11574,11597,11620,11951,11978,12003,12083,12164,12187,12210,12240,12386,12413,12438,12463,12915,13022,13045,13072,13095,13122,13149,13176,13235
+docs/architecture/idempotency.md
+  h_a84d4ff76cadd1 1-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb5e78fc3d40c17a54813a796d9b29eb28277de9",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
