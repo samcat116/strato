@@ -1,0 +1,24 @@
+.entire/settings.json
+  s_81808b7653a0c2::t_68044d8087e99b 5-6
+  s_81808b7653a0c2::t_ac0ce40fbd619d 1-4,7
+.entire/.gitignore
+  s_81808b7653a0c2::t_63173b956f07ac 1-6
+.gitignore
+  s_81808b7653a0c2::t_5213fc23145b0a 49-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19db63ea5be30c8489dd220141f0befd2f393fb9",
+  "prompts": {},
+  "sessions": {
+    "s_81808b7653a0c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "799ecefe-7491-47bd-b9f5-8c49265900e3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
