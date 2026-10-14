@@ -145,7 +145,10 @@ where another stopped:
   - **Verifying** — target registration must occur after assignment. A fresh
     observed inventory report and dependency snapshot must arrive at or after
     that registration, with an online heartbeat. All receipt times use the
-    control-plane cluster clock; future timestamps fail closed. Inventory must
+    control-plane cluster clock. The sweep reads database time after loading its
+    candidate snapshot, so a report received during earlier awaited maintenance
+    work is evaluated against current time; genuinely future timestamps fail
+    closed. Inventory must
     be complete and free of manifest degradation, including unroutable entries.
     Registration alone cannot prove inventory health. After the first healthy
     sweep, the assignment remains in flight for at least 60 seconds and needs

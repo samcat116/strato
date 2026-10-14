@@ -61,7 +61,6 @@ extension AgentMaintenanceLoop {
         }
 
         let db = app.db
-        let now = instant.date
         // Nil on a dev build with no configured target: no *rollout* can run,
         // but assignments an operator made by hand (which supply their own
         // artifact, precisely for builds a release does not serve) still need
@@ -82,6 +81,12 @@ extension AgentMaintenanceLoop {
                 }
                 .sort(\.$name)
                 .all()
+
+            // Earlier sweeps can outlive the tick instant, and reports may
+            // arrive while they run. Read the database clock after loading the
+            // snapshot so valid newer receipts are not classified as future.
+            let evaluationInstant = try await currentInstant(db)
+            let now = evaluationInstant.date
 
             var rolloutHalted = false
             var waitingOnAgent = false
@@ -133,7 +138,7 @@ extension AgentMaintenanceLoop {
                         agent.updateVerificationStartedAt = nil
                         try await agent.save(on: db)
                     }
-                    if let reason = agent.updateHealthVerificationFailure(at: instant) {
+                    if let reason = agent.updateHealthVerificationFailure(at: evaluationInstant) {
                         agent.recordUpdateFailure(reason)
                         try await agent.save(on: db)
                         Telemetry.agentAutoUpdateFailed(reason: "post_update_health")
@@ -146,7 +151,7 @@ extension AgentMaintenanceLoop {
                         rolloutHalted = rolloutHalted || agent.updateAssignmentSource != .manual
                         continue
                     }
-                    if agent.hasFreshUpdateHealth(at: instant) {
+                    if agent.hasFreshUpdateHealth(at: evaluationInstant) {
                         if let startedAt = agent.updateVerificationStartedAt,
                             now.timeIntervalSince(startedAt) >= Self.autoUpdateVerificationSeconds,
                             let inventoryAt = agent.updateInventoryReceivedAt,

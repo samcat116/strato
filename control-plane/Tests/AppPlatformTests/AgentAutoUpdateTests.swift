@@ -58,6 +58,22 @@ final class AgentAutoUpdateTests {
         try await app.shutdownForTesting()
     }
 
+    private actor SweepClock {
+        let evaluation: ClusterInstant
+        let assignment: ClusterInstant
+        var reads = 0
+
+        init(evaluation: ClusterInstant, assignment: ClusterInstant) {
+            self.evaluation = evaluation
+            self.assignment = assignment
+        }
+
+        func read() -> ClusterInstant {
+            defer { reads += 1 }
+            return reads == 0 ? evaluation : assignment
+        }
+    }
+
     /// The sweep lock's TTL outlives back-to-back test sweeps; give each
     /// sweep call a fresh in-memory coordination store so none is skipped.
     private func sweep(
@@ -66,9 +82,10 @@ final class AgentAutoUpdateTests {
         assignmentAt assignmentInstant: ClusterInstant? = nil
     ) async {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
+        let clock = SweepClock(evaluation: instant, assignment: assignmentInstant ?? instant)
         await app.agentMaintenance.sweepAgentAutoUpdates(
             at: instant,
-            currentInstant: { _ in assignmentInstant ?? instant })
+            currentInstant: { _ in await clock.read() })
     }
 
     @discardableResult
@@ -161,6 +178,39 @@ final class AgentAutoUpdateTests {
             let stored = try await self.reload(agent, on: app)
             #expect(stored.updateDesiredVersion == Self.target)
             #expect(stored.updateAttemptedAt == assignmentInstant.date)
+        }
+    }
+
+    @Test("delayed ticks accept newer reports while genuinely future receipts fail", arguments: [false, true])
+    func delayedTickWithNewReport(futureDated: Bool) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            let reportInstant = try await ClusterClock.read(on: app.db)
+            let start = reportInstant.date.addingTimeInterval(-61)
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(start.addingTimeInterval(-1)))
+            first.version = Self.target
+            first.updateTargetRegisteredAt = start
+            first.updateVerificationStartedAt = start
+            self.targetHealth(first, at: reportInstant.date.addingTimeInterval(futureDated ? 300 : 0))
+            try await first.save(on: app.db)
+
+            // The tick predates this report, as when previous awaited sweeps
+            // delay update classification. The production clock must be read
+            // after the candidate query; no sleep or wall-clock skew is needed.
+            app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
+            await app.agentMaintenance.sweepAgentAutoUpdates(
+                at: .testing(reportInstant.date.addingTimeInterval(-20)))
+            let row = try await self.reload(first, on: app)
+            if futureDated {
+                #expect(row.updateFailureReason?.contains("stale") == true)
+                #expect(row.updateDesiredVersion == Self.target)
+                #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+            } else {
+                #expect(row.updateFailureReason == nil)
+                #expect(row.updateDesiredVersion == nil)
+                #expect(try await self.reload(second, on: app).updateDesiredVersion == Self.target)
+            }
         }
     }
 
