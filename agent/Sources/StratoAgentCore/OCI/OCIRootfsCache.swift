@@ -160,6 +160,9 @@ public actor OCIRootfsCache {
             throw OCIError.malformedResponse(detail: "malformed manifest digest \(manifestDigest)")
         }
         let staging = directory + ".partial"
+        guard !FileManager.default.fileExists(atPath: staging + "/.building") else {
+            throw SubprocessStagingBlockedError(path: staging)
+        }
         try? FileManager.default.removeItem(atPath: staging)
         try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: true)
         return staging

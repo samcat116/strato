@@ -45,7 +45,7 @@ struct Ext4ImageBuilderTests {
         let builder = Ext4ImageBuilder(
             mkfsPath: "/bin/ls",  // exists and is executable; never actually run
             logger: Logger(label: "test"),
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorded.record(executable: executable.path, arguments: arguments)
                 return ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
             }
@@ -72,7 +72,7 @@ struct Ext4ImageBuilderTests {
         let builder = Ext4ImageBuilder(
             mkfsPath: "/bin/ls",
             logger: Logger(label: "test"),
-            runSubprocess: { _, _ in
+            runSubprocess: { _, _, _ in
                 ProcessResult(
                     terminationStatus: 1, standardOutput: Data(),
                     standardError: Data("simulated mkfs failure".utf8))
@@ -126,7 +126,7 @@ struct Ext4ImageBuilderTests {
         let builder = Ext4ImageBuilder(
             mkfsPath: "/bin/ls",
             logger: Logger(label: "test"),
-            runSubprocess: { _, _ in
+            runSubprocess: { _, _, _ in
                 ProcessResult(
                     terminationStatus: 1, standardOutput: Data(),
                     standardError: Data("No space left on device".utf8))

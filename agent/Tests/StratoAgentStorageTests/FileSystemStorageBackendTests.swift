@@ -205,7 +205,7 @@ struct FileSystemStorageBackendTests {
             removeItem: removeItem,
             freeDiskSpace: freeDiskSpace,
             publishItem: publishItem,
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorder.record(executable: executable, arguments: arguments)
             }
         )
@@ -226,7 +226,9 @@ struct FileSystemStorageBackendTests {
         // Written to a staging path and published with a rename, so the
         // canonical path only ever holds a finished volume (STR-148).
         #expect(
-            invocations[0].arguments == ["create", "-f", "qcow2", "\(root)/vol-1/volume.qcow2.partial", "42"])
+            invocations[0].arguments.prefix(3) == ["create", "-f", "qcow2"])
+        #expect(invocations[0].arguments[3].hasPrefix("\(root)/vol-1/volume.qcow2.partial."))
+        #expect(invocations[0].arguments.last == "42")
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-1/volume.qcow2"))
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-1/volume.qcow2.partial") == false)
         // The backend owns the layout: the volume directory must exist.
@@ -394,7 +396,7 @@ struct FileSystemStorageBackendTests {
             volumeStoragePath: root,
             qemuImgPath: "/nonexistent/qemu-img",
             imageSource: nil,
-            runSubprocess: { _, _ in throw SpawnError() }
+            runSubprocess: { _, _, _ in throw SpawnError() }
         )
 
         do {
@@ -561,7 +563,8 @@ struct FileSystemStorageBackendTests {
         #expect(convert?.arguments.prefix(5) == ["convert", "-f", "qcow2", "-O", "raw"])
         let inspected = try #require(await recorder.invocations.first { $0.arguments.first == "info" }?.arguments.last)
         #expect(inspected != sourcePath)
-        #expect(convert?.arguments.suffix(2) == [inspected, "\(target).partial"])
+        #expect(convert?.arguments.dropLast().last == inspected)
+        #expect(convert?.arguments.last?.hasPrefix("\(target).partial.") == true)
         #expect(FileManager.default.fileExists(atPath: target))
         #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
     }
@@ -591,7 +594,7 @@ struct FileSystemStorageBackendTests {
         #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
     }
 
-    @Test func materializeDiskDiscardsStalePartialFromCrashedRun() async throws {
+    @Test func materializeDiskPreservesUnknownPriorStaging() async throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
         let sourcePath = "\(root)/cached-image.qcow2"
@@ -612,7 +615,7 @@ struct FileSystemStorageBackendTests {
 
         #expect(attachment.filePath == target)
         #expect(FileManager.default.contents(atPath: target) == Data("image-bytes".utf8))
-        #expect(!FileManager.default.fileExists(atPath: "\(target).partial"))
+        #expect(FileManager.default.contents(atPath: "\(target).partial") == Data("truncated".utf8))
     }
 
     @Test func materializeDiskIsIdempotent() async throws {
@@ -683,8 +686,9 @@ struct FileSystemStorageBackendTests {
         #expect(
             convert?.arguments == [
                 "convert", "-f", "qcow2", "-O", "qcow2", sourcePath,
-                "\(root)/vol-2/volume.qcow2.partial",
+                convert?.arguments.last ?? "",
             ])
+        #expect(convert?.arguments.last?.hasPrefix("\(root)/vol-2/volume.qcow2.partial.") == true)
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-2/volume.qcow2"))
     }
 
@@ -845,7 +849,7 @@ struct FileSystemStorageBackendTests {
         // Overlay is qcow2, but the backing format is detected, not assumed.
         #expect(
             create?.arguments
-                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath + ".partial"])
+                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", create?.arguments.last ?? ""])
         #expect(FileManager.default.contents(atPath: snapshotPath) == Data("created-bytes".utf8))
         #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
     }
@@ -873,7 +877,7 @@ struct FileSystemStorageBackendTests {
 
         #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
         let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
-        #expect(create.arguments.last == snapshotPath + ".partial")
+        #expect(create.arguments.last?.hasPrefix(snapshotPath + ".partial.") == true)
         #expect(FileManager.default.fileExists(atPath: snapshotPath))
         #expect(!FileManager.default.fileExists(atPath: snapshotPath + ".partial"))
     }
@@ -1030,7 +1034,8 @@ struct FileSystemStorageBackendTests {
         let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
         #expect(
             create.arguments
-                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath + ".partial"])
+                == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", create.arguments.last ?? ""])
+        #expect(create.arguments.last?.hasPrefix(snapshotPath + ".partial.") == true)
     }
 
     /// Force-share belongs on inspection alone. On a mutating invocation the

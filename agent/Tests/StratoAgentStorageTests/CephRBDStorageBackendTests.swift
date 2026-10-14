@@ -366,7 +366,7 @@ struct CephRBDStorageBackendTests {
             virshPath: "/fake/virsh",
             qemuImgPath: "/fake/qemu-img",
             clientRoot: root,
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 if arguments.first == "secret-set-value",
                     let index = arguments.firstIndex(of: "--file")
                 {
@@ -948,7 +948,7 @@ struct CephRBDStorageBackendTests {
                     configuration: configuration,
                     rbdPath: "/fake/rbd", virshPath: "/fake/virsh",
                     qemuImgPath: "/fake/qemu-img", clientRoot: root,
-                    runSubprocess: { executable, arguments in
+                    runSubprocess: { executable, arguments, _ in
                         await recorder.run(executable, arguments)
                     })
             })
@@ -1002,7 +1002,7 @@ struct CephRBDStorageBackendTests {
         await recorder.failSecretUndefineOnce()
         let revoker = CephCredentialRevoker(
             clientRoot: root, virshPath: "/fake/virsh",
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 if arguments.first == "secret-undefine" {
                     for path in interruptedPaths {
                         #expect(!FileManager.default.fileExists(atPath: path))
@@ -1076,7 +1076,7 @@ struct CephRBDStorageBackendTests {
         try Self.secret.write(toFile: secret, atomically: false, encoding: .utf8)
         let revoker = CephCredentialRevoker(
             clientRoot: root,
-            runSubprocess: { _, _ in
+            runSubprocess: { _, _, _ in
                 Issue.record("unsafe marker must fail before libvirt")
                 return ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
             })
@@ -1098,7 +1098,7 @@ struct CephRBDStorageBackendTests {
         let barrier = CephRevocationBarrier()
         let revoker = CephCredentialRevoker(
             clientRoot: root,
-            runSubprocess: { _, _ in
+            runSubprocess: { _, _, _ in
                 await barrier.blockFirst()
                 return ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
             })
@@ -1125,13 +1125,13 @@ struct CephRBDStorageBackendTests {
                     configuration: configuration,
                     rbdPath: "/fake/rbd", virshPath: "/fake/virsh",
                     qemuImgPath: "/fake/qemu-img", clientRoot: root,
-                    runSubprocess: { executable, arguments in
+                    runSubprocess: { executable, arguments, _ in
                         await runner.run(executable, arguments)
                     })
             },
             credentialRevoker: CephCredentialRevoker(
                 clientRoot: root, virshPath: "/fake/virsh",
-                runSubprocess: { executable, arguments in
+                runSubprocess: { executable, arguments, _ in
                     await runner.run(executable, arguments)
                 }))
         let selected = try await registry.backend(for: .ceph(configuration))
@@ -1190,7 +1190,7 @@ struct CephRBDStorageBackendTests {
                     configuration: configuration,
                     rbdPath: "/fake/rbd", virshPath: "/fake/virsh",
                     clientRoot: root,
-                    runSubprocess: { _, _ in
+                    runSubprocess: { _, _, _ in
                         ProcessResult(
                             terminationStatus: 0, standardOutput: Data(), standardError: Data())
                     })
@@ -1216,4 +1216,40 @@ struct CephRBDStorageBackendTests {
         }
         _ = try await registry.backend(for: .ceph(configuration))
     }
+    @Test func abortedRBDCommandBlocksStagingReuseUntilRecovery() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = CephCommandRecorder()
+        let recovery = root + "/recovered"
+        let backend = CephRBDStorageBackend(
+            logger: Logger(label: "rbd-budget"), configuration: configuration(),
+            rbdPath: "/fake/rbd", clientRoot: root,
+            runSubprocess: { executable, arguments, budget in
+                if arguments.contains("create"), !FileManager.default.fileExists(atPath: recovery) {
+                    #expect(budget == .mutation)
+                    return try await SubprocessBudget.run(
+                        URL(fileURLWithPath: "/bin/sh"), ["-c", "trap '' TERM; while :; do :; done"],
+                        SubprocessBudget(timeout: .milliseconds(100), maxOutputBytes: budget.maxOutputBytes))
+                }
+                return await recorder.run(executable, arguments)
+            })
+        await #expect(throws: ProcessTimedOutError.self) {
+            try await backend.createVolume(volumeId: Self.volumeId, sizeBytes: 1024, format: .raw)
+        }
+        let marker =
+            CephRBDStorageBackend.clientDirectory(
+                root: root, clusterId: Self.clusterId, credentialId: Self.credentialId) + "/.rbd-building"
+        #expect(FileManager.default.fileExists(atPath: marker))
+        await #expect(throws: SubprocessStagingBlockedError.self) {
+            try await backend.createVolume(volumeId: Self.volumeId, sizeBytes: 1024, format: .raw)
+        }
+        // The controlled direct child is now killed; simulate established
+        // operator recovery rather than treating age as permission to reuse.
+        try FileManager.default.removeItem(atPath: marker)
+        try Data().write(to: URL(fileURLWithPath: recovery))
+        let attachment = try await backend.createVolume(volumeId: Self.volumeId, sizeBytes: 1024, format: .raw)
+        guard case .rbd = attachment else { Issue.record("RBD recovery failed"); return }
+        #expect(!FileManager.default.fileExists(atPath: marker))
+    }
+
 }

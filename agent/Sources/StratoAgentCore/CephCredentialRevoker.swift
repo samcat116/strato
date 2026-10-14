@@ -39,9 +39,7 @@ public actor CephCredentialRevoker {
     public init(
         clientRoot: String = CephRBDStorageBackend.defaultClientRoot,
         virshPath: String = CephRBDStorageBackend.defaultVirshPath,
-        runSubprocess: @escaping SubprocessRunner = {
-            try await ProcessRunner.run(executableURL: $0, arguments: $1)
-        }
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run
     ) {
         self.clientRoot = clientRoot
         self.virshPath = virshPath
@@ -99,7 +97,7 @@ public actor CephCredentialRevoker {
         if FileManager.default.fileExists(atPath: secretMarker) {
             let result: ProcessResult
             do {
-                result = try await runSubprocess(
+                result = try await runCommand(
                     URL(fileURLWithPath: virshPath),
                     ["secret-undefine", credentialId.uuidString.lowercased()])
             } catch {
@@ -177,4 +175,8 @@ public actor CephCredentialRevoker {
             || output.contains("secret not found")
             || output.contains("failed to get secret")
     }
+    private func runCommand(_ executable: URL, _ arguments: [String]) async throws -> ProcessResult {
+        try await runSubprocess(executable, arguments, .storage(executable: executable, arguments: arguments))
+    }
+
 }

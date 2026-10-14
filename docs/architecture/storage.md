@@ -898,3 +898,40 @@ agent has confirmed — rather than from a dispatch that awaited a response.
   (the protocol already expresses these as driver operations).
 - Image metadata (architecture, artifact kinds, per-hypervisor
   compatibility) is tracked separately in issue #214.
+
+## Storage and provisioning subprocess budgets
+
+`SubprocessRunner` carries a `SubprocessBudget` into the production
+`ProcessRunner` watchdog and combined stdout/stderr ceiling (STR-325). Outer
+stage cancellation alone cannot stop a subprocess wait. The policy is:
+
+| Command family | Runtime ceiling | Captured output ceiling |
+| --- | --- | --- |
+| qemu-img inspection/bench, hole punch, RBD inspection | 30 seconds | 1 MiB combined |
+| qemu-img create/resize, RBD metadata/map/unmap, virsh secret operations | 120 seconds | 1 MiB combined |
+| UEFI varstore inspection/conversion | 30 seconds | 1 MiB combined |
+| NoCloud ISO generation | 120 seconds | 1 MiB combined |
+| Image conversion/import, ext4 population, update archive extraction | 300 seconds plus one second per MiB, capped at 24 hours | 1 MiB combined |
+| Remote RBD copy/flatten with unknown size | 1 hour | 1 MiB combined |
+| Staged updater binary `--version` | 30 seconds | 64 KiB combined |
+
+The image-work allowance assumes a conservative 1 MiB/s plus setup time.
+Conversion uses inspected virtual image size, ext4 uses planned filesystem
+size, and raw import/archive extraction use source file length. Unknown sizes
+use the one-hour allowance. These are finite operational ceilings, not a
+throughput guarantee. SIGTERM escalates to SIGKILL after two seconds, with
+bounded pipe draining and exit observation even when descendants retain file
+descriptors. An output abort stops both drains promptly instead of waiting for
+an image operation's long runtime ceiling.
+
+Timeout and output aborts remain transient errors. They do not prove that all
+child descendants stopped using files, so disk/varstore retries use unique
+staging and retain aborted output and private prepared image inputs. Updater
+aborts retain their unique workspace and cannot swap the live binary. NoCloud
+keeps its existing `.building` ownership refusal. Sandbox ext4 staging and RBD
+commands persist a building marker before launch; an unconfirmed abort leaves
+it in place and later reuse is blocked. Recovery requires establishing that
+the builder/remote operation has stopped before removing the retained staging
+or marker. Neither age nor expiry authorizes automatic cleanup. Normal command
+completion retains the existing cleanup behavior. NoCloud also preserves its
+existing conservative refusal after generic generator exceptions.

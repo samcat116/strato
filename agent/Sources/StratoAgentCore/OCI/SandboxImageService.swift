@@ -192,7 +192,8 @@ public actor SandboxImageService {
 
         let workDir = workRoot + "/" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: workDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: workDir) }
+        var retainWork = false
+        defer { if !retainWork { try? FileManager.default.removeItem(atPath: workDir) } }
 
         // Image config → the guest-facing runtime config.
         let configBlobPath = workDir + "/config.blob"
@@ -241,8 +242,17 @@ public actor SandboxImageService {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try (try encoder.encode(guestConfig)).write(
             to: URL(fileURLWithPath: stagingDir + "/" + OCIRootfsCache.configFileName))
-        try await imageBuilder.buildImage(
-            fromTree: treePath, at: stagingDir + "/" + OCIRootfsCache.rootfsFileName)
+        let building = stagingDir + "/.building"
+        try DurableFileWriter().write(Data(), to: building, permissions: 0o600)
+        do {
+            try await imageBuilder.buildImage(
+                fromTree: treePath, at: stagingDir + "/" + OCIRootfsCache.rootfsFileName)
+            try FileManager.default.removeItem(atPath: building)
+        } catch {
+            retainWork = SubprocessBudget.preserveStaging(after: error)
+            if !retainWork { try? FileManager.default.removeItem(atPath: building) }
+            throw error
+        }
 
         let published = try await cache.publish(manifestDigest: resolved.manifestDigest)
         logger.info(
