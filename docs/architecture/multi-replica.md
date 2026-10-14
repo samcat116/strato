@@ -178,7 +178,15 @@ boundary.
 - **Deployment replacement**: the Helm chart uses `Recreate`, so every replica
   drains and stops before the replacement set starts. STR-275 requires that
   process boundary because legacy and current advisory locks occupy disjoint
-  PostgreSQL keyspaces. Agents reconnect as they do after a crash. In-flight
+  PostgreSQL keyspaces. Startup also refuses applied migration names outside
+  the binary's registered history (STR-323), including when migrations are
+  disabled. This prevents an older build from becoming ready against an
+  unsupported newer catalog; it does not prove mixed-version serving safe.
+  `Recreate` retains a replacement availability gap in exchange for stopping
+  the old set first. Rollback after schema advancement requires a build that
+  supports the applied history or a compatible database backup restored with
+  its matching build; do not remove migration log rows to force startup.
+  Agents reconnect as they do after a crash. In-flight
   mutations are not lost — desired state and its convergence deadline live in
   PostgreSQL, and they settle from observed-state reports (or are degraded by
   the sweep and surfaced to the client, never silently dropped).
