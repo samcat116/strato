@@ -85,9 +85,11 @@ into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
   the ordering guarantees the reconciler relies on.
 
   Most fetches carry `If-None-Match` so the control plane can park them and
-  answer `304`; that is a bandwidth optimization. Every
-  `desired_state_full_refetch_seconds` (default 300) the loop omits the
-  validator entirely and the control plane must answer with a full payload —
+  answer `304`; that is a bandwidth optimization. The loop samples its next
+  full-refetch threshold at 80–100% of `desired_state_full_refetch_seconds`
+  (default and maximum 300, minimum 1) after each successful unconditional
+  payload. Once due, the next attempt omits the validator entirely and the
+  control plane must answer with a full payload —
   the correctness invariant, and deliberately a rule rather than a tuning knob.
   Making *every* request conditional is the natural way to write an HTTP client
   and is exactly the bug: a wrong server-side "unchanged" would then strand the
@@ -96,8 +98,9 @@ into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
   Every unhappy path is paced (STR-291). A fetch that throws and a fetch that
   completes but returns something unusable — an undecodable payload, a wrong
   message type, a `304` answering an unconditional request, an unexpected
-  status — share one 1s → 30s doubling backoff, reset only by a response the
-  loop could actually use (a delivered `200`, or a conditional `304`). The
+  status — share one 1s → 30s doubling backoff with each delay sampled at 80–100%
+  of that capped ceiling, reset only by a response the loop could actually use
+  (a delivered `200`, or a conditional `304`). The
   unusable cases are the ones that matter: they drop the ETag, so every retry
   is an unconditional request the control plane must answer with a freshly
   assembled full payload, and their trigger is usually a property of the

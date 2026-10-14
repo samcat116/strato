@@ -209,8 +209,11 @@ background. For the state-sync strategy that is the `AgentDispatch` seam's
 `syncDesiredState(agentId:)`: ring the local and broadcast desired-state
 doorbells so whichever replica holds the agent's parked poll wakes it. A lost
 doorbell is harmless but not instantly repaired: the agent omits
-`If-None-Match` on its own full-refetch interval (300 seconds by default), and
-that unconditional request must receive the complete current state.
+`If-None-Match` on its own full-refetch interval (jittered from 240–300 seconds
+by default), and that unconditional request must receive the complete current state. Each server
+poll samples a hold window at 80–100% of its configured ceiling (45 seconds
+maximum). Doorbells reuse that deadline, preserving parking and assembly limits;
+initial, stale-validator and unconditional payloads are still served immediately.
 
 There is **no double-submit `409`** on these verbs (STR-147). Desired state is
 level-triggered, so two overlapping writes leave the last one standing and the

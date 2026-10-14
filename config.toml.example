@@ -250,7 +250,8 @@ log_level = "info"
 # behind it. Past it the next fetch carries no validator at all and the control
 # plane must answer with the full payload, which bounds how long any conceivable
 # ETag bug could leave this host stranded on stale desired state.
-# Optional - defaults to 300
+# Optional - defaults to 300, clamped to 1–300. Each successful full fetch
+# samples its next threshold at 80–100% of this ceiling (with a 1s floor).
 # desired_state_full_refetch_seconds = 300
 
 # Instance metadata service (Linux, network_mode = "ovn" only)
