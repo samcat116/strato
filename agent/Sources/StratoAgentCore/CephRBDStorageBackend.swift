@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import Logging
 import StratoShared
@@ -476,7 +477,8 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         let secretValue = try Self.parseKey(
             from: configuration.keyring, expectedClientName: configuration.clientName)
         try writer.write(Data(secretValue.utf8), to: secretValuePath, permissions: 0o600)
-        defer { try? FileManager.default.removeItem(atPath: secretValuePath) }
+        var retainSecretInput = false
+        defer { if !retainSecretInput { try? FileManager.default.removeItem(atPath: secretValuePath) } }
         let usage =
             "strato-ceph-\(configuration.clusterId.uuidString.lowercased())-\(configuration.credentialId.uuidString.lowercased())"
         let xml = """
@@ -493,12 +495,18 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         try requireNotRevoked()
         try requireSuccess(
             define, operation: "virsh secret-define", error: StorageBackendError.hostMisconfiguration)
-        let set = try await runCommand(
-            URL(fileURLWithPath: virshPath),
-            [
-                "secret-set-value", "--secret", configuration.credentialId.uuidString.lowercased(),
-                "--file", secretValuePath, "--plain",
-            ])
+        let set: ProcessResult
+        do {
+            set = try await runCommand(
+                URL(fileURLWithPath: virshPath),
+                [
+                    "secret-set-value", "--secret", configuration.credentialId.uuidString.lowercased(),
+                    "--file", secretValuePath, "--plain",
+                ])
+        } catch {
+            retainSecretInput = SubprocessBudget.preserveStaging(after: error)
+            throw error
+        }
         try requireNotRevoked()
         try requireSuccess(
             set, operation: "virsh secret-set-value", error: StorageBackendError.hostMisconfiguration)
@@ -623,25 +631,39 @@ public actor CephRBDStorageBackend: CephStorageBackend {
                 credentialId: configuration.credentialId),
             "--namespace", configuration.namespace,
         ]
-        let marker =
-            Self.clientDirectory(
-                root: clientRoot, clusterId: configuration.clusterId, credentialId: configuration.credentialId)
-            + "/.rbd-building"
-        guard !FileManager.default.fileExists(atPath: marker) else {
+        let directory = Self.clientDirectory(
+            root: clientRoot, clusterId: configuration.clusterId, credentialId: configuration.credentialId)
+        // Scope retry refusals to the images this command touches, including
+        // both coordinates of clone/move. A hung image must not block other
+        // volumes or add synchronized staging writes to read-only inventory.
+        let coordinates = Set(
+            arguments.filter { $0.hasPrefix(configuration.pool + "/") }.map {
+                String($0.split(separator: "@", maxSplits: 1)[0])
+            })
+        let markers = coordinates.map { coordinate in
+            let digest = SHA256.hash(data: Data(coordinate.utf8)).map { String(format: "%02x", $0) }.joined()
+            return directory + "/.rbd-building-" + digest
+        }
+        for marker in markers where FileManager.default.fileExists(atPath: marker) {
             throw SubprocessStagingBlockedError(path: marker)
         }
-        // RBD import/clone staging has durable deterministic names. A bounded
-        // wait cannot prove the cluster-side mutation stopped; fence retries
-        // before they can remove or reuse that staging. Persist before spawn.
-        try DurableFileWriter().write(Data(), to: marker, permissions: 0o600)
+        let mutates =
+            arguments.first != "info" && arguments.first != "ls"
+            && Array(arguments.prefix(2)) != ["snap", "ls"]
+        let ownedMarkers = mutates ? markers : []
         do {
+            // Remote mutation can outlive the local child. Persist before
+            // spawn so neither a crash nor a timeout authorizes staging reuse.
+            for marker in ownedMarkers {
+                try DurableFileWriter().write(Data(), to: marker, permissions: 0o600)
+            }
             let result = try await runCommand(URL(fileURLWithPath: rbdPath), common + arguments)
-            try FileManager.default.removeItem(atPath: marker)
+            for marker in ownedMarkers { try FileManager.default.removeItem(atPath: marker) }
             try requireNotRevoked()
             return result
         } catch {
             if !SubprocessBudget.preserveStaging(after: error) {
-                try? FileManager.default.removeItem(atPath: marker)
+                for marker in ownedMarkers { try? FileManager.default.removeItem(atPath: marker) }
             }
             throw error
         }

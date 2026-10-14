@@ -929,7 +929,8 @@ child descendants stopped using files, so disk/varstore retries use unique
 staging and retain aborted output and private prepared image inputs. Updater
 aborts retain their unique workspace and cannot swap the live binary. NoCloud
 keeps its existing `.building` ownership refusal. Sandbox ext4 staging and RBD
-commands persist a building marker before launch; an unconfirmed abort leaves
+mutations persist building markers before launch; RBD markers are scoped to
+the image coordinates the command touches. An unconfirmed abort leaves
 it in place and later reuse is blocked. Recovery requires establishing that
 the builder/remote operation has stopped before removing the retained staging
 or marker. Neither age nor expiry authorizes automatic cleanup. Normal command

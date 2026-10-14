@@ -1217,7 +1217,7 @@ struct CephRBDStorageBackendTests {
         _ = try await registry.backend(for: .ceph(configuration))
     }
     @Test func abortedRBDCommandBlocksStagingReuseUntilRecovery() async throws {
-        let root = try makeTempDir()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ceph-budget-\(UUID())").path
         defer { try? FileManager.default.removeItem(atPath: root) }
         let recorder = CephCommandRecorder()
         let recovery = root + "/recovered"
@@ -1225,7 +1225,9 @@ struct CephRBDStorageBackendTests {
             logger: Logger(label: "rbd-budget"), configuration: configuration(),
             rbdPath: "/fake/rbd", clientRoot: root,
             runSubprocess: { executable, arguments, budget in
-                if arguments.contains("create"), !FileManager.default.fileExists(atPath: recovery) {
+                if arguments.contains("create"), arguments.contains("volumes/strato-volume-" + Self.volumeId),
+                    !FileManager.default.fileExists(atPath: recovery)
+                {
                     #expect(budget == .mutation)
                     return try await SubprocessBudget.run(
                         URL(fileURLWithPath: "/bin/sh"), ["-c", "trap '' TERM; while :; do :; done"],
@@ -1236,13 +1238,20 @@ struct CephRBDStorageBackendTests {
         await #expect(throws: ProcessTimedOutError.self) {
             try await backend.createVolume(volumeId: Self.volumeId, sizeBytes: 1024, format: .raw)
         }
-        let marker =
-            CephRBDStorageBackend.clientDirectory(
-                root: root, clusterId: Self.clusterId, credentialId: Self.credentialId) + "/.rbd-building"
+        let directory = CephRBDStorageBackend.clientDirectory(
+            root: root, clusterId: Self.clusterId, credentialId: Self.credentialId)
+        let markerName = try #require(
+            FileManager.default.contentsOfDirectory(atPath: directory).first {
+                $0.hasPrefix(".rbd-building-")
+            })
+        let marker = directory + "/" + markerName
         #expect(FileManager.default.fileExists(atPath: marker))
         await #expect(throws: SubprocessStagingBlockedError.self) {
             try await backend.createVolume(volumeId: Self.volumeId, sizeBytes: 1024, format: .raw)
         }
+        let otherVolume = "44444444-4444-4444-8444-444444444444"
+        let otherAttachment = try await backend.createVolume(volumeId: otherVolume, sizeBytes: 1024, format: .raw)
+        guard case .rbd = otherAttachment else { Issue.record("unrelated volume was blocked"); return }
         // The controlled direct child is now killed; simulate established
         // operator recovery rather than treating age as permission to reuse.
         try FileManager.default.removeItem(atPath: marker)

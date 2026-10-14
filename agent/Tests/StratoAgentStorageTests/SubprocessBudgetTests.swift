@@ -133,6 +133,27 @@ struct SubprocessBudgetTests {
         #expect(ContinuousClock.now - started < .seconds(10))
     }
 
+    @Test func anExitedChildWithOpenDescendantPipesCannotReportSuccess() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let pidFile = root + "/descendant"
+        defer {
+            if let text = try? String(contentsOfFile: pidFile, encoding: .utf8),
+                let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            {
+                _ = kill(pid, SIGKILL)
+            }
+        }
+        let started = ContinuousClock.now
+        await #expect(throws: ProcessTimedOutError.self) {
+            try await SubprocessBudget.run(
+                URL(fileURLWithPath: "/bin/sh"),
+                ["-c", "sleep 20 & echo $! > '\(pidFile)'; exit 0"],
+                SubprocessBudget(timeout: .milliseconds(200)))
+        }
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
     @Test func varstoreThirtySecondWatchdogIsEffectiveWithProductionRunner() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(atPath: root) }

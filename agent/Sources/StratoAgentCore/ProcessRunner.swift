@@ -177,15 +177,16 @@ public enum ProcessRunner {
                 Double($0.components.seconds) + Double($0.components.attoseconds) / 1e18 + drainGrace)
         }
         let outputBudget = maxOutputBytes.map(OutputBudget.init(limit:))
+        let drainExpired = TimeoutFlag()
         let pid = process.processIdentifier
         let stdoutFD = stdoutHandle.fileDescriptor
         let stderrFD = stderrHandle.fileDescriptor
         async let stdoutData = drain(
             fd: stdoutFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid,
-            processIsRunning: { !exited.isSignaled })
+            processIsRunning: { !exited.isSignaled }, deadlineExceeded: drainExpired)
         async let stderrData = drain(
             fd: stderrFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid,
-            processIsRunning: { !exited.isSignaled })
+            processIsRunning: { !exited.isSignaled }, deadlineExceeded: drainExpired)
 
         let (out, err) = await (stdoutData, stderrData)
 
@@ -202,7 +203,7 @@ public enum ProcessRunner {
         // fires only when the orphaned sleep ends). This path throws without
         // ever reading `terminationStatus`, so it does not need the handler;
         // the bounded wait just keeps bookkeeping tidy when the kill worked.
-        if expired.isTripped, let timeout {
+        if expired.isTripped || drainExpired.isTripped, let timeout {
             await watchdog?.value
             _ = await exited.wait(upTo: exitObservationGrace)
             throw ProcessTimedOutError(
@@ -494,7 +495,8 @@ public enum ProcessRunner {
         deadline: Date? = nil,
         outputBudget: OutputBudget? = nil,
         processID: Int32? = nil,
-        processIsRunning: (@Sendable () -> Bool)? = nil
+        processIsRunning: (@Sendable () -> Bool)? = nil,
+        deadlineExceeded: TimeoutFlag? = nil
     ) async -> Data {
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
@@ -508,7 +510,10 @@ public enum ProcessRunner {
                         // while a grandchild holds the write end open and no
                         // bytes are arriving.
                         let remaining = deadline?.timeIntervalSinceNow ?? 1
-                        if remaining <= 0 { break }
+                        if remaining <= 0 {
+                            deadlineExceeded?.trip()
+                            break
+                        }
                         var pollFD = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
                         let slice = Int32(min(remaining, outputBudget == nil ? 1 : 0.1) * 1000)
                         let ready = poll(&pollFD, 1, slice)
