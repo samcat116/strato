@@ -1,7 +1,8 @@
 import Fluent
 
-/// Nullable fields leave existing assignments visibly unverifiable; operators
-/// must reassign to capture a trustworthy pre-update baseline.
+/// Nullable fields leave existing assignments visibly unverifiable. Operators
+/// review health and perform any needed recovery before explicitly cancelling;
+/// target-version agents cannot be reassigned the same version.
 struct AddAgentUpdateHealthVerification: AsyncMigration {
     func prepare(on database: any Database) async throws {
         try await database.schema("agents")

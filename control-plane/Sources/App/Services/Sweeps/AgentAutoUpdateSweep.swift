@@ -129,9 +129,9 @@ extension AgentMaintenanceLoop {
                 }
 
                 if !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned) {
-                    // Re-enabling rollout retries by resetting the existing
-                    // budget clock. Preserve its original required capabilities,
-                    // but never reuse an earlier verification interval.
+                    // A retained assignment's budget clock can restart under
+                    // existing operator actions. Never reuse an earlier interval.
+                    // Withdrawal instead clears the entire rollout assignment.
                     if let attemptedAt = agent.updateAttemptedAt,
                         let startedAt = agent.updateVerificationStartedAt, attemptedAt > startedAt
                     {
@@ -177,7 +177,7 @@ extension AgentMaintenanceLoop {
                         now.timeIntervalSince(attemptedAt) > Self.autoUpdateHealthBudgetSeconds
                     {
                         agent.recordUpdateFailure(
-                            "no fresh target-version inventory and capability verification within \(Int(Self.autoUpdateHealthBudgetSeconds))s; reassign or recover the agent"
+                            "no fresh target-version inventory and capability verification within \(Int(Self.autoUpdateHealthBudgetSeconds))s; review agent health, perform any needed recovery, and explicitly cancel this assignment"
                         )
                         try await agent.save(on: db)
                         Telemetry.agentAutoUpdateFailed(reason: "health_budget")

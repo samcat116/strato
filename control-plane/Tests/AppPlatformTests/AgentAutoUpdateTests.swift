@@ -484,6 +484,65 @@ final class AgentAutoUpdateTests {
         }
     }
 
+    @Test("target-version recovery withdraws the baseline through existing endpoints", arguments: [false, true])
+    func targetVersionRecovery(withdrawEnrollment: Bool) async throws {
+        try await withAutoUpdateApp { app, _, org, token in
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(Date()))
+            first.version = Self.target
+            first.recordUpdateFailure("target inventory degraded")
+            try await first.save(on: app.db)
+            #expect(try await self.reload(first, on: app).updateHealthBaseline != nil)
+
+            struct Body: Content {
+                let artifactUrl: String
+                let sha256: String
+                let targetVersion: String
+                let force: Bool
+            }
+            try await app.test(.POST, "/api/agents/\(first.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(
+                        artifactUrl: Self.stubArtifact.url, sha256: Self.validDigest,
+                        targetVersion: Self.target, force: true))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("already runs"))
+            }
+            #expect(try await self.reload(first, on: app).updateFailureReason != nil)
+            if withdrawEnrollment {
+                try await app.test(.PATCH, "/api/agents/\(first.id!)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["autoUpdate": false])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+                #expect(try await self.reload(first, on: app).updateHealthBaseline == nil)
+                try await app.test(.PATCH, "/api/agents/\(first.id!)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["autoUpdate": true])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            } else {
+                try await app.test(.DELETE, "/api/agents/\(first.id!)/actions/update") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+            let recovered = try await self.reload(first, on: app)
+            #expect(recovered.updateDesiredVersion == nil)
+            #expect(recovered.updateFailureReason == nil)
+            #expect(recovered.updateHealthBaseline == nil)
+            await self.sweep(app)
+            #expect(try await self.reload(first, on: app).updateDesiredVersion == nil)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == Self.target)
+        }
+    }
+
     @Test("cancelling withdraws the assignment, offline agent and all")
     func cancelClearsTheAssignment() async throws {
         try await withAutoUpdateApp { app, _, org, token in
@@ -721,7 +780,7 @@ final class AgentAutoUpdateTests {
         }
     }
 
-    @Test("an operator retry cannot reuse an earlier health interval")
+    @Test("a restarted assignment clock cannot reuse an earlier health interval")
     func retryRestartsVerification() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
             let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
@@ -730,7 +789,7 @@ final class AgentAutoUpdateTests {
             first.version = Self.target
             first.updateVerificationStartedAt = now.addingTimeInterval(1)
             first.updateTargetRegisteredAt = now.addingTimeInterval(1)
-            first.updateAttemptedAt = now.addingTimeInterval(70)  // Existing PATCH retry contract.
+            first.updateAttemptedAt = now.addingTimeInterval(70)  // Restart a retained assignment's clock.
             self.targetHealth(first, at: now.addingTimeInterval(70))
             try await first.save(on: app.db)
             await self.sweep(app, at: .testing(now.addingTimeInterval(70)))
@@ -740,14 +799,14 @@ final class AgentAutoUpdateTests {
         }
     }
 
-    @Test("legacy target assignments require an operator to recapture the baseline")
+    @Test("legacy target assignments direct operators to review health and cancel")
     func missingBaseline() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
             let first = try await self.makeAgent(app: app, org: org, name: "aa-agent", version: Self.target)
             first.updateDesiredVersion = Self.target
             try await first.save(on: app.db)
             await self.sweep(app)
-            #expect(try await self.reload(first, on: app).updateFailureReason?.contains("reassign") == true)
+            #expect(try await self.reload(first, on: app).updateFailureReason?.contains("explicitly cancel") == true)
         }
     }
 

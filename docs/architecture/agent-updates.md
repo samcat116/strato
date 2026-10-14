@@ -154,9 +154,10 @@ where another stopped:
     sweep, the assignment remains in flight for at least 60 seconds and needs
     fresh inventory and dependency evidence at the far boundary. Every sweep
     checks the required baseline again; a degraded required dependency fails
-    verification even where placement policy temporarily permits it. Retrying
-    by re-enabling auto-update preserves the required capabilities but starts a
-    new interval using reports received after the retry. A heartbeat, inventory receipt, or
+    verification even where placement policy temporarily permits it. If an
+    existing operator action restarts a retained assignment's budget clock,
+    verification requires a new interval using reports received after that clock
+    restart. A heartbeat, inventory receipt, or
     dependency receipt reaching 60 seconds old during verification fails the
     assignment, including a target agent that disappears. Re-registration
     restarts the verification interval. These are sampled health checks, not
@@ -173,11 +174,26 @@ where another stopped:
     verification, or exhausted the 10-minute assignment budget without verified
     target health. Version equality never erases a terminal failure. A *rollout*
     failure **halts** the fleet — no further agents are assigned — until an
-    operator intervenes (re-enable auto-update on the failed agent to retry,
-    which also restarts its budget clock; re-issue the update, which
-    overwrites the assignment with a fresh artifact; or cancel it) or the
-    target version moves on, which resets stale rollout assignments and
-    failures.
+    operator explicitly withdraws the failed assignment or the target version
+    moves on, which resets stale rollout assignments and failures.
+
+    After reviewing the agent's capabilities, inventory, and health, perform
+    manual recovery as needed (see [agent deployment](../deployment/agents.md))
+    and explicitly cancel with
+    `DELETE /api/agents/:id/actions/update` (or **Cancel**). Cancellation clears
+    the assignment, failure, and original baseline; it is an operator decision
+    to withdraw verification, not proof that verification succeeded. If no other
+    assignment holds or halts the fleet, rollout can advance. An enrolled agent
+    still below target can be assigned again, so disable its auto-update first
+    if it should remain excluded.
+
+    `POST /api/agents/:id/actions/update` refuses a version the agent already
+    runs, even with `force`: same-target reassignment cannot recover a failed
+    verification after target registration. A genuinely different target may be
+    explicitly assigned through the existing update action. Disabling
+    auto-update withdraws a rollout assignment and its baseline; re-enabling
+    does not restore or retry that original baseline, and an agent already at
+    target is not assigned again. Disabling leaves manual assignments intact.
 
     A *manual* failure does not halt the fleet. One operator action on one
     agent — possibly not even an enrolled one — must not stop every other
@@ -188,16 +204,17 @@ where another stopped:
 
     Assignments preserved from a build without baseline fields cannot establish
     their pre-update health retrospectively. They fail verification with explicit
-    guidance to check health and reassign. A degraded inventory baseline also
-    requires recovery and reassignment. The migration is additive and does not
-    invent successful evidence for old rows. Parked assignments retain their
+    guidance to review health, perform any needed recovery, and explicitly
+    cancel the unverifiable assignment. A degraded inventory baseline likewise
+    requires inventory recovery and operator review before cancellation. The
+    migration is additive and does not invent successful evidence for old rows. Parked assignments retain their
     baseline and must pass the same interval when they eventually register;
     parking does not waive target health. STR-138 inventory admission and session
     safeguards continue to gate reports before they can count as evidence.
 
     Either way the failure drops the pinned artifact, so a presigned
-    credential does not outlive the update that needed it; re-issuing supplies
-    a fresh one.
+    credential does not outlive the update that needed it. A permitted new
+    assignment supplies a fresh artifact; same-target reinstalls remain refused.
 
 ### Convergence preconditions (agent)
 

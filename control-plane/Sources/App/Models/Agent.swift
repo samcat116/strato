@@ -976,10 +976,12 @@ extension Agent {
 
     func updateHealthVerificationFailure(at instant: ClusterInstant) -> String? {
         guard let baseline = updateHealthBaseline else {
-            return "missing pre-update health baseline; reassign the update after checking agent health"
+            return
+                "missing pre-update health baseline; review agent health and explicitly cancel this assignment after any needed recovery"
         }
         guard baseline.inventoryHealthy else {
-            return "inventory was degraded at assignment; recover inventory before reassigning the update"
+            return
+                "inventory was degraded at assignment; recover inventory, review agent health, and explicitly cancel this assignment"
         }
         if updateVerificationStartedAt != nil && !hasFreshUpdateHealth(at: instant) {
             return
