@@ -17,8 +17,8 @@ reasons, and the one-agent-at-a-time property (an in-flight manual update holds
 the fleet rollout, and vice versa). The end is always the same: the agent
 downloads the artifact, verifies its SHA-256, atomically swaps its own binary
 (preserving the old one as `<binary>.prev`), exits with a restart code for its
-supervisor, and proves the update by re-registering with the new build's
-version.
+supervisor, and proves the update through target-version registration followed
+by fresh inventory and capability health across a 60-second verification interval.
 
 Until wire v28 the operator path was a separate imperative `agent_update`
 message answered synchronously over the socket. It is gone (ADR 0001 stage 6):
@@ -135,16 +135,40 @@ where another stopped:
   desired-state sync as `desiredAgentUpdate`, with the artifact URL and
   checksum re-resolved on every assembly so a long-desired update never
   carries a stale link.
-- The next agent is assigned only after the previous one **re-registers at
-  the target version**. Outcomes per assigned agent:
-  - **Converged** — re-registered at the target (or updated by hand):
-    assignment cleared, rollout advances.
+- Assignment captures a durable baseline of previously working capabilities
+  (usable backends and their subcapabilities, networking, sandbox, TPM, resolver,
+  metadata, and fresh dependency-gated features) and inventory health. Capability
+  gains are allowed; losing any required capability conservatively fails the
+  update without requiring proof that the update caused it.
+- The next agent is assigned only after the previous one **registers at the
+  target and passes post-update verification**. Outcomes per assigned agent:
+  - **Verifying** — target registration must occur after assignment. A fresh
+    observed inventory report and dependency snapshot must arrive at or after
+    that registration, with an online heartbeat. All receipt times use the
+    control-plane cluster clock; future timestamps fail closed. Inventory must
+    be complete and free of manifest degradation, including unroutable entries.
+    Registration alone cannot prove inventory health. After the first healthy
+    sweep, the assignment remains in flight for at least 60 seconds and needs
+    fresh inventory and dependency evidence at the far boundary. Every sweep
+    checks the required baseline again; a degraded required dependency fails
+    verification even where placement policy temporarily permits it. Retrying
+    by re-enabling auto-update preserves the required capabilities but starts a
+    new interval using reports received after the retry. A heartbeat, inventory receipt, or
+    dependency receipt reaching 60 seconds old during verification fails the
+    assignment, including a target agent that disappears. Re-registration
+    restarts the verification interval. These are sampled health checks, not
+    continuous on-host monitoring.
+  - **Converged** — the target agent passes the interval with unchanged or
+    improved capabilities and healthy inventory: assignment and verification
+    state cleared, rollout advances.
   - **Blocked** — the agent reports why it will not act yet (see
     preconditions below). Past the health budget (10 minutes) the agent is
     *parked*: its assignment stays, so it converges whenever the blocker
     clears, but the rollout stops waiting on it.
   - **Failed** — the agent reported a terminal failure (download, checksum,
-    probe, or swap), or went silent past the health budget. A *rollout*
+    probe, or swap), regressed capabilities/inventory, lost fresh health during
+    verification, or exhausted the 10-minute assignment budget without verified
+    target health. Version equality never erases a terminal failure. A *rollout*
     failure **halts** the fleet — no further agents are assigned — until an
     operator intervenes (re-enable auto-update on the failed agent to retry,
     which also restarts its budget clock; re-issue the update, which
@@ -158,6 +182,15 @@ where another stopped:
     what a terminal failure closes: it never converges, and it is never reset
     as stale (the deployment target has no opinion about a version an operator
     chose). Cancelling is what clears it.
+
+    Assignments preserved from a build without baseline fields cannot establish
+    their pre-update health retrospectively. They fail verification with explicit
+    guidance to check health and reassign. A degraded inventory baseline also
+    requires recovery and reassignment. The migration is additive and does not
+    invent successful evidence for old rows. Parked assignments retain their
+    baseline and must pass the same interval when they eventually register;
+    parking does not waive target health. STR-138 inventory admission and session
+    safeguards continue to gate reports before they can count as evidence.
 
     Either way the failure drops the pinned artifact, so a presigned
     credential does not outlive the update that needed it; re-issuing supplies
@@ -293,7 +326,7 @@ supervisor helper and is out of scope until halting proves insufficient.
 
 - `strato_agent_auto_update_assignments_total`,
   `..._converged_total`, `..._failures_total{reason}` (`agent_reported` |
-  `health_budget`), `..._parked_total`. `assignments_total` counts what the
+  `health_budget` | `post_update_health`), `..._parked_total`. `assignments_total` counts what the
   fleet rollout assigned; the rest are recorded by the sweep, which since
   STR-145 classifies operator-assigned updates too, so they cover both.
 - Version transitions log at `notice` on registration ("Agent re-registered

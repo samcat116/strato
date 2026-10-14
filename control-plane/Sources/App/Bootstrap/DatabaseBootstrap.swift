@@ -250,5 +250,6 @@ extension Application {
         migrations.add(AddSandboxSuspension())
         migrations.add(AddSandboxIdleActivity())
         migrations.add(AddSandboxIdleFences())
+        migrations.add(AddAgentUpdateHealthVerification())
     }
 }
