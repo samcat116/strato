@@ -12,8 +12,30 @@ passwords to remember to change.
 git clone https://github.com/samcat116/strato.git
 cd strato/helm/strato-control-plane
 helm dependency build
-helm install strato .
+helm install strato . \
+  --set image.repository=ghcr.io/samcat116/strato-control-plane \
+  --set frontend.image.repository=ghcr.io/samcat116/strato-frontend \
+  --set image.tag=main --set frontend.image.tag=main
 ```
+
+The chart defaults to local image names. The overrides above select the
+published images used by the Compose deployment; pin matching immutable tags
+for reproducible installations and include those image values in your
+production values file. If using local builds, make both images available to
+every eligible cluster node instead.
+
+For local browser access, forward the frontend service:
+
+```bash
+kubectl port-forward service/strato-strato-control-plane-frontend 8080:3000
+```
+
+Visit `http://localhost:8080`, matching the default WebAuthn origin. Forwarding
+the control-plane service exposes the API only. This browser-only setup does
+not expose the agent mTLS or SPIRE endpoints; configure the external routes
+below before enrolling hypervisors. Continue with
+[first login](/guide/getting-started#first-login) and the
+[first VM checklist](/guide/getting-started#create-your-first-vm).
 
 Every control-plane pod applies pending database migrations before it starts
 serving. PostgreSQL advisory locking serializes concurrent replicas; a migration
