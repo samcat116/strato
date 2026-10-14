@@ -31,6 +31,32 @@ struct SubprocessBudgetTests {
         #expect(SubprocessBudget.imageWork(bytes: nil).timeout == .seconds(3600))
     }
 
+    @Test(arguments: ["info", "ls", "cp", "flatten", "import"])
+    func rbdBudgetsIgnoreCommandNamesInOptionValues(namespace: String) throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let source = root + "/" + namespace
+        try Data(repeating: 0, count: 8192).write(to: URL(fileURLWithPath: source))
+        let executable = URL(fileURLWithPath: "/usr/bin/rbd")
+        let common = ["--conf", namespace, "--name", namespace, "--keyring", namespace, "--namespace", namespace]
+        let cases: [([String], SubprocessBudget)] = [
+            (["create", "pool/image"], .mutation),
+            (["info", "pool/image"], .inspection),
+            (["ls", "pool"], .inspection),
+            (["snap", "ls", "pool/image"], .inspection),
+            (["device", "list", "--format", "json"], .inspection),
+            (["cp", "pool/source", "pool/destination"], .imageWork(bytes: nil)),
+            (["flatten", "pool/image"], .imageWork(bytes: nil)),
+            (["import", source, "pool/image"], .imageWork(bytes: 8192)),
+        ]
+        for (command, expected) in cases {
+            #expect(SubprocessBudget.storage(executable: executable, arguments: common + command) == expected)
+            #expect(
+                SubprocessBudget.storage(
+                    executable: executable, arguments: ["--namespace=" + namespace] + command) == expected)
+        }
+    }
+
     @Test func realRunnerEscalatesAndReleasesSerializedStorageKeys() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(atPath: root) }

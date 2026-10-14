@@ -205,6 +205,30 @@ struct OCIRootfsCacheTests {
         #expect(FileManager.default.fileExists(atPath: fresh.rootfsPath))
     }
 
+    @Test("cleanup retains aged staging while builder termination is unconfirmed")
+    func cleanupPreservesAgedBuildingStage() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root, ttl: 1, maxSizeBytes: 0)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let marked = try await cache.stagingDirectory(for: digest)
+        let abandoned = try await cache.stagingDirectory(for: otherDigest)
+        let payload = Data("potentially active output".utf8)
+        try payload.write(to: URL(fileURLWithPath: marked + "/rootfs.ext4"))
+        try Data().write(to: URL(fileURLWithPath: marked + "/.building"))
+        for path in [marked, abandoned] {
+            try FileManager.default.setAttributes(
+                [.modificationDate: now.addingTimeInterval(-172_800)], ofItemAtPath: path)
+        }
+        await cache.cleanup(now: now)
+        #expect(FileManager.default.fileExists(atPath: marked + "/.building"))
+        #expect(FileManager.default.contents(atPath: marked + "/rootfs.ext4") == payload)
+        #expect(!FileManager.default.fileExists(atPath: abandoned))
+        await #expect(throws: SubprocessStagingBlockedError.self) {
+            try await cache.stagingDirectory(for: digest)
+        }
+    }
+
     @Test("cleanup evicts LRU entries beyond the size budget, protecting recent ones")
     func sizeBudgetCleanup() async throws {
         let root = try makeTempDir()

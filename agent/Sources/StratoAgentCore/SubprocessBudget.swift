@@ -42,15 +42,41 @@ public struct SubprocessBudget: Sendable, Equatable {
             if ["info", "bench"].contains(arguments.first ?? "") { return .inspection }
         }
         if tool == "rbd" {
-            if let index = arguments.firstIndex(of: "import"), arguments.indices.contains(index + 1) {
-                return imageWork(bytes: fileBytes(arguments[index + 1]))
-            }
-            if arguments.contains("cp") || arguments.contains("flatten") { return imageWork(bytes: nil) }
-            if arguments.contains("info") || arguments.contains("list") || arguments.contains("ls") {
-                return .inspection
+            let command = rbdCommandArguments(arguments)
+            switch command.first {
+            case "import": return imageWork(bytes: command.dropFirst().first.flatMap(fileBytes))
+            case "cp", "flatten": return imageWork(bytes: nil)
+            case "info", "list", "ls": return .inspection
+            case "snap" where command.dropFirst().first == "ls": return .inspection
+            case "device" where command.dropFirst().first == "list": return .inspection
+            default: break
             }
         }
         return .mutation
+    }
+
+    /// RBD callers put common options before the command. Only recognize
+    /// options whose arity is known; an unknown prefix keeps the conservative
+    /// mutation budget rather than guessing that its value is a subcommand.
+    private static func rbdCommandArguments(_ arguments: [String]) -> ArraySlice<String> {
+        let valuedOptions: Set<String> = [
+            "--conf", "--name", "--keyring", "--namespace", "--id", "--user", "--pool", "--format",
+            "-c", "-n", "-p",
+        ]
+        var index = arguments.startIndex
+        while index < arguments.endIndex, arguments[index].hasPrefix("-") {
+            let option = arguments[index]
+            if option == "--no-progress" { index += 1; continue }
+            let name = String(option.split(separator: "=", maxSplits: 1)[0])
+            guard valuedOptions.contains(name) else { return [] }
+            if option.contains("=") {
+                index += 1
+            } else {
+                guard index + 1 < arguments.endIndex else { return [] }
+                index += 2
+            }
+        }
+        return arguments[index...]
     }
 
     @Sendable public static func run(
