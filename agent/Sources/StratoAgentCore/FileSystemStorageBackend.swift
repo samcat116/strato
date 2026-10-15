@@ -48,8 +48,12 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// Default qemu-img path (platform-specific)
     public static var defaultQemuImgPath: String {
         #if os(macOS)
-        // Homebrew typically installs qemu-img here
+        // Homebrew's standard prefix follows the Mac's CPU architecture.
+        #if arch(arm64)
         return "/opt/homebrew/bin/qemu-img"
+        #else
+        return "/usr/local/bin/qemu-img"
+        #endif
         #else
         return "/usr/bin/qemu-img"
         #endif

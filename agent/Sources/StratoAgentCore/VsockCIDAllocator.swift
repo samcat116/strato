@@ -316,7 +316,7 @@ extension HypervisorType {
     public var usesHostVsockNamespace: Bool {
         switch self {
         case .qemu: return true
-        case .firecracker: return false
+        case .firecracker, .appleVirtualization: return false
         }
     }
 }

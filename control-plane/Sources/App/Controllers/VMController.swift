@@ -650,6 +650,15 @@ struct VMController: RouteCollection {
 
         try Self.validateSizing(cpu: newCPU, memory: newMemory, balloonTarget: newBalloonTarget)
 
+        if existingVM.hypervisorType == .appleVirtualization {
+            guard newBalloonTarget == nil else {
+                throw Abort(.badRequest, reason: "Apple Virtualization does not support balloon targets")
+            }
+            guard existingVM.status != .running else {
+                throw Abort(.unprocessableEntity, reason: "Shut down this Apple Virtualization VM before resizing it")
+            }
+        }
+
         let growthMutationID = UUID()
         let growthClaim = NIOLockedValueBox<WorkloadResourceClassService.GrowthClaim?>(nil)
         do {

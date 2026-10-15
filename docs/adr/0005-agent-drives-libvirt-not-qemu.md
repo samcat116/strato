@@ -243,3 +243,11 @@ misleading message underneath its real failure.
   exec model (a PID plus polling, no completion notification, no PTY, no further
   stdin, no way to signal a running process) could never have backed an
   interactive session. Sandbox exec goes through the Firecracker guest agent.
+
+## Native macOS backend follow-up
+
+The separate native backend described above is now `apple_virtualization`,
+implemented with Virtualization.framework. QEMU remains libvirt-only on Linux.
+The native driver uses raw local disks, NAT, and ISO bootstrap, and cold-boots
+after its owning agent exits. Its supported subset and capability gates are
+documented in [the agent architecture](../architecture/agent.md#native-macos-driver).

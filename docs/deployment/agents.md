@@ -1,5 +1,8 @@
 # Deploying Agents
 
+This guide covers the Linux bootstrap installer. For the native macOS backend,
+see [local development](../development/local-development.md#macos-native-agent).
+
 Agents run on Linux hypervisor hosts and execute VMs as **libvirt domains**
 under QEMU/KVM, with Firecracker as an optional second backend. They connect out
 to the control plane over WebSocket — no inbound ports needed on the hypervisor.

@@ -182,6 +182,10 @@ extension AgentConfig {
     /// Default hypervisor type (platform-specific)
     /// Linux defaults to QEMU, but can be configured to use Firecracker
     public static var defaultHypervisorType: HypervisorType {
+        #if os(macOS)
+        return .appleVirtualization
+        #else
         return .qemu
+        #endif
     }
 }

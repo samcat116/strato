@@ -38,8 +38,9 @@ struct ImageCompatibilityTests {
         let image = makeImage(architecture: .x86_64)
         image.$artifacts.value = [artifact(.diskImage, arch: .x86_64, format: .qcow2)]
 
-        #expect(image.compatibleHypervisors() == [.qemu])
+        #expect(image.compatibleHypervisors() == [.qemu, .appleVirtualization])
         #expect(image.isUsable(by: .qemu))
+        #expect(image.usableBootArtifact(for: .appleVirtualization)?.kind == .diskImage)
         #expect(!image.isUsable(by: .firecracker))
     }
 
@@ -65,7 +66,7 @@ struct ImageCompatibilityTests {
             artifact(.rootfs, arch: .x86_64, format: .raw),
         ]
 
-        #expect(image.compatibleHypervisors() == [.qemu, .firecracker])
+        #expect(image.compatibleHypervisors() == [.qemu, .firecracker, .appleVirtualization])
     }
 
     @Test("Architecture-mismatched artifacts don't count")

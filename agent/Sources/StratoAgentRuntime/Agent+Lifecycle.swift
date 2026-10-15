@@ -244,20 +244,9 @@ extension Agent {
             libvirtService = libvirt
             hypervisorServices[.qemu] = libvirt
             #else
-            // A deliberate, temporary regression (STR-136): the QEMU driver is
-            // libvirt, and libvirt is Linux-only. A native
-            // Virtualization.framework driver is separate work. Said plainly so
-            // a mock cannot be mistaken for a hypervisor — and the host reports
-            // `.qemu` as unavailable to match (`HypervisorProbe.qemuReport`), so
-            // nothing is ever scheduled onto it.
-            logger.warning(
-                "No hypervisor on this platform: registering a MOCK QEMU backend",
-                metadata: [
-                    "detail": .string(
-                        "this host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only")
-                ])
-            hypervisorServices[.qemu] = MockHypervisorService(
-                logger: logger, hypervisorType: .qemu, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
+            logger.info("Initializing Apple Virtualization.framework service")
+            hypervisorServices[.appleVirtualization] = await AppleVirtualizationService(
+                logger: logger, vmStoragePath: configuration.vmStoragePath)
             #endif
 
             #if os(Linux)

@@ -42,6 +42,10 @@ public enum HypervisorProbe {
             ))
         #endif
 
+        reports.append(
+            HypervisorSupport(
+                type: .appleVirtualization, available: false, accelerated: false,
+                unavailabilityReason: "Apple Virtualization requires macOS and a successful runtime entitlement probe"))
         return reports
     }
 
@@ -95,9 +99,8 @@ public enum HypervisorProbe {
     /// caller which never reaches the gate cannot come away believing a host
     /// with no libvirt can run VMs.
     ///
-    /// Off Linux there is no libvirt at all and the registered backend is a
-    /// mock, so it reports unavailable rather than letting real placements land
-    /// on it. Without KVM a host can still run VMs under TCG emulation, so
+    /// Off Linux QEMU reports unavailable; native Apple availability is probed
+    /// separately by the runtime, including its executable entitlement. Without KVM a host can still run VMs under TCG emulation, so
     /// acceleration only affects the `accelerated` flag.
     public static func qemuReport(
         libvirt: LibvirtProbe.Status?, acceleration: AccelerationProbe

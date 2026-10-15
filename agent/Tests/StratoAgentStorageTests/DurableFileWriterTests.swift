@@ -292,6 +292,8 @@ struct DurableFileWriterTests {
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
+    // Darwin makes fork unavailable to Swift; this crash fixture uses Linux POSIX semantics.
+    #if os(Linux)
     @Test("A killed staging owner releases its lock and the next save reclaims its file")
     func killedWriterReclamation() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("durable-crash-\(UUID())")
@@ -325,6 +327,8 @@ struct DurableFileWriterTests {
         #expect(!FileManager.default.fileExists(atPath: staging))
         #expect(try Data(contentsOf: URL(fileURLWithPath: destination)) == Data("complete".utf8))
     }
+
+    #endif
 
     @Test("Reclamation waits for active owners and preserves operator and unsafe files")
     func activeOwnerAndUnownedFiles() throws {

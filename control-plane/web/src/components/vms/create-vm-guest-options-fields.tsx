@@ -7,6 +7,7 @@ import type { Image, MetadataSource } from "@/types/api";
 interface VMGuestOptionsFieldsProps {
   isLoading: boolean;
   isFirecracker: boolean;
+  isAppleVirtualization?: boolean;
   metadataEnabled: boolean;
   setMetadataEnabled: Dispatch<SetStateAction<boolean>>;
   metadataSource: MetadataSource;
@@ -29,6 +30,7 @@ interface VMGuestOptionsFieldsProps {
 export function VMGuestOptionsFields({
   isLoading,
   isFirecracker,
+  isAppleVirtualization = false,
   metadataEnabled,
   setMetadataEnabled,
   metadataSource,
@@ -126,9 +128,9 @@ export function VMGuestOptionsFields({
           <input
             id="secureBoot"
             type="checkbox"
-            checked={!isFirecracker && secureBoot}
+            checked={!isFirecracker && !isAppleVirtualization && secureBoot}
             onChange={(e) => setSecureBoot(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Secure Boot
@@ -137,17 +139,16 @@ export function VMGuestOptionsFields({
           <input
             id="tpm"
             type="checkbox"
-            checked={!isFirecracker && tpm}
+            checked={!isFirecracker && !isAppleVirtualization && tpm}
             onChange={(e) => setTpm(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           TPM 2.0
         </label>
-        {isFirecracker ? (
+        {isFirecracker || isAppleVirtualization ? (
           <p className="text-xs text-muted-foreground">
-            Unavailable for this image: it boots under Firecracker, which
-            has no UEFI firmware or TPM device. Use a QEMU image.
+            Secure Boot and TPM are available only with QEMU.
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -170,17 +171,16 @@ export function VMGuestOptionsFields({
           <input
             id="graphicsConsole"
             type="checkbox"
-            checked={!isFirecracker && graphicsConsole}
+            checked={!isFirecracker && !isAppleVirtualization && graphicsConsole}
             onChange={(e) => setGraphicsConsole(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Graphics console
         </label>
-        {isFirecracker ? (
+        {isFirecracker || isAppleVirtualization ? (
           <p className="text-xs text-muted-foreground">
-            Unavailable for this image: it boots under Firecracker, which
-            emulates no display device. Use a QEMU image.
+            The graphics console is available only with QEMU.
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -231,9 +231,9 @@ export function VMGuestOptionsFields({
         <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
-            checked={!isFirecracker && guestAgentEnabled}
+            checked={!isFirecracker && !isAppleVirtualization && guestAgentEnabled}
             onChange={(e) => setGuestAgentEnabled(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Install Strato guest agent (root command execution)

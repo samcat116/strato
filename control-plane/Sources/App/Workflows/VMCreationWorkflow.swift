@@ -198,6 +198,18 @@ enum VMCreationWorkflow {
             chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
         }
 
+        if chosenHypervisor == .appleVirtualization {
+            guard bootPool.mode == .local else {
+                throw Abort(.badRequest, reason: "Apple Virtualization requires a local boot storage pool")
+            }
+            guard createRequest.blockMode == nil || createRequest.blockMode == .conservative else {
+                throw Abort(.badRequest, reason: "Apple Virtualization supports only conservative block mode")
+            }
+            if requestedInterfaces.contains(where: { $0.mtu != nil && $0.mtu != 1500 }) {
+                throw Abort(.badRequest, reason: "Apple Virtualization NAT does not support a custom MTU")
+            }
+        }
+
         // Create the VM instance from the image.
         // Pre-compute values to avoid complex expression
         let cpuValue = createRequest.cpu ?? image.defaultCpu ?? 1
@@ -287,10 +299,10 @@ enum VMCreationWorkflow {
                 .badRequest,
                 reason: "'metadataSource: imds' requires 'metadataEnabled' to be true during VM creation")
         }
-        if metadataSource == .imds, chosenHypervisor == .firecracker {
+        if metadataSource == .imds, chosenHypervisor != .qemu {
             throw Abort(
                 .badRequest,
-                reason: "'metadataSource: imds' is not supported for firecracker VMs; use the qemu hypervisor")
+                reason: "'metadataSource: imds' is not supported for \(chosenHypervisor.rawValue) VMs; use qemu")
         }
 
         let vm = VM(
@@ -345,28 +357,26 @@ enum VMCreationWorkflow {
         // boots a kernel directly with no UEFI and no TPM device at all.
         // Rejecting is the only honest answer: accepting would return 202 for a
         // Windows VM that can never boot (issue #565).
-        if vm.hypervisorType == .firecracker, vm.secureBoot || vm.tpmEnabled {
+        if vm.hypervisorType != .qemu, vm.secureBoot || vm.tpmEnabled {
             throw Abort(
                 .badRequest,
-                reason: "'secureBoot' and 'tpm' are not supported for firecracker VMs "
-                    + "(no UEFI firmware or TPM device); use the qemu hypervisor")
+                reason: "'secureBoot' and 'tpm' are supported only for qemu VMs")
         }
 
-        if vm.guestAgentEnabled, vm.hypervisorType == .firecracker {
+        if vm.guestAgentEnabled, vm.hypervisorType != .qemu {
             throw Abort(
                 .badRequest,
-                reason: "'guestAgentEnabled' is not supported for firecracker VMs; use the qemu hypervisor")
+                reason: "'guestAgentEnabled' is not supported for \(vm.hypervisorType.rawValue) VMs; use qemu")
         }
 
         // Firecracker emulates no display device at all — it boots a kernel
         // directly and its only console is a serial port. Same reasoning as
         // Secure Boot above: returning 202 for a VM whose Display tab could
         // never work is worse than refusing (issue #566).
-        if vm.graphicsConsole, vm.hypervisorType == .firecracker {
+        if vm.graphicsConsole, vm.hypervisorType != .qemu {
             throw Abort(
                 .badRequest,
-                reason: "'graphicsConsole' is not supported for firecracker VMs "
-                    + "(no emulated display device); use the qemu hypervisor")
+                reason: "'graphicsConsole' is supported only for qemu VMs")
         }
 
         let userID = try user.requireID()
@@ -519,7 +529,7 @@ enum VMCreationWorkflow {
                         projectID: projectId,
                         environment: environment,
                         size: vm.disk,
-                        format: bootPool.mode == .ceph || vm.hypervisorType == .firecracker
+                        format: bootPool.mode == .ceph || vm.hypervisorType != .qemu
                             ? .raw : .qcow2,
                         volumeType: .boot,
                         status: .creating,

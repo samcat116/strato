@@ -65,6 +65,46 @@ final class VMNetworkSelectionTests {
         var metadataSource: String? = nil
     }
 
+    @Test("Apple Virtualization creates a raw boot volume with ISO bootstrap")
+    func createAppleVirtualization() async throws {
+        try await withApp { app, _, _, project, image, token in
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "apple-native", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default", hypervisorType: "apple_virtualization"))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "apple-native").first())
+            #expect(vm.hypervisorType == .appleVirtualization)
+            #expect(vm.metadataSource == .iso)
+            let volume = try #require(try await Volume.query(on: app.db).filter(\.$vm.$id == vm.id!).first())
+            #expect(volume.format == .raw)
+        }
+    }
+
+    @Test("Apple Virtualization rejects guest execution and IMDS before persisting a VM", arguments: [false, true])
+    func rejectUnsupportedAppleFeatures(exec: Bool) async throws {
+        try await withApp { app, _, _, project, image, token in
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "apple-unsupported", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default", hypervisorType: "apple_virtualization",
+                        guestAgentEnabled: exec, metadataSource: exec ? "iso" : "imds"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("apple_virtualization"))
+            }
+            #expect(try await VM.query(on: app.db).filter(\.$name == "apple-unsupported").count() == 0)
+        }
+    }
+
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
 
     private func addFirecrackerArtifacts(to image: Image, on db: any Database) async throws {

@@ -49,7 +49,7 @@ extension Reconciler {
 
             let needsReconfiguration: Bool
             switch entry.hypervisorType {
-            case .qemu:
+            case .qemu, .appleVirtualization:
                 needsReconfiguration = observed != entry.spec.networks
             case .firecracker:
                 // Firecracker cannot change MMDS's interface allow-list after
@@ -171,7 +171,11 @@ extension Reconciler {
                 entry.hypervisorType == .qemu
                 && (status == .shutdown || status == .created)
                 && entry.spec.cpus < observed.cpus
-            guard runningResize || stoppedVCPUShrink else { continue }
+            let stoppedAppleResize =
+                entry.hypervisorType == .appleVirtualization
+                && (status == .shutdown || status == .created)
+                && observed.differs(from: entry.spec)
+            guard runningResize || stoppedVCPUShrink || stoppedAppleResize else { continue }
             // Same staleness rule as the core diff: an older sync must never
             // undo a newer one, and an equal generation is drift correction —
             // which is deliberately *not* "already done". See the note above

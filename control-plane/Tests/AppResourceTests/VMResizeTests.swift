@@ -215,6 +215,23 @@ final class VMResizeTests {
         }
     }
 
+    @Test("Native Apple VMs reject online resize before mutating sizing")
+    func appleOnlineResizeRejected() async throws {
+        try await withResizeTestApp { app, _, vm, _, token in
+            vm.hypervisorType = .appleVirtualization
+            vm.status = .running
+            try await vm.save(on: app.db)
+            let originalGeneration = vm.generation
+            try await put(app, vm, token: token, body: ["cpu": 4]) { res in
+                #expect(res.status == .unprocessableEntity)
+                #expect(res.body.string.contains("Shut down"))
+            }
+            let unchanged = try #require(try await VM.find(vm.requireID(), on: app.db))
+            #expect(unchanged.cpu == vm.cpu)
+            #expect(unchanged.generation == originalGeneration)
+        }
+    }
+
     // MARK: - Resting VM
 
     @Test("Resizing a stopped VM records the desired sizing and raises the ceilings")

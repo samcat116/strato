@@ -10224,7 +10224,11 @@ components:
 
     HypervisorType:
       type: string
-      enum: [qemu, firecracker]
+      enum: [qemu, firecracker, apple_virtualization]
+      description: >-
+        QEMU/libvirt or Firecracker on Linux, or native Apple Virtualization
+        on macOS. Apple Virtualization requires matching host architecture,
+        local raw disks and ISO metadata; it has no guest exec or VM checkpoints.
     MetadataSource:
       type: string
       description: Where the VM reads its first-boot guest configuration.
@@ -16263,7 +16267,7 @@ components:
     AgentHypervisorType:
       type: string
       description: A hypervisor backend an agent can run VMs on.
-      enum: [qemu, firecracker]
+      enum: [qemu, firecracker, apple_virtualization]
 
     AgentHypervisorSupport:
       type: object

@@ -92,7 +92,16 @@ extension Agent {
         // Firecracker driver's in-memory reservation map cannot prove absence
         // across restarts, so real Firecracker uses the process/filesystem
         // check below instead. Simulation has no surviving host processes.
-        let types: [HypervisorType] = isSimulationMode ? HypervisorType.allCases : [.qemu]
+        let types: [HypervisorType]
+        if isSimulationMode {
+            types = HypervisorType.allCases
+        } else {
+            #if os(macOS)
+            types = [.appleVirtualization]
+            #else
+            types = [.qemu]
+            #endif
+        }
         var needsLibvirtFilesystemProof = false
         for type in types {
             guard let ids = await hypervisorServices[type]?.bootstrapWorkloadIDs() else {

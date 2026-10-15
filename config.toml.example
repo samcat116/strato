@@ -90,7 +90,8 @@ log_level = "info"
 
 # Select the network and hypervisor drivers advertised by this Linux agent.
 # network_mode = "ovn"          # "ovn" or "user"; default: "user"
-# hypervisor_type = "qemu"      # "qemu" or "firecracker"; default: "qemu"
+# hypervisor_type = "qemu"      # "qemu", "firecracker", or "apple_virtualization"
+# Default: qemu on Linux, apple_virtualization on macOS.
 
 # Hardware acceleration for QEMU VMs
 # When enabled (the default), VMs use KVM. When disabled, QEMU falls back to

@@ -5988,8 +5988,11 @@ export interface components {
          * @enum {string}
          */
         OperationStatus: "pending" | "succeeded" | "failed";
-        /** @enum {string} */
-        HypervisorType: "qemu" | "firecracker";
+        /**
+         * @description QEMU/libvirt or Firecracker on Linux, or native Apple Virtualization on macOS. Apple Virtualization requires matching host architecture, local raw disks and ISO metadata; it has no guest exec or VM checkpoints.
+         * @enum {string}
+         */
+        HypervisorType: "qemu" | "firecracker" | "apple_virtualization";
         /**
          * @description Where the VM reads its first-boot guest configuration.
          * @enum {string}
@@ -9121,7 +9124,7 @@ export interface components {
          * @description A hypervisor backend an agent can run VMs on.
          * @enum {string}
          */
-        AgentHypervisorType: "qemu" | "firecracker";
+        AgentHypervisorType: "qemu" | "firecracker" | "apple_virtualization";
         /** @description One hypervisor on an agent host, as probed at agent startup. */
         AgentHypervisorSupport: {
             type: components["schemas"]["AgentHypervisorType"];
