@@ -273,6 +273,37 @@ struct SchemaMigratorTests {
 
     // MARK: - Applied catalog compatibility (STR-323)
 
+    @Test("Both startup paths preserve a known retired data-only migration", arguments: [true, false])
+    func retiredDataCatalogStarts(runMigrations: Bool) async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            let historical = MigrationLog(name: "App.BackfillNetworkQuotaAccounting", batch: 9999)
+            try await historical.save(on: app.db)
+            let historicalID = try historical.requireID()
+            let org = try await TestDataBuilder(db: app.db).createOrganization(name: "Retired data history")
+            let quota = ResourceQuota(
+                name: "Do not replay cache refresh", organizationID: try org.requireID(),
+                maxVCPUs: 100, maxMemory: 1 << 30, maxStorage: 1 << 30, maxVMs: 100)
+            quota.networkCount = 37
+            quota.reservedVCPUs = 41
+            try await quota.save(on: app.db)
+
+            try await configure(app, environmentVariables: [SchemaMigrator.runMigrationsKey: String(runMigrations)])
+            #expect(app.readiness.migrationsComplete)
+            let logs = try await MigrationLog.query(on: app.db).filter(\.$name == historical.name).all()
+            #expect(logs.count == 1)
+            #expect(logs.first?.id == historicalID)
+            #expect(logs.first?.batch == 9999)
+            let unchanged = try #require(try await ResourceQuota.find(quota.requireID(), on: app.db))
+            #expect(unchanged.networkCount == 37)
+            #expect(unchanged.reservedVCPUs == 41)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     @Test("Both startup paths accept a supported applied catalog", arguments: [true, false])
     func supportedCatalogStarts(runMigrations: Bool) async throws {
         let app = try await Application.makeForTesting()
@@ -295,8 +326,12 @@ struct SchemaMigratorTests {
     @Test("A supported catalog advances through a known migration and verifies afterwards")
     func supportedCatalogAdvances() async throws {
         try await withTestApp { app in
+            try await MigrationLog(name: "App.BackfillNetworkQuotaAccounting", batch: 9998).save(on: app.db)
             let pending = CreatesProbeTable()
             app.migrations.add(pending)
+            await #expect(throws: SchemaMigrationError.self) {
+                try await SchemaMigrator.run(on: app, options: .init(runMigrations: false))
+            }
             try await SchemaMigrator.run(on: app, options: .init())
             try await SchemaMigrator.run(on: app, options: .init(runMigrations: false))
             #expect(try await MigrationLog.query(on: app.db).filter(\.$name == pending.name).count() == 1)
@@ -308,15 +343,18 @@ struct SchemaMigratorTests {
         }
     }
 
-    @Test("Both startup paths reject a newer applied catalog before readiness", arguments: [true, false])
-    func unsupportedCatalogStopsStartup(runMigrations: Bool) async throws {
+    @Test(
+        "Both startup paths reject a newer applied catalog before readiness", arguments: [true, false],
+        ["SchemaMigratorTests.NewerUnsupportedMigration", "App.BackfillNetworkQuotaAccountingV2"])
+    func unsupportedCatalogStopsStartup(runMigrations: Bool, migrationName: String) async throws {
         let app = try await Application.makeForTesting()
-        let newerMigration = CreatesNewerCatalog()
+        let newerMigration = CreatesNewerCatalog(name: migrationName)
         let pending = CreatesProbeTable()
         // Give the old binary a known pending migration too: unsupported history
         // must take precedence and normal startup must not run its pending DDL.
         app.migrations.add(pending)
         do {
+            try await MigrationLog(name: "App.BackfillNetworkQuotaAccounting", batch: 9998).save(on: app.db)
             // Model a newer build having committed additive DDL and its log
             // atomically; the older binary deliberately never registers it.
             try await app.db.withConnection { connection in
@@ -481,7 +519,7 @@ private struct CreatesInvalidTableDefinition: AsyncMigration {
 /// An additive migration from a future binary. An extra table does not prove
 /// the older binary understands the newer schema's complete contract.
 private struct CreatesNewerCatalog: AsyncMigration {
-    var name: String { "SchemaMigratorTests.NewerUnsupportedMigration" }
+    let name: String
 
     func prepare(on database: any Database) async throws {
         let sql = try #require(database as? any SQLDatabase)

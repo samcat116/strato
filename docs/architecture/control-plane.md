@@ -715,10 +715,18 @@ what makes the test harness safe.
     what keeps the connection budget at one: a migrator drawing its own
     connections while the lock sat on a pinned one would need a pool of ≥2 *per
     event loop*, and Vapor's Postgres pool defaults to exactly 1.
-- **Applied-catalog compatibility (STR-323)**: this binary supports exactly
+- **Applied-catalog compatibility (STR-323)**: this binary supports
   the migration names registered by `Application.registerMigrations()` in
   `Bootstrap/DatabaseBootstrap.swift`: the frozen `CurrentSchemaBaseline` plus
-  its registered forward migrations.
+  its registered forward migrations, together with explicitly reviewed retired
+  data-only migration records.
+  `App.BackfillNetworkQuotaAccounting` is the sole retired record currently
+  supported. Its implementation in `87b79418` refreshed cached quota counters
+  and performed no DDL; `da964334` removed its executable registration. The
+  current admission paths resync counters before quota decisions. Recognizing
+  this exact applied name preserves completed history without replaying its
+  backfill, rewriting its log row, or registering it as pending on fresh
+  databases. Other names, including similarly prefixed names, remain unknown.
   Both startup paths compare every `_fluent_migrations` name against that
   history before applying pending migrations or opening readiness. An unknown
   applied name is an unsupported catalog, even if its change looks additive;
