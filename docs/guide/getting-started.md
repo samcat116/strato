@@ -196,8 +196,9 @@ running the agent in Docker.
 
 Before opening the form, check these prerequisites:
 
-- Create or select a **project** in the header switcher. Organization
-  onboarding alone does not supply a selected project.
+- Confirm the **project** in the header switcher. Organization onboarding
+  creates a **Default Project**, which the UI selects when there is no saved
+  selection. Switch to another project or create one if needed.
 - In **Images**, import or upload an image and wait for **ready** status.
   Its architecture and hypervisor artifacts must match an online agent;
   see [images and storage](/architecture/storage).
@@ -205,8 +206,9 @@ Before opening the form, check these prerequisites:
   required backend. Installation of OVN chassis packages alone does not set
   up a site network; follow [agent networking](/deployment/agents) and the
   [networking architecture](/architecture/networking).
-- Choose a network for each VM interface. The form offers the global default
-  network, but reachability still depends on the host/site configuration.
+- Create a network in the selected project if it has none, then choose a
+  project network for each VM interface. Projects do not receive an automatic
+  network; reachability also depends on the host/site configuration.
 
 Then:
 

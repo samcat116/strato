@@ -930,7 +930,14 @@ staging and retain aborted output and private prepared image inputs. Updater
 aborts retain their unique workspace and cannot swap the live binary. NoCloud
 keeps its existing `.building` ownership refusal. Sandbox ext4 staging and RBD
 mutations persist building markers before launch; RBD markers are scoped to
-the image coordinates the command touches. An unconfirmed abort leaves
+the image coordinates the command touches. Firecracker's kernel RBD mapping
+also records a durable refusal before map, because an aborted map may already
+have created a device without reporting its path. This refusal survives restart
+and covers both access modes and credential choices for the same image.
+Kernel-map recovery requires confirming the map process stopped, inspecting
+`rbd device list`, and verifying/recovering the exact cluster/pool/namespace/image
+device before removing its marker; process exit does not unmap a kernel device.
+An unconfirmed abort leaves
 it in place and later reuse is blocked. Recovery requires establishing that
 the builder/remote operation has stopped before removing the retained staging
 or marker. Neither age nor expiry authorizes automatic cleanup. Normal command
