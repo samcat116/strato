@@ -1,0 +1,78 @@
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  h_a84d4ff76cadd1 56,92,104-105,175-176,184,322-339,400,408,427-432
+agent/Sources/StratoAgentCore/GuestAgentProbe.swift
+  h_a84d4ff76cadd1 1-42
+agent/Sources/StratoAgentRuntime/Agent+GuestAgentObservation.swift
+  h_a84d4ff76cadd1 1-39
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  h_a84d4ff76cadd1 202
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  h_a84d4ff76cadd1 435-436
+agent/Sources/StratoAgentRuntime/Agent.swift
+  h_a84d4ff76cadd1 277-278
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  h_a84d4ff76cadd1 628,634-635,831
+agent/Tests/StratoAgentTests/GuestAgentBootstrapTests.swift
+  h_a84d4ff76cadd1 1-102
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  h_a84d4ff76cadd1 66-83,126-132,178
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  h_a84d4ff76cadd1 121
+control-plane/Sources/App/Migrations/AddGuestAgentObservationToVM.swift
+  h_a84d4ff76cadd1 1-13
+control-plane/Sources/App/Models/vm.swift
+  h_a84d4ff76cadd1 192-194,747,843
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  h_a84d4ff76cadd1 85
+control-plane/Sources/App/Services/WorkloadObservedMerge.swift
+  h_a84d4ff76cadd1 44-54
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 10077-10081,10290-10293,10322-10331
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  h_a84d4ff76cadd1 13,67
+control-plane/Tests/AppResourceTests/VMGuestAgentExposureTests.swift
+  h_a84d4ff76cadd1 1-59
+control-plane/web/e2e/vm-exec.spec.ts
+  h_a84d4ff76cadd1 3,18,99
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  h_a84d4ff76cadd1 68,253,293,547-548
+control-plane/web/src/components/vms/create-vm-guest-options-fields.test.tsx
+  h_a84d4ff76cadd1 1-34
+control-plane/web/src/components/vms/create-vm-guest-options-fields.tsx
+  h_a84d4ff76cadd1 23-24,45-46,230-255
+control-plane/web/src/components/vms/vm-detail-page.tsx
+  h_a84d4ff76cadd1 38,119,358,360-370
+control-plane/web/src/components/vms/vm-guest-agent-card.test.ts
+  h_a84d4ff76cadd1 1-24
+control-plane/web/src/components/vms/vm-guest-agent-card.tsx
+  h_a84d4ff76cadd1 1-41
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 5872,5960,5974-5979
+docs/architecture/agent.md
+  h_a84d4ff76cadd1 663-697
+scripts/test-guest-agent-bootstrap.py
+  h_a84d4ff76cadd1 1-77
+shared/Sources/StratoShared/CloudInitUserData.swift
+  h_a84d4ff76cadd1 24-25,29-30
+shared/Sources/StratoShared/GuestAgentBootstrap.swift
+  h_a84d4ff76cadd1 1-104
+shared/Sources/StratoShared/GuestAgentObservation.swift
+  h_a84d4ff76cadd1 1-12
+shared/Sources/StratoShared/InstanceMetadata.swift
+  h_a84d4ff76cadd1 122-123,192,208,235
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  h_a84d4ff76cadd1 1319,1344,1357
+shared/Tests/StratoSharedTests/GuestAgentBootstrapTests.swift
+  h_a84d4ff76cadd1 1-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "87c0ad2449771d5ec1a270397428c9da10c0b694",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

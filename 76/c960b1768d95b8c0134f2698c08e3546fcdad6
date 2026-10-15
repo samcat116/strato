@@ -1,0 +1,19 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_0226cff00d1a8c::t_c9ab723ec6f502 163-173,175,177-178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "76c960b1768d95b8c0134f2698c08e3546fcdad6",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

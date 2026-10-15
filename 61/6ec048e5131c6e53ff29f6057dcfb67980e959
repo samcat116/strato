@@ -1,0 +1,52 @@
+control-plane/Sources/App/Models/SandboxNetworkInterface.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 1-63
+SwiftFirecracker/Tests/SwiftFirecrackerTests/FirecrackerAdoptionTests.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 1-236
+control-plane/Sources/App/Migrations/CreateSandboxInterfaceAddresses.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 1-47
+control-plane/Sources/App/Services/SandboxSpecBuilder.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 1-44
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 25-30
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 4-9,21-27,32-40,77,123,132-182,202-211,235-284
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 503-676
+control-plane/Sources/App/Models/SandboxInterfaceAddress.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 1-94
+control-plane/Sources/App/Services/AgentService.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 1578-1586,1592-1593,1616-1619,1642-1648,1652,1842,1844-1847,1895-1901
+control-plane/Sources/App/Services/IPAMService.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 51-56,61-66,72,114-121,131
+control-plane/Sources/App/Migrations/CreateSandboxNetworkInterface.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 1-37
+control-plane/Sources/App/configure.swift
+  s_b120d599dfc41b::t_89e49d9f48602a 404
+  s_b120d599dfc41b::t_a7d2d599ee2049 399-403
+control-plane/Sources/App/Models/Sandbox.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 68-73,212-216,226
+docs/architecture/sandboxes.md
+  s_b120d599dfc41b::t_a7d2d599ee2049 13-17,43-45
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 334-389,429-483
+  s_b120d599dfc41b::t_65b8e72eacf123 484-485
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_b120d599dfc41b::t_a7d2d599ee2049 299-300,302-305,331-394
+  s_b120d599dfc41b::t_37148c777433a8 395
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "616ec048e5131c6e53ff29f6057dcfb67980e959",
+  "prompts": {},
+  "sessions": {
+    "s_b120d599dfc41b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a1c557cb-2f28-4262-9548-463cb2d341e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

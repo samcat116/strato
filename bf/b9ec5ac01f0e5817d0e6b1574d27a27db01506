@@ -1,0 +1,19 @@
+.github/workflows/build.yaml
+  s_3783100b98d1b5::t_28b729929327d1 219-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bfb9ec5ac01f0e5817d0e6b1574d27a27db01506",
+  "prompts": {},
+  "sessions": {
+    "s_3783100b98d1b5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b05595c-3b5f-4cfc-b734-2d2daa1f9a52",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

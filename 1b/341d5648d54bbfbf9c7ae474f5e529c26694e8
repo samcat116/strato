@@ -1,0 +1,23 @@
+control-plane/web/src/components/layout/nav.test.ts
+  s_bc3653887f7ac0::t_f3f7f89a529697 2,16
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_bc3653887f7ac0::t_207ce9a2aee286 158
+shared/Tests/StratoSharedTests/EnumDecodingTests.swift
+  s_bc3653887f7ac0::t_47144c8e8b2709 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1b341d5648d54bbfbf9c7ae474f5e529c26694e8",
+  "prompts": {},
+  "sessions": {
+    "s_bc3653887f7ac0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ea64-a5fa-7ec1-a946-652bbb50916c",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

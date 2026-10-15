@@ -1,0 +1,24 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_8abe30add70fdf::t_2cf9faf8d1128b 549-550
+  s_8abe30add70fdf::t_28dfdfd86cd723 490
+  s_8abe30add70fdf::t_3c172f4153c2b0 564-569,571-577
+  s_8abe30add70fdf::t_f3f20421217805 513-519,521-527
+control-plane/Sources/App/Services/AgentService.swift
+  s_8abe30add70fdf::t_1a6c0974276b66 300-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "74ec527c879e5e9f373bb946020f61a6bd7560ff",
+  "prompts": {},
+  "sessions": {
+    "s_8abe30add70fdf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4aec5e02-e8c8-426c-bc3d-1d334f0a14b2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

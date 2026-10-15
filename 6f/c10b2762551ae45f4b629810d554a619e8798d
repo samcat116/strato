@@ -1,0 +1,62 @@
+control-plane/web/src/components/auth/login-form.tsx
+  s_8175a76a1576f0::t_83137de8f5666a 4,6,19-20,28-36,76-120,132-138,200-281
+control-plane/web/src/components/oidc-providers/index.ts
+  s_8175a76a1576f0::t_83137de8f5666a 1-2
+control-plane/web/src/lib/hooks/use-oidc-providers.ts
+  s_8175a76a1576f0::t_83137de8f5666a 1-66
+control-plane/web/src/types/api.ts
+  s_8175a76a1576f0::t_83137de8f5666a 363-425
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_8175a76a1576f0::t_b719f907abe3d0 79-81
+  s_8175a76a1576f0::t_318bad08fa349d 103-105,112-116,120-140,142-159
+control-plane/web/src/components/oidc-providers/oidc-provider-dialog.tsx
+  s_8175a76a1576f0::t_83137de8f5666a 1-349
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_8175a76a1576f0::t_83137de8f5666a 25-54
+control-plane/web/src/lib/api/oidc-providers.ts
+  s_8175a76a1576f0::t_83137de8f5666a 1-55
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_8175a76a1576f0::t_83137de8f5666a 182-184,186,372-385
+  s_8175a76a1576f0::t_e45d626a78515f 239-270,288-319
+control-plane/web/src/lib/api/index.ts
+  s_8175a76a1576f0::t_83137de8f5666a 16
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_8175a76a1576f0::t_83137de8f5666a 4-7,608-610,628-630,727-738,765-766
+control-plane/web/src/lib/hooks/index.ts
+  s_8175a76a1576f0::t_83137de8f5666a 46-52
+  s_8175a76a1576f0::t_0faba6c977dfa8 45
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_8175a76a1576f0::t_83137de8f5666a 11-16,18-29,31-41,43-46
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_8175a76a1576f0::t_83137de8f5666a 38-39,42
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_8175a76a1576f0::t_3528ade0b4ca50 586-587,591
+  s_8175a76a1576f0::t_7f9e19c0e2ddfc 508-509,518
+  s_8175a76a1576f0::t_e247f89c1459ad 539,544
+  s_8175a76a1576f0::t_0f1dc0d5f58892 559,568,572
+  s_8175a76a1576f0::t_83137de8f5666a 1-507,510-517,519-538,540-543,545-558,560-567,569-571,573-585,588-590,592-607
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_8175a76a1576f0::t_83137de8f5666a 2,31-34,150-163,183-198,201-208,247,266,268-284,286-287,290-299,317-371,596-599,601-602,605-608,618-621
+.github/workflows/main-build.yaml
+  s_8175a76a1576f0::t_83137de8f5666a 130-132,134-137,160-162,164-167
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_8175a76a1576f0::t_83137de8f5666a 19,280
+control-plane/web/src/components/oidc-providers/oidc-providers-section.tsx
+  s_8175a76a1576f0::t_83137de8f5666a 1-324
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6fc10b2762551ae45f4b629810d554a619e8798d",
+  "prompts": {},
+  "sessions": {
+    "s_8175a76a1576f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1080cc85-15d2-47f7-a8fa-3e986c31849d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

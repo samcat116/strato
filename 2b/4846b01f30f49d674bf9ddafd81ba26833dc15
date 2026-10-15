@@ -1,0 +1,62 @@
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  h_a84d4ff76cadd1 52-54,57-58,69,73-74,81
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  h_a84d4ff76cadd1 36-38
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  h_a84d4ff76cadd1 77-78,122-123,166-167,419-426
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  h_a84d4ff76cadd1 87,138,164,169,173,181,209-210,230,248-250,276-277,294,299-300
+control-plane/Sources/App/Controllers/NetworkController.swift
+  h_a84d4ff76cadd1 212-214,450,709-710,713-717
+control-plane/Sources/App/Controllers/VMController.swift
+  h_a84d4ff76cadd1 215-217
+control-plane/Sources/App/DatabaseSessionTimeouts.swift
+  h_a84d4ff76cadd1 1-47
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  h_a84d4ff76cadd1 38-41,45,74,91-92,107,109,113,119,148,151,153,170-172,183,286-298,403,420-430
+control-plane/Sources/App/Middleware/DatabaseTransientErrorMiddleware.swift
+  h_a84d4ff76cadd1 1-15
+control-plane/Sources/App/Models/SCIMExternalID.swift
+  h_a84d4ff76cadd1 103-105,119-120,126-131
+control-plane/Sources/App/SchemaMigrator.swift
+  h_a84d4ff76cadd1 101,190,201,455
+control-plane/Sources/App/Services/AdvisoryLock.swift
+  h_a84d4ff76cadd1 170-184
+control-plane/Sources/App/Services/DatabaseTransactionRetry.swift
+  h_a84d4ff76cadd1 1-111
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  h_a84d4ff76cadd1 39-45
+control-plane/Sources/App/Workflows/SandboxCreationWorkflow.swift
+  h_a84d4ff76cadd1 377-379,383
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  h_a84d4ff76cadd1 389-391,398
+control-plane/Tests/AppIdentityTests/SCIMExternalIDRetryTests.swift
+  h_a84d4ff76cadd1 1-232
+control-plane/Tests/AppPlatformTests/ControlPlaneConfigurationTests.swift
+  h_a84d4ff76cadd1 9-40
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  h_a84d4ff76cadd1 138-143,148-153,167-172
+control-plane/Tests/AppPlatformTests/DatabaseTransactionRetryTests.swift
+  h_a84d4ff76cadd1 1-207
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  h_a84d4ff76cadd1 2-3,131-244
+deploy/compose/docker-compose.yml
+  h_a84d4ff76cadd1 271-272
+docs/deployment/docker-compose.md
+  h_a84d4ff76cadd1 247-248,258-284
+helm/strato-control-plane/templates/deployment.yaml
+  h_a84d4ff76cadd1 192-195
+helm/strato-control-plane/values.yaml
+  h_a84d4ff76cadd1 343-345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b4846b01f30f49d674bf9ddafd81ba26833dc15",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

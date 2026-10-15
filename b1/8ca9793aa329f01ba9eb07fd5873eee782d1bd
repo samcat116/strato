@@ -1,0 +1,22 @@
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_a0fe2694a164dd::t_0f0c39eb5184b7 132-133,135
+  s_a0fe2694a164dd::t_9c2b40703a190f 89-96
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_a0fe2694a164dd::t_b55271a9597658 140-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b18ca9793aa329f01ba9eb07fd5873eee782d1bd",
+  "prompts": {},
+  "sessions": {
+    "s_a0fe2694a164dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8ad5bf0c-bd3e-45ed-b213-4b2727f1b5cb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

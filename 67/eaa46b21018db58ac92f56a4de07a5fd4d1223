@@ -1,0 +1,21 @@
+control-plane/Sources/App/Migrations/MakeImageArtifactsAuthoritative.swift
+  s_b46c3107f6ba4b::t_e1dec8777d8539 35-36,51-52,56-57,103-104
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_b46c3107f6ba4b::t_e1dec8777d8539 1188-1189,1202-1203,1217-1218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "67eaa46b21018db58ac92f56a4de07a5fd4d1223",
+  "prompts": {},
+  "sessions": {
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+helm/strato-control-plane/values.yaml
+  s_e8058c4ef41c93::t_199a344c1264d7 894-914
+docs/architecture/control-plane.md
+  s_e8058c4ef41c93::t_277bb42b21ae89 208-215
+docs/architecture/overview.md
+  s_e8058c4ef41c93::t_5c364fe02d7894 140-146
+helm/strato-control-plane/templates/NOTES.txt
+  s_e8058c4ef41c93::t_d12c155911011e 102-111,116-118
+  s_e8058c4ef41c93::t_e20aa06996408c 112-115
+.github/workflows/helm-test.yml
+  s_e8058c4ef41c93::t_a1b652060769b3 195
+  s_e8058c4ef41c93::t_5d69de674ab091 186-194,196-214
+docs/deployment/kubernetes.md
+  s_e8058c4ef41c93::t_9c1e8900eb39f9 99-121
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_e8058c4ef41c93::t_fffc561459a0c7 30-32,34,36
+docs/deployment/docker-compose.md
+  s_e8058c4ef41c93::t_809639ae9c300e 128-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "1602ef443118cc7c6d6b80f8e039ad622b38d73f",
+  "prompts": {},
+  "sessions": {
+    "s_e8058c4ef41c93": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57e9ab48-2479-4894-b271-c729042fa9b3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

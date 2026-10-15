@@ -1,0 +1,66 @@
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_06bf323f5520ac::t_b374615bebd628 366-370
+  s_06bf323f5520ac::t_55763b9e124a26 244-298
+  s_06bf323f5520ac::t_326a34e399af49 36-47,58-60
+  s_06bf323f5520ac::t_6f2c52456e6ce9 357-364
+  s_06bf323f5520ac::t_7b7e5670ce75cb 365
+control-plane/Sources/App/configure.swift
+  s_06bf323f5520ac::t_db2e1309c4a884 146-148
+control-plane/Sources/App/Services/AgentService.swift
+  s_06bf323f5520ac::t_991d9e2b39f17b 143-145
+  s_06bf323f5520ac::t_8650ae5788676b 119-121
+  s_06bf323f5520ac::t_6ab183fb922039 635-638
+  s_06bf323f5520ac::t_70f4935480f34a 873-875
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_06bf323f5520ac::t_c4a0dc253b0414 55-118,120
+agent/Sources/StratoAgent/Agent.swift
+  s_06bf323f5520ac::t_b7d1e86b291e45 440-456,463-466
+  s_06bf323f5520ac::t_eea330531485ff 86-88
+  s_06bf323f5520ac::t_ce478b7189959e 176,180,185
+  s_06bf323f5520ac::t_72781810c52c65 575-578,580-597
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_06bf323f5520ac::t_95b055a3ad5ad5 206-207,210-211,215
+  s_06bf323f5520ac::t_0205f31dd6599c 174-176
+  s_06bf323f5520ac::t_bb8d7bf07d9c91 4
+  s_06bf323f5520ac::t_fa90c37deb19a6 33-77
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_06bf323f5520ac::t_50c9fd3990857c 84-85,87-95,105-108,118-120
+  s_06bf323f5520ac::t_b6ac90c9964f96 122-136
+  s_06bf323f5520ac::t_877c6472177549 121
+control-plane/web/src/types/api.ts
+  s_06bf323f5520ac::t_c818f9bda45308 70-94,103-105
+control-plane/Sources/App/Migrations/ReplaceAgentHypervisorTypeWithHypervisors.swift
+  s_06bf323f5520ac::t_65970214833fb7 1-8,12-15,19,23,27-33,37,41,45-48
+  s_06bf323f5520ac::t_eeb767284a4d31 9-11,16-18,20-22,24-26,34-36,38-40,42-44
+docs/architecture/scheduler.md
+  s_06bf323f5520ac::t_b8cd17706fe73f 11
+control-plane/Sources/App/Models/Agent.swift
+  s_06bf323f5520ac::t_d60d6deb75866b 169-171,188-190
+  s_06bf323f5520ac::t_a09f518909d8ff 136-138
+  s_06bf323f5520ac::t_0d9ae7147549d3 53-63,66,75-77,92-94
+control-plane/Tests/AppTests/SchedulerServiceTests.swift
+  s_06bf323f5520ac::t_02a3dbbea69c8b 3,11-16,25-26,40-41,53-64
+  s_06bf323f5520ac::t_96be9450821b16 275-340
+agent/Tests/StratoAgentTests/HypervisorProbeTests.swift
+  s_06bf323f5520ac::t_7b0bf753d31524 1-3,5-103
+  s_06bf323f5520ac::t_40225c4a7d780a 4
+agent/Sources/StratoAgentCore/HypervisorProbe.swift
+  s_06bf323f5520ac::t_fef2db99d9929b 93
+  s_06bf323f5520ac::t_40225c4a7d780a 1-92,94-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9b8f414f9b21efdce1efb2b5829143b63f3660f4",
+  "prompts": {},
+  "sessions": {
+    "s_06bf323f5520ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "432e2f03-c5be-44b6-b08c-3f8845c22fbd",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

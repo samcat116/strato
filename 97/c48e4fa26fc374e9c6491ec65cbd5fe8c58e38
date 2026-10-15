@@ -1,0 +1,29 @@
+deploy/compose/docker-compose.yml
+  s_2bc4036ae522e0::t_5f48b3319edd83 254-256
+  s_2bc4036ae522e0::t_a65da84557e7e5 335
+docs/deployment/docker-compose.md
+  s_2bc4036ae522e0::t_fd5ad2818244bb 80-81,84,87-88
+  s_2bc4036ae522e0::t_4f359ae16248f6 89
+deploy/compose/.env.example
+  s_2bc4036ae522e0::t_e5aeb2b17a26d8 45-47
+deploy/compose/setup.sh
+  s_2bc4036ae522e0::t_3533a951c86d08 137-140
+deploy/compose/README.md
+  s_2bc4036ae522e0::t_a529f7b083b4a7 29-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "97c48e4fa26fc374e9c6491ec65cbd5fe8c58e38",
+  "prompts": {},
+  "sessions": {
+    "s_2bc4036ae522e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a99afcca-115b-46bb-825d-5f30bc2fa553",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

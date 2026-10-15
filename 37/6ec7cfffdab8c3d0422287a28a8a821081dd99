@@ -1,0 +1,33 @@
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_5b300dc4e2e5e1::t_5b91573ea9ca6e 1023-1024
+control-plane/Tests/AppTests/OIDCAuthFlowTests.swift
+  s_5b300dc4e2e5e1::t_7abee451891cfe 679-688
+  s_5b300dc4e2e5e1::t_a3cf4d173abb84 676-678
+  s_c669e87d33bda4::t_b1caff51be347d 668-675
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_5b300dc4e2e5e1::t_fb2edafd1a0663 56-87,91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "376ec7cfffdab8c3d0422287a28a8a821081dd99",
+  "prompts": {},
+  "sessions": {
+    "s_5b300dc4e2e5e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01d2145c-30d5-4f69-b3bd-e6132e9b7ade",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_c669e87d33bda4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a7db489db99720aa5",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

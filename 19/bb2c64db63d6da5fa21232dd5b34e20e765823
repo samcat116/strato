@@ -1,0 +1,36 @@
+control-plane/Sources/App/IAM/AgentAuthorization.swift
+  s_1dd9ddf4b6d7c1::t_19b04246fef0a7 1-17
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_1dd9ddf4b6d7c1::t_19b04246fef0a7 581,669,686,820,930,1013,1201,1246
+control-plane/Tests/AppPlatformTests/StorageDeviceControllerTests.swift
+  s_1dd9ddf4b6d7c1::t_244b4d828799bc 1-97
+control-plane/Sources/App/Controllers/StorageDeviceController.swift
+  s_1dd9ddf4b6d7c1::t_5fe21aaa24dcfa 1-244
+control-plane/Sources/App/openapi.yaml
+  s_1dd9ddf4b6d7c1::t_7ded2cd984e832 203-204,5235-5304
+  s_1dd9ddf4b6d7c1::t_3fd73d4344df3f 14370-14469,16791-16801,16803,16805
+  s_1dd9ddf4b6d7c1::t_31b5734dc25125 16802
+  s_1dd9ddf4b6d7c1::t_5d6089a8e75311 16804
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_1dd9ddf4b6d7c1::t_5fe21aaa24dcfa 132
+control-plane/web/src/types/openapi.ts
+  s_1dd9ddf4b6d7c1::t_f09d1cb38675ef 3681-3723,8101-8142,9228-9234,16376-16441
+control-plane/Sources/App/routes.swift
+  s_1dd9ddf4b6d7c1::t_5fe21aaa24dcfa 52-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "19bb2c64db63d6da5fa21232dd5b34e20e765823",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

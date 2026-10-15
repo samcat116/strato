@@ -1,0 +1,91 @@
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_9d764f706ace50::t_98204c8b30d299 102-103,112-113,1041-1106
+  s_9d764f706ace50::t_99476d1ede031a 1107-1109
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_9d764f706ace50::t_98204c8b30d299 183-185,192-193,200
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_9d764f706ace50::t_98204c8b30d299 259-288
+control-plane/Sources/App/Services/ResourceFinalizerService.swift
+  s_9d764f706ace50::t_98204c8b30d299 307-310,349-352
+agent/Tests/StratoAgentTests/ResourceTelemetryProbeTests.swift
+  s_9d764f706ace50::t_98204c8b30d299 1-162
+control-plane/web/src/types/openapi.ts
+  s_9d764f706ace50::t_98204c8b30d299 6011-6016,6199-6204,8539-8544,8649-8730
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  s_9d764f706ace50::t_98204c8b30d299 185-186
+control-plane/Sources/App/Services/WorkloadObservedMerge.swift
+  s_9d764f706ace50::t_98204c8b30d299 58-72,91,456-469,477
+agent/Sources/StratoAgentRuntime/Agent+Lifecycle.swift
+  s_9d764f706ace50::t_98204c8b30d299 482-484,599-600
+  s_9d764f706ace50::t_6e72369054060e 601
+control-plane/Sources/App/openapi.yaml
+  s_9d764f706ace50::t_98204c8b30d299 10365-10370,10753-10758,15332-15339,15548-15720
+  s_9d764f706ace50::t_39b9edd89e8082 15721
+shared/Sources/StratoShared/WireProtocol.swift
+  s_9d764f706ace50::t_d22bcbb16c06a9 15-16
+  s_9d764f706ace50::t_98204c8b30d299 14
+agent/Sources/StratoAgentCore/ResourceTelemetryProbe.swift
+  s_9d764f706ace50::t_98204c8b30d299 1-371
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_9d764f706ace50::t_98204c8b30d299 726-1050,1091-1100
+  s_9d764f706ace50::t_5e45f276cd73c9 1101
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_9d764f706ace50::t_98204c8b30d299 336-368
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  s_9d764f706ace50::t_98204c8b30d299 193-310
+  s_3af79fd703f9fa::t_e0aacf9ef30e51 311
+control-plane/Sources/App/Migrations/AddResourceContentionTelemetry.swift
+  s_9d764f706ace50::t_98204c8b30d299 1-36
+agent/Sources/StratoAgentRuntime/Agent.swift
+  s_9d764f706ace50::t_98204c8b30d299 319-324
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_9d764f706ace50::t_98204c8b30d299 1318-1321,1337,1349,1380-1381,1391-1392,1402,1727-1730,1784,1800
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_9d764f706ace50::t_98204c8b30d299 13,67
+docs/deployment/observability.md
+  s_9d764f706ace50::t_98204c8b30d299 239-300,557-590,715-730
+  s_9d764f706ace50::t_81365c6483d250 731
+shared/Sources/StratoShared/ResourceTelemetry.swift
+  s_9d764f706ace50::t_98204c8b30d299 1-246
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  s_9d764f706ace50::t_98204c8b30d299 84
+control-plane/Sources/App/Models/Agent.swift
+  s_9d764f706ace50::t_98204c8b30d299 144-154,286-287,313-314,701-704,807-808
+control-plane/Sources/App/Models/Sandbox.swift
+  s_9d764f706ace50::t_98204c8b30d299 106-112,438-440,497-498
+agent/Sources/StratoAgentRuntime/Agent+ResourceTelemetry.swift
+  s_9d764f706ace50::t_98204c8b30d299 1-80
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_9d764f706ace50::t_98204c8b30d299 197-200
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  s_9d764f706ace50::t_98204c8b30d299 571,590,626-636
+  s_9d764f706ace50::t_fce06bb01c5235 637
+control-plane/Sources/App/Models/vm.swift
+  s_9d764f706ace50::t_98204c8b30d299 219-227,755-758,848-849
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  s_9d764f706ace50::t_98204c8b30d299 436,460,534,652-653,672-673
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "68b6aaec19199cc065ae8fd26ad85cfa5021b08e",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9d764f706ace50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-dda9-7730-90f4-480f55b6b230",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

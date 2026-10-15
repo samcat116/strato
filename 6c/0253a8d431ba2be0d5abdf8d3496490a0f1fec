@@ -1,0 +1,94 @@
+control-plane/Sources/App/Models/User.swift
+  s_c0acd110d509fb::t_56941303155c2f 40-49,91-92
+control-plane/Package.swift
+  s_c0acd110d509fb::t_56941303155c2f 29-33,88
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-268
+control-plane/Sources/App/Services/SSFService.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-400
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_c0acd110d509fb::t_56941303155c2f 356-360,363
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_c0acd110d509fb::t_56941303155c2f 36-37,40
+control-plane/Sources/App/Services/AgentService.swift
+  s_c0acd110d509fb::t_56941303155c2f 1053-1056
+deploy/compose/prometheus.yml
+  s_c0acd110d509fb::t_56941303155c2f 1-14
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_c0acd110d509fb::t_56941303155c2f 131-132
+deploy/agent/install.sh
+  s_c0acd110d509fb::t_56941303155c2f 17-23,28,32,36-52,54-55,69-81,88-96,112-120,131-141,157-158,167-178,192,252-333,353-356,375-380,434-440,442-443,448,450,467-722,745-756,798-800
+deploy/compose/docker-compose.yml
+  s_c0acd110d509fb::t_56941303155c2f 12-14,123-162,197-201,297-300,354-357,415-416
+helm/strato-control-plane/values.yaml
+  s_c0acd110d509fb::t_56941303155c2f 440-443
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_c0acd110d509fb::t_56941303155c2f 982-997,1010,1012-1013,1038,1040-1041,1116-1163
+control-plane/Tests/AppTests/SSFTests.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-691
+control-plane/Package.resolved
+  s_c0acd110d509fb::t_56941303155c2f 2,445-450
+  s_c0acd110d509fb::t_126a8c1ff08f53 451-452
+control-plane/Sources/App/Controllers/UserController.swift
+  s_c0acd110d509fb::t_56941303155c2f 186-197,208-211,214,271-278,281
+deploy/compose/README.md
+  s_c0acd110d509fb::t_56941303155c2f 39-45,69-73
+control-plane/Sources/App/Middleware/UserSecurityMiddleware.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-105
+agent/Package.resolved
+  s_c0acd110d509fb::t_56941303155c2f 189
+deploy/compose/spiffe/bootstrap.sh
+  s_c0acd110d509fb::t_56941303155c2f 17-20,23,39,45,51-67
+docs/.vitepress/config.mts
+  s_c0acd110d509fb::t_56941303155c2f 55
+control-plane/Sources/App/Migrations/CreateSSFStream.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-41
+docs/deployment/shared-signals.md
+  s_c0acd110d509fb::t_56941303155c2f 1-59
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_c0acd110d509fb::t_56941303155c2f 64-67,93-96,102,106,115-118
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_c0acd110d509fb::t_56941303155c2f 81-86,90
+agent/Package.swift
+  s_c0acd110d509fb::t_56941303155c2f 112
+docs/deployment/agents.md
+  s_c0acd110d509fb::t_56941303155c2f 28-31,164-191
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_c0acd110d509fb::t_56941303155c2f 181-196,199-201,213-216,227-230
+control-plane/Dockerfile
+  s_c0acd110d509fb::t_56941303155c2f 35-38
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_c0acd110d509fb::t_56941303155c2f 282-285
+deploy/compose/spiffe/envoy.yaml
+  s_c0acd110d509fb::t_56941303155c2f 67-114,125-132,190-219
+  s_c0acd110d509fb::t_192373a30cbd3f 220
+control-plane/Sources/App/Models/SSFStream.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-275
+control-plane/Sources/App/configure.swift
+  s_c0acd110d509fb::t_56941303155c2f 136-141,202-206,312-314,535-538
+  s_c0acd110d509fb::t_c0a88f82380c26 539
+control-plane/Sources/App/Migrations/AddSecurityStateToUser.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-31
+control-plane/Sources/App/Services/SSFSignalProcessor.swift
+  s_c0acd110d509fb::t_56941303155c2f 1-297
+control-plane/Sources/App/routes.swift
+  s_c0acd110d509fb::t_56941303155c2f 41-43
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_c0acd110d509fb::t_56941303155c2f 106-109,111-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6c0253a8d431ba2be0d5abdf8d3496490a0f1fec",
+  "prompts": {},
+  "sessions": {
+    "s_c0acd110d509fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6695b3a-3d82-40a8-b418-a286fbf9d4a1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

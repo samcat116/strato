@@ -1,0 +1,27 @@
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_7051b6d9c6ec87::t_c620469bd97e41 470-475
+  s_7051b6d9c6ec87::t_ddead32687b942 264-274,286-302,450-469,476-486
+  s_7051b6d9c6ec87::t_c43a432ff7103c 275-285
+agent/Sources/StratoAgentCore/NodeDependencyHostAdapters.swift
+  s_7051b6d9c6ec87::t_43792bb0faf816 83-87,97-99
+  s_7051b6d9c6ec87::t_b5a44f2854d168 76-82,88-96,154,161-162,168
+docs/architecture/agent-dependency-management.md
+  s_7051b6d9c6ec87::t_b5a44f2854d168 74
+  s_7051b6d9c6ec87::t_43792bb0faf816 75-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d2ad0ddae952ff169a382a6b151cb4a0290698e1",
+  "prompts": {},
+  "sessions": {
+    "s_7051b6d9c6ec87": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-7a5d-75f2-b785-93842a4bc0e2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

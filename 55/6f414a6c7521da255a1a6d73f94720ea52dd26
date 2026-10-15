@@ -1,0 +1,157 @@
+helm/strato-control-plane/README.md
+  s_97aa0ae9838634::t_a1f15938b6c478 43-60
+control-plane/Tests/AppPlatformTests/AdvisoryLockTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-290
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 657
+control-plane/Tests/AppPlatformTests/FloatingIPControllerTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 106-107
+control-plane/Tests/AppPlatformTests/SecurityGroupControllerTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 98,138
+control-plane/Tests/AppPlatformTests/MACAllocatorTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-163
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 30,150-154,164-168,205-209,228-232,247-251,272-276,297-301,311-313,330-334,338,358-362,366-370,383-387,391-395,399-403,418-422,426,443-445,452-454,483,513,545,558-559
+control-plane/Sources/App/Migrations/CreateMACAddressLedger.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-155
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 204-206,355-356
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_97aa0ae9838634::t_a1f15938b6c478 58-74,595-607,1722-1737,2210-2217,2322-2329,3009-3020
+  s_97aa0ae9838634::t_303bd79682742d 3021-3022
+helm/strato-control-plane/values.yaml
+  s_97aa0ae9838634::t_a1f15938b6c478 7-11
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 125,959,1142
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 115-119,121-122,165
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 151-154,158-160,163-174
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 80,949
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1406-1407,1455,1464,1471-1473,1675
+.github/workflows/helm-test.yml
+  s_97aa0ae9838634::t_a1f15938b6c478 101-122
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 675-676,716-718,720,723
+docs/deployment/kubernetes.md
+  s_97aa0ae9838634::t_a1f15938b6c478 226,228-271
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 78-79,81-82
+control-plane/Sources/App/Controllers/VMController.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 278-280,282,285,1095-1096,1100-1102,1104,1107
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 242,584
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 379-382
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 192-193
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 65-66,100-126
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 427,470,1041,1063,1113,1133
+helm/strato-control-plane/templates/deployment.yaml
+  s_97aa0ae9838634::t_a1f15938b6c478 12-17
+control-plane/Sources/App/Services/MACAddressAudit.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-136
+shared/Sources/StratoShared/IPAddressing.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 18-77
+agent/Sources/StratoAgent/NetworkServiceMacOS.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 49-58
+control-plane/Sources/App/Services/ResolverAddressAllocator.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 103-105,107-108
+control-plane/Sources/App/SchemaMigrator.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 33,56-58,141,146,156,161-162,310-313,318,322-342
+docs/architecture/networking.md
+  s_97aa0ae9838634::t_a1f15938b6c478 38-41,118-129
+  s_97aa0ae9838634::t_81dbb76997261a 130
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 18,26-28,33-34,120-121
+control-plane/Sources/App/Services/AdvisoryLock.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-374
+docs/deployment/observability.md
+  s_97aa0ae9838634::t_a1f15938b6c478 152-213,274
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 396-405
+control-plane/Sources/App/Services/MACAllocator.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-79
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 101-113,116-117,120-131,133-138
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 21-30,130-133
+  s_97aa0ae9838634::t_c17629ab94f0ad 134
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1628-1630,1634-1639,1655,1692,1716,1734,1770,1773-1774
+control-plane/Sources/App/Controllers/UserController.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 103-106,108-109
+control-plane/Tests/AppIAMTests/VMAttachTargetDisclosureTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 155
+docs/deployment/health-checks.md
+  s_97aa0ae9838634::t_a1f15938b6c478 1,4,128-135,160-172
+control-plane/Sources/App/Models/SandboxNetworkInterface.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 7
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 216-217,219-220,222-223
+control-plane/Sources/App/Services/DNSZoneService.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 104-106,108-109
+shared/Tests/StratoSharedTests/MACAddressTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-33
+docs/architecture/control-plane.md
+  s_97aa0ae9838634::t_a1f15938b6c478 688-689,694-698
+control-plane/Tests/AppPlatformTests/SchemaMigratorTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 43,62,66-72,75-80
+helm/strato-control-plane/TESTING.md
+  s_97aa0ae9838634::t_a1f15938b6c478 99-102,106-122,128-132,136-138
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 17-72,449-453
+  s_97aa0ae9838634::t_8e8e0f3958c624 454
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 110,120-139,143
+control-plane/Tests/AppPlatformTests/CreateMACAddressLedgerMigrationTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 1-148
+control-plane/Tests/AppPlatformTests/ListCountBatchingTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 133
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 520-521,527,529-532,534-535
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 12,32-35,37-38,68-75
+  s_97aa0ae9838634::t_2c6b9f20cb1177 76-86
+control-plane/Tests/AppPlatformTests/LoadBalancerControllerTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 84
+control-plane/Sources/App/Services/IPAMService.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 73,75-81,84-85,88-95,108,185,261
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_97aa0ae9838634::t_3f0c98701d34fe 1380,1413
+  s_97aa0ae9838634::t_a1f15938b6c478 1369,1371,1373,1377,1402,1404,1406,1410,1417
+control-plane/Sources/App/Bootstrap/StartupReconciliation.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 8-12
+docs/architecture/multi-replica.md
+  s_97aa0ae9838634::t_a1f15938b6c478 150-156
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 350,388,393,399
+deploy/compose/README.md
+  s_97aa0ae9838634::t_a1f15938b6c478 55-61
+control-plane/Tests/AppResourceTests/WorkloadSizeValidationTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 133-137
+docs/deployment/docker-compose.md
+  s_97aa0ae9838634::t_a1f15938b6c478 317-323,349
+control-plane/Tests/AppIAMTests/CrossProjectContainmentTests.swift
+  s_97aa0ae9838634::t_a1f15938b6c478 143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "556f414a6c7521da255a1a6d73f94720ea52dd26",
+  "prompts": {},
+  "sessions": {
+    "s_97aa0ae9838634": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05538-8017-7a21-aac4-876e35e96be4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

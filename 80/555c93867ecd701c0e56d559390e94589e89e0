@@ -1,0 +1,29 @@
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_2a55536377745d::t_2e9178d074570e 287-303
+  s_2a55536377745d::t_c0d99e28519c31 786-790,795-806,808,810-831,833-834
+  s_2a55536377745d::t_350af7dd4fc914 2
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_2a55536377745d::t_19e5bf5b223f2c 516-563
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_2a55536377745d::t_7b26128c0194dc 765-766
+  s_2a55536377745d::t_2e80899e4c665d 608-610
+  s_2a55536377745d::t_86425c1afc0c30 628-630
+  s_2a55536377745d::t_b8a5b08b0a5528 4-7
+  s_2a55536377745d::t_2f338a3e2c7e01 727-738
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "80555c93867ecd701c0e56d559390e94589e89e0",
+  "prompts": {},
+  "sessions": {
+    "s_2a55536377745d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "799fb350-ca1f-46de-9fc6-3506f8c10760",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

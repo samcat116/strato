@@ -1,0 +1,19 @@
+agent/Package.resolved
+  s_b1fd57a7028f8c::t_6cbce159102312 2,184-191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "026817327a5b727195310f558db0e8e350805471",
+  "prompts": {},
+  "sessions": {
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+.github/workflows/main-build.yaml
+  s_312ef112b2ead4::t_403c52af0b905a 102,123
+.github/workflows/release.yaml
+  s_312ef112b2ead4::t_2456c636c49447 191,212
+agent/Dockerfile
+  s_312ef112b2ead4::t_1fe5268179f664 80
+control-plane/Dockerfile
+  s_312ef112b2ead4::t_392d1f5318a985 72
+control-plane/Sources/App/ControlPlaneMain.swift
+  s_312ef112b2ead4::t_7e75870bbc26e6 6-11
+control-plane/Sources/Run/entrypoint.swift
+  s_312ef112b2ead4::t_7bd6bea57eecc0 1-8
+docs/architecture/control-plane.md
+  s_312ef112b2ead4::t_ca87669d0412cf 12,14-15,29-34
+docs/deployment/observability.md
+  s_312ef112b2ead4::t_9d3922f34515be 529
+control-plane/Package.swift
+  s_312ef112b2ead4::t_6ee88c1d7456e5 11-13,87-93,158-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d4b8d41e411d635e6fa9fed1cf0bd33667c19bf4",
+  "prompts": {},
+  "sessions": {
+    "s_312ef112b2ead4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ca75322-27ad-430b-93d0-5599e58f03d8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

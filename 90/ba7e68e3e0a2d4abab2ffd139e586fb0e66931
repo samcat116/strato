@@ -1,0 +1,40 @@
+control-plane/web/src/lib/api/passkeys.ts
+  s_142c71a25effdc::t_ee2f64a2e25c40 26
+control-plane/Sources/App/Controllers/PasskeyController.swift
+  s_142c71a25effdc::t_ee2f64a2e25c40 80,87,115,267-268,279
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_142c71a25effdc::t_ee2f64a2e25c40 22-27,47,90-93,99,102,113-139,251,253-261
+README.md
+  s_142c71a25effdc::t_ee2f64a2e25c40 55-57,60-66,69-73
+control-plane/Tests/AppTests/PasskeyCredentialRecordTests.swift
+  s_142c71a25effdc::t_ee2f64a2e25c40 1-110
+control-plane/Sources/App/Migrations/BackfillPasskeyDeviceType.swift
+  s_142c71a25effdc::t_ee2f64a2e25c40 1-36
+control-plane/Sources/App/openapi.yaml
+  s_142c71a25effdc::t_ee2f64a2e25c40 7675-7682,7708-7715,7806-7808,7815-7817,7837-7844
+control-plane/Sources/App/configure.swift
+  s_142c71a25effdc::t_ee2f64a2e25c40 519
+  s_142c71a25effdc::t_ebed4d2b73217f 520-522
+control-plane/Sources/App/Controllers/UserController.swift
+  s_142c71a25effdc::t_ee2f64a2e25c40 384,394,415,497,509,564,584,824-825,838,847,849-850,860-884,888-889,904
+control-plane/web/src/lib/webauthn/client.ts
+  s_142c71a25effdc::t_ee2f64a2e25c40 76,80-88,160,186,208
+control-plane/web/src/lib/api/auth.ts
+  s_142c71a25effdc::t_ee2f64a2e25c40 40,75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "90ba7e68e3e0a2d4abab2ffd139e586fb0e66931",
+  "prompts": {},
+  "sessions": {
+    "s_142c71a25effdc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90bb8025-bfc8-44c8-8403-a08963648ed9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

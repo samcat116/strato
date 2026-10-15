@@ -1,0 +1,91 @@
+control-plane/Sources/App/Services/SPIFFE/OrgSPIREClientRegistry.swift
+  s_15662ab5a21c2c::t_3ddde9c4d66bb9 1-36,46-116,150-305
+  s_15662ab5a21c2c::t_de81022e31ce41 37-45
+  s_15662ab5a21c2c::t_597373f494fe66 117-149
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_15662ab5a21c2c::t_ca54ff3334ad58 129-134
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_15662ab5a21c2c::t_842953897c1d1b 45-54
+  s_15662ab5a21c2c::t_1bec62f7c763d6 251-271
+  s_15662ab5a21c2c::t_722dfe09f6215b 82-92,108-110
+  s_15662ab5a21c2c::t_33bc742b1cf154 135,144-145
+agent/Sources/StratoAgentSPIFFE/WorkloadAPIClient.swift
+  s_15662ab5a21c2c::t_f0334356db0f75 336,342-361
+  s_15662ab5a21c2c::t_5a7e3b3708facd 362-363
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_15662ab5a21c2c::t_bc00831ca4f247 131-132
+  s_15662ab5a21c2c::t_af551aa426ca93 149-159,168
+agent/Sources/StratoAgentSPIFFE/SPIFFETLSConfig.swift
+  s_15662ab5a21c2c::t_e0b1f758c42770 127-132,141,144
+  s_15662ab5a21c2c::t_13c0d36e06344b 155-156
+  s_15662ab5a21c2c::t_723ae4054b2e70 12-20,25,39-47
+  s_15662ab5a21c2c::t_3882f6cdb580f1 240-241
+agent/Sources/StratoAgent/Agent.swift
+  s_15662ab5a21c2c::t_bbe5569fd113e9 687-696
+  s_15662ab5a21c2c::t_9c684849b8abab 914-919,927
+deploy/compose/spiffe/envoy.yaml
+  s_15662ab5a21c2c::t_e8e9958c95d071 49-57,59
+  s_15662ab5a21c2c::t_1857248cec7428 117-119,140-142,171-173,201-203
+  s_15662ab5a21c2c::t_1bcff31f037a94 116,139,170,200
+  s_15662ab5a21c2c::t_c157170e412bc7 220-230
+docs/architecture/control-plane.md
+  s_15662ab5a21c2c::t_01781688bbf54e 285-309,311-313
+agent/Sources/StratoAgentSPIFFE/SPIFFEWebSocketConnect.swift
+  s_15662ab5a21c2c::t_a513a951feb1a5 36-63
+control-plane/Tests/AppTests/OrgSPIREClientRegistryTests.swift
+  s_15662ab5a21c2c::t_3433937ee5b567 1-228,231-243,251-362
+  s_15662ab5a21c2c::t_ea4af38c6a5c38 244-250
+  s_15662ab5a21c2c::t_5af0e3c505d153 229-230
+agent/Tests/StratoAgentTests/SPIFFEFederatedBundleTests.swift
+  s_15662ab5a21c2c::t_9ff80be8480201 207-210
+  s_15662ab5a21c2c::t_66ee0381134eb4 272-287
+  s_15662ab5a21c2c::t_f023adb60f69b4 201
+  s_15662ab5a21c2c::t_e098bcec6f0b9a 168-172,177-182
+  s_15662ab5a21c2c::t_09335dd285b946 1-167,173-176,183-200,202-206,211-234,237-249,252-271,288-335
+  s_15662ab5a21c2c::t_dbb22aa31e1dec 235-236
+  s_15662ab5a21c2c::t_b1c825c58b251c 250-251
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_15662ab5a21c2c::t_f40319cddd7dcd 48-58,60
+  s_15662ab5a21c2c::t_4378ccc3dd55cd 122-125,152-155
+  s_15662ab5a21c2c::t_9f8db3c558a6b0 121,151
+  s_15662ab5a21c2c::t_93256c7224865a 172-184
+agent/Sources/StratoAgentSPIFFE/SPIFFETypes.swift
+  s_15662ab5a21c2c::t_2643318f35b041 68-69,72-88,100,108,113-124
+  s_15662ab5a21c2c::t_0ed10e58919ace 365-369
+  s_15662ab5a21c2c::t_ea8cd519bd754a 336-339
+  s_15662ab5a21c2c::t_397f78d0686fb9 125-126
+deploy/agent/install.sh
+  s_15662ab5a21c2c::t_950cd574226325 740-746
+  s_15662ab5a21c2c::t_111e84fc1fed8f 914-923
+  s_15662ab5a21c2c::t_4d98c3c37b12fa 590-594
+  s_15662ab5a21c2c::t_c22296d012e6d0 869-889
+  s_15662ab5a21c2c::t_6e624ac68dbc8d 28-33
+  s_15662ab5a21c2c::t_6837394a7c7af8 553-589,595-596
+  s_15662ab5a21c2c::t_7524eb9a286717 611-612
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_15662ab5a21c2c::t_ebd5ddfea50992 617-619
+  s_15662ab5a21c2c::t_c8bfb6dcc9a877 448-452
+  s_15662ab5a21c2c::t_1731f62de1060c 180-193
+  s_15662ab5a21c2c::t_40e45f5b09747b 454-458
+  s_15662ab5a21c2c::t_d8afc1ce720190 166,453,616
+  s_15662ab5a21c2c::t_17094b7c61e8e6 613-615
+  s_15662ab5a21c2c::t_e604dc85b59014 268-269
+  s_15662ab5a21c2c::t_83d4acad913371 342-343
+  s_15662ab5a21c2c::t_265397d81d07b6 194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "b5250ba12bb759bae9c4a68fc8e99ce8c7c42866",
+  "prompts": {},
+  "sessions": {
+    "s_15662ab5a21c2c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edf3df5b-c034-4d55-b2a6-0129850eb0b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

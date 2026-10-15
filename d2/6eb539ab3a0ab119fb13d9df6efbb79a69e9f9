@@ -1,0 +1,21 @@
+control-plane/web/src/components/layout/sidebar.tsx
+  s_ec5c7f773ae110::t_2d280b8a725309 52-54,57-64
+  s_ec5c7f773ae110::t_ffb52b0e00d8e3 14-15
+  s_ec5c7f773ae110::t_7691c9002a4883 95-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "d26eb539ab3a0ab119fb13d9df6efbb79a69e9f9",
+  "prompts": {},
+  "sessions": {
+    "s_ec5c7f773ae110": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f16fbf-4928-41ab-8bd4-3e3f9cd7a2d1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

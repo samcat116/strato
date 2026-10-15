@@ -1,0 +1,49 @@
+agent/Tests/StratoAgentTests/MTLSArtifactDownloaderTests.swift
+  s_4237f4b97dc89e::t_2447df47bd52f1 28
+  s_4237f4b97dc89e::t_962f6e2cb6c5aa 50,52
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_4237f4b97dc89e::t_38cd75b464d99a 337
+agent/Sources/StratoAgentCore/SingleFlight.swift
+  s_4237f4b97dc89e::t_2884b87bc8cc66 76
+control-plane/Sources/App/Services/StreamingMultipartReceiver.swift
+  s_4237f4b97dc89e::t_41a00d273b40c2 123
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_4237f4b97dc89e::t_1092e7a66d8116 30,59,86,122,173,209,235,280,313
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_4237f4b97dc89e::t_ee7146ed497e03 173
+control-plane/Tests/AppTests/ImageFetchRedirectTests.swift
+  s_4237f4b97dc89e::t_7d8818509fdb2f 57,77
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_4237f4b97dc89e::t_c81a2d45947334 171
+control-plane/Tests/AppTests/HierarchyIntegrationTests.swift
+  s_4237f4b97dc89e::t_8e4e7ce2179d5a 125,134,143,165,225
+agent/Sources/StratoAgentSPIFFE/SPIFFEWebSocketConnect.swift
+  s_4237f4b97dc89e::t_de2898b898d2da 96-104
+  s_4237f4b97dc89e::t_de9272b6fb6a29 89-95
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_4237f4b97dc89e::t_1092e7a66d8116 33,75,114,181,250,297,323,395,446
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_4237f4b97dc89e::t_1092e7a66d8116 36,58,129,163,235,267,297
+control-plane/Tests/AppTests/SPIREServerAPIClientMTLSTests.swift
+  s_4237f4b97dc89e::t_7d8818509fdb2f 533
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_4237f4b97dc89e::t_1092e7a66d8116 112,131,222,251,272,309,341,389,414,464
+agent/Sources/StratoAgent/HostInfoProbe.swift
+  s_4237f4b97dc89e::t_65edafbb5fb84b 208-209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "4ed7163532c8578143fba18f30c61b3174ff2529",
+  "prompts": {},
+  "sessions": {
+    "s_4237f4b97dc89e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6642bfbd-31b6-4971-aaee-e944d2b459ad",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_45f5bd5bc03fe4::t_2243eb4d666a8a 944-946
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_45f5bd5bc03fe4::t_dcefa0aea9f7b6 373-374
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_45f5bd5bc03fe4::t_a822e506c40e7a 235-241,276-285,288,290,292,295,297-306,316
+  s_45f5bd5bc03fe4::t_a875a9d5bef055 78-85
+control-plane/Sources/App/Migrations/CreateVMCommandExecutions.swift
+  s_45f5bd5bc03fe4::t_a822e506c40e7a 19,24-28,45-57,63
+control-plane/Sources/App/Models/VMCommandExecution.swift
+  s_45f5bd5bc03fe4::t_a822e506c40e7a 5-7,38-41,44-48,52,54-57
+control-plane/Sources/App/Services/OperationFacade.swift
+  s_45f5bd5bc03fe4::t_a822e506c40e7a 364-366,398
+control-plane/Tests/AppPlatformTests/ReplicaMessageBridgeTests.swift
+  s_45f5bd5bc03fe4::t_a875a9d5bef055 90-93,97,106,111,115-118
+  s_45f5bd5bc03fe4::t_4a99c53b8b02cc 94-96,98-105,107-110,112-114
+control-plane/Sources/App/Controllers/VMController.swift
+  s_45f5bd5bc03fe4::t_a875a9d5bef055 1877-1884
+  s_45f5bd5bc03fe4::t_a822e506c40e7a 1862
+control-plane/Tests/AppResourceTests/VMCommandExecutionTests.swift
+  s_45f5bd5bc03fe4::t_6b21b33424bbd0 26-27,47,49-53,58-63,73,87-90,100
+control-plane/web/src/types/openapi.ts
+  s_45f5bd5bc03fe4::t_611b0440a65f53 5336
+docs/architecture/iam.md
+  s_45f5bd5bc03fe4::t_67eb483a5b262c 417-418,706-707
+  s_45f5bd5bc03fe4::t_f972157203bb10 419-423
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_45f5bd5bc03fe4::t_a875a9d5bef055 51,77-80,82,134,137-147,152,192-194,198
+control-plane/Sources/App/openapi.yaml
+  s_45f5bd5bc03fe4::t_3fa1addb0389c5 8993-8995
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "373946cd2ece690707f6e83a0dc08cddf266d76f",
+  "prompts": {},
+  "sessions": {
+    "s_45f5bd5bc03fe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdff-9a39-74b3-8ce3-c403f19183b6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

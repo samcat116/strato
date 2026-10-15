@@ -1,0 +1,75 @@
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_79e524c6806817::t_efbf588827059a 1-402
+control-plane/Sources/App/Controllers/VMController.swift
+  s_79e524c6806817::t_693724730d7945 280,315,336-337,442-479,545-547,589-596,605-606,626-630
+control-plane/Sources/App/Migrations/AddProjectToLogicalNetwork.swift
+  s_79e524c6806817::t_832cd692d5002f 1-27
+control-plane/Sources/App/Migrations/CreateLogicalNetwork.swift
+  s_79e524c6806817::t_f9a3f97a187307 2,52-70
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_79e524c6806817::t_ba782137ca5ffe 8-13,35-36,40-48,57-64,69-70,75-119
+control-plane/Sources/App/Models/vm.swift
+  s_79e524c6806817::t_76c6e8d42015af 297-320,336,355-359
+control-plane/Sources/App/configure.swift
+  s_79e524c6806817::t_a3d7276a21f769 257-259
+control-plane/Sources/App/routes.swift
+  s_79e524c6806817::t_526badbf3086ea 44-46
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_79e524c6806817::t_bc78e494b8957c 1-390
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_79e524c6806817::t_7f6d2669c6f010 1-201
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_79e524c6806817::t_cae505d3342dd4 1-63
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_79e524c6806817::t_cf62351f08b48b 24,257-259
+control-plane/web/src/components/layout/sidebar.tsx
+  s_79e524c6806817::t_019f97003e84df 11,156-164
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_79e524c6806817::t_a2ad33a874ee18 1-181
+control-plane/web/src/components/networks/index.ts
+  s_79e524c6806817::t_4bb2ae0734070c 1-2
+control-plane/web/src/components/networks/network-table.tsx
+  s_79e524c6806817::t_7009fd4f0645da 1-145
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_79e524c6806817::t_5b373dcd9d38a9 19,49,56-58,119,134,365-392
+control-plane/web/src/components/vms/index.ts
+  s_79e524c6806817::t_57bf78c4899213 7
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_79e524c6806817::t_67024334cc6b4e 1-89
+control-plane/web/src/lib/api/index.ts
+  s_79e524c6806817::t_95ddfb85abb93c 18
+control-plane/web/src/lib/api/networks.ts
+  s_79e524c6806817::t_854587f3c2701d 1-33
+control-plane/web/src/lib/hooks/index.ts
+  s_652bf623475d7b::t_1e7a29c35eff05 81
+control-plane/web/src/lib/hooks/use-networks.ts
+  s_79e524c6806817::t_a2ad8422a9ba91 1-22
+control-plane/web/src/types/api.ts
+  s_79e524c6806817::t_199dce8c91088a 34-45,61,298-299,695-723
+spicedb/schema.zed
+  s_79e524c6806817::t_cfde6ab57a0af3 42,95-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "080665426c1f3a35256020b507338c8ae773f2fc",
+  "prompts": {},
+  "sessions": {
+    "s_652bf623475d7b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a21322948da4e14b0",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_79e524c6806817": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ac12cf4-64db-450e-b882-8b616c8cdc67",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

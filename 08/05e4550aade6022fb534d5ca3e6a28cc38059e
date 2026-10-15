@@ -1,0 +1,31 @@
+control-plane/Tests/AppTests/IAMGuardrailTests.swift
+  s_6671064d0155b3::t_77c42e5ddc4a22 674-697
+control-plane/Sources/App/IAM/GuardrailCedarTextBackfill.swift
+  s_6671064d0155b3::t_6ef63a7a9802b1 1-50
+control-plane/web/src/types/openapi.ts
+  s_6671064d0155b3::t_9d4e553c8be8a6 6530
+control-plane/Sources/App/IAM/CeilingEvaluator.swift
+  s_6671064d0155b3::t_32f28522c0ec83 46-49
+control-plane/Sources/App/configure.swift
+  s_6671064d0155b3::t_19edf8b4ecd152 594-603
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_6671064d0155b3::t_6ef277d6c6f429 274-280
+control-plane/Sources/App/openapi.yaml
+  s_6671064d0155b3::t_8adbba81262a9e 11388-11390
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "0805e4550aade6022fb534d5ca3e6a28cc38059e",
+  "prompts": {},
+  "sessions": {
+    "s_6671064d0155b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0fee7a23-4417-4878-a3b9-5a07242ef9f3",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

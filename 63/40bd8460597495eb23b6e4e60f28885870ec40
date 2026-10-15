@@ -1,0 +1,69 @@
+control-plane/Sources/App/Models/Sandbox.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 1-265
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 1-619
+CLAUDE.md
+  s_b1fd57a7028f8c::t_292d874f7e87b5 88,90
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 37-41
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 297-305,340-344
+  s_b1fd57a7028f8c::t_4ee62f7dcd3e5e 345
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 402,404-416
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 191-203,260-267,507-513
+  s_b1fd57a7028f8c::t_b781dfde0d82e4 514-515
+control-plane/Sources/App/Extensions/Request+SandboxAuthorization.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 1-23
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 514-531
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 1-578
+agent/Package.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 30-38,82-93
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 65-69,75-100,110,113,125,135,159,167
+control-plane/Sources/App/configure.swift
+  s_b1fd57a7028f8c::t_89360d13b2149a 376
+  s_b1fd57a7028f8c::t_292d874f7e87b5 373-375
+control-plane/Sources/App/Services/AgentService.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 316-318,321-322,363-365,368-369,903-904,952-982,1012-1032,1364-1381,1383-1384,1544-1547,1549-1550,1580-1600,1748-1880,1953-2012,2719-2729
+  s_b1fd57a7028f8c::t_94007f52127a9f 2730
+docs/architecture/overview.md
+  s_b1fd57a7028f8c::t_292d874f7e87b5 93
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_b1fd57a7028f8c::t_292d874f7e87b5 4,185-212
+  s_b1fd57a7028f8c::t_0157a9a33fd413 213-214
+control-plane/Sources/App/Migrations/CreateSandbox.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 1-56
+spicedb/schema.zed
+  s_b1fd57a7028f8c::t_292d874f7e87b5 4,185-212
+  s_b1fd57a7028f8c::t_5a75840af1c494 213-214
+.github/workflows/build.yaml
+  s_b1fd57a7028f8c::t_292d874f7e87b5 361-372
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 111-125,926-935
+control-plane/Sources/App/routes.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 13-14
+docs/architecture/sandboxes.md
+  s_b1fd57a7028f8c::t_292d874f7e87b5 11-14,99-118
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_b1fd57a7028f8c::t_292d874f7e87b5 12,20-21,48-60,124-127,205-207,211-212,222-223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6340bd8460597495eb23b6e4e60f28885870ec40",
+  "prompts": {},
+  "sessions": {
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

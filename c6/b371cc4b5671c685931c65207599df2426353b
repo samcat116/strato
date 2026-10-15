@@ -1,0 +1,27 @@
+agent/Sources/StratoAgentRuntime/Agent+Messages.swift
+  s_457de9942b8cfd::t_0c15c16b38f66d 335,337
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_457de9942b8cfd::t_4c19b50e01a8a1 870,874
+agent/Tests/StratoAgentRuntimeTests/BlockPolicyLifecycleTests.swift
+  s_457de9942b8cfd::t_51b87d38428edf 11-14,50-51,146-175
+agent/Tests/StratoAgentRuntimeTests/HypervisorSelectionTests.swift
+  s_457de9942b8cfd::t_1303fd0cfeba0f 1-34
+agent/Tests/StratoAgentRuntimeTests/RuntimeTestConfiguration.swift
+  s_457de9942b8cfd::t_904a1d1a1dd389 1,7,34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c6b371cc4b5671c685931c65207599df2426353b",
+  "prompts": {},
+  "sessions": {
+    "s_457de9942b8cfd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0b7bf-1890-7ee1-9d80-b843efa7f4b4",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

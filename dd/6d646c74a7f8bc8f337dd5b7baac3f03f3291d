@@ -1,0 +1,39 @@
+SwiftFirecracker/Sources/SwiftFirecracker/UnixSocketHTTPClient.swift
+  s_dc9c56fd888cdf::t_16880e2a760acb 105
+  s_dc9c56fd888cdf::t_1706a14e569411 244-310
+  s_dc9c56fd888cdf::t_fee0e06a5db67a 133,136
+  s_dc9c56fd888cdf::t_d534130639d204 18,47-59,62-67,86,92-95
+  s_dc9c56fd888cdf::t_941a558fc7e918 147,154
+agent/Sources/StratoAgent/QEMUService.swift
+  s_dc9c56fd888cdf::t_53b233cbb36f1e 192
+  s_dc9c56fd888cdf::t_af8a672bba2259 835
+  s_dc9c56fd888cdf::t_8b35232700c233 652
+agent/Sources/StratoAgent/VolumeService.swift
+  s_dc9c56fd888cdf::t_d41cbefc438a09 215-227
+  s_dc9c56fd888cdf::t_f131d45fdc4ff6 278-290
+  s_dc9c56fd888cdf::t_9358ebdce68a4c 85-88,90-91
+  s_dc9c56fd888cdf::t_ba34e0fc157720 173-176,178-179
+  s_dc9c56fd888cdf::t_f04e8edd1a699e 313-316,318,322
+agent/Sources/StratoAgent/CloudInitProvisioner.swift
+  s_dc9c56fd888cdf::t_382708d2da2983 25
+  s_dc9c56fd888cdf::t_5d9c07e9a97ced 67-68,70-71,83-85,94,99,103
+agent/Sources/StratoAgent/ProcessRunner.swift
+  s_dc9c56fd888cdf::t_566e0c5971d399 1-2,9-30,34-37,41-44,74,92,97,102,104-107
+  s_dc9c56fd888cdf::t_e60deb650ad283 3-8,31-33,38-40,45-73,75-91,93-96,98-101,103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dd6d646c74a7f8bc8f337dd5b7baac3f03f3291d",
+  "prompts": {},
+  "sessions": {
+    "s_dc9c56fd888cdf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c540221a-5f06-470c-b878-9ba548f54fcb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

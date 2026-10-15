@@ -1,0 +1,47 @@
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_c279a05c0b202b::t_6e3758160d34a9 82-84
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_c279a05c0b202b::t_9cc23b4174f7a0 176-179
+  s_c279a05c0b202b::t_556ec47596294a 103-111,119-122,137,140
+  s_c279a05c0b202b::t_931924ec8fd8d1 2
+  s_c279a05c0b202b::t_688ec29301dcdd 81-83,87,96
+  s_c279a05c0b202b::t_db05c2018cdafb 156-175,180-181,183-184,190-194
+  s_c279a05c0b202b::t_08406f986a4914 182,185-189
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_c279a05c0b202b::t_fdd8d61fd17ec9 79-82
+control-plane/Sources/App/configure.swift
+  s_c279a05c0b202b::t_875f14596dbe49 640-641
+  s_c279a05c0b202b::t_2e5478eecd8454 642-644
+docs/architecture/iam.md
+  s_c279a05c0b202b::t_b5b096244c4dcb 447-459,462-472
+control-plane/Sources/App/IAM/IAMShadowEvaluator.swift
+  s_c279a05c0b202b::t_f87feb5165b643 64
+  s_c279a05c0b202b::t_28e7c9e633b2cd 166-172
+  s_c279a05c0b202b::t_d32a0033fda1b6 266-277
+  s_c279a05c0b202b::t_06e909abde6224 479-482
+  s_c279a05c0b202b::t_f3b8ff6df2b910 27-32,38-42,47-63,65-110
+  s_c279a05c0b202b::t_8e626ba2c0a6cd 133-134,140-142,146-147,151-165,173-174
+  s_c279a05c0b202b::t_5e9d1c309003b6 111-112
+control-plane/Tests/AppTests/IAMShadowEvaluatorTests.swift
+  s_c279a05c0b202b::t_c3a33f814526d3 252-283
+control-plane/Tests/AppTests/IAMDecisionLogEndpointTests.swift
+  s_c279a05c0b202b::t_b711234bfac6ff 88-92
+  s_c279a05c0b202b::t_67b4614cb02678 183
+  s_c279a05c0b202b::t_fa3321df31cc05 1-87,93-182,184-288
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "79c31ef70c4b5f3aeccde61194d31107e9fd4221",
+  "prompts": {},
+  "sessions": {
+    "s_c279a05c0b202b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5a36b807-8901-4503-ad0d-3f511e97117e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

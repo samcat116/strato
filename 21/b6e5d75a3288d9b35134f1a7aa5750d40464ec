@@ -1,0 +1,84 @@
+shared/Sources/StratoShared/ArtifactKind.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-39
+control-plane/Sources/App/Services/VolumeService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 156-159
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 14,30,37,58-68,94,98,105-119,121-125,129-130,134-137,139,144,155-160
+control-plane/web/src/lib/api/images.ts
+  s_2ea3015fe4758c::t_fd27997bbccedd 36-38
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 5,55,78-79,178,258,290-296,336,347-362,435-437,526-537,563-564,582,586-587,607,612-614,629-648,705
+control-plane/web/src/components/images/upload-image-dialog.tsx
+  s_2ea3015fe4758c::t_fd27997bbccedd 19-21,35,50,105,133,203-220,324-339
+  s_2ea3015fe4758c::t_3d37e9457f1673 340-341
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 118,122,129-145
+  s_2ea3015fe4758c::t_c2312b66e7d0f3 146
+agent/Sources/StratoAgent/QEMUService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 85-86
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-101
+agent/Sources/StratoAgent/Agent.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 287
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 221,224-270,273,277-280
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 156-157,163-165,180
+control-plane/Tests/AppTests/BackfillImageArtifactsTests.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-47
+control-plane/Tests/AppTests/URLSigningServiceArtifactTests.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-71
+control-plane/Sources/App/Migrations/AddArchitectureToImage.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-19
+control-plane/Sources/App/Migrations/CreateImageArtifact.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-26
+control-plane/Sources/App/configure.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 214-218
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 233-236,244-246,251-252
+control-plane/Sources/App/Services/AgentService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 666,693-695
+control-plane/web/src/components/images/image-table.tsx
+  s_2ea3015fe4758c::t_fd27997bbccedd 54-57,98-117
+control-plane/Tests/AppTests/ImageCompatibilityTests.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-99
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 289-331,341-345,354-356,365-384
+shared/Tests/StratoSharedTests/ImageInfoArtifactTests.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-62
+control-plane/Tests/AppTests/VMSpecBuilderImageInfoTests.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-84
+agent/Sources/StratoAgent/ImageCacheService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 105,111-223,374-377,387,400-401
+control-plane/Sources/App/Controllers/VMController.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 301-302,409-424
+control-plane/Sources/App/Migrations/BackfillImageArtifacts.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 1-43
+control-plane/web/src/types/api.ts
+  s_2ea3015fe4758c::t_fd27997bbccedd 347-358,368,378-379,389,399
+control-plane/web/src/components/images/edit-image-dialog.tsx
+  s_2ea3015fe4758c::t_fd27997bbccedd 18,21,47-49,76,152-168
+  s_2ea3015fe4758c::t_543008d4259214 169-170
+control-plane/Sources/App/Services/URLSigningService.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 6,31-32,44-45,51-55,75-76,90-91,98-103,110-111,113-116
+control-plane/Sources/App/Models/Image.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 4,49-59,114,130,154,178,234-267,276,281-302,308,313-330,342,352-355,369,379-380
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_2ea3015fe4758c::t_fd27997bbccedd 49-50,52-63,110,112-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "21b6e5d75a3288d9b35134f1a7aa5750d40464ec",
+  "prompts": {},
+  "sessions": {
+    "s_2ea3015fe4758c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "629f6438-37f6-44c7-a528-a8c440c9ee73",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

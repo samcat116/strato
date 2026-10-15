@@ -1,0 +1,60 @@
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_e5ac99cc916fa3::t_33d417108f5194 280,307,351
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_e5ac99cc916fa3::t_707f4851abd89e 104
+  s_e5ac99cc916fa3::t_5c95f4f8488b61 942,1126
+control-plane/Tests/AppPlatformTests/VMMutableMetadataTests.swift
+  s_e5ac99cc916fa3::t_33d417108f5194 89
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  s_e5ac99cc916fa3::t_628e4316c13a25 311
+  s_e5ac99cc916fa3::t_069cfc5e1cd855 448
+  s_e5ac99cc916fa3::t_228d76bbbf8946 107
+  s_e5ac99cc916fa3::t_7316a5d11781c8 45-59,67
+control-plane/Tests/AppPlatformTests/DesiredStateDNSZoneTests.swift
+  s_e5ac99cc916fa3::t_5aff1ee5b65d35 74
+  s_e5ac99cc916fa3::t_f804137bad2766 78-79
+control-plane/Tests/AppPlatformTests/SecurityGroupControllerTests.swift
+  s_e5ac99cc916fa3::t_33d417108f5194 817,925
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_e5ac99cc916fa3::t_60ac3791896c2d 95
+  s_e5ac99cc916fa3::t_43fe945af1f591 67
+  s_65a00e8ad4ab37::t_07e74a893081a4 115-117,191,219
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_e5ac99cc916fa3::t_d393fc6089b827 1003-1036,1040
+  s_01730cdafc8446::t_fce8d4a4a70206 1037-1039
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_e5ac99cc916fa3::t_f967c35c140794 436
+  s_e5ac99cc916fa3::t_f4f70f79b4d59c 259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "97bb9e03cd10d031ee06301fdc787ec82d059992",
+  "prompts": {},
+  "sessions": {
+    "s_01730cdafc8446": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-d8cf-7de3-97c1-67f2dad45e55",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_65a00e8ad4ab37": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae3-0bc2-7d01-8347-bcc58cb53596",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e5ac99cc916fa3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1500b831-541e-4965-9195-470335336b8d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

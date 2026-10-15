@@ -1,0 +1,87 @@
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  s_e300b0a73c2a9f::t_191a451ff830bb 65
+  s_e300b0a73c2a9f::t_38128285982460 108-109,125-136,146
+  s_e300b0a73c2a9f::t_cd46e9030d6b5c 110,145
+  s_e300b0a73c2a9f::t_330abbe2669085 137-138
+control-plane/web/src/types/openapi.ts
+  s_e300b0a73c2a9f::t_2b38882ead8c4d 5301-5305,5376,5380-5384,5452-5453
+control-plane/web/src/types/api.ts
+  s_e300b0a73c2a9f::t_e5b9e279890549 154-155,219-224,1178-1179
+  s_e300b0a73c2a9f::t_75b8c65477319a 1174-1175
+docs/architecture/wire-protocol.md
+  s_e300b0a73c2a9f::t_ae82bf224c41d2 53,64-67,69-72,74-77,417-420
+docs/adr/0006-imds-session-auth.md
+  s_e300b0a73c2a9f::t_5573065eab2407 96-98
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_e300b0a73c2a9f::t_4a23690f04eea2 20
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_e300b0a73c2a9f::t_0f45f30cea32b5 29,291-314
+  s_02d8bd720c129b::t_4acc34e0d382eb 315
+docs/architecture/networking.md
+  s_e300b0a73c2a9f::t_ae82bf224c41d2 1186-1193
+shared/Sources/StratoShared/VMSpec.swift
+  s_e300b0a73c2a9f::t_9ce2701a81e7fc 135-139
+  s_e300b0a73c2a9f::t_4a23690f04eea2 5-15,86-89,107-108,126,132,158-159,193-194,219-220,243-244
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_e300b0a73c2a9f::t_79f9d471629aba 630
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_e300b0a73c2a9f::t_ea0cc18b12131c 102,121,124-140,144-157
+control-plane/Sources/App/Controllers/VMController.swift
+  s_e300b0a73c2a9f::t_0a1c20a2951f0c 470-473,665-666
+control-plane/Sources/App/openapi.yaml
+  s_e300b0a73c2a9f::t_d94949a5067fc9 8939-8942,9076-9087,9236-9241
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_e300b0a73c2a9f::t_e5b9e279890549 23,74,221-222,250,573-584,586-588,590-594,596-608,714-716
+  s_e300b0a73c2a9f::t_0ab2370772b3c3 71-72
+  s_e300b0a73c2a9f::t_10ff02d75b0d14 223,585,589,595
+control-plane/Sources/App/Models/vm.swift
+  s_e300b0a73c2a9f::t_0a1c20a2951f0c 153-164,346-347,377,662-663,739
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_e300b0a73c2a9f::t_9ce2701a81e7fc 100,102
+  s_e300b0a73c2a9f::t_79f9d471629aba 45-46,54,67-90,93-99,101,155-189
+  s_e300b0a73c2a9f::t_ec5718ec38922d 190
+shared/Sources/StratoShared/WireProtocol.swift
+  s_e300b0a73c2a9f::t_4a23690f04eea2 14-19
+agent/Tests/StratoAgentTests/CloudInitMetaDataTests.swift
+  s_e300b0a73c2a9f::t_75b8c65477319a 50
+  s_e300b0a73c2a9f::t_ea0cc18b12131c 10-49
+control-plane/Sources/App/configure.swift
+  s_e300b0a73c2a9f::t_0a1c20a2951f0c 398-401
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_e300b0a73c2a9f::t_0a1c20a2951f0c 257-258
+control-plane/Tests/AppPlatformTests/AddMetadataSourceToVMTests.swift
+  s_e300b0a73c2a9f::t_0f45f30cea32b5 1-44
+docs/architecture/agent.md
+  s_e300b0a73c2a9f::t_ae82bf224c41d2 541-554,577-578,1333-1334
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_e300b0a73c2a9f::t_0f45f30cea32b5 674-687
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_e300b0a73c2a9f::t_79f9d471629aba 141-142
+control-plane/Sources/App/Migrations/AddMetadataSourceToVM.swift
+  s_e300b0a73c2a9f::t_0a1c20a2951f0c 1-2,4-31
+  s_e300b0a73c2a9f::t_9ce2701a81e7fc 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f221f29b7c3f3f06911f7ef2a88e621c50cd2f87",
+  "prompts": {},
+  "sessions": {
+    "s_02d8bd720c129b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff105-a5f0-7ae1-9afa-1683cd0ebe6a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e300b0a73c2a9f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-7353-7161-b6ab-b306d13023e4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

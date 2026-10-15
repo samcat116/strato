@@ -1,0 +1,22 @@
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_b43197b9370391::t_7b0a44b13019df 325-330
+  s_b43197b9370391::t_a44b888293e0fc 370-373,375-378,384
+control-plane/Tests/AppTests/RoleNestingSubsumptionTests.swift
+  s_b43197b9370391::t_d98cfaf39e2636 22-24,26-29,35,55,73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "046f1225fad91b01e2d45cbb68b30a561571d7c9",
+  "prompts": {},
+  "sessions": {
+    "s_b43197b9370391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ea664118-a025-4def-b6cb-d0af529be8d8",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

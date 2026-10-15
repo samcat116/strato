@@ -1,0 +1,38 @@
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_071366b7d1e1c2::t_3e831c9222b21f 1183-1201
+  s_071366b7d1e1c2::t_a3c7522a15b9d3 768-797
+  s_071366b7d1e1c2::t_afa34a81b80fc8 306-314
+  s_071366b7d1e1c2::t_7d6e24beaba2a7 2108-2258
+  s_071366b7d1e1c2::t_2f17c9d57ca954 1111-1114,1124-1132
+  s_071366b7d1e1c2::t_e5b68ce1846d5e 1133
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_071366b7d1e1c2::t_2b4356f43cc14b 116
+  s_071366b7d1e1c2::t_41db4341df8bb4 35-39,41-44,54-57
+  s_071366b7d1e1c2::t_f0fc586d549100 89-94,100
+agent/Sources/StratoAgent/Agent.swift
+  s_071366b7d1e1c2::t_f405c748ee9989 1942-1955,1957-1959
+shared/Sources/StratoShared/WireProtocol.swift
+  s_071366b7d1e1c2::t_639c8828779702 244-260
+agent/Tests/StratoAgentTests/SecurityGroupReconcilerTests.swift
+  s_071366b7d1e1c2::t_626f738555b710 1-302
+agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift
+  s_071366b7d1e1c2::t_cd5270a248f1e9 1-441
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_071366b7d1e1c2::t_c406f0120196eb 67-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "40e53f4d05ff0b701bdd132275b507ff724d6955",
+  "prompts": {},
+  "sessions": {
+    "s_071366b7d1e1c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c8d2edb-f9f6-4c81-bef3-3d415daceadb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

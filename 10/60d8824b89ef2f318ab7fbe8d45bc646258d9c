@@ -1,0 +1,103 @@
+control-plane/Sources/App/Models/vm.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 279-283,332,361,636-637,720
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 706-719
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 1297
+control-plane/web/src/types/openapi.ts
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 5359-5362,5436-5437,7817-7818
+  s_1caa12ce689fe8::t_59061b66432af6 5358
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 136
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 32,47,243-273
+  s_1caa12ce689fe8::t_1220e8e907a435 274
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 63-66
+control-plane/Sources/App/Controllers/VMController.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 449-451,659,704-707
+  s_1caa12ce689fe8::t_2890bece77748e 708-709
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 46-47,65-66,822-875
+  s_1caa12ce689fe8::t_8812c11afac76d 876
+docs/architecture/wire-protocol.md
+  s_1caa12ce689fe8::t_9f07447fbb9a7b 53,65-67,75
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 76-78,87-91
+docs/architecture/guest-identity.md
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 310-317,666-667
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 245
+shared/Sources/StratoShared/WireProtocol.swift
+  s_1caa12ce689fe8::t_9f07447fbb9a7b 14-18
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 67
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 28,265-288
+  s_1caa12ce689fe8::t_2d7ebcefc4056b 289
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 20-21,23,29,38-41,89,94,107,114,131-133,497-521
+  s_1caa12ce689fe8::t_2ed22ce83f507c 522
+control-plane/Sources/App/openapi.yaml
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 9030-9037,9198-9202,13819-13824
+shared/Sources/StratoShared/VMSpec.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 54-57,87,104,112-142,169,194,217
+control-plane/Sources/App/Models/Agent.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 489-498
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 79-80,91
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 54-56,75-76,95,150-151,194-197,217-218,230,244,285-288,354-355,600-609
+  s_1caa12ce689fe8::t_5730d6e88ec2b8 610-611
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 66-70,84,92
+agent/Sources/StratoAgentCore/VsockCIDAllocator.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 213-216
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 37,63-66,70,74-78,84-91,120-122,156-157,177,215-218,254-261,357,519-539
+  s_1caa12ce689fe8::t_4f5bb2fdea3fb4 540
+control-plane/Sources/App/Services/AgentService.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 2814-2815
+docs/architecture/agent.md
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 966-974,1005-1010
+  s_1caa12ce689fe8::t_e32e0f2fa928bf 1011
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 18,29,38-58
+  s_1caa12ce689fe8::t_532e3bc03f24ae 59-60
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_1caa12ce689fe8::t_9f07447fbb9a7b 20
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 101-126
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 582-583,645
+agent/Sources/StratoAgent/Agent.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 1341,1344-1355,1685-1686,1734,1738-1739,1766,1778-1782,4903-4904,4918-4920,4936-4937
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_1caa12ce689fe8::t_9f07447fbb9a7b 80-82
+control-plane/web/src/types/api.ts
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 182-183,569,1145-1149
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 656-657,677
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 71-73,86,99,119-122,136-141,275-282,647-659,767
+agent/Tests/StratoAgentTests/VsockCIDAllocatorTests.swift
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 272,275-277,308-317
+  s_1caa12ce689fe8::t_5b5a3d87a5d555 318-319
+agent/Tests/StratoAgentTests/Goldens/DomainXML/x86_64-uefi-vsock.xml
+  s_1caa12ce689fe8::t_2e50dcdc74c85a 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1060d8824b89ef2f318ab7fbe8d45bc646258d9c",
+  "prompts": {},
+  "sessions": {
+    "s_1caa12ce689fe8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6f-4fa5-7fd0-bf2a-063474d3e1e0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

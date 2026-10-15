@@ -1,0 +1,19 @@
+deploy/agent/install.sh
+  s_8d4e3245fcb8ee::t_0523d409b58d82 318-321,323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9447022af3e95d7d2d4938ef63be71eae98c48d9",
+  "prompts": {},
+  "sessions": {
+    "s_8d4e3245fcb8ee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da4c92ee-5eeb-4b89-a597-b7ccb20ba078",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,126 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_8e6198b3225c36::t_fc4a8f2d8c7af0 449-451,659,704-707
+  s_1f8e687c4649c2::t_940ca4ef840c52 708-709
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_8e6198b3225c36::t_8ab2e1342dd6a3 63-66
+agent/Sources/StratoAgent/Agent.swift
+  s_8e6198b3225c36::t_8ab2e1342dd6a3 4681-4682,4696-4698,4714-4715
+  s_8e6198b3225c36::t_3730714e166c80 1683,1687-1688,1715,1727-1731
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_8e6198b3225c36::t_8ab2e1342dd6a3 582-583,645
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_8e6198b3225c36::t_98cac807988f3b 20
+agent/Sources/StratoAgentCore/VsockCIDAllocator.swift
+  s_8e6198b3225c36::t_8ab2e1342dd6a3 213-216
+shared/Sources/StratoShared/WireProtocol.swift
+  s_8e6198b3225c36::t_98cac807988f3b 14-17
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_8e6198b3225c36::t_8ab2e1342dd6a3 67
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_8e6198b3225c36::t_8ab2e1342dd6a3 71-73,86,99,119-122,136-141,275-282,647-659,767
+docs/architecture/guest-identity.md
+  s_8e6198b3225c36::t_71d5d6e985bd6b 313-320,671-672
+shared/Sources/StratoShared/VMSpec.swift
+  s_8e6198b3225c36::t_fc4a8f2d8c7af0 54-57,87,104,112-142,169,194,217
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_8e6198b3225c36::t_441df38603c38d 501-502
+  s_8e6198b3225c36::t_21e44f8bfe4a43 23,29,89,94,107,114,131-133,497-500,503-521
+  s_8e6198b3225c36::t_e336f98db51c1e 20-21,38-40
+  s_d3c90e184e731d::t_a600157fa74b42 41,522
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_8e6198b3225c36::t_21e44f8bfe4a43 32,242-270
+  s_1f8e687c4649c2::t_7a34a517ab5851 271
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_8e6198b3225c36::t_fc4a8f2d8c7af0 136
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_8e6198b3225c36::t_fc4a8f2d8c7af0 1297
+docs/architecture/agent.md
+  s_8e6198b3225c36::t_71d5d6e985bd6b 966-974,1005-1010
+  s_1f8e687c4649c2::t_7d4b1785907539 1011
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_8e6198b3225c36::t_3730714e166c80 37,63-66,70,74-78,84-91,120-122,156-157,177,215-218,349,511-531
+  s_2c099ab9a178cb::t_f036c9b8173766 532
+control-plane/web/src/types/api.ts
+  s_8e6198b3225c36::t_800992a15593d1 182-183,1120-1124
+control-plane/Sources/App/Models/vm.swift
+  s_8e6198b3225c36::t_fc4a8f2d8c7af0 277-281,330,359,634-635,718
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_8e6198b3225c36::t_fc4a8f2d8c7af0 245
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_8e6198b3225c36::t_21e44f8bfe4a43 101-126
+agent/Tests/StratoAgentTests/Goldens/DomainXML/x86_64-uefi-vsock.xml
+  s_8e6198b3225c36::t_47c8fb778a59f1 1-67
+control-plane/Sources/App/openapi.yaml
+  s_8e6198b3225c36::t_800992a15593d1 9030-9037,9198-9202
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_8e6198b3225c36::t_21e44f8bfe4a43 656-657,677
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_8e6198b3225c36::t_03fd35b85378bc 28,265-288
+  s_7b4fb451d80f69::t_a51864ce643ee6 289
+control-plane/web/src/types/openapi.ts
+  s_8e6198b3225c36::t_a0656f8c5b5e8c 5359-5362,5436-5437
+  s_3ea4601d4518a0::t_9beae197b76af3 5358
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_8e6198b3225c36::t_03fd35b85378bc 706-719
+agent/Tests/StratoAgentTests/VsockCIDAllocatorTests.swift
+  s_8e6198b3225c36::t_21e44f8bfe4a43 272,275-277,308-317
+  s_1f8e687c4649c2::t_3dace57e4c170e 318-319
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_8e6198b3225c36::t_8ab2e1342dd6a3 79-80,91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b85b3c30357e33b022ed7b8808475fe097311a02",
+  "prompts": {},
+  "sessions": {
+    "s_1f8e687c4649c2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee38-3cde-7611-a263-54e845a2a3a7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_2c099ab9a178cb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee39-8d20-7911-81c3-303cc3d5f976",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_3ea4601d4518a0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee41-bb79-70b2-b297-223a47bd8a4d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7b4fb451d80f69": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee38-f349-77f1-8236-32e23acabede",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_8e6198b3225c36": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee38-a767-7500-9527-952209efbc80",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d3c90e184e731d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede4-bec2-7343-aad5-ce620399e429",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+control-plane/Sources/App/Models/DeviceAuthorization.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 105,115
+control-plane/Sources/App/Support/SecureToken.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 1-35
+control-plane/Sources/App/Models/AccountClaimToken.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 61,64,70
+control-plane/Sources/App/Models/APIKey.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 80,87
+control-plane/Sources/App/Models/CLISession.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 108,113
+control-plane/Tests/AppResourceTests/SecureTokenTests.swift
+  s_d208ea9b1a94af::t_56bae5807349bc 1-64
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 123,128
+control-plane/Sources/App/Models/SCIMToken.swift
+  s_d208ea9b1a94af::t_4971cf4382c54c 74,80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "083a5b7938c8bdf51d0a57e04280ef78e3c5e4cb",
+  "prompts": {},
+  "sessions": {
+    "s_d208ea9b1a94af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0efac-c477-7920-860b-09b0954f77e3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

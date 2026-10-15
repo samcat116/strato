@@ -1,0 +1,22 @@
+control-plane/Sources/App/Migrations/CreateIAMPolicy.swift
+  s_b1a3cdaaad9719::t_d74f1701accdef 34-37
+control-plane/Sources/App/IAM/PolicyStore.swift
+  s_b1a3cdaaad9719::t_96ff99d9b9a6af 218-221,224-225,230
+  s_b1a3cdaaad9719::t_3eb09c66930ffc 74-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "09fce9921179439f4b57ca2040632cdd193f5cd4",
+  "prompts": {},
+  "sessions": {
+    "s_b1a3cdaaad9719": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ea271fad-807b-4afa-a3a6-b5ac6c64880d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

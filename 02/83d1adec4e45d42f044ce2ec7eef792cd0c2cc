@@ -1,0 +1,304 @@
+control-plane/Sources/App/Models/SecurityGroup.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 13-14
+control-plane/Sources/App/Models/Volume.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 32-33
+control-plane/Sources/App/Services/FilesystemImageObjectStore.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 4,180-199,205,215,217-222,227,231-253,259,262-274
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 102-103
+agent/Sources/StratoAgent/SignalHandler.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 8,18-24,26,38-54,56,61-66
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2,307-328,334-339,341-342,518-524,527-532,539,556-559,561,568-569,572,576
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 4,14,36-38,48-49,62-63,66-67,71,78,81-82,93-94,137-138,140,144-145,147,240,450-451,455-456,462-463,467-468
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+control-plane/Sources/App/Models/WebhookSubscription.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 10-11
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 24-25
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 123,198
+control-plane/Sources/App/Models/Project.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+clients/swift/Tests/StratoAPIClientTests/StratoAPIClientTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 4,20-22,37
+control-plane/Tests/AppIdentityTests/OIDCAuthFlowTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 216,222-226,228,235,239,243,253-255
+control-plane/Tests/AppResourceTests/ImageObjectStoreTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 11-53,214-316
+  s_1caa12ce689fe8::t_12368235aa5561 317
+docs/architecture/guest-identity.md
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 196-197,247-251,654-655
+control-plane/Sources/App/Models/WebhookDelivery.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 19-20
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 160-162,165-169,172,175,178,186-187,191-192,194,197,202-213
+  s_1caa12ce689fe8::t_a9356bc98d4ed3 214-215
+control-plane/Sources/App/Services/S3ImageObjectStore.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 162-226,229,231,234-240,245-246,259-295,299-318,321,328-331
+control-plane/Sources/App/Models/IAMRoleDefinition.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 60-61
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 580-589,595-597,615-618,818-921
+  s_1caa12ce689fe8::t_030f5b24760d11 922
+control-plane/Sources/App/Models/DeviceAuthorization.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 14-15
+SwiftFirecracker/Tests/SwiftFirecrackerTests/VsockConnectionTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 3,155,165-169,174,235,241,245,259-262
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 12
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 29-30
+control-plane/Sources/App/Models/FloatingIPPool.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 14-15
+control-plane/Tests/AppResourceTests/SandboxExecAttachIntegrationTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 18,102,106-107,111-112,119,126,131,134-135,142
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 8-11
+agent/Tests/StratoAgentTests/ResolverSupervisorTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 4,46,324-325,328,332,353-369,375-380,384-386,392-394,398-399,402-404,411-414,417,420-425,430,432,434
+control-plane/Sources/App/Models/DNSZone.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 18-19
+control-plane/Sources/App/Models/SecurityGroupRule.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 8-9
+control-plane/Sources/App/Services/AgentLogIngestor.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 45,93-97,100-130
+control-plane/Sources/App/Models/OrganizationalUnit.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_1caa12ce689fe8::t_9a11161c8b555e 254-257
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 28-29,37,83,96,1604,1623-1624,1657,1664
+control-plane/Sources/App/Models/ResourceEvent.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 81-82
+shared/Sources/StratoShared/GuestExecMessages.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 1-423
+control-plane/Sources/App/Models/Sandbox.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 11-12
+control-plane/Sources/App/Services/SPIFFE/WorkloadRegistry.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 34-42,46-49,54,57
+control-plane/Sources/App/Models/DNSZoneNetwork.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 12-13
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2591,2751
+agent/Sources/StratoAgentCore/MetadataService/MetadataServerProcess.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 1-5,8,85-144,147,157-170,173,175,178-181,184-197,201-227,232-238,240,243,245-248
+control-plane/Sources/App/Models/AppSetting.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+control-plane/Sources/App/Models/CLISession.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 13-14
+agent/Sources/StratoAgent/ConsoleSocketManager.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 311
+agent/Sources/StratoAgent/ResolverProcessHost.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 4,150-151,154-156,160
+control-plane/Sources/App/Models/IAMPolicy.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 34-35
+control-plane/Sources/App/Models/VMSnapshot.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 34-35
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_1caa12ce689fe8::t_29e860915f3f08 20
+control-plane/Sources/App/Models/APIKey.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 6-7
+control-plane/Tests/AppIdentityTests/WorkloadPrincipalTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 469,471-493,495,499-505
+  s_1caa12ce689fe8::t_a0217822ff2d94 506
+agent/Sources/StratoAgent/MetadataServerCommand.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2-6,47-51
+agent/Sources/StratoAgentCore/ResolverHostPortPlan.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 75-76,87-89,105,138
+control-plane/Sources/App/Models/AccountClaimToken.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 14-15
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_1caa12ce689fe8::t_5a992d57b7c142 80-82
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 67-68,71-79
+control-plane/Sources/App/Services/ImageObjectStore.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 48-49,53-55
+control-plane/Sources/App/Models/User.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6,161-162,254-255
+control-plane/Sources/App/Models/VMInterfaceObservedAddress.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 15-16
+control-plane/Sources/App/Services/DecoyKeyService.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 102-103,106-107
+shared/Sources/StratoShared/WireProtocol.swift
+  s_1caa12ce689fe8::t_29e860915f3f08 14-18
+control-plane/Sources/App/Models/SandboxNetworkInterface.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 9-10
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+control-plane/Sources/App/Models/VolumeReplica.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 19-20
+control-plane/Sources/App/Services/SandboxExecSessionManager.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 16,25-27,48,270-272,289,291,293,303,311,403,410
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 16-17
+control-plane/Sources/App/Models/RoleBinding.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 16-17
+control-plane/Sources/App/Models/SCIMToken.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 6-7
+control-plane/Sources/App/Models/Organization.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6,73-74
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 19-23,44-49,147-151,153-155,174-178,180,182-184,188,191-196,198,203-221,246,250,268,313-333,338,360-385,389
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2,192-198,201-206,213-216,218
+control-plane/Sources/App/Models/StoragePool.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 21-22
+control-plane/Sources/App/Models/vm.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+control-plane/Tests/AppPlatformTests/AgentUpdateArtifactsTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 324-329,331,335,339,346-350
+agent/Tests/StratoAgentTests/SPIFFEWebSocketPinningTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 3,173-174,177-181
+control-plane/Tests/AppPlatformTests/BootstrapCommandTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2,11-22,25-27,29-31
+shared/Tests/StratoSharedTests/GuestExecMessageTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 1-132
+control-plane/Sources/App/Models/Agent.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+agent/Sources/StratoAgentCore/OrderedByteRelay.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 19
+agent/Sources/StratoAgent/Agent.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 48-52,220-231,510-511,571-572,578,583-588,590,594,608,2663-2671,2673-2677,2679-2686,3312,3320-3321,3421-3423,3425,3427-3428,3433-3439,3442-3445,3456,3460,3470-3471,3475-3477,3479-3481,3490,3493-3495,3502,3507-3508,3512-3514,3516-3518,3525,3530-3531,3535,3537,3550-3552,3567-3578,3580-3581,3583-3584,3586,3590,3598-3600,3603,3605,3610-3617,3620
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2,16-17,20,24
+control-plane/Tests/AppIAMTests/CedarPolicySetCacheTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 3,203,213-217
+control-plane/Sources/App/Models/AuditEvent.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 10-11
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 314-316
+SwiftFirecracker/Sources/SwiftFirecracker/UnixSocketHTTPClient.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 270-272
+control-plane/Sources/App/Models/VMInterfaceSecurityGroup.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 10-11
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 3,74-75,78,82
+control-plane/Sources/App/Models/WorkloadRegistration.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 33-34
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 26-33,51-52
+control-plane/Sources/App/Controllers/VMController.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 991-992
+control-plane/Sources/App/Models/SandboxInterfaceSecurityGroup.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 25-26
+agent/Tests/StratoAgentTests/MetadataTokenStoreTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2,16-17,19-22
+control-plane/Sources/App/Models/Image.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 29-30
+docs/architecture/sandboxes.md
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 421,423-424
+agent/Tests/StratoAgentTests/HypervisorHangResilienceTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 3,192-193,196,200,206-211,215-220,227-232
+agent/Sources/StratoAgentCore/SandboxExecTypes.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5
+control-plane/Sources/App/Models/ServiceAccount.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 14-15
+control-plane/Sources/App/Models/FloatingIP.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 14-15
+control-plane/Sources/App/Models/OrgTrustDomain.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 39-40
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 23-24
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 10,13-14,17,21-25,30-31,34,38,42,356
+agent/Tests/StratoAgentTests/MockSandboxRuntimeTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2,42-43,45,48
+control-plane/Sources/App/Models/SandboxInterfaceAddress.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 12-13
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-8
+agent/Tests/StratoAgentTests/MetadataServerSupervisorTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 2,5,15-21,23-25,28,32,36,41,45-49,54,60-71,74-75,79,83,87,91-98,233-310
+  s_1caa12ce689fe8::t_7c4bf622b40262 311-312
+control-plane/Sources/App/Models/DNSRecord.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 44-45
+control-plane/Sources/App/Services/AgentService.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 14-16
+control-plane/Sources/App/Services/SCIM/GroupSCIMHandler.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-8
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5,199,201,235,239,243-246,250-263,269,277,280,284-288,293,297,301-305,310,314,339,515,529
+control-plane/Sources/App/Services/SPIFFE/GuestIdentity.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 19-23
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 13-14
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 440
+agent/Sources/StratoAgentCore/OCI/OCIHTTPTransport.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 59-61
+control-plane/Sources/App/Models/Guardrail.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 21-22
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 14-15
+control-plane/Sources/App/Models/Group.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6,77-78
+docs/architecture/wire-protocol.md
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 40,42,74,122,142
+  s_1caa12ce689fe8::t_29e860915f3f08 53,70-73
+  s_1caa12ce689fe8::t_5a992d57b7c142 64-69
+control-plane/Sources/App/Models/SCIMExternalID.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 5-6
+agent/Tests/StratoAgentTests/ResolverSupervisionPolicyTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 212-218
+deploy/agent/install.sh
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 499-501
+control-plane/Sources/App/Models/SSFStream.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 15-16
+control-plane/Sources/App/Models/RegistryPullSecret.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 12-13
+control-plane/Tests/AppPlatformTests/AuditLoggingTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 368
+SwiftFirecracker/Package.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 25,39
+SwiftFirecracker/Sources/SwiftFirecracker/ProcessSupervision.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 4,72-79,83-88,90,94,115-122,133,159-162
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 287,290,295,644-648
+control-plane/Sources/App/Models/VMNetworkInterface.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 7-8
+control-plane/Sources/App/Models/Site.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 32-33
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 331-332
+SwiftFirecracker/Tests/SwiftFirecrackerTests/FirecrackerAdoptionTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 3,102,107,174,181
+agent/Sources/StratoAgentCore/NetworkResolverDefaults.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 35-51
+SwiftFirecracker/Tests/SwiftFirecrackerTests/HTTPConcurrencyTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 3,300-306,312,320,370,382-387,396,401-405
+cli/Tests/StratoCLITests/MockTransport.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 4,11,40-45,50,55,77-84,89
+control-plane/Sources/App/Models/AgentWorkloadClaim.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 29-30
+control-plane/Sources/App/Controllers/WorkloadRegistrationController.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 108
+control-plane/Sources/App/Models/PolicySetVersion.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 28-29
+control-plane/Sources/App/Services/AuditService.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 158-160,235-237,286-288,433-436
+docs/architecture/iam.md
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 960-967
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 13-14
+agent/Tests/StratoAgentTests/ResolverHostPortPlanTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 24-25,78-80,89,101-102,110,118
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  s_1caa12ce689fe8::t_18a73dc7e0bcea 577-587,593-594,598,602,607,613-617,620,626-630,633,642,649-653,655,662-664,668,672,680-682
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0283d1adec4e45d42f044ce2ec7eef792cd0c2cc",
+  "prompts": {},
+  "sessions": {
+    "s_1caa12ce689fe8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6f-4fa5-7fd0-bf2a-063474d3e1e0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

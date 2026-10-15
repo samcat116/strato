@@ -1,0 +1,37 @@
+control-plane/web/src/lib/api/users.ts
+  s_589380e0528185::t_6e4b6f5aedaa47 1-11
+control-plane/web/src/lib/api/index.ts
+  s_589380e0528185::t_9e0cd9f4c4aadd 5
+control-plane/web/src/types/api.ts
+  s_589380e0528185::t_8ecb921148cf05 13-18
+control-plane/web/src/lib/webauthn/client.ts
+  s_589380e0528185::t_589377e3e19a25 124-133
+  s_589380e0528185::t_fded1be9b72719 120-123,134-136,139,148
+  s_589380e0528185::t_f51ce5f7074ae7 9,11
+  s_589380e0528185::t_2eddfd1ab8ed45 10
+control-plane/web/src/components/auth/register-form.tsx
+  s_589380e0528185::t_6e407955c169f1 26-27,38-45
+  s_589380e0528185::t_4b074cf68c889d 57-61
+  s_589380e0528185::t_4f9aa72418712e 157-182,186
+  s_589380e0528185::t_ecb1312f2e652f 84
+control-plane/web/src/providers/auth-provider.tsx
+  s_589380e0528185::t_679cf2ec7f6f22 14
+  s_589380e0528185::t_46e412528a8fb1 22
+  s_589380e0528185::t_ec175d507325a4 61-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9d220f70658f915a00cdf4c4bc85f4242180a127",
+  "prompts": {},
+  "sessions": {
+    "s_589380e0528185": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5f8719f9-a2b8-4586-9ab7-1b65062a9c5b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

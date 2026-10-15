@@ -1,0 +1,60 @@
+control-plane/web/src/app/(dashboard)/storage/volumes/page.tsx
+  s_a7de27be0cacd8::t_aff3d3506d4ca0 1-65
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_a7de27be0cacd8::t_0ef09eaa3229d1 253-255
+  s_a7de27be0cacd8::t_60a137dc3f07e5 19-24
+control-plane/web/src/types/api.ts
+  s_a7de27be0cacd8::t_1d0c6d9ff64ab0 334-429
+control-plane/web/src/components/volumes/snapshot-status-badge.tsx
+  s_a7de27be0cacd8::t_7b2fa412534580 1-44
+control-plane/web/src/components/volumes/create-snapshot-dialog.tsx
+  s_a7de27be0cacd8::t_9255394bc6a41a 1-186
+control-plane/web/src/components/volumes/snapshot-table.tsx
+  s_a7de27be0cacd8::t_e89289ac564604 1-212
+control-plane/web/src/lib/api/volumes.ts
+  s_a7de27be0cacd8::t_6a58a8cca38b84 1-69
+control-plane/web/src/components/vms/index.ts
+  s_a7de27be0cacd8::t_11902631e03ecd 6
+control-plane/web/src/components/volumes/clone-volume-dialog.tsx
+  s_a7de27be0cacd8::t_8ff880034d2b6d 1-132
+control-plane/web/src/app/(dashboard)/storage/snapshots/page.tsx
+  s_a7de27be0cacd8::t_433e4a617a3486 1-73
+control-plane/web/src/components/volumes/attach-volume-dialog.tsx
+  s_a7de27be0cacd8::t_13f239d3c8ff02 1-165
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_a7de27be0cacd8::t_118dde36181b85 1-270
+control-plane/web/src/components/volumes/volume-actions.tsx
+  s_a7de27be0cacd8::t_2b7b61be37cc6e 1-233
+control-plane/web/src/lib/hooks/index.ts
+  s_a7de27be0cacd8::t_5ea9de13d569c3 2-8
+control-plane/web/src/components/volumes/resize-volume-dialog.tsx
+  s_a7de27be0cacd8::t_282fed1ad3929f 1-122
+control-plane/web/src/components/layout/sidebar.tsx
+  s_a7de27be0cacd8::t_c25039b0086110 146-147
+control-plane/web/src/components/volumes/index.ts
+  s_a7de27be0cacd8::t_6ac058cb4d3d88 1-10
+control-plane/web/src/components/volumes/volume-status-badge.tsx
+  s_a7de27be0cacd8::t_1535ab42ca0df2 1-67
+control-plane/web/src/components/volumes/volume-table.tsx
+  s_a7de27be0cacd8::t_d674cfdff4c783 1-132
+control-plane/web/src/components/vms/vm-volumes-card.tsx
+  s_a7de27be0cacd8::t_3ee2d236b4196f 1-262
+control-plane/web/src/lib/hooks/use-volumes.ts
+  s_a7de27be0cacd8::t_ce11b6bacce3f1 1-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7811d5b5c4bcbf6376491c14b35b288713efd281",
+  "prompts": {},
+  "sessions": {
+    "s_a7de27be0cacd8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4ce10b1d-4696-4bc8-a6c0-55a0316d8be7",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

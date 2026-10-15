@@ -1,0 +1,35 @@
+control-plane/Tests/AppTests/SandboxExecAttachIntegrationTests.swift
+  s_d0d9905ef80a1e::t_818da097fc87b5 58-59,69-76,78
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_d0d9905ef80a1e::t_932699164c3ff0 48
+  s_d0d9905ef80a1e::t_811ac8ac990a36 37
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_d0d9905ef80a1e::t_8813915574d382 170-181
+  s_d0d9905ef80a1e::t_293e584910ceae 229-230
+  s_d0d9905ef80a1e::t_941d7e373376f1 72-79
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_d0d9905ef80a1e::t_8c5e33dfab9be3 389-393
+  s_d0d9905ef80a1e::t_21f271ef670445 94-102,104-131
+  s_d0d9905ef80a1e::t_807b1c16a4b870 103
+docs/architecture/iam.md
+  s_d0d9905ef80a1e::t_e158d72bd4e208 569-587
+control-plane/Tests/AppTests/IAMAuthorizerTests.swift
+  s_d0d9905ef80a1e::t_1d00354e19c9c5 493-494,502-503,508-509
+  s_d0d9905ef80a1e::t_fa216266df3e22 375-492,495-501,504-507,510-576
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "865240a42ea33773b8a437e1984287b022c72b5c",
+  "prompts": {},
+  "sessions": {
+    "s_d0d9905ef80a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2871a9cb-d7d0-4915-a56c-6a824d4c3e63",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

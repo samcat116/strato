@@ -1,0 +1,77 @@
+control-plane/Sources/App/openapi-generator-config.yaml
+  s_b8cfff041f0853::t_c1ff382cb9830b 6-26
+control-plane/Sources/App/OpenAPI/OpenAPIRequestContext.swift
+  s_b8cfff041f0853::t_aa67966e8a91a1 57-61
+  s_b8cfff041f0853::t_1ae653ec368227 1-56,62-66
+docs/api-reference.md
+  s_b8cfff041f0853::t_dfcc8016848d2f 73-127
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_b8cfff041f0853::t_7ff86c3f168ae1 574-631
+CLAUDE.md
+  s_b8cfff041f0853::t_36c927caa48c11 149
+  s_b8cfff041f0853::t_315d9aa45b477f 22
+control-plane/Tests/AppTests/OpenAPISpecDriftTests.swift
+  s_b8cfff041f0853::t_ca32fe69b39aaf 182-245
+  s_b8cfff041f0853::t_c1e4690307ebc7 94-99,103,133,135-167,169-171,173
+.github/workflows/build.yaml
+  s_b8cfff041f0853::t_0c0aac9a7a23e9 33,64-67,90,111-112,117,134-142,192,216,266-278
+  s_b8cfff041f0853::t_4a87e1ce6a78b7 226-228,230-231,236,244
+  s_b8cfff041f0853::t_d2886b71861a9c 279
+clients/swift/Sources/StratoAPIClient/BearerTokenMiddleware.swift
+  s_b8cfff041f0853::t_8c22f1b6e6cc60 1-28
+control-plane/web/package.json
+  s_b8cfff041f0853::t_eb2cea8c77f796 41
+  s_b8cfff041f0853::t_531aafef44881b 10-11
+control-plane/web/src/lib/api/projects.ts
+  s_b8cfff041f0853::t_359a18e69bac05 34-35
+  s_b8cfff041f0853::t_f7259da4667c45 4,6-10,12-16,18-20
+control-plane/web/eslint.config.mjs
+  s_b8cfff041f0853::t_129482d32ca052 15-16
+clients/swift/Sources/StratoAPIClient/openapi-generator-config.yaml
+  s_b8cfff041f0853::t_958ce31fc42385 1-8
+control-plane/Sources/App/OpenAPI/ProjectSchemaMapping.swift
+  s_b8cfff041f0853::t_bcedb329d118cb 29,31
+  s_b8cfff041f0853::t_85206083e1b837 12,14
+  s_b8cfff041f0853::t_e3db68c1e40585 1-11,13,15-28,30,32-90
+control-plane/Sources/App/routes.swift
+  s_b8cfff041f0853::t_ef7c2b012ccbf1 27-28
+  s_b8cfff041f0853::t_b48a0b1b8be984 80-84
+clients/swift/Package.swift
+  s_b8cfff041f0853::t_cfb3abcf0d4bff 1-35,39-49
+  s_b8cfff041f0853::t_7f38facd5bd777 36-38
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_b8cfff041f0853::t_206c14bafe9e35 521-529
+  s_b8cfff041f0853::t_74251142d8b91d 79-82,227-230,290-293,329-332,453-456
+  s_b8cfff041f0853::t_ba15efc6ccb6fc 72,156,254,318,341,377,504,516
+  s_b8cfff041f0853::t_cb9d6ab648d865 1-60,62-71,73-76,78,83-155,157-160,162-193,195-224,226,231-253,255-260,262-286,288-289,294-317,319-326,328,333-340,342-347,349-376,378-385,387-400,402-450,452,457-503,505-515,517-520,530-626
+  s_b8cfff041f0853::t_829bdef7ba3a95 61,77,161,194,225,261,287,327,348,386,401,451
+control-plane/Sources/App/OpenAPI/GeneratedAPIRegistration.swift
+  s_b8cfff041f0853::t_cd76e1febb6da8 1-46
+control-plane/web/src/types/openapi.ts
+  s_b8cfff041f0853::t_7e11c039657920 5338
+  s_b8cfff041f0853::t_531aafef44881b 1-5337,5339-14154
+clients/swift/Tests/StratoAPIClientTests/StratoAPIClientTests.swift
+  s_b8cfff041f0853::t_e20bdde8d130aa 1-94
+control-plane/Sources/App/openapi.yaml
+  s_b8cfff041f0853::t_327694e204314c 9085
+clients/swift/Sources/StratoAPIClient/openapi.yaml
+  s_b8cfff041f0853::t_1339f94408785f 1
+control-plane/web/bun.lock
+  s_b8cfff041f0853::t_11e0aeecd6013c 34,275-280,399-400,403-404,461-462,473-474,637-638,645-646,709-710,811-812,823-824,835-836,865-866,933,957-958,981-982,1003-1006,1033-1038,1059-1060,1077-1078
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f618f1d4698f72d08efccc02b34e14b0e0fc495a",
+  "prompts": {},
+  "sessions": {
+    "s_b8cfff041f0853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53c13793-5dc7-4e02-a4e1-962d9f381ce1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

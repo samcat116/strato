@@ -1,0 +1,25 @@
+control-plane/Sources/App/Services/IPAMService.swift
+  s_fc11bc84994473::t_508fd8c0b46800 248-249,251
+  s_fc11bc84994473::t_de327b4c7f594b 87-93
+control-plane/Sources/App/configure.swift
+  s_fc11bc84994473::t_15db56289436f1 675-679
+control-plane/Sources/App/Migrations/ScopeFloatingIPPoolNamesToOwners.swift
+  s_fc11bc84994473::t_8f8b404fb25831 44-52,54,56-57,59-76
+  s_fc11bc84994473::t_3e8be1f3bcd18d 79-81,83,85-86,88-96,98-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "e4ede2dbba77d8fab4bdbbddef080888af7f7e0f",
+  "prompts": {},
+  "sessions": {
+    "s_fc11bc84994473": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15c4f3c7-8724-42fd-a73b-75a484729c52",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

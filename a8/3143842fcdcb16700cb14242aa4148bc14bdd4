@@ -1,0 +1,31 @@
+helm/strato-control-plane/templates/_helpers.tpl
+  s_6be939981236cc::t_25b8038c542511 93-99,107-108
+helm/strato-control-plane/templates/migration-job.yaml
+  s_6be939981236cc::t_5e56925e99e258 39-42
+helm/strato-control-plane/values.yaml
+  s_d3ddaf0d6448fa::t_d6dc3404c0b3ba 183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a83143842fcdcb16700cb14242aa4148bc14bdd4",
+  "prompts": {},
+  "sessions": {
+    "s_6be939981236cc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "de13cf51-5a0e-4903-b04f-3adbbf89fe2b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d3ddaf0d6448fa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6716173-cfeb-4893-a1ea-a5eccbdbcb33",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

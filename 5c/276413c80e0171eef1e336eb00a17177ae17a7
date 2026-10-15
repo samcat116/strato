@@ -1,0 +1,18 @@
+cli/Sources/StratoCLI/Commands/VMExecCommand.swift
+  h_a84d4ff76cadd1 46-51,54,60
+cli/Tests/Integration/vm_exec.py
+  h_a84d4ff76cadd1 37-38,119,123-124,170-200,203-204,206-215,217,221
+docs/architecture/control-plane.md
+  h_a84d4ff76cadd1 805-807,816-817
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5c276413c80e0171eef1e336eb00a17177ae17a7",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

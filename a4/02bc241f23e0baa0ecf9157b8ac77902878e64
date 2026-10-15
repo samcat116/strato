@@ -1,0 +1,22 @@
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_d757a3d357885a::t_cf5e2a6299ba47 199,206,216,219-224,226,228-231,233,235-241,243-259,261-267,269-270,272-284
+  s_d757a3d357885a::t_6983b2c78d1468 877-961
+  s_d757a3d357885a::t_0b5b3c70419ad9 89,101
+  s_d757a3d357885a::t_d071104404eea3 374-377,453-467
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a402bc241f23e0baa0ecf9157b8ac77902878e64",
+  "prompts": {},
+  "sessions": {
+    "s_d757a3d357885a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00120-15a1-73d1-b311-cd894a6d7f99",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

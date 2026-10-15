@@ -1,0 +1,19 @@
+control-plane/web/bun.lock
+  s_fb1c27aa624e3c::t_cebf4206cb75bf 19,181,185,187,189,191,193,195,197,199,789
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a00001a64f6d6bbd96f018a46c6be6fd1acb546b",
+  "prompts": {},
+  "sessions": {
+    "s_fb1c27aa624e3c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7c13c7af-224e-4117-8289-4753a5fb2d4e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

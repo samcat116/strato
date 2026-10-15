@@ -1,0 +1,84 @@
+control-plane/web/src/lib/api/projects.ts
+  s_2e084fefe2586a::t_071ab46dae62ab 75
+control-plane/Sources/App/Models/Project.swift
+  s_2e084fefe2586a::t_c32ffb23ec6dc9 212,216
+control-plane/web/src/components/folders/folders-section.tsx
+  s_2e084fefe2586a::t_c6dafd7bf2639e 12-91
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_2e084fefe2586a::t_c32ffb23ec6dc9 374,385,416,426,430,664,667,675
+control-plane/web/src/lib/hooks/index.ts
+  s_2e084fefe2586a::t_00275e8062f8fb 100-106
+control-plane/web/src/lib/api/quotas.ts
+  s_2e084fefe2586a::t_071ab46dae62ab 40
+docs/deployment/iam.md
+  s_2e084fefe2586a::t_f64a8ae0a1cbb5 4
+docs/deployment/agents.md
+  s_2e084fefe2586a::t_6c8ee2dbdae964 30
+docs/architecture/overview.md
+  s_2e084fefe2586a::t_cf2d36ffb402ef 198
+  s_2e084fefe2586a::t_5a486cd2532033 153-154,156
+  s_2e084fefe2586a::t_cbcae2c93005cd 205,209
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_2e084fefe2586a::t_c32ffb23ec6dc9 316,328,348,358,362,492,508
+control-plane/web/src/components/folders/folder-form-dialog.tsx
+  s_2e084fefe2586a::t_08556d44cc7097 17-192
+control-plane/web/src/lib/hooks/use-folders.ts
+  s_2e084fefe2586a::t_0a2b261c645a97 2-68
+docs/architecture/control-plane.md
+  s_2e084fefe2586a::t_11d6b9cfee2031 85-86
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_2e084fefe2586a::t_ff1dfd403fd651 18,155,158,283-285
+control-plane/web/src/app/(dashboard)/hierarchy/page.tsx
+  s_2e084fefe2586a::t_071ab46dae62ab 61,71,148
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_2e084fefe2586a::t_c32ffb23ec6dc9 50
+docs/architecture/iam.md
+  s_2e084fefe2586a::t_788e9e87403c37 24,26-28
+control-plane/web/src/components/agents/agent-table.tsx
+  s_2e084fefe2586a::t_071ab46dae62ab 26,34
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_2e084fefe2586a::t_c32ffb23ec6dc9 102
+control-plane/web/src/components/hierarchy/hierarchy-tree.tsx
+  s_2e084fefe2586a::t_ff1dfd403fd651 17,150,152,187-188,196
+  s_2e084fefe2586a::t_bfb54663e1ba32 158,162,166-167,169
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_2e084fefe2586a::t_c9f2d86ca20fa0 280-281
+  s_2e084fefe2586a::t_c32ffb23ec6dc9 82,89,94,131,136,155,190,199,204,223,259,266,271,289,317,324,329,343,352,357,364,369,375,435,442,447,486,496,501,512
+control-plane/web/src/components/folders/index.ts
+  s_2e084fefe2586a::t_55585ad0184f27 1-4
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_2e084fefe2586a::t_c9f2d86ca20fa0 398-399
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_2e084fefe2586a::t_8d6a860223bee0 45
+  s_2e084fefe2586a::t_ff1dfd403fd651 28,79,81,83-84,86-87,89-90,93,171-172
+control-plane/web/src/components/folders/folder-tree.tsx
+  s_2e084fefe2586a::t_c5fde61e665da6 1-268
+control-plane/web/src/lib/api/index.ts
+  s_2e084fefe2586a::t_00275e8062f8fb 20
+control-plane/web/src/lib/api/hierarchy.ts
+  s_2e084fefe2586a::t_071ab46dae62ab 1
+CLAUDE.md
+  s_2e084fefe2586a::t_b2c7388f2f9bd6 128
+docs/architecture/networking.md
+  s_2e084fefe2586a::t_2b66b5e55a16b9 365
+control-plane/web/src/lib/api/folders.ts
+  s_2e084fefe2586a::t_7f823670298ee0 1-41
+control-plane/web/src/types/api.ts
+  s_2e084fefe2586a::t_f4adf3a1e639e1 186-188,201-202,209,212,218,1106,1112,1121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "800ac2c3b5cbb0749f92d09bdb768022474eda77",
+  "prompts": {},
+  "sessions": {
+    "s_2e084fefe2586a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cea75fa9-a83f-4c57-b26b-7a698ad66320",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

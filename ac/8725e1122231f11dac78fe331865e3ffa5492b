@@ -1,0 +1,19 @@
+control-plane/Tests/AppTests/VolumeAttachProjectContainmentTests.swift
+  s_4c473b6fe446db::t_b201ea88fed7d2 105-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "ac8725e1122231f11dac78fe331865e3ffa5492b",
+  "prompts": {},
+  "sessions": {
+    "s_4c473b6fe446db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9aeee864-ffc4-4413-9851-8782fdc6878d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

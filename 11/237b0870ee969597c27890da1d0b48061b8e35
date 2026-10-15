@@ -1,0 +1,23 @@
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_b041cfc9c7df01::t_b89340ed8cf791 125-139
+  s_b041cfc9c7df01::t_4635f3bf6a98fd 4
+  s_b041cfc9c7df01::t_474b27fde7188d 60-65,76-78
+  s_b041cfc9c7df01::t_4af9560655deb0 79
+  s_b041cfc9c7df01::t_5f1dbf69cdaef4 140-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "11237b0870ee969597c27890da1d0b48061b8e35",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

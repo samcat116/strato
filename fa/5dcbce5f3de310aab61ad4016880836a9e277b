@@ -1,0 +1,19 @@
+helm/strato-control-plane/templates/spire-bundle-configmap.yaml
+  s_a587f81d483352::t_c0ecb66c53e2b3 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "fa5dcbce5f3de310aab61ad4016880836a9e277b",
+  "prompts": {},
+  "sessions": {
+    "s_a587f81d483352": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc6066aa-332b-4561-b79f-cda35143be82",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

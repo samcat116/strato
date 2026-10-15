@@ -1,0 +1,24 @@
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_e124613d58f764::t_0c89d86002aee1 96-103
+agent/Tests/StratoAgentTests/DomainMemoryInventoryTests.swift
+  s_e124613d58f764::t_0c89d86002aee1 83-87
+  s_e124613d58f764::t_983b735b44ca22 76-82,88-99
+agent/Sources/StratoAgentCore/DomainMemoryInventory.swift
+  s_e124613d58f764::t_983b735b44ca22 149-152,212-222,226-227,240,248-258,281-291,298,328-352
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "be32d35b98058237addce28857469a7f3d43bc92",
+  "prompts": {},
+  "sessions": {
+    "s_e124613d58f764": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae3-6d8b-7011-bec6-5aa84f70dc52",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

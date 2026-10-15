@@ -1,0 +1,163 @@
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 520-522,744-746,756
+agent/Sources/StratoAgentRuntime/Agent+Identity.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 185,225,579-587
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 76-81,97,107,112,126
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 151,165-185
+  s_d5e22336a13eea::t_23bbac099949ce 186-189
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 9,12-13,59-60,62-74,162,171-172,176-183,190-191,196-213,341-394,443,464,471-503,564
+agent/Sources/StratoAgentRuntime/MockHypervisorService.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 136,138-149,161-199
+  s_d5e22336a13eea::t_b9256e1ffff82c 200
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 34-35,54-55,559-560,578,587-631
+  s_d5e22336a13eea::t_e891252b23e590 632-633
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 593-599
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_d5e22336a13eea::t_aa6284cb662524 309-310
+agent/Tests/StratoAgentTests/DomainBlockIOTuneTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 1-91
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_d5e22336a13eea::t_41a7c1aa58d5bc 205-209
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 79
+control-plane/web/src/types/openapi.ts
+  s_d5e22336a13eea::t_c43de5e299eadc 1180,1182,6468,6473,6571,6573,8764-8765
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_d5e22336a13eea::t_aa6284cb662524 427-428
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 137,146
+agent/Sources/StratoAgentDomainXML/DomainXMLBuilder.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 563,830,882-884,891-902,921,925-926
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 481-483
+control-plane/Sources/App/Services/VolumeService.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 199,329
+  s_d5e22336a13eea::t_48999398e40af4 334,352
+  s_d5e22336a13eea::t_39a1965eb7cd89 200,330,343-344
+agent/Tests/StratoAgentTests/EdgeNonceReconciliationTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 443
+agent/Sources/StratoAgentDomainXML/ResolvedDisk.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 31-32,36,42
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 941
+control-plane/Sources/App/openapi.yaml
+  s_d5e22336a13eea::t_c43de5e299eadc 1711-1713,1717-1719,11244,11251-11252,11444-11446,11449-11452,15774-15779
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 9-12,16-17,134-146,149
+  s_d5e22336a13eea::t_39a1965eb7cd89 147-148
+  s_d5e22336a13eea::t_0fc8eb80848aa4 150-151
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 292-311
+control-plane/Sources/App/Models/Agent.swift
+  s_d5e22336a13eea::t_48999398e40af4 554,557
+  s_d5e22336a13eea::t_c43de5e299eadc 551-553,555-556,558-560
+agent/Sources/StratoAgentCore/DomainBlockIOTune.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 1-147
+agent/Tests/StratoAgentPlatformTests/MetadataStoreTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 80
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 604-620
+deploy/compose/volume-io-limits-test.sh
+  s_d5e22336a13eea::t_c43de5e299eadc 1-412
+docs/architecture/storage.md
+  s_d5e22336a13eea::t_c43de5e299eadc 615-642
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 20
+control-plane/Tests/AppPlatformTests/RebaseLegacyClusterClockDeadlinesTests.swift
+  s_d5e22336a13eea::t_41a7c1aa58d5bc 1-111
+control-plane/Sources/App/Models/Volume.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 193-196,413,570-571
+docs/deployment/observability.md
+  s_d5e22336a13eea::t_c43de5e299eadc 228-233
+shared/Tests/StratoSharedTests/VolumeIOLimitsTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 12,118-128
+  s_d5e22336a13eea::t_7faba7c5297a01 129-130
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 27-28,37-38,47-48,52,127-128,136-137,142-150,196-268
+  s_d5e22336a13eea::t_d6b3c547517175 269
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_d5e22336a13eea::t_4aec48a977d53f 974,976-983
+  s_d5e22336a13eea::t_48999398e40af4 694,946,948
+  s_d5e22336a13eea::t_c43de5e299eadc 197-199,201-205,207-208,210-221,319,695-700,926-927,940,943-945,947,949-956,962-973,975,984-990,1010-1021
+  s_d5e22336a13eea::t_39a1965eb7cd89 200,206,209,320,337
+  s_0a6f49dab719ee::t_a552227507bdd0 1022-1023
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 378-383
+agent/Sources/StratoAgentRuntime/Agent.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 414-417
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 146-192
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 18-19,32,63
+shared/Sources/StratoShared/WireProtocol.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 14-17,35
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 473-560
+agent/Sources/StratoAgentRuntime/FirecrackerService.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 804
+agent/Sources/StratoAgentRuntime/Agent+Reconciliation.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 380-420,426-428,433,625
+agent/Tests/StratoAgentStorageTests/VMManifestStoreTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 151-171
+agent/Tests/StratoAgentRuntimeTests/AgentIdentityTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 1-16
+control-plane/Sources/App/Migrations/RebaseLegacyClusterClockDeadlines.swift
+  s_d5e22336a13eea::t_41a7c1aa58d5bc 1-73
+agent/Sources/StratoAgentCore/ReconcileTypes.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 96-100,106-108,114-115,228-230
+control-plane/Sources/App/Services/StorageObservedMerge.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 204-207,219-230
+agent/Sources/StratoAgentCore/ReconcilePlanner.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 632-641,669-677
+  s_d5e22336a13eea::t_fd9295777c2cc6 678-679
+docs/development/e2e-testing.md
+  s_d5e22336a13eea::t_c43de5e299eadc 176-198
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 45-46,868-870
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 236
+docs/adr/0001-declarative-agent-protocol.md
+  s_d5e22336a13eea::t_c43de5e299eadc 491-497
+agent/Sources/StratoAgentDomainXML/DomainDeviceXML.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 50-51,55
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 191-202
+agent/Sources/StratoAgentCore/HypervisorProbe.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 204-207
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 332-348,1476-1479,1481-1482,1486-1489,1502-1503,1516
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 1439,1454-1455,1495-1505,1533-1639,2421-2422
+agent/Sources/StratoAgentRuntime/HypervisorProtocol.swift
+  s_d5e22336a13eea::t_c43de5e299eadc 235,238-251,417-427
+  s_d5e22336a13eea::t_b38c17ce0407a3 428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "42869b756caa45d81fd3a9a75ef2d0f5390ccc74",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

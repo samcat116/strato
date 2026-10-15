@@ -1,0 +1,35 @@
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_5e07396a61914c::t_b1812aab096155 20,284-285
+control-plane/web/src/components/ssf-streams/index.ts
+  s_5e07396a61914c::t_10c57d3a0c846d 1-2
+control-plane/web/src/components/ssf-streams/ssf-stream-dialog.tsx
+  s_5e07396a61914c::t_1405393b20315d 1-359
+control-plane/web/src/components/ssf-streams/ssf-streams-section.tsx
+  s_5e07396a61914c::t_087b2656216664 1-577
+control-plane/web/src/lib/api/index.ts
+  s_5e07396a61914c::t_a46087e2858bf8 17
+control-plane/web/src/lib/api/ssf-streams.ts
+  s_5e07396a61914c::t_c985fb276e6790 1-63
+control-plane/web/src/lib/hooks/index.ts
+  s_5e07396a61914c::t_ff4323d18506bb 53-63
+control-plane/web/src/lib/hooks/use-ssf-streams.ts
+  s_5e07396a61914c::t_003c2992e102b0 1-86
+control-plane/web/src/types/api.ts
+  s_5e07396a61914c::t_61b1d87f529b81 462-528
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "804091b01077519be46362fe304a95671fbc7078",
+  "prompts": {},
+  "sessions": {
+    "s_5e07396a61914c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1697d47d-d1b7-4d21-b559-3e981d0d73dc",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

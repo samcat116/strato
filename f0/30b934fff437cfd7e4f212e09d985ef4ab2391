@@ -1,0 +1,24 @@
+shared/Sources/StratoShared/WireProtocol.swift
+  s_b46e1e8521f8aa::t_1ed7797e54acbd 14-16,30
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_b46e1e8521f8aa::t_1ed7797e54acbd 20
+docs/architecture/wire-protocol.md
+  s_b46e1e8521f8aa::t_1ed7797e54acbd 53,113-116
+  s_b46e1e8521f8aa::t_7bdbfe44a09d20 117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "f030b934fff437cfd7e4f212e09d985ef4ab2391",
+  "prompts": {},
+  "sessions": {
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

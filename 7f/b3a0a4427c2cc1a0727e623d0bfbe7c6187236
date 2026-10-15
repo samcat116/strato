@@ -1,0 +1,18 @@
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  h_a84d4ff76cadd1 163,165-168
+control-plane/Tests/AppNetworkTests/OverlapAdmissionRaceTests.swift
+  h_a84d4ff76cadd1 93,95,185-231
+docs/architecture/networking.md
+  h_a84d4ff76cadd1 74-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7fb3a0a4427c2cc1a0727e623d0bfbe7c6187236",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

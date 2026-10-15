@@ -1,0 +1,30 @@
+control-plane/Sources/App/configure.swift
+  s_7102ca8dc4e21d::t_d0ec398efb74e6 506-510
+control-plane/Sources/App/Services/AuditService.swift
+  s_7102ca8dc4e21d::t_c99ac25157a8a2 4
+  s_7102ca8dc4e21d::t_ecbe00687f3d64 307-403
+  s_7102ca8dc4e21d::t_3360083311278c 56-57,64,77-78
+  s_7102ca8dc4e21d::t_a8c048c2e1b8be 251-255,264
+  s_7102ca8dc4e21d::t_8df89f0452d313 421-439
+control-plane/Tests/AppTests/AuditLoggingTests.swift
+  s_7102ca8dc4e21d::t_577b09dab7988f 266-334
+docs/deployment/audit-logging.md
+  s_7102ca8dc4e21d::t_1a05e86fa939f8 81-91
+  s_7102ca8dc4e21d::t_a05bbd2bce3d9e 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "88977730c487521eca52528b94b81ee936e884e9",
+  "prompts": {},
+  "sessions": {
+    "s_7102ca8dc4e21d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "231ad76d-0e92-4471-9677-3a547e5a712e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+agent/Sources/StratoAgentCore/MTLSArtifactDownloader.swift
+  h_a84d4ff76cadd1 246-257,324,327-328,342-345
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  h_a84d4ff76cadd1 122
+agent/Sources/StratoAgentRuntime/Agent+Identity.swift
+  h_a84d4ff76cadd1 154-171
+agent/Sources/StratoAgentRuntime/Agent+Lifecycle.swift
+  h_a84d4ff76cadd1 561
+agent/Sources/StratoAgentRuntime/Agent+Messages.swift
+  h_a84d4ff76cadd1 708,755,794
+agent/Sources/StratoAgentRuntime/Agent+NetworkConnection.swift
+  h_a84d4ff76cadd1 68
+agent/Tests/StratoAgentTests/AgentUpdaterTests.swift
+  h_a84d4ff76cadd1 35-70
+agent/Tests/StratoAgentTests/MTLSArtifactDownloaderTests.swift
+  h_a84d4ff76cadd1 112-144
+control-plane/Sources/App/Controllers/AgentDesiredStateController.swift
+  h_a84d4ff76cadd1 72-79
+control-plane/Sources/App/Controllers/AgentUpdateBridgeController.swift
+  h_a84d4ff76cadd1 1-42
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  h_a84d4ff76cadd1 165
+control-plane/Sources/App/routes.swift
+  h_a84d4ff76cadd1 31
+control-plane/Tests/AppResourceTests/DesiredStatePollTests.swift
+  h_a84d4ff76cadd1 76-77,92-150
+docs/architecture/agent-updates.md
+  h_a84d4ff76cadd1 6,187-259,269,272
+docs/architecture/wire-protocol.md
+  h_a84d4ff76cadd1 671-679
+docs/deployment/kubernetes.md
+  h_a84d4ff76cadd1 278-305
+shared/Sources/StratoShared/AgentUpdateBridge.swift
+  h_a84d4ff76cadd1 1-52
+shared/Sources/StratoShared/WireProtocol.swift
+  h_a84d4ff76cadd1 6-9
+shared/Tests/StratoSharedTests/AgentUpdateBridgeTests.swift
+  h_a84d4ff76cadd1 1-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5e5299f59f394a8398e11745c792162ca8a78f13",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

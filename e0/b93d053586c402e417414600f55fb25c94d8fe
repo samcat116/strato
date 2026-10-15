@@ -1,0 +1,30 @@
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_b46c3107f6ba4b::t_9e15649cc1fb1e 48
+  s_b46c3107f6ba4b::t_2d4e6413c2c2f8 30-35,37
+control-plane/web/src/components/images/image-table.tsx
+  s_b46c3107f6ba4b::t_2d4e6413c2c2f8 80-84,98
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_b46c3107f6ba4b::t_2d4e6413c2c2f8 54-63,248-249
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_b46c3107f6ba4b::t_2d4e6413c2c2f8 296-297
+control-plane/web/src/types/api.ts
+  s_b46c3107f6ba4b::t_2d4e6413c2c2f8 1607-1610
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_b46c3107f6ba4b::t_2d4e6413c2c2f8 152,165,219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e0b93d053586c402e417414600f55fb25c94d8fe",
+  "prompts": {},
+  "sessions": {
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

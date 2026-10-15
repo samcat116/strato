@@ -1,0 +1,91 @@
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_1a95950ee906ac::t_020d3464e97224 36-37,44
+  s_1a95950ee906ac::t_79924956eea44f 486-529
+control-plane/Tests/AppTests/VMResizeTests.swift
+  s_1a95950ee906ac::t_769d846d4e8e48 11-13
+  s_1a95950ee906ac::t_c290ab5cb94738 268-397
+docs/architecture/agent.md
+  s_1a95950ee906ac::t_1f5d094e79915b 256-282
+docs/architecture/wire-protocol.md
+  s_1a95950ee906ac::t_4e630e55e79653 109-117,148
+agent/Sources/StratoAgentCore/QMP/QMPProbeClient.swift
+  s_1a95950ee906ac::t_24469c38d24b1f 60-62
+  s_1a95950ee906ac::t_9abc59704c785f 142,420-430
+  s_1a95950ee906ac::t_1831bd243b66a8 104-110,114-115,120-140
+  s_1a95950ee906ac::t_6f3654a4f956cc 141
+  s_1a95950ee906ac::t_726fe903b7e6fc 143
+docs/architecture/control-plane.md
+  s_1a95950ee906ac::t_49a9ea544d67a8 151-162
+shared/Sources/StratoShared/VMMemoryStats.swift
+  s_1a95950ee906ac::t_c339231d2e1d6a 30-48,52
+agent/Sources/StratoAgent/Agent.swift
+  s_1a95950ee906ac::t_19f996171a9e1a 3531-3535
+agent/Sources/StratoAgent/QEMUService.swift
+  s_1a95950ee906ac::t_b9a7f8a6ec9ad4 334-336
+  s_1a95950ee906ac::t_2f11d805b3e108 889-892,896-924
+  s_1a95950ee906ac::t_6fcc6ff64431ba 330-333,337
+  s_1a95950ee906ac::t_3f3e8c8567d3d2 925-926
+control-plane/Sources/App/Services/AgentService.swift
+  s_1a95950ee906ac::t_db2e6c721ec3a1 2614,2618
+  s_1a95950ee906ac::t_f4f3629d12cdca 2627-2630,2633
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_1a95950ee906ac::t_b0dd6994edcf16 205-216
+control-plane/Sources/App/Models/vm.swift
+  s_1a95950ee906ac::t_8ecd7247ba0b8a 422-428
+  s_1a95950ee906ac::t_cbb5fe2c94e32c 73-89
+  s_1a95950ee906ac::t_33a8ab9ff7acbd 468-470
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_1a95950ee906ac::t_52dac088669375 749-750,758,796
+agent/Tests/StratoAgentTests/QMPProbeClientTests.swift
+  s_1a95950ee906ac::t_458af88a753ed3 187-188
+  s_1a95950ee906ac::t_a1d3613a4710e5 370-407,410-412
+  s_1a95950ee906ac::t_83684e65fe39d4 408-409
+  s_1a95950ee906ac::t_450451c3464613 153-154,164-165
+shared/Sources/StratoShared/VMSpec.swift
+  s_1a95950ee906ac::t_06e9e1e2c3689b 94
+  s_1a95950ee906ac::t_ec3fc479333894 27-38
+  s_1a95950ee906ac::t_8a29ac2251ccf4 112
+  s_1a95950ee906ac::t_dde53a86221957 78
+  s_1a95950ee906ac::t_d15ff888087f2b 125-129
+control-plane/web/src/types/api.ts
+  s_1a95950ee906ac::t_b537734529f098 690-696
+  s_1a95950ee906ac::t_a04167f91bfdc2 156-164
+shared/Sources/StratoShared/WireProtocol.swift
+  s_1a95950ee906ac::t_316661e445c484 230-243
+  s_1a95950ee906ac::t_9be6ab8750d03f 415-427
+control-plane/Sources/App/configure.swift
+  s_1a95950ee906ac::t_acc8233924bd1a 525-528
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_1a95950ee906ac::t_dcd5487c79e25e 118,160
+control-plane/Sources/App/Controllers/VMController.swift
+  s_1a95950ee906ac::t_92fcf6e0e229dd 994-1009,1018-1022
+  s_1a95950ee906ac::t_35bf07bcd01061 1037-1042
+  s_1a95950ee906ac::t_e8988fd42fd4ec 1053-1062
+  s_1a95950ee906ac::t_0b75a18bcab237 886-889
+  s_1a95950ee906ac::t_c34383663a4007 968
+  s_1a95950ee906ac::t_d9234ea202d187 869-872,879-885,890-899
+  s_1a95950ee906ac::t_5173cce1a95bc2 914-916,926-943
+  s_1a95950ee906ac::t_dbcb238176a11e 944
+control-plane/Sources/App/Migrations/AddBalloonTargetToVM.swift
+  s_1a95950ee906ac::t_d1eb42b62b8f68 1-29
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_1a95950ee906ac::t_1dd5b94d1c7225 36-38,42-44,46,49,55
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_1a95950ee906ac::t_5f7fe10889b6d0 158-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "29cb8aaa729a0e6c285ca3cbc17b6b5e5fb4aa79",
+  "prompts": {},
+  "sessions": {
+    "s_1a95950ee906ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6f06e4c-b879-4582-99de-e1aed66e18b5",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

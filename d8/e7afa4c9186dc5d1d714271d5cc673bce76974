@@ -1,0 +1,148 @@
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 137,146
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 236
+control-plane/Sources/App/openapi.yaml
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 1711-1713,1717-1719,11244,11251-11252,11444-11446,11449-11452,15780-15785
+agent/Tests/StratoAgentTests/EdgeNonceReconciliationTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 443
+docs/architecture/storage.md
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 615-642
+agent/Sources/StratoAgentRuntime/MockHypervisorService.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 136,138-149,161-199
+  s_3af79fd703f9fa::t_99c192864c3d8a 200
+agent/Tests/StratoAgentTests/DomainBlockIOTuneTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 1-91
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 332-348,1476-1479,1481-1482,1486-1489,1502-1503,1516
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_3af79fd703f9fa::t_9079dfea7fdeeb 20
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 18-19,32,76
+agent/Tests/StratoAgentPlatformTests/MetadataStoreTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 80
+control-plane/Sources/App/Services/VolumeService.swift
+  s_3af79fd703f9fa::t_9079dfea7fdeeb 344,364,367-370,419,423
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 212-213,345,349,431-433,437-440
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 34-35,54-55,686-687,705,714-758
+  s_3af79fd703f9fa::t_27c1f5a859c0d0 759-760
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 140,154-174
+  s_3af79fd703f9fa::t_c5a9d99b596f3d 175-178
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 378-383
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 191-202
+control-plane/Sources/App/Models/Agent.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 557-566
+agent/Sources/StratoAgentRuntime/Agent+Reconciliation.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 380-420,426-428,433,625
+agent/Sources/StratoAgentCore/ReconcileTypes.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 96-100,106-108,114-115,228-230
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 581-587
+control-plane/Sources/App/Models/Volume.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 193-196,413,570-571
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 146-192
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 292-311
+agent/Tests/StratoAgentStorageTests/VMManifestStoreTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 151-171
+agent/Sources/StratoAgentDomainXML/DomainDeviceXML.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 50-51,55
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 481-483
+deploy/compose/volume-io-limits-test.sh
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 1-412
+docs/adr/0001-declarative-agent-protocol.md
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 491-497
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 45-46,868-870
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 224-247,393-394,790-796,1021-1022,1035,1038-1050,1056-1077,1097-1108
+  s_3af79fd703f9fa::t_9079dfea7fdeeb 308,419
+  s_aeadc33ad2c139::t_615a19480febd6 1109-1110
+control-plane/Sources/App/Services/StorageObservedMerge.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 201-204,216-227
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 27-28,37-38,47-48,52,127-128,136-137,142-150,196-268
+  s_3af79fd703f9fa::t_b080899774155b 269
+shared/Sources/StratoShared/HypervisorTypes.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 76-81,97,107,112,126
+agent/Sources/StratoAgentRuntime/Agent+Identity.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 185,225,579-587
+agent/Sources/StratoAgentRuntime/FirecrackerService.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 804
+agent/Sources/StratoAgentRuntime/Agent.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 418-421
+agent/Tests/StratoAgentRuntimeTests/AgentIdentityTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 1-16
+shared/Tests/StratoSharedTests/VolumeIOLimitsTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 12,118-128
+  s_3af79fd703f9fa::t_ac195a8f6331a4 129-130
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 79
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 604-620
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 459-546
+docs/development/e2e-testing.md
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 176-198
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 9-12,16-17,173-187
+  s_aeadc33ad2c139::t_cb96bc4710730a 188-189
+agent/Sources/StratoAgentCore/DomainBlockIOTune.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 1-147
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 520-522,744-746,756
+agent/Sources/StratoAgentRuntime/HypervisorProtocol.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 235,238-251,417-427
+  s_3af79fd703f9fa::t_8ec382fa70e379 428
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 9,12-13,59-60,62-74,162,171-172,176-183,190-191,196-213,341-394,443,464,471-503,564
+agent/Sources/StratoAgentCore/HypervisorProbe.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 204-207
+agent/Sources/StratoAgentDomainXML/DomainXMLBuilder.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 563,830,882-884,891-902,921,925-926
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 1439,1454-1455,1495-1505,1533-1639,2421-2422
+docs/deployment/observability.md
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 227-232
+shared/Sources/StratoShared/WireProtocol.swift
+  s_3af79fd703f9fa::t_9079dfea7fdeeb 14-17,35
+agent/Sources/StratoAgentDomainXML/ResolvedDisk.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 31-32,36,42
+agent/Sources/StratoAgentCore/ReconcilePlanner.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 632-641,669-677
+  s_3af79fd703f9fa::t_651ebf84f18bd6 678-679
+control-plane/web/src/types/openapi.ts
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 1180,1182,6468,6473,6571,6573,8772-8773
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_3af79fd703f9fa::t_f6c1c99d0a8501 941
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "d8e7afa4c9186dc5d1d714271d5cc673bce76974",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_aeadc33ad2c139": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-590c-7111-ab67-964d351744c2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

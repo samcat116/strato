@@ -1,0 +1,54 @@
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_3af79fd703f9fa::t_eb0a350e8c0fd1 205-208
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_3af79fd703f9fa::t_a05cb2db6a6308 50-55,100,114
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_3af79fd703f9fa::t_369b817e15037a 389
+  s_3af79fd703f9fa::t_fdca5d658cfd45 182-205,232,280,299
+control-plane/Tests/AppPlatformTests/AddImageArtifactVirtualSizeTests.swift
+  s_3af79fd703f9fa::t_24c009058545f6 1-44,48-66
+  s_3af79fd703f9fa::t_b048f340aae048 45-47
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_3af79fd703f9fa::t_90f32d47574eb4 1048,1075
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_3af79fd703f9fa::t_53697d0482540d 25,28,31,34,37
+  s_3af79fd703f9fa::t_fa615f61deb420 912,923,925-931
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_3af79fd703f9fa::t_7259e5fa3b3624 79,104-105,167-169,268,280-283,325,327
+control-plane/Sources/App/Services/ImageValidationService.swift
+  s_3af79fd703f9fa::t_a05cb2db6a6308 25-27,78-103,105-140
+  s_3af79fd703f9fa::t_b048f340aae048 104
+  s_3af79fd703f9fa::t_0d1fc1de38b496 141
+control-plane/Sources/App/Migrations/AddImageArtifactVirtualSize.swift
+  s_3af79fd703f9fa::t_eb0a350e8c0fd1 1-38
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_3af79fd703f9fa::t_047e51960f8b8b 13,67
+control-plane/Tests/AppResourceTests/ImageValidationServiceTests.swift
+  s_3af79fd703f9fa::t_59eadf64aab40a 108-109,115
+  s_3af79fd703f9fa::t_586aea019c030b 106-107,110-114,116-131
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_3af79fd703f9fa::t_cd0a6878370bea 249,251,283-284
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_3af79fd703f9fa::t_cd0a6878370bea 321-366
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_3af79fd703f9fa::t_7259e5fa3b3624 448-450,463,577-580,599
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  s_3af79fd703f9fa::t_59eadf64aab40a 22,25-31
+  s_3af79fd703f9fa::t_ed2dc71b74502d 189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "f47337b5f5569ccc70679b2dce4f4b9283f682c3",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

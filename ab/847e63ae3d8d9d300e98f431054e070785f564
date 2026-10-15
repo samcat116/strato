@@ -1,0 +1,68 @@
+control-plane/Sources/App/configure.swift
+  s_7cb1100217f98a::t_90554d09809ae7 95-107,370-374
+  s_7cb1100217f98a::t_aab61880b5304a 375
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_7cb1100217f98a::t_90554d09809ae7 85,155-157,759,803-809,812-813,828-834,840-841,846-848,875-876,879,886,888-893,909-912,928-931
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_7cb1100217f98a::t_90554d09809ae7 278-326
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_7cb1100217f98a::t_90554d09809ae7 80-85,92,95,116,118-123,125-126
+deploy/compose/setup.sh
+  s_7cb1100217f98a::t_90554d09809ae7 112-114
+control-plane/Sources/App/Services/SSFService.swift
+  s_7cb1100217f98a::t_90554d09809ae7 91
+docker-compose.yml
+  s_7cb1100217f98a::t_90554d09809ae7 75-77
+Taskfile.yml
+  s_7cb1100217f98a::t_90554d09809ae7 29-31
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_7cb1100217f98a::t_90554d09809ae7 1-195
+deploy/compose/docker-compose.yml
+  s_7cb1100217f98a::t_90554d09809ae7 333-336
+control-plane/Tests/AppTests/SecretsEncryptionServiceTests.swift
+  s_7cb1100217f98a::t_90554d09809ae7 1-220
+docs/architecture/overview.md
+  s_7cb1100217f98a::t_90554d09809ae7 224
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_7cb1100217f98a::t_90554d09809ae7 230-249,301
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_7cb1100217f98a::t_90554d09809ae7 20-21
+control-plane/Tests/AppTests/OIDCAuthFlowTests.swift
+  s_7cb1100217f98a::t_90554d09809ae7 1-643
+control-plane/Tests/AppTests/OIDCTokenVerificationTests.swift
+  s_7cb1100217f98a::t_90554d09809ae7 1-261
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_7cb1100217f98a::t_90554d09809ae7 119,377-415
+  s_7cb1100217f98a::t_042f77be3197aa 376
+control-plane/Sources/App/Models/SSFStream.swift
+  s_7cb1100217f98a::t_90554d09809ae7 36-37
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_7cb1100217f98a::t_90554d09809ae7 1-108
+control-plane/Tests/AppTests/SSFTests.swift
+  s_7cb1100217f98a::t_90554d09809ae7 470-568
+helm/strato-control-plane/templates/deployment.yaml
+  s_7cb1100217f98a::t_90554d09809ae7 164-171,196-205
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_7cb1100217f98a::t_90554d09809ae7 69,99-101
+helm/strato-control-plane/values.yaml
+  s_7cb1100217f98a::t_90554d09809ae7 220-228,238-245
+  s_7cb1100217f98a::t_50c476b80072ef 246
+docs/deployment/docker-compose.md
+  s_7cb1100217f98a::t_90554d09809ae7 72-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "ab847e63ae3d8d9d300e98f431054e070785f564",
+  "prompts": {},
+  "sessions": {
+    "s_7cb1100217f98a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "268f2271-7b73-49ec-a677-911ffbb65707",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

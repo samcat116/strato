@@ -1,0 +1,20 @@
+control-plane/web/src/components/iam/role-form-dialog.tsx
+  s_0efe7446473d64::t_3f8f0cb31a9203 103-147
+  s_0efe7446473d64::t_48861efdc9caf4 263-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6ea4475d5c1de09d39654246b20f6b2b16bbdf90",
+  "prompts": {},
+  "sessions": {
+    "s_0efe7446473d64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4fb56667-508b-4f0b-867b-bfbc05294f05",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

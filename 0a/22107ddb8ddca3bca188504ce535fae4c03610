@@ -1,0 +1,71 @@
+control-plane/web/src/lib/api/project-members.ts
+  s_79e524c6806817::t_268110bcb516be 1-42
+control-plane/web/src/lib/hooks/use-project-members.ts
+  s_79e524c6806817::t_e7843e1e6beabe 1-73
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_311e4d09212c99::t_d3dc0bf0822081 1-298
+control-plane/Sources/App/Migrations/CreateProjectGroupGrant.swift
+  s_311e4d09212c99::t_cd871d3b678ec2 1-19
+control-plane/Sources/App/Migrations/CreateProjectMember.swift
+  s_311e4d09212c99::t_98e6b6e9daf1fe 1-19
+control-plane/Sources/App/Models/ProjectMember.swift
+  s_311e4d09212c99::t_fd4949f7d34b27 1-95
+control-plane/Sources/App/configure.swift
+  s_311e4d09212c99::t_9b40dad0a1da53 257-260,268-273,275,366
+control-plane/Sources/App/routes.swift
+  s_311e4d09212c99::t_85d1ef4b042d79 15,24
+control-plane/Tests/AppTests/ProjectMemberTests.swift
+  s_311e4d09212c99::t_59b51a78547876 1-185
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_311e4d09212c99::t_a7399a878d59bb 14,51-64
+control-plane/web/src/app/(dashboard)/projects/[projectId]/page.tsx
+  s_311e4d09212c99::t_486ef1c59b2691 1-60
+control-plane/web/src/components/project-members/add-group-dialog.tsx
+  s_311e4d09212c99::t_8518efd6c462d9 1-190
+control-plane/web/src/components/project-members/add-member-dialog.tsx
+  s_311e4d09212c99::t_c9a7537caf1c6b 1-162
+control-plane/web/src/components/project-members/group-grants-table.tsx
+  s_311e4d09212c99::t_6adf7c92c00140 1-134
+control-plane/web/src/components/project-members/index.ts
+  s_311e4d09212c99::t_2ad269471e227c 1-5
+control-plane/web/src/components/project-members/members-section.tsx
+  s_311e4d09212c99::t_ec71c443e82000 1-125
+control-plane/web/src/components/project-members/members-table.tsx
+  s_311e4d09212c99::t_b0ce2125b42294 1-192
+control-plane/web/src/components/projects/projects-table.tsx
+  s_311e4d09212c99::t_ed9b3bd926064d 4,103-108
+control-plane/web/src/lib/api/authorization.ts
+  s_311e4d09212c99::t_28ef9c5b07606d 1-19
+control-plane/web/src/lib/api/index.ts
+  s_311e4d09212c99::t_76f623c5db45c3 9-10
+control-plane/web/src/lib/hooks/index.ts
+  s_311e4d09212c99::t_bd8559f6e09b4f 81-90
+control-plane/web/src/lib/hooks/use-permissions.ts
+  s_79e524c6806817::t_25c5939f100d31 1-33
+control-plane/web/src/types/api.ts
+  s_311e4d09212c99::t_355a822aa6d966 70-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0a22107ddb8ddca3bca188504ce535fae4c03610",
+  "prompts": {},
+  "sessions": {
+    "s_311e4d09212c99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b6dd57a-adf6-4dc0-8fd6-ae1126922c9b",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_79e524c6806817": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ac12cf4-64db-450e-b882-8b616c8cdc67",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_df0f2f0bc97d1f::t_42f413be8ef289 10
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_df0f2f0bc97d1f::t_42f413be8ef289 20-23,25,48-66,88-139,142-144,146-151,153-158,165-171,183,185,301-306,407-411,417,427-432,440,481-484,565-570,576
+  s_df0f2f0bc97d1f::t_2edb3e74ac2c31 67-87
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_df0f2f0bc97d1f::t_d0bd44bb2d114a 117-128
+control-plane/Sources/App/Services/AgentService.swift
+  s_df0f2f0bc97d1f::t_1e99e7b173ed66 127-139,504,665-666,730-736,741,746-754,756-766,768-777,779-783,1699-1703,1705-1718,1723
+control-plane/Tests/AppTests/CoordinationServiceTests.swift
+  s_df0f2f0bc97d1f::t_d0bd44bb2d114a 54-63
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_df0f2f0bc97d1f::t_75a0b9436332fc 82-90,126-132,263-275,429-439,559-580,582
+  s_df0f2f0bc97d1f::t_eecf24b8a627b7 581
+  s_df0f2f0bc97d1f::t_38aa99d090e7d1 583
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_df0f2f0bc97d1f::t_d0bd44bb2d114a 629-694
+  s_df0f2f0bc97d1f::t_10dc3548f836ca 401-433
+control-plane/Sources/App/Migrations/AddVMHotColumnIndexes.swift
+  s_df0f2f0bc97d1f::t_d0bd44bb2d114a 8-9
+control-plane/Sources/App/Models/Agent.swift
+  s_df0f2f0bc97d1f::t_5095c1215eb62b 202,206-220
+  s_df0f2f0bc97d1f::t_cba54d4210c871 221-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b7938305fa8b3cddb033c93baca6aa552bbe5bfb",
+  "prompts": {},
+  "sessions": {
+    "s_df0f2f0bc97d1f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f9178-3afb-7112-9211-aad8859aed1a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

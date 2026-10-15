@@ -1,0 +1,33 @@
+docs/deployment/agents.md
+  s_1f8e687c4649c2::t_43b5a0086fe179 630
+control-plane/Sources/App/Controllers/AgentGuestIdentityController.swift
+  s_1f8e687c4649c2::t_43b5a0086fe179 130-131,136-137
+agent/Tests/StratoAgentTests/MetadataRouterTests.swift
+  s_1f8e687c4649c2::t_43b5a0086fe179 154-167
+agent/Sources/StratoAgentCore/MetadataService/MetadataRouter.swift
+  s_1f8e687c4649c2::t_43b5a0086fe179 2,31-33,283-284
+control-plane/Tests/AppIdentityTests/GuestIdentityIssuanceConfigTests.swift
+  s_1f8e687c4649c2::t_43b5a0086fe179 16-28
+control-plane/Sources/App/configure.swift
+  s_1f8e687c4649c2::t_43b5a0086fe179 469
+shared/Sources/StratoShared/GuestIdentityMinting.swift
+  s_1f8e687c4649c2::t_43b5a0086fe179 3-14
+control-plane/Sources/App/Services/SPIFFE/GuestIdentityIssuanceConfig.swift
+  s_1f8e687c4649c2::t_43b5a0086fe179 2,18-19,31,33,37-40,75-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "47be87c1ac61c279726adf750203be0ce44423f9",
+  "prompts": {},
+  "sessions": {
+    "s_1f8e687c4649c2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee38-3cde-7611-a263-54e845a2a3a7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

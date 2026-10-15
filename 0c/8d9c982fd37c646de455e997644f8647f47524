@@ -1,0 +1,104 @@
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_fa5d42100130c1::t_ca5e344b85fea7 165-168,170-171
+  s_fa5d42100130c1::t_1de39224ed6e03 1074-1080
+  s_fa5d42100130c1::t_d3daaf66b30ef0 462-581,679-748
+  s_fa5d42100130c1::t_2d0c5fefd9968f 1067-1073
+  s_fa5d42100130c1::t_4ef4afe677ef89 21-24,26
+  s_fa5d42100130c1::t_51330bd7990f42 582-678
+  s_fa5d42100130c1::t_9aecbcf6351ea3 25
+  s_fa5d42100130c1::t_925e305d32def2 243-300
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_fa5d42100130c1::t_e4994e2014ce36 1093,1099-1104,1111-1112,1125-1127
+  s_fa5d42100130c1::t_925a78daa7deca 434-435,442-443,445,448-455
+  s_fa5d42100130c1::t_1670cbc2028e8f 105-181
+  s_fa5d42100130c1::t_c2eea592179774 7
+  s_fa5d42100130c1::t_93c71c2245226a 1019-1092,1094-1098,1105-1110,1113-1124,1128-1130
+  s_fa5d42100130c1::t_574dfd1632fa56 920-1018,1131-1151
+control-plane/web/src/lib/api/images.ts
+  s_fa5d42100130c1::t_6ba7a0932e5f9e 6
+  s_fa5d42100130c1::t_48db8504b3abee 102
+  s_fa5d42100130c1::t_79170f77b61474 25-82,97-101,103-106
+  s_fa5d42100130c1::t_8262a3baa510a9 83-96
+control-plane/web/src/components/images/upload-image-dialog.tsx
+  s_fa5d42100130c1::t_a7a2ea9426a841 18-22,24
+  s_fa5d42100130c1::t_f4b7f81cf34580 173,177-197,199,236-247
+  s_fa5d42100130c1::t_ed1b82190149ea 266,272-279
+  s_fa5d42100130c1::t_184a75694671ff 23
+  s_fa5d42100130c1::t_12abcecf40cc0c 457-479,482-495,497-567
+  s_fa5d42100130c1::t_281c39de0172ce 48,50-52,56-57,62-63,73-75,79
+  s_fa5d42100130c1::t_e4aa4eb3588dc6 174-176,198,200-235
+  s_fa5d42100130c1::t_db41491558aa6c 72,76-78
+  s_fa5d42100130c1::t_e5a9e21d29835a 411-456,480-481,496,568-596,604-610
+  s_fa5d42100130c1::t_184be071ae9c89 260-261
+  s_fa5d42100130c1::t_24d1b92dfb7b53 64
+  s_fa5d42100130c1::t_f3a3a2bacdc3ee 597-603
+  s_fa5d42100130c1::t_09bcf5b75c8ab8 4
+  s_fa5d42100130c1::t_816b038b00804f 49,53-55
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_fa5d42100130c1::t_07d21a236c3143 6-16
+  s_fa5d42100130c1::t_ec34e4687ebb25 55-69,87-89,100-101
+  s_fa5d42100130c1::t_9c213ea46fb924 118-121,132-136
+control-plane/Sources/App/configure.swift
+  s_fa5d42100130c1::t_0e85b27562f9df 218
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_fa5d42100130c1::t_f70c6956206d0d 15-16
+  s_fa5d42100130c1::t_61c5c171cebee1 173-301
+  s_fa5d42100130c1::t_10c233289a60aa 115-118
+  s_fa5d42100130c1::t_c2f83f98b8c6a5 302-303,307
+  s_fa5d42100130c1::t_c3b71619fc3a95 372
+  s_fa5d42100130c1::t_a77256d3ee4d6b 429-447
+  s_fa5d42100130c1::t_31358708a28888 23
+control-plane/web/src/lib/hooks/use-images.ts
+  s_fa5d42100130c1::t_3862720f441a0a 84-119,142-161
+  s_fa5d42100130c1::t_80219e84bf526e 26-37
+  s_fa5d42100130c1::t_70e546c7ee1a71 3-7
+  s_fa5d42100130c1::t_eb669a8c358979 120-141
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_fa5d42100130c1::t_ccd75a74111005 23,25-33
+  s_fa5d42100130c1::t_a4f089443e9684 58
+  s_fa5d42100130c1::t_fdcb42d95fee19 305-324
+  s_fa5d42100130c1::t_76f42884ac6ccb 269-304,325-351
+control-plane/Sources/App/Services/ImageStorageService.swift
+  s_fa5d42100130c1::t_13f2659344d062 117-129,132-157
+  s_fa5d42100130c1::t_76ab4b2dbf0270 130-131
+control-plane/Sources/App/Migrations/AddFetchStateToImageArtifact.swift
+  s_fa5d42100130c1::t_00cce1189a2c23 1-41
+control-plane/Sources/App/Models/Image.swift
+  s_fa5d42100130c1::t_d083a71aee33fc 248-250,252
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_fa5d42100130c1::t_0241ed45c0adc7 239-242
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_fa5d42100130c1::t_d542f8ba124b24 383,397-400
+  s_fa5d42100130c1::t_05eff7909f7843 401
+control-plane/web/src/types/api.ts
+  s_fa5d42100130c1::t_6210d154defec6 366-367,376-379
+control-plane/Sources/App/Services/ImageValidationService.swift
+  s_fa5d42100130c1::t_9e71776e858f87 136,141-172
+  s_fa5d42100130c1::t_cf6416bb2c7c72 133-135
+  s_fa5d42100130c1::t_c32e5c10dfd5af 137-140
+  s_953b4f35853140::t_1fd143ddab32da 132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0c8d9c982fd37c646de455e997644f8647f47524",
+  "prompts": {},
+  "sessions": {
+    "s_953b4f35853140": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bab01f81-dd20-471e-b345-300193931638",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_fa5d42100130c1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77b5785e-8f6a-40cc-838b-35566dcd9ad6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

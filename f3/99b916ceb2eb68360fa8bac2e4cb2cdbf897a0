@@ -1,0 +1,30 @@
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_65a00e8ad4ab37::t_daf2044befa2da 218,220,222-225
+  s_65a00e8ad4ab37::t_1ed492c0e981e3 526-528,572-574
+  s_65a00e8ad4ab37::t_70e8f67a48c03a 219,221
+  s_65a00e8ad4ab37::t_a521ff93068b2e 235,534-535,537-550,557-558,580-582
+  s_65a00e8ad4ab37::t_8e9cf2a4caac1d 176,179,189,191
+  s_65a00e8ad4ab37::t_336dc39889bd46 237-300,505-508,511-513,515-525,529-533,551-556,559,561-571,575-579
+  s_65a00e8ad4ab37::t_86b59978e22839 217
+  s_65a00e8ad4ab37::t_711802f34c9cd8 509-510,514,560
+  s_65a00e8ad4ab37::t_6cc2bf04ad4a13 11-40,126-175,177-178,180-188,190,192-216,226-234,491-504
+  s_65a00e8ad4ab37::t_89a183a1eb11c6 236,536
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_65a00e8ad4ab37::t_213fc179b9320b 405-414
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "f399b916ceb2eb68360fa8bac2e4cb2cdbf897a0",
+  "prompts": {},
+  "sessions": {
+    "s_65a00e8ad4ab37": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae3-0bc2-7d01-8347-bcc58cb53596",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,64 @@
+spicedb/schema.zed
+  s_c1e74efaba2a64::t_ef60163af74711 237-242
+control-plane/web/src/components/vms/operation-watcher.tsx
+  s_c1e74efaba2a64::t_ef60163af74711 21
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_c1e74efaba2a64::t_ef60163af74711 1593-1606,1689-1694,1696-1697,1699-1700,1720-1723,1727,1730,1736-1746,1750-1756,1760,1763
+agent/Sources/StratoAgentCore/HypervisorProbe.swift
+  s_c1e74efaba2a64::t_ef60163af74711 112-119,124-128,132-133
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_c1e74efaba2a64::t_ef60163af74711 59-60
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_c1e74efaba2a64::t_ef60163af74711 44-55,78-86,89-90,107-127,130-138,141-142,147-151,245-256,263-277,331-338,352-369
+  s_c1e74efaba2a64::t_a08b6b6ac95198 370
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_c1e74efaba2a64::t_a1b7fe9b2e92cd 176
+  s_c1e74efaba2a64::t_ef60163af74711 41-45,47,50,99-111,183-193
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_c1e74efaba2a64::t_ef60163af74711 237-242
+control-plane/web/src/components/sandboxes/sandbox-status-badge.tsx
+  s_c1e74efaba2a64::t_ef60163af74711 54
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_c1e74efaba2a64::t_ef60163af74711 60
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_c1e74efaba2a64::t_ef60163af74711 732-735,755,835,867-881,933
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_c1e74efaba2a64::t_ef60163af74711 122-131
+  s_c1e74efaba2a64::t_a260f4a3c27d58 113-121
+agent/Tests/StratoAgentTests/HypervisorProbeTests.swift
+  s_c1e74efaba2a64::t_ef60163af74711 140-161
+control-plane/web/src/types/api.ts
+  s_c1e74efaba2a64::t_ef60163af74711 614-619,631-633
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_c1e74efaba2a64::t_3739990cf17257 1072-1083,1085-1087,1089-1115
+  s_c1e74efaba2a64::t_a34428a7155560 790-793
+  s_c1e74efaba2a64::t_ef60163af74711 928-931,970-1071,1084,1088,1116-1117
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_c1e74efaba2a64::t_ef60163af74711 65-67,69-74,77-79
+control-plane/Sources/App/Services/SandboxSnapshotService.swift
+  s_c1e74efaba2a64::t_ef60163af74711 19-29,105-108,112-114,124
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_c1e74efaba2a64::t_ef60163af74711 195-200,210-213
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_c1e74efaba2a64::t_ef60163af74711 58-59
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_c1e74efaba2a64::t_ef60163af74711 88
+agent/Tests/StratoAgentTests/ProcessRunnerTests.swift
+  s_c1e74efaba2a64::t_ef60163af74711 38-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "f77846574d4b02ad892eb52eaabc266a0fe8e796",
+  "prompts": {},
+  "sessions": {
+    "s_c1e74efaba2a64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc4f4359-64cb-472e-836c-dd5f9c0edac9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

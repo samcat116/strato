@@ -1,0 +1,21 @@
+sandbox-guest/init/src/config.rs
+  s_96cbd44874abe4::t_69878a8ea7f7ff 275-288,304,662-677
+sandbox-guest/init/src/linux/mod.rs
+  s_96cbd44874abe4::t_69878a8ea7f7ff 55-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ddeda597d0667035e38cd26a0f966e7982e1a940",
+  "prompts": {},
+  "sessions": {
+    "s_96cbd44874abe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6c-108e-7333-ae23-7a439b43213b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

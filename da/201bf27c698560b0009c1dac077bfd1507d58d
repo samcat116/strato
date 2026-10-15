@@ -1,0 +1,65 @@
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 135-140,161-168,186,191,371-373,375-377,592-593,600,778-821
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 162-165,167-169,176,178,185-200,204-207
+control-plane/Sources/App/Migrations/AddDHCPConfigToLogicalNetwork.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 1-39
+control-plane/web/src/components/networks/dhcp-fields.tsx
+  s_cfe661b849c7e9::t_be07b3049521d4 1-126
+control-plane/web/src/components/networks/network-table.tsx
+  s_cfe661b849c7e9::t_be07b3049521d4 4,24,31,79,120-140,148-157
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 45-53,57-58,65-68
+agent/Tests/StratoAgentTests/DHCPOptionsTests.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 1-51
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 40-60,84-88,96-120,136-160,170-188,199-202,214-217
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_cfe661b849c7e9::t_be07b3049521d4 7-11,14,18,58,68-75
+  s_cfe661b849c7e9::t_41bc878c9c66ef 76
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 79-123
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 39-43,55-59,64-67,79-81
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 58-65,69-70,76-80,123-126,143,156-157,180
+control-plane/Sources/App/configure.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 266-268
+control-plane/Sources/App/Services/AgentService.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 882-890,899-900
+control-plane/web/src/types/api.ts
+  s_cfe661b849c7e9::t_be07b3049521d4 752-759,769-772,779-782
+control-plane/web/src/components/networks/edit-network-dialog.tsx
+  s_cfe661b849c7e9::t_be07b3049521d4 1-162
+agent/Sources/StratoAgentCore/DHCPOptions.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 1-42
+control-plane/web/src/components/networks/index.ts
+  s_cfe661b849c7e9::t_be07b3049521d4 3
+agent/Sources/StratoAgentCore/NetworkAttachment.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 19-25,44-50,59-61,70-71
+shared/Sources/StratoShared/VMSpec.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 139-151,158-162,170-195
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 341-373
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_cfe661b849c7e9::t_be07b3049521d4 108-109,116-120,222-236,243-249,359-380,453-455
+  s_cfe661b849c7e9::t_29c2b2e66aac14 456
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_cfe661b849c7e9::t_be07b3049521d4 19-24,46,54,79,160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "da201bf27c698560b0009c1dac077bfd1507d58d",
+  "prompts": {},
+  "sessions": {
+    "s_cfe661b849c7e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72a931f5-a31b-47d9-9bf8-f821c524c05e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

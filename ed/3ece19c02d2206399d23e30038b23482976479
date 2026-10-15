@@ -1,0 +1,34 @@
+control-plane/Sources/App/Controllers/SCIMController.swift
+  s_e0772027dcd9cd::t_726cb89a607d75 186
+  s_e0772027dcd9cd::t_e8ac34517d6957 232
+  s_e0772027dcd9cd::t_dbd9eb0d38f717 239
+  s_e0772027dcd9cd::t_112b99ba44acde 61
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_e0772027dcd9cd::t_cd63e4806f8b68 285-290,292,294-297,308,318
+control-plane/Tests/AppTests/SCIMFilterTests.swift
+  s_e0772027dcd9cd::t_c157aef75d0edf 41
+  s_e0772027dcd9cd::t_8765dac35c3fa0 55
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_e0772027dcd9cd::t_936eb36dde3ea3 396-401,403,405-408,412-416,422
+control-plane/Sources/App/configure.swift
+  s_e0772027dcd9cd::t_12bc46b96a981b 67-70
+  s_e0772027dcd9cd::t_3170bf59834990 285
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_e0772027dcd9cd::t_af1c772508c3b8 432-438,440-461,463,465-468,474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ed3ece19c02d2206399d23e30038b23482976479",
+  "prompts": {},
+  "sessions": {
+    "s_e0772027dcd9cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "329eaac3-3e0d-4ea2-bc63-c189deaebfd7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

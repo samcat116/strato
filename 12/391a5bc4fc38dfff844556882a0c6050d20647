@@ -1,0 +1,35 @@
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_08df14af99520f::t_c1d4cf5b253b5a 6,16,79,163,197,351
+control-plane/Sources/App/Services/AgentService.swift
+  s_08df14af99520f::t_1415b6baa125f7 341-342,2479-2501
+control-plane/Tests/AppPlatformTests/AgentVersionTargetTests.swift
+  s_08df14af99520f::t_1415b6baa125f7 3,5-6,8,14-15,23,37-38
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_08df14af99520f::t_1415b6baa125f7 1049
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_08df14af99520f::t_481d40493b0ce1 257,259-262
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_08df14af99520f::t_d0ace129981784 19
+shared/Tests/StratoSharedTests/EnumDecodingTests.swift
+  s_08df14af99520f::t_d0ace129981784 20,28,36,47
+agent/Sources/StratoAgentCore/CustomLogHandler.swift
+  s_08df14af99520f::t_c1d4cf5b253b5a 46-48
+agent/Sources/StratoAgentCore/QEMUGraphicsDevice.swift
+  s_08df14af99520f::t_c1d4cf5b253b5a 16-18,20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "12391a5bc4fc38dfff844556882a0c6050d20647",
+  "prompts": {},
+  "sessions": {
+    "s_08df14af99520f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4b1-20b8-74b1-aac6-1172a92f6889",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

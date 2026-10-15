@@ -1,0 +1,22 @@
+control-plane/Sources/App/Services/LastUsedTracking.swift
+  s_66f25871c0dca2::t_100e1ac650054d 60-61,71-80
+control-plane/Tests/AppTests/LastUsedTrackingTests.swift
+  s_66f25871c0dca2::t_203887f00b6fc7 215-241
+  s_66f25871c0dca2::t_a89c38a69821ce 72-78,84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "33f70aa32b085bafe5e0ff61c52054fd944c0c48",
+  "prompts": {},
+  "sessions": {
+    "s_66f25871c0dca2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74b5abc3-c902-47e6-a30c-05d97ec86096",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

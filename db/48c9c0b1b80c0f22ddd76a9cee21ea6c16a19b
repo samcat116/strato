@@ -1,0 +1,23 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_b041cfc9c7df01::t_9b30cf6dc4c8a0 475,478-482,484-487,490-504,508-509,512
+  s_b041cfc9c7df01::t_3d20d505721db9 449-463
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_b041cfc9c7df01::t_c0d098eae2ba66 655-667
+  s_b041cfc9c7df01::t_529bebf7c313f1 580
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "db48c9c0b1b80c0f22ddd76a9cee21ea6c16a19b",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

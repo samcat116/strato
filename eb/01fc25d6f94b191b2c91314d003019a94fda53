@@ -1,0 +1,60 @@
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_d5e22336a13eea::t_33cd8e4859d255 182,190-197
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_d5e22336a13eea::t_e4b10ffeb93820 128-150
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  s_d5e22336a13eea::t_629701eae9c00e 598-610
+  s_aeadc33ad2c139::t_8f8ec7e88ef8d6 611
+control-plane/Sources/App/Workflows/SandboxCreationWorkflow.swift
+  s_d5e22336a13eea::t_58f9fdfc8a5ad4 425-436
+  s_3af79fd703f9fa::t_77361d8920b082 437
+docs/architecture/multi-replica.md
+  s_d5e22336a13eea::t_f544da84d6abca 60,63-65
+control-plane/Tests/AppPlatformTests/ClusterClockTests.swift
+  s_d5e22336a13eea::t_79ec9c1f6659fe 129-134
+  s_d5e22336a13eea::t_7543d15c8e508b 11-26
+control-plane/Sources/App/Services/VolumeService.swift
+  s_d5e22336a13eea::t_a18cda3035f2af 172
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_d5e22336a13eea::t_cda5643a45b3ff 237-239,1020,1125
+control-plane/Tests/AppResourceTests/ResourceMutationTests.swift
+  s_d5e22336a13eea::t_ea2389ff8f3dd7 254-279
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_d5e22336a13eea::t_231ff176c40676 226-229
+control-plane/Sources/App/Services/ClusterClock.swift
+  s_d5e22336a13eea::t_549f9382309d2d 58-61,70
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_d5e22336a13eea::t_8e5d5fa3a6535a 107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "eb01fc25d6f94b191b2c91314d003019a94fda53",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_aeadc33ad2c139": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-590c-7111-ab67-964d351744c2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

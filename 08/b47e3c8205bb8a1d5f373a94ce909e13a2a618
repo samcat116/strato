@@ -1,0 +1,30 @@
+control-plane/Sources/App/Controllers/UserController.swift
+  s_b36c12691fceda::t_fb88bfa12b3327 658-673
+  s_b36c12691fceda::t_f23d174c1a8ba6 653-657
+  s_b36c12691fceda::t_de0d9ebdd6c52f 125-141,153-158,166-168,179-187,191-206
+  s_b36c12691fceda::t_a0a452593764d8 207
+control-plane/Tests/AppTests/UserCreationAndClaimTests.swift
+  s_b36c12691fceda::t_51574fcf1154cf 122-191
+control-plane/web/src/types/api.ts
+  s_b36c12691fceda::t_c21616aa1d4b14 29-32
+control-plane/web/src/components/users/create-user-dialog.tsx
+  s_b36c12691fceda::t_3c8e877d29aa03 51-54,59-60,66,72-75
+  s_b36c12691fceda::t_d2951102c2f815 161-231
+  s_b36c12691fceda::t_0a5b6f74b11f41 4,17-23,25,27-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "08b47e3c8205bb8a1d5f373a94ce909e13a2a618",
+  "prompts": {},
+  "sessions": {
+    "s_b36c12691fceda": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1c63ca92-0784-45e8-9097-491fccf4ebcb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

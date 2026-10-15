@@ -1,0 +1,22 @@
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_0226cff00d1a8c::t_feeecf82fc98d1 533-564
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_0226cff00d1a8c::t_c80428a89f3e10 66-86
+  s_0226cff00d1a8c::t_9948f1e7f3ef38 142-147,152-154,157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6634fac47526e306310436bfbb60c9372669528b",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,86 @@
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_7823973a3e486b::t_d60255d32b767f 50-55,64-65,74,80-88,187
+  s_7823973a3e486b::t_c4e97676194d0e 136-138,140,146-186
+  s_b8a95666dc0476::t_14ac8b8c416986 188
+control-plane/Sources/App/IAM/RoleBindingService.swift
+  s_7823973a3e486b::t_d3d54be7e4db0a 137-188
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_7823973a3e486b::t_290e2f780ece49 195-202
+control-plane/web/src/components/project-members/members-table.tsx
+  s_7823973a3e486b::t_cde721b33aaa5a 124,126-134
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_7823973a3e486b::t_757396f04c4785 212-215,218-219
+docs/architecture/iam.md
+  s_7823973a3e486b::t_5144a080d5b90e 309,314-348
+control-plane/Sources/App/openapi.yaml
+  s_7823973a3e486b::t_3f8880f4472a24 3428-3432
+  s_7823973a3e486b::t_33de9381fd17c2 9338,9354-9358,9362,9374-9378
+  s_7823973a3e486b::t_6a3209f3d64fb8 3411-3413
+  s_7823973a3e486b::t_954fdd704aad8d 10504
+  s_7823973a3e486b::t_7a94846b0a70e9 3387-3389
+  s_7823973a3e486b::t_56cd0a65ec0903 10534-10540
+  s_7823973a3e486b::t_ce37d28f563188 3349-3352
+  s_7823973a3e486b::t_2bf75c6f0db8f5 3465-3467
+docs/deployment/audit-logging.md
+  s_7823973a3e486b::t_a35532d57ee7d7 25-26
+control-plane/Sources/App/IAM/CrossOrgBindingGate.swift
+  s_7823973a3e486b::t_4914e7d3c3a8ae 49-60,72-73
+  s_7823973a3e486b::t_587bc4aa5d15b0 1-48,61-71,74-120
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_7823973a3e486b::t_80a7ec5b3be887 98-101
+  s_7823973a3e486b::t_c7829e3613f3da 102
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_7823973a3e486b::t_916abef175b528 152-159,168,185-188
+  s_7823973a3e486b::t_8ad1ccaad9c3fa 392-395,406-410
+  s_7823973a3e486b::t_ebef0142738257 118
+  s_7823973a3e486b::t_e9f7a9016e0314 91-108,110,112-117,121,123-127
+  s_7823973a3e486b::t_6526f08d10f53a 214-220,229
+  s_7823973a3e486b::t_315f07eb2580a8 189,259-263,308,369,411
+  s_7823973a3e486b::t_258ce1e9125624 11-15
+  s_7823973a3e486b::t_fa3eb53481579d 321,333-340,348,365-368
+  s_7823973a3e486b::t_384c377c6b5df5 286-289,300-307
+  s_7823973a3e486b::t_0bd0ab0f18dd86 38-41,49-50
+control-plane/Sources/App/IAM/OffboardingSweep.swift
+  s_7823973a3e486b::t_55a0004976bbfb 1-25,39-61
+  s_7823973a3e486b::t_341ae4894d65a6 26-38
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7823973a3e486b::t_c1bdca4db5294a 316-324
+control-plane/web/src/types/openapi.ts
+  s_7823973a3e486b::t_32def34aca2781 2543,2569,2576,2595,2621,5470-5471,5480-5481,6057-6058
+control-plane/Sources/App/Services/SCIM/GroupSCIMHandler.swift
+  s_7823973a3e486b::t_a809d090cc8db2 156-162
+control-plane/Sources/App/Services/AuditService.swift
+  s_7823973a3e486b::t_cc50e7ff267c21 28-35
+control-plane/web/src/types/api.ts
+  s_7823973a3e486b::t_1cf47b810080aa 196-197,205-206
+control-plane/Tests/AppTests/CrossOrgBindingTests.swift
+  s_7823973a3e486b::t_9d106bd3796341 1-405
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_7823973a3e486b::t_41af57674e11c7 449-454
+control-plane/web/src/components/project-members/group-grants-table.tsx
+  s_7823973a3e486b::t_c53e308901da66 95-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a37ad3866ccd834213eee8c212f009fd20073011",
+  "prompts": {},
+  "sessions": {
+    "s_7823973a3e486b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "09d8221d-6ae7-4419-a11b-80bff14e0dcb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b8a95666dc0476": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15c44b7f-6928-4d7b-9f9a-a551cd5d72a7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

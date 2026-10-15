@@ -1,0 +1,48 @@
+control-plane/Sources/App/configure.swift
+  s_0358bb3acc0907::t_7960a39da55de2 203-204
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_0358bb3acc0907::t_c8b1f465a17e8e 369-373,378,380-383,392
+  s_0358bb3acc0907::t_c688f0781387c9 348-354
+control-plane/Sources/App/Services/ValkeyScriptExecutor.swift
+  s_0358bb3acc0907::t_46f133550f6a07 1-44,47-69,71,73-96,98-110
+  s_0358bb3acc0907::t_6d81f2ed1ddfc9 45-46,70,72,97
+control-plane/Sources/App/Services/AgentService.swift
+  s_0358bb3acc0907::t_bf4bfc6e605d2b 8,2092,2095-2108,2117-2137
+  s_0358bb3acc0907::t_a365a33b3c6315 2138-2139
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_0358bb3acc0907::t_1ea82bce29bc49 200,591,872
+  s_0358bb3acc0907::t_500e66e07aa020 51-53,81-83,122-127,198-199,201-209,224-225,254-255,261-262,264-275,298-299,341-347,385-388,444-445
+  s_0358bb3acc0907::t_c25a365cbc1c7b 446,585-590,592-599,863-871,873-883
+  s_fa9e1a346b7184::t_c3612e7cd84c8d 447
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_0358bb3acc0907::t_7960a39da55de2 94-105,272-273
+control-plane/Tests/AppTests/CoordinationServiceTests.swift
+  s_0358bb3acc0907::t_c2213f4a96db3e 30-40,191-204
+control-plane/Sources/App/Services/RateLimitService.swift
+  s_0358bb3acc0907::t_c688f0781387c9 37-38
+  s_0358bb3acc0907::t_7960a39da55de2 41-46,58-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c6e7511eea91cbc55142428565ea575453ff0fc4",
+  "prompts": {},
+  "sessions": {
+    "s_0358bb3acc0907": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f9199-4a74-7f62-ade3-e20aa4d9dbef",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_fa9e1a346b7184": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f918f-9dbe-75d1-a558-c6599b409c75",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

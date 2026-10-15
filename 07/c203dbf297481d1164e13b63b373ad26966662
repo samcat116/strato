@@ -1,0 +1,225 @@
+control-plane/web/src/lib/hooks/index.ts
+  s_db16b30eee15e6::t_b8b7a2ade37267 18-19
+CLAUDE.md
+  s_db16b30eee15e6::t_235dcccde67b5b 129
+  s_db16b30eee15e6::t_d341ad5be14eed 51-52
+agent/Tests/StratoAgentTests/WebSocketURLsTests.swift
+  s_db16b30eee15e6::t_2d258aac35b79a 8,11,14,20,23-32,35-44,46-50,53-54,59
+deploy/compose/docker-compose.yml
+  s_db16b30eee15e6::t_db2c96c2753e95 8-11
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_db16b30eee15e6::t_c77d2f529e63eb 710-711,720
+  s_db16b30eee15e6::t_25a61668bca9fe 697-698,700
+  s_db16b30eee15e6::t_2fbe4ac60de1fb 2-3
+  s_db16b30eee15e6::t_71ccc625565c2f 235
+  s_db16b30eee15e6::t_04abdabcb35840 276,278-279,281,293,300,305,310,316-317,319,334,342,346,352-353,355,372
+  s_db16b30eee15e6::t_2cb6103e8c467d 574-575,577,584-586,589,597,602-603,608
+  s_db16b30eee15e6::t_20d31b2feccc1f 92
+  s_db16b30eee15e6::t_46d8afb0d473c1 12-15,44-73
+  s_db16b30eee15e6::t_f213c61771bf11 126-127,129-136,138,146-151,155,163,173-207
+  s_db16b30eee15e6::t_48287367004966 74
+helm/strato-control-plane/values.yaml
+  s_db16b30eee15e6::t_1fbc0970010e8f 658-664,666
+docs/guide/getting-started.md
+  s_db16b30eee15e6::t_2e2206eb6be404 91-92,95-98,101-105
+docs/architecture/frontend.md
+  s_db16b30eee15e6::t_0cee66b67535cd 115-116
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_db16b30eee15e6::t_2085303a84e9b5 211,218,221-224,230
+control-plane/web/src/app/(dashboard)/agents/page.tsx
+  s_db16b30eee15e6::t_f3dee647143701 7,11,30,87-90
+docs/architecture/agent.md
+  s_db16b30eee15e6::t_c2542dbb0ff98e 60-61
+  s_db16b30eee15e6::t_aa120f2f2a3794 51-53
+  s_db16b30eee15e6::t_76b51a9aa34376 41-42
+  s_db16b30eee15e6::t_d8763e537fd510 33-34,43-50
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_db16b30eee15e6::t_b722223d217cb8 151
+  s_db16b30eee15e6::t_c61bd402a8aedc 173
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_db16b30eee15e6::t_41300b5103d08f 191-199
+  s_db16b30eee15e6::t_5a5ba9e3599b0e 86-92,96-115
+  s_db16b30eee15e6::t_6286aec775d5a7 338-342
+  s_db16b30eee15e6::t_93372d5e70d6d1 306-308,310,316
+docs/architecture/control-plane.md
+  s_db16b30eee15e6::t_d0cf1b222fd677 54-56
+  s_db16b30eee15e6::t_ccac517a28bbd1 140-145
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_db16b30eee15e6::t_a52631f9bfa443 213
+  s_db16b30eee15e6::t_cefe539f534785 220
+  s_db16b30eee15e6::t_ade477fb753ed2 235-236,238
+control-plane/web/src/lib/api/agents.ts
+  s_db16b30eee15e6::t_f001eb186bfb6b 6-7,9
+  s_db16b30eee15e6::t_944a60bf1b0ddd 42-45,50-51,54-55
+docs/architecture/networking.md
+  s_db16b30eee15e6::t_d7c42d18e172b4 311
+docs/deployment/agents.md
+  s_db16b30eee15e6::t_595cf6aeb0b47b 389
+  s_db16b30eee15e6::t_9286f49ee20e4f 48-53,56-60
+  s_db16b30eee15e6::t_44191ba2f94eb4 350,352
+  s_db16b30eee15e6::t_2e997e690b175f 304-308,310,312,314-316,318-319,329-331,335
+  s_db16b30eee15e6::t_6d87c8bcbecdc9 390-391
+  s_db16b30eee15e6::t_9f7108303eb827 201-204,210,212,215
+  s_db16b30eee15e6::t_a2438a80ab1e06 383
+  s_db16b30eee15e6::t_858a3e04e96474 3-4,7-11,13-36,40-44,62-69,75-77,79-81,83,100-101
+  s_db16b30eee15e6::t_989d4431589cc1 37-39
+  s_db16b30eee15e6::t_d63ac26b118fbc 174-179,185,187,192,194-197
+  s_db16b30eee15e6::t_aa120f2f2a3794 85-89,91-95,99,102-104
+  s_db16b30eee15e6::t_75d4f7012c6393 61
+control-plane/Sources/App/configure.swift
+  s_db16b30eee15e6::t_ae8823fa97fc8e 457-458
+  s_db16b30eee15e6::t_dd0a3556ba0768 437-442
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_db16b30eee15e6::t_7a9c2f8de52928 108-122
+  s_db16b30eee15e6::t_4bcc23d1f8085e 264
+  s_db16b30eee15e6::t_5eb618fc975f7b 284,287
+  s_db16b30eee15e6::t_f18a62fe1622f3 72,77-78
+  s_db16b30eee15e6::t_9a1daaa577304f 219-227,229-234
+  s_db16b30eee15e6::t_db687365709d00 12,17
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_db16b30eee15e6::t_13a6b61a6fb055 28-30,34-37
+  s_db16b30eee15e6::t_77c3f813ae4c31 1-4,6-27,31-33,38-40,45-52,55-67,69-72,74,76-81,84-89,91-95,98-101,103,105,107-117,119-125,127-146,148-159,161-169,171-187,190-223,225-226,228,230,233-245,248-251,253-254
+  s_db16b30eee15e6::t_2c0d5564c5da61 41-44
+  s_db16b30eee15e6::t_efc33939383e33 53-54
+  s_256b817512560e::t_5b408e9524a7e2 5,118,246-247
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_db16b30eee15e6::t_84f41601427fdc 41,46-47,52-59
+  s_db16b30eee15e6::t_40b33d0d69ce9f 95
+  s_db16b30eee15e6::t_90f676d4b0e818 60-62
+control-plane/web/src/components/agents/index.ts
+  s_db16b30eee15e6::t_39b87ece289315 3
+shared/Sources/StratoShared/WireProtocol.swift
+  s_db16b30eee15e6::t_941f6957169354 134-141
+config.toml.example
+  s_db16b30eee15e6::t_8e25fbd46c7ddb 14-18
+  s_db16b30eee15e6::t_ab0c3d9e6b5d33 225-253
+deploy/ovn-central/README.md
+  s_db16b30eee15e6::t_7a7c74f348f540 54
+agent/scripts/spawn-sim-fleet.sh
+  s_db16b30eee15e6::t_2651dd6afd0dfc 93-97,166-167,185-187,193,465,498-503,532,563
+  s_db16b30eee15e6::t_0641256a47b4f3 10-35,38,45-52,59-61,91-92,110-111
+  s_db16b30eee15e6::t_c1f0b241d05e12 472,483-497,504,507-508,512,514-515,520-522,528-531,533-545,548
+  s_db16b30eee15e6::t_febfdf70a7613e 322-342,345-358
+  s_db16b30eee15e6::t_27a2ef42e9a42d 421-422,424,426-427,430-434,436-438
+  s_db16b30eee15e6::t_76b51a9aa34376 106
+  s_db16b30eee15e6::t_6039bf9499fef8 124-126,151-153
+deploy/compose/README.md
+  s_db16b30eee15e6::t_49c80666401c8b 67-69
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_db16b30eee15e6::t_46878adedf1071 217-218,221-232,234,248-251,255,257-260
+  s_db16b30eee15e6::t_536702fef52ea3 402-404,407-408,411,414,418-422,425-428,430-431,434,437,439-440,443,445,448,450,456,461,464,466-467
+  s_db16b30eee15e6::t_cf4dda779add7e 157
+  s_db16b30eee15e6::t_1263c2d6df2963 9-13
+  s_db16b30eee15e6::t_4b89c9b228cd19 181,183,187-192,199,204-205
+  s_db16b30eee15e6::t_e3979836215697 613-618
+  s_db16b30eee15e6::t_7967bed2b94f76 30-31
+  s_db16b30eee15e6::t_b4b4a52223a0ad 303-323,326,328,335,337,342,345-347,350-354
+  s_db16b30eee15e6::t_631ceeb067d37d 266-273
+  s_db16b30eee15e6::t_2937e3299161b8 283
+  s_db16b30eee15e6::t_e23665f181ac79 357,359,363-365,374,376-379,381,383-385,392,397-399
+agent/Sources/StratoAgent/Agent.swift
+  s_db16b30eee15e6::t_9e2a4840f51c7c 54
+  s_db16b30eee15e6::t_be6283a6fa90dc 213
+  s_db16b30eee15e6::t_662d706179c45c 20-21
+  s_db16b30eee15e6::t_377e1fd286fc4d 413-417
+  s_db16b30eee15e6::t_8e20bf52d771f6 261
+  s_db16b30eee15e6::t_846595e41bbb68 1016-1017
+  s_db16b30eee15e6::t_24d1a0f2edb009 55
+  s_db16b30eee15e6::t_09f9593a7cec79 1377-1379,1382
+  s_db16b30eee15e6::t_974166bd1d263e 587-595,597-617,619-623
+  s_db16b30eee15e6::t_7a890792c7c1f9 630,632-633
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_db16b30eee15e6::t_6acc9c1babf0c6 263-264
+  s_db16b30eee15e6::t_63d555822111e2 108
+control-plane/web/src/types/api.ts
+  s_db16b30eee15e6::t_adc5a373a4920e 763,766
+  s_db16b30eee15e6::t_3a150c42a8cc9d 330-332,335,337-338,344-345,350-351,354
+docs/development/local-development.md
+  s_db16b30eee15e6::t_c62e7eb5da6cbd 134-138
+control-plane/Sources/App/Migrations/CreateAgentEnrollment.swift
+  s_db16b30eee15e6::t_f4b46251054dda 14-15
+  s_db16b30eee15e6::t_34fb4610bcf590 1-13,16-28
+deploy/agent/install.sh
+  s_db16b30eee15e6::t_81cd0ce29f01bf 769,771-775,782,792-793,802,804-810,812,814
+  s_db16b30eee15e6::t_0331a3c43e1905 187-192
+  s_db16b30eee15e6::t_8014a5886b79da 206,436,495-498,530-532
+  s_db16b30eee15e6::t_bd88e10d527eb2 508,779,784-787,813
+  s_db16b30eee15e6::t_d48b3987961acb 4-7,10-15,17-22,24-26,28-42
+  s_db16b30eee15e6::t_ea606d511d4d3f 172-175
+  s_db16b30eee15e6::t_0e397033e8a627 143-164
+  s_db16b30eee15e6::t_8fc250aac29d5e 55,61,68-69
+  s_db16b30eee15e6::t_49e0289e2a69cb 629-630,633,636,642
+  s_db16b30eee15e6::t_0b0582e2fa510f 113-114
+control-plane/Sources/App/Migrations/DropAgentRegistrationTokens.swift
+  s_db16b30eee15e6::t_09003b8ebba4d5 2
+  s_db16b30eee15e6::t_fbe01ec70c3063 1,3-30,33-39
+  s_db16b30eee15e6::t_f4b46251054dda 31-32
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_db16b30eee15e6::t_783067648590aa 154-155,157
+  s_db16b30eee15e6::t_2de612708a8dab 137
+control-plane/Tests/AppTests/AgentWebSocketIntegrationTests.swift
+  s_db16b30eee15e6::t_2388e368cb5750 16-20,24-25,28,31-38,40-42,44-49,52,54-55,57,60-76,84,86-88,91-100,106,111,113-120,123-124,129-130,143,145-146,148-162,172-173,178-233
+  s_db16b30eee15e6::t_85129aac91a011 39
+  s_db16b30eee15e6::t_091c93f9c0e76e 234-235,380-391
+  s_db16b30eee15e6::t_5027c8cc225079 5
+helm/strato-control-plane/templates/deployment.yaml
+  s_db16b30eee15e6::t_67a68bf3e58f7f 228-232
+  s_db16b30eee15e6::t_6d1021d6db4900 342
+  s_db16b30eee15e6::t_1df3df3b1aa66b 1-3
+  s_db16b30eee15e6::t_da24d47e1d4475 215
+control-plane/Tests/AppTests/SandboxExecAttachIntegrationTests.swift
+  s_db16b30eee15e6::t_ebbd86bf091f15 25-29,31-35,38-41,43,46-48
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_db16b30eee15e6::t_e5454fe18427af 77
+  s_db16b30eee15e6::t_1c704d95ebee5e 140-142
+control-plane/Sources/App/Services/AgentService.swift
+  s_db16b30eee15e6::t_78396d5b2188cd 293-296
+  s_db16b30eee15e6::t_3fd306498cf61e 330-342,350
+  s_db16b30eee15e6::t_6a7ba415133d90 269-274
+  s_db16b30eee15e6::t_081bfc0b84495b 445
+  s_db16b30eee15e6::t_a345bd52c8f6db 382
+  s_db16b30eee15e6::t_0950e0c98c9342 454-467
+docs/guide/quick-start.md
+  s_db16b30eee15e6::t_b59305bfc78e8c 60,62-64,67-70,73-77
+agent/Sources/StratoAgentCore/WebSocketURLs.swift
+  s_db16b30eee15e6::t_2e117fcf8b960d 4-7
+  s_db16b30eee15e6::t_97a3346be656e1 19
+docs/architecture/wire-protocol.md
+  s_db16b30eee15e6::t_92702d30801ac2 63
+  s_db16b30eee15e6::t_410db89d13f73c 78
+  s_db16b30eee15e6::t_9ada6aec17b7b5 41,45
+control-plane/web/src/components/agents/create-enrollment-dialog.tsx
+  s_db16b30eee15e6::t_daf4d9b2e54b23 19-234
+docs/deployment/docker-compose.md
+  s_db16b30eee15e6::t_ab2895e1fc6e49 6
+control-plane/Tests/AppTests/SPIREServiceTests.swift
+  s_db16b30eee15e6::t_287f0952a7dff9 11-12,17,21
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_db16b30eee15e6::t_7e60e52c881640 11-15
+  s_db16b30eee15e6::t_730c26142bc26d 49,55,62-72,74-75,81,83-84,87-90,92-94,96-97,101,104,108-113,119,132-137,142,150,152,155-156,162,170,172,177-178,183,189,191,196-197,201-202,207-209,211-233,237-249,253,255-256,261-262,264,280,285-286,291-296,298,309,314-315,320-327,329,340-341,345-346,351-356,358,365,377-378,380,386-387,392,399,403-404,406,416
+  s_db16b30eee15e6::t_3e934cbae4d77c 495-496,498,504,509-510,512,519
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "07c203dbf297481d1164e13b63b373ad26966662",
+  "prompts": {},
+  "sessions": {
+    "s_256b817512560e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cc585-7b1b-4f68-b28b-4af0753f6ba2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_db16b30eee15e6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57e2fd00-5fd9-4c09-b8b2-1248afa3c8a4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

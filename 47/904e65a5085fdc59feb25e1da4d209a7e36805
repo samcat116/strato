@@ -1,0 +1,27 @@
+docs/architecture/storage.md
+  s_753b8c92d921a6::t_320cac9053aa2d 209-213
+control-plane/Sources/App/Models/Volume.swift
+  s_753b8c92d921a6::t_6aa1f23fb937ac 244-252
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_753b8c92d921a6::t_fdd48ced878df9 726-736,739
+control-plane/Tests/AppTests/VolumeSnapshotGuardTests.swift
+  s_753b8c92d921a6::t_6cf01f8cf58611 92-110
+control-plane/Tests/AppTests/VolumeStatusTests.swift
+  s_753b8c92d921a6::t_0ae57e5f055d54 33-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "47904e65a5085fdc59feb25e1da4d209a7e36805",
+  "prompts": {},
+  "sessions": {
+    "s_753b8c92d921a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "52d36f60-b53a-43dc-b193-d462ef1bde61",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_c83dc918147a05::t_8f910b0b198f0b 518-538
+  s_c83dc918147a05::t_c60031cac2540b 73-76
+  s_c83dc918147a05::t_14715d3e4e9958 234-242
+  s_c83dc918147a05::t_75dc39ea94afe7 345-348
+control-plane/Tests/AppTests/CoordinationServiceTests.swift
+  s_c83dc918147a05::t_31d4a18317f0b4 150-165
+  s_c83dc918147a05::t_fcce3483a18b63 60,62,64,68
+docs/architecture/scheduler.md
+  s_c83dc918147a05::t_c37f63b428a78e 186-188
+control-plane/Sources/App/Services/AgentService.swift
+  s_c83dc918147a05::t_f3fc7acb02f995 468-477
+  s_c83dc918147a05::t_26613451e58e98 325-331
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "55dcde19ff472667aae8365b2d998277877d51ab",
+  "prompts": {},
+  "sessions": {
+    "s_c83dc918147a05": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "95882906-c485-4035-99e7-542e685b54d1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

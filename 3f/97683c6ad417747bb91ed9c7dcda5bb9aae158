@@ -1,0 +1,22 @@
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_a920201f7c1034::t_e0cb43588f1df5 356-382
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_a920201f7c1034::t_8f5bccdeb8184a 507-515
+  s_a920201f7c1034::t_ccea24afc113d1 191-203
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "3f97683c6ad417747bb91ed9c7dcda5bb9aae158",
+  "prompts": {},
+  "sessions": {
+    "s_a920201f7c1034": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e474b736-80eb-41cc-aeb3-ac5e04e1363a",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

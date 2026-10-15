@@ -1,0 +1,43 @@
+control-plane/Tests/AppTests/ServiceAccountAPITests.swift
+  s_a03ccd1eb71a29::t_3de93dec393751 298,328-374
+  s_a03ccd1eb71a29::t_bb96daedd26b74 261-263,270-297
+control-plane/Sources/App/Controllers/ServiceAccountController.swift
+  s_a03ccd1eb71a29::t_ce8d64a3801b30 289-294,298,301,304
+  s_a03ccd1eb71a29::t_e7f8e966dea168 125-141,143-146
+  s_a03ccd1eb71a29::t_3cf32f35ed4abb 196
+  s_a03ccd1eb71a29::t_2d69835b083325 322,326
+control-plane/Sources/App/Controllers/WorkloadRegistrationController.swift
+  s_a03ccd1eb71a29::t_b0796fb04eeb90 96
+  s_a03ccd1eb71a29::t_98ec0ef10c3a15 58-60,66
+control-plane/Sources/App/Services/SPIFFE/WorkloadRegistry.swift
+  s_a03ccd1eb71a29::t_b3250984d658ab 34-58
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_a03ccd1eb71a29::t_ce51a4774ff023 185-199
+control-plane/web/src/types/openapi.ts
+  s_a03ccd1eb71a29::t_49024dc936a7fe 3187,3213
+control-plane/Tests/AppTests/WorkloadPrincipalTests.swift
+  s_a03ccd1eb71a29::t_2b9d66878ad95c 266-344
+  s_a03ccd1eb71a29::t_fe058262a99fa3 447-484
+control-plane/Sources/App/openapi.yaml
+  s_a03ccd1eb71a29::t_4ebdfd6bd7564f 4480
+  s_a03ccd1eb71a29::t_47a613ea0c8e25 4448-4453
+control-plane/Sources/App/Migrations/CreateServiceAccount.swift
+  s_a03ccd1eb71a29::t_b661a6e3dbd7ba 27-32,36
+  s_a03ccd1eb71a29::t_577749fad9e159 57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "29da54244deea75eb57eb32f77cc875f91a7c34e",
+  "prompts": {},
+  "sessions": {
+    "s_a03ccd1eb71a29": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b8c6fb8b-d4f1-4518-b629-9193811f8296",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

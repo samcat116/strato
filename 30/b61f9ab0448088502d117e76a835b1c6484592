@@ -1,0 +1,23 @@
+helm/strato-control-plane/templates/gateway-routes.yaml
+  s_9ab21835e56a12::t_97872cab13b752 25-27,44-46
+helm/strato-control-plane/templates/ingress.yaml
+  s_9ab21835e56a12::t_b85618d17660c5 123-131
+  s_9ab21835e56a12::t_080e241c4d56d3 120-122
+  s_9ab21835e56a12::t_91e54f8f8bd342 115-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "30b61f9ab0448088502d117e76a835b1c6484592",
+  "prompts": {},
+  "sessions": {
+    "s_9ab21835e56a12": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "87b262e7-3510-4d0a-a9d4-e534891e5dd6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+cli/Tests/StratoCLITests/StratoClientTests.swift
+  s_4d988215f5ca34::t_b10c1eb65a873c 16
+  s_4d988215f5ca34::t_08f3834b26e6d8 14
+control-plane/Sources/App/openapi.yaml
+  s_4d988215f5ca34::t_b10c1eb65a873c 8959,8967,8969-8971
+control-plane/Sources/App/Services/OperationFacade.swift
+  s_4d988215f5ca34::t_b10c1eb65a873c 394-397,405
+control-plane/Tests/AppResourceTests/OperationResponseContractTests.swift
+  s_4d988215f5ca34::t_0c55e81687115c 1-34
+control-plane/web/src/types/openapi.ts
+  s_4d988215f5ca34::t_9c3bbdf688bd36 5320-5321,5323
+control-plane/web/src/types/api.ts
+  s_4d988215f5ca34::t_b10c1eb65a873c 1351-1353,1355
+cli/Tests/StratoCLITests/OperationWaiterTests.swift
+  s_4d988215f5ca34::t_08f3834b26e6d8 19
+  s_4d988215f5ca34::t_b10c1eb65a873c 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "85c677c21e3b0789c08926cfe8703cd03881896e",
+  "prompts": {},
+  "sessions": {
+    "s_4d988215f5ca34": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdbf-a400-72a3-a31d-9ef1b4fced3a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

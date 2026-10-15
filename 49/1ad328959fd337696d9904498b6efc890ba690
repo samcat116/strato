@@ -1,0 +1,19 @@
+.entire/settings.json
+  s_c3cd1c0c12b992::t_bfe7a111e65243 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "491ad328959fd337696d9904498b6efc890ba690",
+  "prompts": {},
+  "sessions": {
+    "s_c3cd1c0c12b992": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82e09804-cdb1-43ee-85f8-b1fe9a9134f4",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

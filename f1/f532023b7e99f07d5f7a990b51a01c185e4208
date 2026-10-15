@@ -1,0 +1,40 @@
+sandbox-guest/strato-guest-agent.service
+  s_be08b0945b7154::t_addfdb129214ab 1-20
+.github/workflows/release.yaml
+  s_be08b0945b7154::t_e1e5ea4e1ce79d 795-796,832-833
+  s_be08b0945b7154::t_b1aff16ec3f410 842
+.github/workflows/sandbox-guest.yaml
+  s_be08b0945b7154::t_4d980f73c19c3d 203-216,218-220,222-238,240-256,272-294
+  s_be08b0945b7154::t_f667568ccbc194 239
+  s_be08b0945b7154::t_a0deef754b9cfc 123-128,217
+  s_be08b0945b7154::t_00d29f0f93f4e0 3-6,47-55,98-103,108-109,112,114-122,137-140,155-160
+  s_be08b0945b7154::t_b1aff16ec3f410 221,257-271
+docs/architecture/agent.md
+  s_be08b0945b7154::t_fa314006bd3d6e 1060
+  s_be08b0945b7154::t_e1e5ea4e1ce79d 1065-1067
+sandbox-guest/README.md
+  s_be08b0945b7154::t_e1e5ea4e1ce79d 36-39,241-249,274-285
+  s_be08b0945b7154::t_d6e23eee08bbc6 286
+.github/workflows/README.md
+  s_be08b0945b7154::t_e1e5ea4e1ce79d 97-98
+sandbox-guest/build-guest-agent.sh
+  s_be08b0945b7154::t_addfdb129214ab 1-56
+sandbox-guest/init/src/guest_agent.rs
+  s_be08b0945b7154::t_901c6717e88fb8 5-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f1f532023b7e99f07d5f7a990b51a01c185e4208",
+  "prompts": {},
+  "sessions": {
+    "s_be08b0945b7154": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f4-c4b8-7200-8764-50a86111dc56",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

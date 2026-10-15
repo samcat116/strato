@@ -1,0 +1,31 @@
+helm/strato-control-plane/values.yaml
+  s_d3ddaf0d6448fa::t_f318d0f4365b24 168-170,172-177,179-182
+helm/strato-control-plane/templates/_helpers.tpl
+  s_d3ddaf0d6448fa::t_99ca0f64efd684 73-108
+helm/strato-control-plane/templates/deployment.yaml
+  s_d3ddaf0d6448fa::t_c2a771f3bbd6ac 138-142,144
+helm/strato-control-plane/templates/credentials-secret.yaml
+  s_d3ddaf0d6448fa::t_0f3591fc3bbb7a 97,99-100,102-103
+helm/strato-control-plane/templates/spicedb-statefulset.yaml
+  s_d3ddaf0d6448fa::t_951925f5393497 43-48
+  s_d3ddaf0d6448fa::t_14f94788e920ac 104,106,109-114,116-121
+helm/strato-control-plane/templates/migration-job.yaml
+  s_d3ddaf0d6448fa::t_01c8889a95e3a0 56-63
+  s_d3ddaf0d6448fa::t_1e1f9f353c8d5a 79-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f7c01b37149795d96818291e551520cac596a006",
+  "prompts": {},
+  "sessions": {
+    "s_d3ddaf0d6448fa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6716173-cfeb-4893-a1ea-a5eccbdbcb33",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

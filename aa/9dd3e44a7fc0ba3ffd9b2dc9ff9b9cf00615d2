@@ -1,0 +1,340 @@
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 65-66,100-126
+agent/Sources/StratoAgentCore/WireMessageLogger.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-156
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 657
+control-plane/Tests/AppPlatformTests/AdvisoryLockTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-290
+control-plane/Tests/AppPlatformTests/FloatingIPControllerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 106-107
+control-plane/Tests/AppPlatformTests/NetworkACLControllerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-459
+control-plane/web/src/types/api.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 2148-2188
+helm/strato-control-plane/templates/deployment.yaml
+  s_9826c2fbaa51e8::t_4de39a298e03a2 12-17,202,208-215
+helm/strato-control-plane/values.yaml
+  s_9826c2fbaa51e8::t_4de39a298e03a2 7-11,370-375,379
+docs/adr/0010-layer-network-acls-with-ovn-tiers.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-130
+docs/architecture/wire-protocol.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 53,105-111
+  s_9826c2fbaa51e8::t_fe9aa1ff329514 112
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 204-206,355-356
+control-plane/Sources/App/Services/AuditService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 41-51,76-109,124-127,147,151,168-170,231-236,265-268,276,284-288,397-402,409-414,418,420-422,443-448,450,452,456-467,469,471-472,492-503,505,525-526,565-568,626-641,643,651,653-654,730,732-737
+docs/deployment/kubernetes.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 149,226,228-271
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 21-30,122-124,133-140
+  s_9826c2fbaa51e8::t_68cacec3bc730c 141
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 280-281,308-312,1045-1085
+  s_9826c2fbaa51e8::t_7191edd0b5c4f2 1086-1087
+control-plane/Sources/App/Migrations/AddVMGuestExecutionAudit.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-64
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 675-676,716-718,720,723
+control-plane/Sources/App/Services/VMGuestExecutionAudit.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-287
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 8-10,540,547-583,1067,1092,1098-1121
+  s_9826c2fbaa51e8::t_eee4cd1a8eaeea 1122
+agent/Tests/StratoAgentTests/WireMessageLoggingTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-336
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 91-92,94,116-134,232,234,240-249,269-343,446-447,454-464,479-480,484-488,500-519,536,540,544,555,560-587,611-619,640-641,756-759,767-861,866-873,883-886,890-1162,1208-1209
+shared/Tests/StratoSharedTests/MACAddressTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-33
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 12-14,16-29,33,38-45,47,54,63-78,82,86,90-107,112,114-119,126,132,148-151,157-167,172-182,184-186,192-195,205-209,212,215-223,227-240,242-247,249-254,262-273,275,283-289,309-311,330-333,335-375,379-381,388-393,395,397-409,413-420,422-423,427-428,430-431,433-436,438-446,449-452,457-463,467-574,595-612,614,616,618,623,629-635,650,652,654,656-661,667,675-743
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 717-781,1056-1060,1080-1081,1101
+control-plane/Sources/App/Services/GuestExecSessionManager.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 71-74,86-88,101,113,117,129,208-210,236-252,276-285,288-296,302-305,309,312-317,373-407,455-479,485-513,528-651,711-723
+  s_9826c2fbaa51e8::t_c8f911e8dd76bf 724
+control-plane/web/src/lib/api/audit-events.test.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-31
+control-plane/Sources/App/Migrations/CreateNetworkACLs.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-129
+control-plane/Sources/App/Migrations/CreateMACAddressLedger.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-155
+control-plane/Tests/AppIdentityTests/SecretsEncryptionServiceTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 13,19-24,54-77,88-92,108,122-131,161-175,283-429
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 20-45,156-165,193,201-205,211-222,256-259,290-293,394-410,425-429,436-440,459-463,474-480
+control-plane/Tests/AppPlatformTests/VMGuestExecutionAuditTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-214
+helm/strato-control-plane/TESTING.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 99-102,106-122,128-132,136-138
+control-plane/web/src/components/networks/network-table.tsx
+  s_9826c2fbaa51e8::t_4de39a298e03a2 6,28,36,43,96,107,185-196
+control-plane/Sources/App/Models/VMCommandExecution.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 15-22,26-28,37-42,48-52,55
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 125,959,1142
+control-plane/Tests/AppPlatformTests/SecurityGroupControllerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 98,138
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 520-521,527,529-532,534-535
+control-plane/Sources/App/Services/MACAddressAudit.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-136
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 12,32-35,37-38,68-75
+  s_9826c2fbaa51e8::t_f74ca02c242477 76-86
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 78-79,81-83,96,101-110,195-199,222,348-354
+  s_9826c2fbaa51e8::t_66187914e6ba73 355-356
+control-plane/Sources/App/openapi.yaml
+  s_9826c2fbaa51e8::t_4de39a298e03a2 170,1824-1921,6922-6923,6958-6959,8615-8622,9066-9079,11528-11620,11622,11625
+  s_9826c2fbaa51e8::t_49b3c2da5a1917 11621,11623-11624,11626-11627
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 232-264,269-270,305-309,312
+control-plane/Sources/App/Services/ResolverAddressAllocator.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 103-105,107-108
+docs/architecture/control-plane.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 688-689,694-698
+shared/Tests/StratoSharedTests/NetworkACLProtocolTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-76
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 242,584
+deploy/compose/setup.sh
+  s_9826c2fbaa51e8::t_4de39a298e03a2 107-108,111-113,115-116
+control-plane/Tests/AppIAMTests/CrossProjectContainmentTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 143
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 90,92,127,129,156-157,242,276-277,302
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 350,388,393,399
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 30,150-154,164-168,205-209,228-232,247-251,272-276,297-301,311-313,330-334,338,358-362,366-370,383-387,391-395,399-403,418-422,426,443-445,452-454,483,513,545,558-559
+agent/Sources/StratoAgent/MetadataServerCommand.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 61-67
+control-plane/Sources/App/Models/NetworkACLRule.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-169
+control-plane/web/src/app/(dashboard)/admin/audit/page.tsx
+  s_9826c2fbaa51e8::t_4de39a298e03a2 19-22,37-41,62,65-67,75-76,80,85,88-95,97-102,110,192-211,276-295,314,319-320
+  s_9826c2fbaa51e8::t_8fc0bed5332bf4 321-322
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 481,504,514,667,693
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 8,47-53,83,92,175-177,189,191-194,333-343,351-355
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 379-382
+shared/Sources/StratoShared/WireProtocol.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 14-16,23
+control-plane/Tests/AppPlatformTests/CreateMACAddressLedgerMigrationTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-148
+agent/Sources/StratoAgent/Agent.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 103-104,515,2520-2521,2526-2529,2532,2534,2538-2555,2557,2563-2566,2585-2588,2745-2748,2751-2754,2757-2760,2764-2767,2770-2773,2776-2779,2782-2785,2795-2801,2803-2806,2812
+agent/Sources/StratoAgentCore/AgentLogLevel.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-75
+control-plane/web/src/components/audit/audit-event-table.tsx
+  s_9826c2fbaa51e8::t_4de39a298e03a2 21-54,100,148-150,157-205,235-247,250-259
+control-plane/web/src/components/networks/index.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 4
+control-plane/web/src/lib/api/networks.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 3,7-8,10,37-82
+control-plane/Sources/App/Services/AdvisoryLock.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-374
+docs/deployment/observability.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 152-213,228,274
+control-plane/Sources/App/routes.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 73
+control-plane/Tests/AppPlatformTests/SchemaMigratorTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 43,62,66-72,75-80
+control-plane/web/src/lib/hooks/index.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 170-178
+docs/architecture/networking.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 36-37,40-43,120-132,600-602,652-654,667-675,682-683,686-688,717-718,785-788,809-815,888-889,900-997
+control-plane/web/src/types/api-contracts.ts
+  s_9826c2fbaa51e8::t_d8070f56657022 52-54
+control-plane/Sources/App/Services/NetworkACLService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-141
+control-plane/web/src/components/audit/audit-event-table.test.tsx
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-83
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 17-72,305-314,449-453
+  s_9826c2fbaa51e8::t_4be3febbe6be51 454
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 22-238,261-264,269,326-327,334-336,349-377,381-390,415-416,419-433,440-452,525-538,578-581,583-587
+control-plane/Tests/AppPlatformTests/MACAllocatorTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-163
+control-plane/web/src/lib/hooks/use-networks.ts
+  s_9826c2fbaa51e8::t_d8070f56657022 3
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1,20-69
+docs/deployment/health-checks.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1,4,128-135,160-172
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 216-217,219-220,222-223
+helm/strato-control-plane/README.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 43-60,169-171
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 4-5,10-16,18-22,24-25,27-30,32-35,37-40,43-119,122-131,135-140,149,155,161,163-174,176-180,182-183,186-189,191-238,241-303,305-385,388,390-398,401,406-418,420-446,448,450-458,460-467,469-492,494-525,527-534,536-537,539-556,558-600,602
+agent/Sources/StratoAgentCore/NetworkACLReconciler.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-619
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1624-1626,1630-1635,1651,1688,1712,1730,1766,1769-1770
+control-plane/Sources/App/Middleware/AuditMiddleware.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 12-70,90-91,94-99,103-108,112,114-122,124-129,131-138,140,172-176
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 80,949
+control-plane/Sources/App/Controllers/UserController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 103-106,108-109
+control-plane/Sources/App/Controllers/AuditEventController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 21-22,65-77
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1406-1407,1455,1464,1471-1473,1675
+agent/Package.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 168
+docs/architecture/multi-replica.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 150-156
+control-plane/Sources/App/Services/MACAllocator.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-79
+control-plane/Tests/AppPlatformTests/ListCountBatchingTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 133
+control-plane/Sources/App/Controllers/NetworkACLController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-221
+control-plane/web/src/types/openapi.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1298-1373,6649-6706,10185-10186,10295-10298,12321-12447,18483-18486,18524-18527
+agent/Tests/StratoAgentTests/SecurityGroupReconcilerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 88,200,208,280,288,290-295,350,525-556,666,679,699,718,720-729,734,798
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 427,470,1041,1063,1113,1133
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 754-816
+shared/Sources/StratoShared/IPAddressing.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 18-77
+control-plane/Sources/App/Models/NetworkACL.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-74
+agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 65-76,84,86-87,104,114,128-129,181-183,267,353,360,403,408,452,481,486,491,496,503,508,518,523,529,534,677-679,716-733,746-750,765,770,772,781-783,785,800,806-811
+control-plane/web/src/components/audit/audit-event-model.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-16
+docs/deployment/audit-logging.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 38-42,45-68,79,81,83,115-132,157,164-169
+  s_9826c2fbaa51e8::t_33c5b413a25fac 170
+.github/workflows/helm-test.yml
+  s_9826c2fbaa51e8::t_4de39a298e03a2 101-122
+control-plane/Sources/App/Models/AuditEvent.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 64-68,75-80
+control-plane/Sources/App/Models/SandboxNetworkInterface.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 7
+control-plane/Tests/AppIAMTests/VMAttachTargetDisclosureTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 155
+CONTEXT.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 332-348
+control-plane/web/src/lib/api/audit-events.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 10-12,27-28
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 20
+control-plane/web/src/components/networks/network-acl-permissions.test.tsx
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-132
+deploy/compose/docker-compose.yml
+  s_9826c2fbaa51e8::t_4de39a298e03a2 319-320
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1368,1370,1372,1376,1379,1401,1403,1405,1409,1412,1416
+docs/superpowers/specs/2026-08-15-vm-guest-execution-audit-design.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-316
+control-plane/Tests/AppPlatformTests/LoadBalancerControllerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 84
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 67-69,161-170
+  s_9826c2fbaa51e8::t_f133f6d5fefe72 171-172
+control-plane/Sources/App/Services/AgentService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 635-636,680-681
+control-plane/Sources/App/Bootstrap/StartupReconciliation.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 8-12,26-29
+control-plane/Tests/AppPlatformTests/AuditLoggingTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 2,17-37,282-326,371,373-376,432-493,520-549,580-663,686-719,753-754,785-817,841,859-867
+control-plane/web/src/app/(dashboard)/admin/audit/page.test.ts
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-24
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_9826c2fbaa51e8::t_744e2c6676f298 90-92
+  s_9826c2fbaa51e8::t_4de39a298e03a2 14,23-26,113-120
+  s_97aa0ae9838634::t_6f37ae3e452ae7 121
+control-plane/Sources/App/Services/DNSZoneService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 104-106,108-109
+control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 59-62,67
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 216-249
+agent/Tests/StratoAgentTests/AgentLogLevelTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-106
+docs/deployment/docker-compose.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 177-178,182-221,317-323,349
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 396-405,1614,1617,1625-1650,3149,3164-3167,3203-3204,3229-3233,3312-3447
+  s_9826c2fbaa51e8::t_8b15381377985c 3448-3449
+control-plane/Sources/App/Models/RegistryPullSecret.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 35-36
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 136-137,139
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 18,26-28,33-34,120-121
+control-plane/Tests/AppResourceTests/VMCommandExecutionTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 14,27-64,73-83,119-126,203,211,228-231,233,243,245,250-304,315-318,320-333,336-346,349-350,353-526,547-1041
+deploy/compose/.env.example
+  s_9826c2fbaa51e8::t_4de39a298e03a2 14-17
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 22
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_9826c2fbaa51e8::t_4de39a298e03a2 58-74,595-607,1722-1737,2210-2217,2322-2329,3009-3020
+  s_9826c2fbaa51e8::t_48b15837880e61 3021-3022
+control-plane/Sources/App/SchemaMigrator.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 33,56-58,141,146,156,161-162,310-313,318,322-342
+control-plane/Sources/App/Controllers/VMController.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 278-280,282,285,1095-1096,1100-1102,1104,1107,1864-1870,1872,1876-1881,1885-1886,1978-1984,1986,1997-1998,2000-2001
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 101-113,116-117,120-131,133-138
+control-plane/web/src/components/networks/network-acl-dialog.tsx
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-646
+deploy/compose/README.md
+  s_9826c2fbaa51e8::t_4de39a298e03a2 55-61
+agent/Tests/StratoAgentTests/NetworkACLReconcilerTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 1-596
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 192-193
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 78-79,81-82
+agent/Sources/StratoAgent/NetworkServiceMacOS.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 49-58
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 115-119,121-122,165
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 286,450,598-607,1144,1175
+control-plane/Tests/AppResourceTests/WorkloadSizeValidationTests.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 133-137
+control-plane/Sources/App/Services/IPAMService.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 73,75-81,84-85,88-95,108,185,261
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 110,120-139,143
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_9826c2fbaa51e8::t_4de39a298e03a2 151-154,158-160,163-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "aa9dd3e44a7fc0ba3ffd9b2dc9ff9b9cf00615d2",
+  "prompts": {},
+  "sessions": {
+    "s_97aa0ae9838634": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05538-8017-7a21-aac4-876e35e96be4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9826c2fbaa51e8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a054ad-abb0-7033-896b-1aac668985a6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

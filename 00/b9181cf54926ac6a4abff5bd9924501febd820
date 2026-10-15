@@ -1,0 +1,63 @@
+control-plane/web/src/components/quotas/usage-bar.tsx
+  s_bd516ccae91710::t_c513af0b27f519 1-59
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_bd516ccae91710::t_c513af0b27f519 1-298
+control-plane/web/src/components/layout/sidebar.tsx
+  s_bd516ccae91710::t_c513af0b27f519 16-18,191-211
+control-plane/Tests/AppTests/VolumeStatusTests.swift
+  s_bd516ccae91710::t_c513af0b27f519 1-19
+control-plane/web/src/app/(dashboard)/hierarchy/page.tsx
+  s_bd516ccae91710::t_c513af0b27f519 1-177
+control-plane/web/src/components/quotas/index.ts
+  s_bd516ccae91710::t_c513af0b27f519 1-3
+control-plane/web/src/lib/hooks/index.ts
+  s_bd516ccae91710::t_c513af0b27f519 32-42
+control-plane/web/src/components/hierarchy/index.ts
+  s_bd516ccae91710::t_c513af0b27f519 1
+control-plane/web/src/lib/hooks/use-quotas.ts
+  s_bd516ccae91710::t_c513af0b27f519 1-109
+control-plane/web/src/types/api.ts
+  s_bd516ccae91710::t_c513af0b27f519 299-438
+control-plane/Sources/App/Models/Volume.swift
+  s_bd516ccae91710::t_c513af0b27f519 223-225,227
+control-plane/Sources/App/Services/VolumeService.swift
+  s_bd516ccae91710::t_c513af0b27f519 148,187-192
+  s_bd516ccae91710::t_4b78cd16831104 193-194
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_bd516ccae91710::t_c513af0b27f519 4-5,36,97,125,127-135,219-232,358-361
+control-plane/web/src/lib/api/hierarchy.ts
+  s_bd516ccae91710::t_c513af0b27f519 1-37
+control-plane/web/src/components/hierarchy/hierarchy-tree.tsx
+  s_bd516ccae91710::t_c513af0b27f519 1-201
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_bd516ccae91710::t_c513af0b27f519 253-255
+control-plane/Tests/AppTests/VolumeAgentSelectionTests.swift
+  s_bd516ccae91710::t_df870d01cea679 49,60,70,80
+  s_bd516ccae91710::t_c513af0b27f519 1-48,50-59,61-69,71-79,81-94
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_bd516ccae91710::t_c513af0b27f519 1-110
+control-plane/web/src/lib/api/index.ts
+  s_bd516ccae91710::t_c513af0b27f519 12-13
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_bd516ccae91710::t_c513af0b27f519 1-280
+control-plane/web/src/lib/hooks/use-hierarchy.ts
+  s_bd516ccae91710::t_c513af0b27f519 1-29
+control-plane/web/src/lib/api/quotas.ts
+  s_bd516ccae91710::t_c513af0b27f519 1-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "00b9181cf54926ac6a4abff5bd9924501febd820",
+  "prompts": {},
+  "sessions": {
+    "s_bd516ccae91710": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44061ba0-985d-4af7-89df-9953978662e0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_3b51f876fe765a::t_dffdf9cad96b99 61-63,72,75
+  s_3b51f876fe765a::t_558bb824256822 101-106
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_3b51f876fe765a::t_95dec547030aae 114-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "75c634daa83161a8c3bf83c092dc4093f84ebc64",
+  "prompts": {},
+  "sessions": {
+    "s_3b51f876fe765a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "afc8942e-6b0f-47cb-893a-c3f33533d891",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

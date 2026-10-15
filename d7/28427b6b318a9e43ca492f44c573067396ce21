@@ -1,0 +1,52 @@
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_64bc87c554eeb2::t_e1ff8be8a65231 454-524
+control-plane/Tests/AppTests/OrganizationMemberAuthzTests.swift
+  s_64bc87c554eeb2::t_2d59d3518088d3 1-121
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_64bc87c554eeb2::t_d54b1299615046 518-531
+  s_64bc87c554eeb2::t_65623d2c976fe1 500-501
+control-plane/Tests/AppTests/IAMRoleBindingTests.swift
+  s_64bc87c554eeb2::t_a478882ede461c 178-179
+  s_64bc87c554eeb2::t_155fa990c158c8 200-207
+  s_64bc87c554eeb2::t_d22b312bfdcb25 225-235
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_64bc87c554eeb2::t_d265f9cba928ce 615-622,624,627,633,636
+control-plane/Tests/AppTests/APIKeyOwnershipTests.swift
+  s_64bc87c554eeb2::t_a1b160ca038c86 1-87
+control-plane/Sources/App/Services/OrganizationAccessService.swift
+  s_64bc87c554eeb2::t_7dd812ff9dd470 17-19
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_64bc87c554eeb2::t_c7e37e78d57bcf 501-502
+  s_64bc87c554eeb2::t_87fa38837350c3 238,250-252
+  s_64bc87c554eeb2::t_1bdf356a0d121d 326,334-336
+  s_64bc87c554eeb2::t_2e5129a476a4f9 84-89,95
+  s_64bc87c554eeb2::t_0718bb70fb5ed3 196,208-210
+  s_64bc87c554eeb2::t_08208348a788cf 364-366
+  s_64bc87c554eeb2::t_a0cb00f751df5e 440-441
+  s_64bc87c554eeb2::t_c8de8b3040e39a 400,428,533
+  s_64bc87c554eeb2::t_cd42e95f7de25f 312-315
+docs/architecture/iam.md
+  s_64bc87c554eeb2::t_b62c452144da02 479-529
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_64bc87c554eeb2::t_d97f91846fa422 126-130
+  s_64bc87c554eeb2::t_fbb3bdc82babdf 179-182,195
+control-plane/Sources/App/IAM/RoleBindingBackfill.swift
+  s_64bc87c554eeb2::t_7215b53ec79de1 90-92
+  s_64bc87c554eeb2::t_6d1f88c1baedee 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "d728427b6b318a9e43ca492f44c573067396ce21",
+  "prompts": {},
+  "sessions": {
+    "s_64bc87c554eeb2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "19e798f4-f1e9-4e38-80b0-d7bd44f2a163",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

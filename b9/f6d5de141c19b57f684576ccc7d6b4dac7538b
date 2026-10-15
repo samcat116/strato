@@ -1,0 +1,95 @@
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_a587f81d483352::t_5e42792348901a 79,111,135,170,204,237,271,306,341,386,423,445,477,500
+control-plane/Sources/App/Services/AgentService.swift
+  s_a587f81d483352::t_5e42792348901a 113-121,1439-1443,1451-1475,1479-1493,1497-1502,1555-1562,1564-1579,1582-1583
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_a587f81d483352::t_5e42792348901a 20-22,29-33
+control-plane/Package.swift
+  s_a587f81d483352::t_4943547f5c0db9 104
+control-plane/Tests/AppTests/AgentServiceLifecycleTests.swift
+  s_a587f81d483352::t_5e42792348901a 36,42
+control-plane/Tests/AppTests/VolumeAuthorizationTests.swift
+  s_a587f81d483352::t_5e42792348901a 55,59
+helm/strato-control-plane/templates/spicedb-statefulset.yaml
+  s_a587f81d483352::t_5e42792348901a 41-42,84-85
+helm/strato-control-plane/values.yaml
+  s_a587f81d483352::t_5e42792348901a 315-331
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_a587f81d483352::t_5e42792348901a 50,54,72-90,112,117
+helm/strato-control-plane/templates/credentials-secret.yaml
+  s_a587f81d483352::t_5e42792348901a 101,105-109
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_a587f81d483352::t_5e42792348901a 52,55
+control-plane/Tests/AppTests/HealthControllerTests.swift
+  s_a587f81d483352::t_5e42792348901a 20,43,60,83,101,125,150,173,195
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_a587f81d483352::t_5e42792348901a 141,145
+control-plane/Tests/AppTests/AuthorizationCheckTests.swift
+  s_a587f81d483352::t_5e42792348901a 38,41
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_a587f81d483352::t_5e42792348901a 51,55,166,168
+helm/strato-control-plane/templates/_helpers.tpl
+  s_a587f81d483352::t_5e42792348901a 134-135,145-172
+.github/workflows/README.md
+  s_a587f81d483352::t_5e42792348901a 70-71,75-78
+control-plane/Sources/App/Services/BackgroundTaskRegistry.swift
+  s_a587f81d483352::t_5e42792348901a 1-92
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_a587f81d483352::t_5e42792348901a 16-17,19
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_a587f81d483352::t_5e42792348901a 59,63
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_a587f81d483352::t_5e42792348901a 3-6,8,10,35-248,258-259,261-264,267,270-278,280-281,291-292,297-301,303-311,316-317,325,329,332-333,335
+control-plane/Sources/App/configure.swift
+  s_a587f81d483352::t_5e42792348901a 24-28
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_a587f81d483352::t_5e42792348901a 389
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_a587f81d483352::t_5e42792348901a 244,249
+control-plane/Tests/AppTests/OrganizationalUnitTests.swift
+  s_a587f81d483352::t_5e42792348901a 45,49
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_a587f81d483352::t_5e42792348901a 52,56
+.github/workflows/build.yaml
+  s_a587f81d483352::t_5e42792348901a 131-144,148,164-169,171-177,179,189-231,242-284,297-303
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_a587f81d483352::t_5e42792348901a 45,49
+control-plane/Tests/AppTests/HierarchyIntegrationTests.swift
+  s_a587f81d483352::t_5e42792348901a 33,37
+control-plane/Tests/AppTests/OrgMemberSpiceDBMirrorTests.swift
+  s_a587f81d483352::t_5e42792348901a 59,63
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_a587f81d483352::t_5e42792348901a 36,39
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_a587f81d483352::t_5e42792348901a 52,55
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a587f81d483352::t_5e42792348901a 121,129,223,715,784
+control-plane/Tests/AppTests/HierarchyPathResolverTests.swift
+  s_a587f81d483352::t_5e42792348901a 17,20
+control-plane/Tests/AppTests/SecurityHeadersTests.swift
+  s_a587f81d483352::t_5e42792348901a 23,49,63,92,107
+control-plane/Tests/AppTests/ProjectMemberTests.swift
+  s_a587f81d483352::t_5e42792348901a 46,49
+helm/strato-control-plane/templates/secret.yaml
+  s_a587f81d483352::t_5e42792348901a 5
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_a587f81d483352::t_5e42792348901a 57,61
+control-plane/Tests/AppTests/OrganizationAccessServiceTests.swift
+  s_a587f81d483352::t_5e42792348901a 23,27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b9f6d5de141c19b57f684576ccc7d6b4dac7538b",
+  "prompts": {},
+  "sessions": {
+    "s_a587f81d483352": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc6066aa-332b-4561-b79f-cda35143be82",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

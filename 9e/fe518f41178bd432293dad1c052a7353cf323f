@@ -1,0 +1,52 @@
+control-plane/Package.swift
+  s_1ad33b6e618777::t_25fc6b09fb23e7 73
+  s_1ad33b6e618777::t_9df63af9cde013 1
+  s_1ad33b6e618777::t_260bf36b0c69d3 85-92
+  s_1ad33b6e618777::t_f578253844e30d 80-83
+agent/Sources/StratoAgent/Agent.swift
+  s_1ad33b6e618777::t_7977ea825744c9 365
+.github/workflows/build.yaml
+  s_1ad33b6e618777::t_c87a9af0451c52 70-71
+.github/workflows/main-build.yaml
+  s_1ad33b6e618777::t_6ccb092e23ba99 58-59
+control-plane/Dockerfile
+  s_1ad33b6e618777::t_1282c14a6be28b 4
+agent/Dockerfile
+  s_1ad33b6e618777::t_d72eb0d25c93f6 4
+SwiftFirecracker/Package.swift
+  s_1ad33b6e618777::t_932187765fc1d0 26-27,35-36
+  s_1ad33b6e618777::t_9c8475c0d01aaa 1
+CLAUDE.md
+  s_1ad33b6e618777::t_2291be1e123bef 261
+README.md
+  s_1ad33b6e618777::t_c04282b2c5ac9e 5
+  s_1ad33b6e618777::t_e905bb23b7e6b1 24
+docs/guide/getting-started.md
+  s_1ad33b6e618777::t_cd8788c5e2715f 31
+shared/Package.swift
+  s_1ad33b6e618777::t_eea374696c0746 26-29
+  s_1ad33b6e618777::t_326b455e3cc695 1
+agent/Package.swift
+  s_1ad33b6e618777::t_1a487c986e9d94 1
+  s_1ad33b6e618777::t_f705d6a8555ec2 27
+  s_1ad33b6e618777::t_55457b3c99d33f 60-63
+  s_1ad33b6e618777::t_60340225b95c23 56
+.github/workflows/release.yaml
+  s_1ad33b6e618777::t_893e4ec3121c65 202,204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "9efe518f41178bd432293dad1c052a7353cf323f",
+  "prompts": {},
+  "sessions": {
+    "s_1ad33b6e618777": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "07bb7bdd-32d2-4c9e-a793-38e6f3558521",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

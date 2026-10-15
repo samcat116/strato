@@ -1,0 +1,107 @@
+control-plane/web/src/components/webhooks/event-catalog.ts
+  s_cf53942f9f2993::t_4f1a0fa1307acd 1-46
+control-plane/Sources/App/Models/WebhookSubscription.swift
+  s_cf53942f9f2993::t_75e9276a24bcc9 1-183
+control-plane/web/src/components/webhooks/webhooks-table.tsx
+  s_cf53942f9f2993::t_261d9a4c33df5b 16-17
+  s_cf53942f9f2993::t_f7c2a28056ece2 1-15,18-272
+control-plane/Sources/App/Migrations/CreateWebhookSubscription.swift
+  s_cf53942f9f2993::t_641b7b0c091051 1-36
+control-plane/Sources/App/Migrations/CreateWebhookDelivery.swift
+  s_cf53942f9f2993::t_a36f1265af145b 1-49
+control-plane/Sources/App/routes.swift
+  s_cf53942f9f2993::t_5fa0ccfaff806c 57-59
+control-plane/Sources/App/Controllers/WebhookSubscriptionController.swift
+  s_cf53942f9f2993::t_4aafd1eaebf76d 1-288
+control-plane/Sources/App/Services/AgentService.swift
+  s_cf53942f9f2993::t_742917a8004f50 825-826
+  s_cf53942f9f2993::t_d536dfe4d367c6 2690,2697,2710-2713
+  s_cf53942f9f2993::t_4ef4f56fdcb05a 541-542
+  s_cf53942f9f2993::t_36be66ef4b5a13 1001-1002
+  s_cf53942f9f2993::t_76a17b91b3e27e 2641,2646,2665-2668
+  s_cf53942f9f2993::t_33e760bfbeccc6 658-659
+  s_cf53942f9f2993::t_e495752bd7eb95 730-732
+  s_cf53942f9f2993::t_047878435f352b 2892-2893
+  s_cf53942f9f2993::t_a7f0aaad7f02fc 2669,2714
+control-plane/Sources/App/configure.swift
+  s_cf53942f9f2993::t_ed24866d151f63 575-579
+  s_cf53942f9f2993::t_937e834d1bd5b7 726-730
+control-plane/web/src/lib/api/index.ts
+  s_cf53942f9f2993::t_18258780b19b2c 21
+control-plane/Tests/AppTests/WebhookTests.swift
+  s_cf53942f9f2993::t_06cd86b553754a 1-376,379-588,590-639,641-653,655-661,663-696,698-729,731-758,760-777
+  s_cf53942f9f2993::t_7d932bc02822e8 377-378
+  s_cf53942f9f2993::t_da0f9201f93d6b 589,640,654,662,697,730,759
+control-plane/Sources/App/Models/WebhookDelivery.swift
+  s_cf53942f9f2993::t_e55530d21d9a36 1-128
+docs/architecture/webhooks.md
+  s_cf53942f9f2993::t_97855d9947a66f 1-45,47-120
+  s_cf53942f9f2993::t_7d8f9735a94449 46
+control-plane/web/src/components/webhooks/webhook-deliveries-dialog.tsx
+  s_cf53942f9f2993::t_b3f426344a2b37 1-342
+docs/.vitepress/config.mts
+  s_cf53942f9f2993::t_3182b694e096d9 54
+control-plane/web/src/lib/hooks/use-webhooks.ts
+  s_cf53942f9f2993::t_109e352d704060 1-107
+control-plane/Sources/App/openapi.yaml
+  s_cf53942f9f2993::t_092ed840360cc3 13297-13451
+  s_cf53942f9f2993::t_0bcb2057912340 7339-7354
+  s_cf53942f9f2993::t_ae68cd9309fd0d 6466-6688
+  s_cf53942f9f2993::t_877996f015f240 148-151
+control-plane/web/src/components/webhooks/webhook-secret-dialog.tsx
+  s_cf53942f9f2993::t_e1878ef7c2a1d5 1-91
+control-plane/web/src/lib/api/webhooks.ts
+  s_cf53942f9f2993::t_3b9b6142c9dbe2 1-76
+control-plane/web/src/app/(dashboard)/settings/webhooks/page.tsx
+  s_cf53942f9f2993::t_273e2376214518 1-40
+docs/architecture/overview.md
+  s_cf53942f9f2993::t_df1c04aff82bf3 229
+control-plane/web/src/components/webhooks/index.ts
+  s_cf53942f9f2993::t_0263fbe4e28c20 1-10
+control-plane/web/src/lib/hooks/index.ts
+  s_cf53942f9f2993::t_27d49dae63c3e5 97-106
+  s_cf53942f9f2993::t_bbc84ae1739ccd 96
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_cf53942f9f2993::t_5b64fe1b34fdd0 170-181
+control-plane/web/src/components/webhooks/webhooks-section.tsx
+  s_cf53942f9f2993::t_91d50f604e6621 1-252
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_cf53942f9f2993::t_0e66dade71b5d8 229-233
+  s_cf53942f9f2993::t_31af5cce57bfd1 247,249-252
+control-plane/web/src/components/webhooks/webhook-form-dialog.tsx
+  s_cf53942f9f2993::t_52d0a9d69ad73b 30-31
+  s_cf53942f9f2993::t_4e6ada66c7ce9e 1-29,32-352
+control-plane/web/src/types/api.ts
+  s_cf53942f9f2993::t_555bd5ecd85410 791-851
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_cf53942f9f2993::t_294deaeb19266a 1-103,117-310
+  s_cf53942f9f2993::t_f51018863a9ccb 104-116
+control-plane/web/src/components/layout/nav.ts
+  s_cf53942f9f2993::t_a170858e6037d3 29
+  s_cf53942f9f2993::t_0964e1096135b0 103
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_cf53942f9f2993::t_a7d88448f7207c 238
+  s_cf53942f9f2993::t_2935bc87f653ca 254-305
+  s_cf53942f9f2993::t_29ed6fef3ab339 1-94,113-178,182-237,239-253,306-313,315-324
+  s_cf53942f9f2993::t_91112dc3da3d9c 95-112
+  s_cf53942f9f2993::t_39faf5854ea40c 179-181
+  s_cf53942f9f2993::t_cd22f667bbda38 314
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_cf53942f9f2993::t_eaf5b5553d246f 171-176,182-185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c2d37b9a08d645290e45ee2dbc6b7d66466bc5b7",
+  "prompts": {},
+  "sessions": {
+    "s_cf53942f9f2993": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77b18d76-962c-4c62-8810-d6bb6a3e69c5",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

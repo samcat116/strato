@@ -1,0 +1,87 @@
+control-plane/Sources/App/Services/AgentService+Types.swift
+  s_d8d16a4080ee42::t_2392642af92878 4-7,24,42-45
+control-plane/Tests/AppTests/AgentSchedulableTransformTests.swift
+  s_d8d16a4080ee42::t_4704d9ab412f25 9-10,13,16,25,29,31-32,34-35,37-39,42,44-45,57-58,65-71
+  s_d8d16a4080ee42::t_55e74e6d092597 72
+helm/strato-control-plane/values.yaml
+  s_d8d16a4080ee42::t_b737a035f1b97f 5-9
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_d8d16a4080ee42::t_53507f5efa51c4 323-326,329,333
+  s_d8d16a4080ee42::t_1933b80ebeda2a 1-322,327-328,330-332,334-365
+agent/Sources/StratoAgent/Agent.swift
+  s_d8d16a4080ee42::t_cfea761a027400 695-704
+control-plane/Sources/App/Services/AgentService.swift
+  s_d8d16a4080ee42::t_1d7a3e1a71406a 912-914,919,931-944
+  s_d8d16a4080ee42::t_07416e789b58cf 340-343,348,353,359-364,366-368,370
+  s_d8d16a4080ee42::t_625be7b338492b 95,785,1542,1794-1795,1797-1805
+  s_d8d16a4080ee42::t_67606f71dc3dfd 663,665-668,670-671,675-680,682-716,719,739-767,770-784
+  s_d8d16a4080ee42::t_166b6b125e9123 1126-1131,1136,1141-1143,1168-1170,1175,1181,1183-1185,1191-1196,1202-1205,1222,1224-1231,1233-1241,1243-1252,1254-1257,1261,1264-1265,1267-1282
+  s_d8d16a4080ee42::t_141c0983080acc 768-769
+  s_d8d16a4080ee42::t_12ccbcdb8e1cdf 1289-1295,1298-1299,1302-1316,1318-1321,1324-1332,1336-1338,1341-1345,1347-1348,1354,1357,1368,1375-1541
+  s_d8d16a4080ee42::t_6dafbc342e3539 13-19,21,26-34,41-56,73,85-93
+  s_d8d16a4080ee42::t_b5862c15dd3d7d 499-502,504-513,516-534,536-538,540-541,544-547,549-550
+  s_d8d16a4080ee42::t_ec79a678821fa0 94,1739-1748,1751-1753
+  s_d8d16a4080ee42::t_99ac99986ad79a 1657
+  s_d8d16a4080ee42::t_44c44d1a74ab55 161-170,201-204,206-208,210,226-246,253,259,267,278,288,291,295-297,299-302,305-312,314,323-325
+  s_d8d16a4080ee42::t_9ff3310d5e7c30 100-105,107-112,120,126-131,138-139,142
+  s_d8d16a4080ee42::t_948bb11ad38aa7 786
+  s_d8d16a4080ee42::t_b4f67184cfa528 1287-1288
+  s_d8d16a4080ee42::t_7bb126504fb829 1543
+control-plane/Tests/AppTests/VolumeAgentSelectionTests.swift
+  s_d8d16a4080ee42::t_bed1e7bb8ba67b 22-24,29,38-39
+  s_d8d16a4080ee42::t_4e696572b39db0 51,81,90
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_d8d16a4080ee42::t_b197717812b5b8 12-20,29-30
+  s_d8d16a4080ee42::t_bc2aad1e85102b 476-480
+control-plane/Sources/App/Services/VolumeService.swift
+  s_d8d16a4080ee42::t_9a28329e6365b1 167
+  s_d8d16a4080ee42::t_5f0f7d5a44e582 180,186,190,197
+  s_d8d16a4080ee42::t_9635ffc0d45fba 148-150
+docs/architecture/multi-replica.md
+  s_d8d16a4080ee42::t_dcca60e22a4bf3 1-88
+control-plane/Sources/App/Controllers/VMController.swift
+  s_d8d16a4080ee42::t_6424601b66eac9 682-685,689,692,697-702,708-710,714-716
+  s_d8d16a4080ee42::t_8c6b1440924c49 604-608
+  s_d8d16a4080ee42::t_a6f3fa0bce0271 621-627,639-641
+  s_d8d16a4080ee42::t_3edad517aaaf4d 97-100,102-103,106-109
+  s_d8d16a4080ee42::t_5648fa99da0cba 567
+  s_d8d16a4080ee42::t_b23cd9ee9fac92 493
+  s_d8d16a4080ee42::t_c5767625dce055 110-124
+  s_d8d16a4080ee42::t_ed029992e7ec60 690,754,771,804,822
+  s_d8d16a4080ee42::t_9661e5528b86ec 780-783,795-798
+control-plane/Sources/App/Models/Agent.swift
+  s_d8d16a4080ee42::t_e4e54009b0e13f 149-173
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_d8d16a4080ee42::t_be2066034fbd7f 668-762
+  s_d8d16a4080ee42::t_be349df1b54b4d 486-487,489,492-494,500-506
+  s_d8d16a4080ee42::t_41c3dc4d2282f0 79-99
+  s_d8d16a4080ee42::t_1ec97f4bb475d8 782-792
+  s_d8d16a4080ee42::t_11d818b26021a0 287-350
+  s_d8d16a4080ee42::t_a8ce030a5f4fbf 374-375
+  s_d8d16a4080ee42::t_212aa6757be37a 445-474
+  s_d8d16a4080ee42::t_f7236721ebd944 507
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_d8d16a4080ee42::t_c55028744d67d1 241-248
+  s_d8d16a4080ee42::t_68f784916ff6d9 441-450,453-454
+  s_d8d16a4080ee42::t_40ba04ff9751c7 694-701
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_d8d16a4080ee42::t_ac9dfad14b4821 8-9,12-13
+  s_d8d16a4080ee42::t_dea507da4e0fcb 136-137
+  s_d8d16a4080ee42::t_f30cf75be9aa0a 163,166-175,177-181,184-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3d04d9e089a77c24651883b81f892a2a5581f459",
+  "prompts": {},
+  "sessions": {
+    "s_d8d16a4080ee42": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc352037-c724-42e0-9f5a-3d9dd84bcba7",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

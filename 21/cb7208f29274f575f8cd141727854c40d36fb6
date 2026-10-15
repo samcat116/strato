@@ -1,0 +1,33 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_d8d16a4080ee42::t_514b7eb1ecca1c 836,851-854
+  s_d8d16a4080ee42::t_161860814411c2 754-767,787,791,798-835
+  s_d8d16a4080ee42::t_a0453905dfd231 482-486
+  s_d8d16a4080ee42::t_93635dbeab47b1 837,839-845
+  s_d8d16a4080ee42::t_420e049920e7aa 132-139
+  s_d8d16a4080ee42::t_64667bf5ea5d41 838
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_d8d16a4080ee42::t_47d73ac866d80f 351-367
+docs/architecture/multi-replica.md
+  s_d8d16a4080ee42::t_834eeb3c83b908 73-78
+control-plane/Sources/App/Controllers/VMController.swift
+  s_d8d16a4080ee42::t_0cbbcaf9f73526 111-115,117-119,123-124,130-136
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_d8d16a4080ee42::t_00ae9029d7b5ed 124-127,140-171
+  s_d8d16a4080ee42::t_cdd0aed0ccdb3d 172-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "21cb7208f29274f575f8cd141727854c40d36fb6",
+  "prompts": {},
+  "sessions": {
+    "s_d8d16a4080ee42": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc352037-c724-42e0-9f5a-3d9dd84bcba7",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

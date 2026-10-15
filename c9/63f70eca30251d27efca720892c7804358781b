@@ -1,0 +1,35 @@
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_2ea3015fe4758c::t_9ee5e89eb49551 78-82
+control-plane/Sources/App/Services/IPAMService.swift
+  s_2ea3015fe4758c::t_17464de759f176 21,28-29,36-39
+  s_2ea3015fe4758c::t_e96b10ff7f84a4 60,67-78
+  s_2ea3015fe4758c::t_70d94cd1526e9b 93
+  s_2ea3015fe4758c::t_9b58f1ae3fce5b 40
+control-plane/Tests/AppTests/IPAMServiceTests.swift
+  s_2ea3015fe4758c::t_afe1f2f63f51c9 61-63,70-77
+  s_2ea3015fe4758c::t_a5923249439d4c 78-80
+  s_2ea3015fe4758c::t_a01d31f3eb66b9 81
+control-plane/Sources/App/Migrations/CreateLogicalNetwork.swift
+  s_2ea3015fe4758c::t_8ea44566fc88af 24-27,29-49
+control-plane/Sources/App/Migrations/AddGatewayToVMNetworkInterface.swift
+  s_2ea3015fe4758c::t_dc89ecda765406 2,10-30,38-68
+  s_2ea3015fe4758c::t_c9f23fb0b0cb01 69
+agent/Package.resolved
+  s_2ea3015fe4758c::t_e15a203d0db270 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c963f70eca30251d27efca720892c7804358781b",
+  "prompts": {},
+  "sessions": {
+    "s_2ea3015fe4758c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "629f6438-37f6-44c7-a528-a8c440c9ee73",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

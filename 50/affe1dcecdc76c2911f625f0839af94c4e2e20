@@ -1,0 +1,164 @@
+control-plane/Tests/AppTests/HealthControllerTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 20,43,60,83,101,125,150,173,195
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 2,7-21,25-26,31-49,52-53,55,57-76,78-79,82,86-87,90-92,94-96,100-114,116,118-136,139,143-145,149-157,160,162,164-173,179-180,182-184,186-187,189-190,192-193,196-200,203-206,209-232,234-246,248-254,261-262,266-270,287-297,301-302,305,308
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 3-6,8,10,35-248,258-259,261-264,267,270-278,280-281,291-292,297-301,303-311,316-317,325,329,332-333,335
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/status.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-29
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 52,55
+control-plane/Tests/AppTests/MigrationRoundTripTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 20-22,29-33
+control-plane/Tests/AppTests/ProjectMemberTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 46,49
+docs/deployment/agents.md
+  s_3ab0be924ef621::t_04a56da74a5a47 101-137
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 52,55
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/x509svid.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-25
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/attestation.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-12
+control-plane/Tests/AppTests/HierarchyPathResolverTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 17,20
+control-plane/Tests/AppTests/OrgMemberSpiceDBMirrorTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 59,63
+control-plane/Tests/AppTests/SecurityHeadersTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 23,49,63,92,107
+Taskfile.yml
+  s_3ab0be924ef621::t_04a56da74a5a47 13,325-326,332,348-370,731,836,847,851,968-969
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/spiffeid.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-15
+control-plane/Tests/AppTests/SPIREServerAPIClientTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 1-442
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 25-29,41,53,88,307-311,394,428-432
+  s_3ab0be924ef621::t_c96921184fea0f 79,749-750
+.github/workflows/README.md
+  s_3ab0be924ef621::t_04a56da74a5a47 70-71,75-78
+control-plane/web/src/types/api.ts
+  s_3ab0be924ef621::t_04a56da74a5a47 244-256
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 244,249
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 59,63
+control-plane/Tests/AppTests/ReplicaRoutingTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 141,145
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 57,61
+control-plane/Tests/AppTests/VMAuthorizationTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 52,56
+control-plane/Package.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 7-9,43-49,52-67,71,101,104-108
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 19-24,40-41,47,73-80,95-128
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_3ab0be924ef621::t_04a56da74a5a47 35-37,70,72-78,85-87,119-149,152-154
+control-plane/Sources/App/Services/BackgroundTaskRegistry.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 1-92
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/federateswith.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-68
+control-plane/Tests/AppTests/OrganizationalUnitTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 45,49
+control-plane/Sources/SPIREServerAPI/Generated/README.md
+  s_3ab0be924ef621::t_04a56da74a5a47 1-25
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/selector.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-78
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 51,55,156,166-172
+control-plane/Tests/AppTests/SPIREServiceTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 333-335
+deploy/agent/strato-node-bootstrap.sh
+  s_3ab0be924ef621::t_04a56da74a5a47 1-248
+control-plane/Sources/App/Controllers/VMController.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 121,129,223,715,784
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 389
+control-plane/Tests/AppTests/AgentServiceLifecycleTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 36,42
+control-plane/Tests/AppTests/HierarchyIntegrationTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 33,37
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 36,39
+control-plane/Sources/App/Migrations/AddSPIREProvisionedToAgentRegistrationToken.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 1-22
+.github/workflows/main-build.yaml
+  s_3ab0be924ef621::t_04a56da74a5a47 137-159,165-166,168,173-186
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 1-388
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/server/agent/v1/agent.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-235
+.github/workflows/build.yaml
+  s_3ab0be924ef621::t_04a56da74a5a47 131-144,148,164-169,171-177,179,189-231,242-284,297-303
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/agent.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-56
+control-plane/Sources/App/Services/AgentService.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 113-121,1439-1443,1451-1475,1479-1493,1497-1502,1555-1562,1564-1579,1582-1583
+control-plane/Sources/App/configure.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 24-28,206,430-432
+  s_3ab0be924ef621::t_b20f2b5bf18382 433
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 79,111,135,170,204,237,271,306,341,386,423,445,477,500
+control-plane/Tests/AppTests/VolumeAuthorizationTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 55,59
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 50,54,72-90,112,116-117
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/entry.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-130
+control-plane/Tests/AppTests/AuthorizationCheckTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 38,41
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 1-619
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 37-74,139-173,176-177,180-187,197,200,226-286,346-370
+  s_3ab0be924ef621::t_087fc7f34aec5c 371
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/jointoken.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-11
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 16-17,19
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/server/entry/v1/entry.proto
+  s_3ab0be924ef621::t_04a56da74a5a47 1-249
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 45,49
+control-plane/Tests/AppTests/OrganizationAccessServiceTests.swift
+  s_3ab0be924ef621::t_04a56da74a5a47 23,27
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_server_agent_v1_agent.pb.swift
+  s_3ab0be924ef621::t_16dd235c4fa800 1-1316
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_server_entry_v1_entry.pb.swift
+  s_3ab0be924ef621::t_096cfa3f0cb829 1-1501
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_agent.pb.swift
+  s_3ab0be924ef621::t_ef758f9b2068ea 1-228
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_attestation.pb.swift
+  s_3ab0be924ef621::t_d5da062d9f5de4 1-82
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_entry.pb.swift
+  s_3ab0be924ef621::t_2ca61695234d76 1-541
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_federateswith.pb.swift
+  s_3ab0be924ef621::t_8d34ebbc9139b6 1-173
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_jointoken.pb.swift
+  s_3ab0be924ef621::t_77629cf8b57931 1-76
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_selector.pb.swift
+  s_3ab0be924ef621::t_75a7a9ebb841cf 1-225
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_spiffeid.pb.swift
+  s_3ab0be924ef621::t_dc7ac71ff4f4f8 1-80
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_status.pb.swift
+  s_3ab0be924ef621::t_af3426d26bb6ee 1-184
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_x509svid.pb.swift
+  s_3ab0be924ef621::t_fbb76448b2b654 1-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "50affe1dcecdc76c2911f625f0839af94c4e2e20",
+  "prompts": {},
+  "sessions": {
+    "s_3ab0be924ef621": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8cfd938b-a27e-4a2e-8583-e08aa2355d38",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

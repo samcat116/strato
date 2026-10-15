@@ -1,0 +1,29 @@
+control-plane/web/src/lib/service-account-selection.test.ts
+  s_ad70cfcbbd12be::t_58a8064d4c51b5 1-28
+control-plane/web/src/app/(dashboard)/settings/project-integrations/page.tsx
+  s_ad70cfcbbd12be::t_58a8064d4c51b5 17,60-65,67-70,197,202,208-209,211,215
+control-plane/web/src/lib/workload-registration.test.ts
+  s_ad70cfcbbd12be::t_58a8064d4c51b5 1-37
+control-plane/web/src/lib/service-account-selection.ts
+  s_ad70cfcbbd12be::t_58a8064d4c51b5 1-14
+control-plane/web/src/lib/workload-registration.ts
+  s_ad70cfcbbd12be::t_58a8064d4c51b5 1-14
+control-plane/web/src/components/workload-identity/workload-registration-manager.tsx
+  s_ad70cfcbbd12be::t_58a8064d4c51b5 13,56-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "34ac60abde9ef3ed4be4b9e23660cbc1f5c48866",
+  "prompts": {},
+  "sessions": {
+    "s_ad70cfcbbd12be": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffe02-ce7b-7dc3-b453-d02621103a2c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+helm/strato-control-plane/values.yaml
+  s_7d857bb7a64a3b::t_ae446a2012f683 229-237
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_7d857bb7a64a3b::t_3210022a6004fe 175-194
+  s_7d857bb7a64a3b::t_fb420c7b9dfaf5 246
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_7d857bb7a64a3b::t_f6ef7fa082d542 76-81,86-88,91,93
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_7d857bb7a64a3b::t_aefe40b3302d8c 753-763,768,774-782,789-790
+  s_7d857bb7a64a3b::t_862544c21b2daa 795-796
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_7d857bb7a64a3b::t_6b4e7f0b86824e 118
+  s_7d857bb7a64a3b::t_0bb6c4d56dacb5 304-343
+helm/strato-control-plane/templates/deployment.yaml
+  s_7d857bb7a64a3b::t_7eb162dfc54be7 188-197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "2ee97c80d5b2390df145d6fa510614ac3736ab1e",
+  "prompts": {},
+  "sessions": {
+    "s_7d857bb7a64a3b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1c456b4f-8997-4a4f-be0a-432fdd490e49",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

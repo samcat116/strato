@@ -1,0 +1,243 @@
+control-plane/web/src/components/networks/edit-network-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 54,109,117,125,128,139,146
+control-plane/web/src/components/images/upload-image-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 251,256,259,266,269,276,283,298,309,321,334,341,355,358,375,379,389,397,404,412,424,435,447,457,463-464,474-475,490,492,503,505,518,532,544,558,562,571,575,584,591,604,619,630,642,660,662,668,676,683
+control-plane/web/src/components/organization-members/add-member-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 70,73,81,90,94,100,110,114,117,123,136,144
+control-plane/web/src/components/projects/project-form-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 153,158,168,176,183,191,197,202,209,228,235,242,249,259,263,268,282,290
+control-plane/web/src/app/(dashboard)/settings/api-keys/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 19-20,25,34,36
+control-plane/web/src/components/organization-groups/manage-group-members-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 50,129,137,148,159,164,173,188,194,198,202,212,215,223
+control-plane/web/src/components/networks/network-table.tsx
+  s_674b14ea31f8f5::t_86ea83da17a71a 75
+  s_674b14ea31f8f5::t_0173f188a91b2e 58,66,74,76-82,87,99,102,108,114,117,120,123,126,135,141,144,151,161
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 96,99,108,118,124,134,137,142,152,155,167,174
+control-plane/web/src/components/scim-tokens/scim-tokens-section.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 81,83,89,98,104,110,114,119,121,124,127,130,133,136,141,147,150,154,159,163,167,172,177,187,206,237,240,249
+  s_674b14ea31f8f5::t_86ea83da17a71a 120
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 105,110,120-121,132,136,142,150-151,163,167,173,179-180,184,190,200,204,216,224,229,239,249,256,276
+  s_674b14ea31f8f5::t_79e340d151d3e5 194
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 27,29-30,38,46,48
+control-plane/web/src/components/agents/agent-table.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 25,33,41,43-48,53,57,60-61,68-69,72,76
+  s_674b14ea31f8f5::t_86ea83da17a71a 42
+control-plane/web/src/app/(dashboard)/layout.tsx
+  s_674b14ea31f8f5::t_a5247aab586337 3,6,41,51,54-56
+control-plane/web/src/components/images/image-actions.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 83,91,96,103,108,112,131,134,142
+control-plane/web/src/components/organization-groups/groups-section.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 49,51,57,67
+control-plane/web/src/components/agents/agent-status-badge.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 7,11,15,19
+control-plane/web/src/components/projects/transfer-project-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 80,83,85,93,97,108,112,117,132,140
+control-plane/web/src/components/overview/recent-instances.tsx
+  s_674b14ea31f8f5::t_d4242a4720def2 1-12,16-54,56-95
+  s_674b14ea31f8f5::t_830e20947f0437 13-15
+  s_674b14ea31f8f5::t_1ea05fe957a143 55
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 29,39,41-42,48,56,58,64
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 29,31,44-45,54,56,92,98,101,106,112,114,120,123,126,128,134,137,142,144,150,153,158,160,166,171,181,183,190-191,194-195,198-199,202-203,213,215,226
+control-plane/web/src/app/(auth)/register/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 21
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 160,170,178,183,185,191,199,206,216,236,244,254,261
+control-plane/web/src/app/globals.css
+  s_674b14ea31f8f5::t_c4e5cef4ea1ae1 51-54,56,58-59,62-66,68-69
+  s_674b14ea31f8f5::t_eb7b256273e5dd 127-138
+  s_674b14ea31f8f5::t_b7eb4f60db5897 10
+control-plane/web/src/components/terminal/console-terminal.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 111
+control-plane/web/src/app/(dashboard)/admin/users/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 18-19,28-29,41-42,47,49
+control-plane/web/src/components/users/user-table.tsx
+  s_674b14ea31f8f5::t_86ea83da17a71a 72
+  s_674b14ea31f8f5::t_0173f188a91b2e 56,64,71,73,76,79-82,87,91,94,100,106,109,112,116,121,131,140,170,173,177,186
+control-plane/web/src/components/hierarchy/hierarchy-tree.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 45,54,68,87,100,103,105,107,130,136,157,183,195
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 18,20,26,31,33,36,39,42,45,48,51,56,60,62,65-66,69,72,75,78
+  s_674b14ea31f8f5::t_86ea83da17a71a 32
+control-plane/web/src/components/overview/fleet-capacity-chart.tsx
+  s_674b14ea31f8f5::t_ad6974d0ffc568 1-89
+control-plane/web/src/components/volumes/clone-volume-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 66,69,77,84,90,98,108,115
+control-plane/web/src/components/volumes/volume-table.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 40,48,56,58-62,65,70,76,79,81,86,94,96,98,105,109,116,120
+  s_674b14ea31f8f5::t_86ea83da17a71a 57
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 55,69,82,159,167,170,178-179,182-183,193,200,204,212,222,258,261,263,274
+control-plane/web/src/components/api-keys/api-key-table.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 59,67,75,77-84,89,95,98,100,109,118,122,126,131,136,141,150
+  s_674b14ea31f8f5::t_86ea83da17a71a 76
+control-plane/web/src/components/auth/login-form.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 66,68,71,77,86,100,103,112,121,128,139,141
+control-plane/web/src/components/vms/vm-table.tsx
+  s_674b14ea31f8f5::t_86ea83da17a71a 45
+  s_674b14ea31f8f5::t_0173f188a91b2e 28,36,44,46-51,56,60,65,70,78,81-82
+control-plane/web/src/components/overview/constants.ts
+  s_674b14ea31f8f5::t_c1cb20f7d4bb18 1-56,62-66
+  s_674b14ea31f8f5::t_d28e9eb998d1e0 57-61
+control-plane/web/src/components/layout/nav.ts
+  s_674b14ea31f8f5::t_9f5621d75f134a 1-75
+control-plane/web/src/components/overview/kpi-card.tsx
+  s_674b14ea31f8f5::t_24f4071ec8aba6 1-35
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 37-38,54,56,69-70,79,81,100,106,110,118,121,127,133,138,148,150,156,159,162,164,170,175,177,183,188,190,196,199,207,209,216-217,220,224,229,233,237,242,246-247,264,273,275-276,279
+control-plane/web/src/components/organizational-units/ou-form-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 49,130,140,148,155,163,173,181
+control-plane/web/src/app/(dashboard)/dashboard/page.tsx
+  s_674b14ea31f8f5::t_381b1252a262f2 17
+  s_674b14ea31f8f5::t_c5e47f119c45ed 3,6-16,18-23,25-32,34-36,39-42,44-107,109,111-127,130-193,195-224,226-228,231-232
+  s_674b14ea31f8f5::t_73931cdb3b7a2f 43
+  s_674b14ea31f8f5::t_3bdf943edafca7 233
+control-plane/web/src/components/project-members/members-section.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 41,43,47,55-56,60,72,93
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 25,29,35,43,55,64,105
+control-plane/web/src/app/(auth)/login/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 21
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 13,17,21,25,30,34,38,42,72
+control-plane/web/src/components/volumes/snapshot-table.tsx
+  s_674b14ea31f8f5::t_86ea83da17a71a 96
+  s_674b14ea31f8f5::t_0173f188a91b2e 73,81,95,97,99,103-106,111,119,122,126,131,137,139,148,151,160,178,181,190
+control-plane/web/src/components/volumes/volume-actions.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 105,115,118,121,126,129,134,137,142,145,150,153,156,159,199,202,211
+control-plane/web/src/components/organizational-units/organizational-units-section.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 54,56,62,72
+control-plane/web/src/app/layout.tsx
+  s_674b14ea31f8f5::t_b9c878b1d8274c 2,11-12
+  s_674b14ea31f8f5::t_e5ba82b5f32b94 27,29
+control-plane/web/src/components/images/image-status-badge.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 18,21,23,25,27,29
+control-plane/web/src/app/(dashboard)/agents/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 23,26,29,39,41,46,51,53,58,63,65,70,76,78
+control-plane/web/src/app/(dashboard)/storage/volumes/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 22,24-25,33,41,43
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 29,108,111,120,130,136,146,152,163,168,188,209,213,235,246,253
+control-plane/web/src/components/organization-groups/group-form-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 36,105,115,123,130,138,148,156
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 160,164,168,173,175,185,203,213,216,225,228,235,241,249,259,264,274,280,282,291,294,302,311-312,326-327,341,352,357,368,373,384,391,401,412,426,433
+control-plane/web/src/components/layout/command-palette.tsx
+  s_674b14ea31f8f5::t_0fc5bc5352bf06 3
+  s_674b14ea31f8f5::t_31505a3d2deb62 138
+  s_674b14ea31f8f5::t_a184860e757abd 1-2,4-137,139-170
+control-plane/web/src/app/(dashboard)/storage/snapshots/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 29,31-32,40,48,50
+control-plane/web/src/components/vms/vm-volumes-card.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 33,91,93,99,110,114,119,121,124,127,130,133,138,142,144,150,155,165,188,191,198,202,206,237,244
+  s_674b14ea31f8f5::t_86ea83da17a71a 120
+control-plane/web/src/components/project-members/add-group-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 81,84,93,103,111,113,121,132,142,146,151,165,173
+control-plane/web/src/components/users/edit-user-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 64,67,74,83,90,96,104,113,121
+  s_674b14ea31f8f5::t_79e340d151d3e5 77
+control-plane/web/src/app/(dashboard)/hierarchy/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 22-23,26,47,57,60,67,72,77,86,88,91,94,102,110,113,118,124,156,160-162,165
+control-plane/web/src/components/projects/projects-table.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 71,79,88-91,93,101,105,110,123-124,133,143,149,152,159,166
+control-plane/web/src/components/networks/dhcp-fields.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 61-62,68,72,79,87,90,96,104,110,120
+control-plane/web/src/app/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 24
+control-plane/web/src/components/images/image-table.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 33,41,49,51-55,58-59,62,67,71,74,76,80,90,95,98,101,108,115,118,121
+  s_674b14ea31f8f5::t_86ea83da17a71a 50
+control-plane/web/src/components/layout/header.tsx
+  s_674b14ea31f8f5::t_97b90468f78dd1 3-4,6,9,12-16
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_674b14ea31f8f5::t_79e340d151d3e5 205
+  s_674b14ea31f8f5::t_0173f188a91b2e 105,114-115,124,127,132,135,141,147,153,157,164,166,173,182,187,196,202,211,233,235,241,251,279,281,286
+control-plane/web/src/components/organizational-units/ou-tree.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 41,49,93,195,202,215,219-220,226,235,244,253
+control-plane/web/src/components/volumes/snapshot-status-badge.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 10,14,19,23,27,33
+control-plane/web/src/app/(dashboard)/vms/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 29,32,39,48,50
+control-plane/web/src/components/layout/project-switcher.tsx
+  s_674b14ea31f8f5::t_5f30f5b5f46050 28,34-38,40-41,44,47,55,58,63,69,71
+control-plane/web/src/components/quotas/usage-bar.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 44-45,48,51
+control-plane/web/src/components/overview/agent-health-donut.tsx
+  s_674b14ea31f8f5::t_306373480d0115 1-59
+control-plane/web/src/components/layout/sidebar.tsx
+  s_674b14ea31f8f5::t_6f280c3a661fbb 51-58,61-73
+  s_674b14ea31f8f5::t_d1ad4bc771176e 47-50
+  s_674b14ea31f8f5::t_7bccc548a199e7 5,7-19,21-22,26,28-31,34-35,40-42,44,59,74-75,77-78,80-112
+control-plane/web/src/components/overview/busiest-agents.tsx
+  s_674b14ea31f8f5::t_7f3a029b76ad56 1-29,31-51
+  s_674b14ea31f8f5::t_f0ea755d1b520f 30
+control-plane/web/src/components/overview/index.ts
+  s_674b14ea31f8f5::t_8dfef127ae3f8a 1-6
+control-plane/web/src/components/project-members/group-grants-table.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 58,66,74,76-78,80,86,92,94,100,105,115
+  s_674b14ea31f8f5::t_86ea83da17a71a 75
+control-plane/web/src/components/project-members/members-table.tsx
+  s_674b14ea31f8f5::t_86ea83da17a71a 103
+  s_674b14ea31f8f5::t_0173f188a91b2e 86,94,102,104-106,108,114,120,124,127,139,142,147,157,163,173
+control-plane/web/src/components/volumes/attach-volume-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 29,81,84,91,95,100,123,131,141,148
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 39-40,46,64,68,81-82,91,93,126,132,136,142,153,173,175,181,186,188,194,199,201,207,212,219,221,227,235,237,244-245,248-249,253-254,258-259,270,272,281,296,299,302,306,311,315,329,344,354,356,364,366-367,373,375-376,380,382-383
+control-plane/web/src/components/volumes/create-snapshot-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 31,88,93,101,105,130,138,144,152,162,169
+control-plane/web/src/components/organization-groups/groups-table.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 63,71,77,79-80,83-84,89,95,97,100,103,111,122,131
+  s_674b14ea31f8f5::t_86ea83da17a71a 78
+control-plane/web/src/components/scim-tokens/create-scim-token-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 87,92,101-102,112,116,124-125,131,139,150,158,164,174,177,187,195
+control-plane/web/src/components/layout/create-organization-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 65,68,75,85,90,100,110,117
+control-plane/web/src/components/volumes/resize-volume-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 67,70,78,87,98,105
+control-plane/web/src/app/(dashboard)/images/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 28-29,40,42-43,49,52-53,56,71,73-74,84,86
+control-plane/web/src/components/auth/register-form.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 78,80,83,91,100,110,117,119,127,131,144,153,158,167,171,180,185,196-197,200,202,209,223,236,238,241,247,249
+control-plane/web/src/components/organization-members/members-table.tsx
+  s_674b14ea31f8f5::t_86ea83da17a71a 112
+  s_674b14ea31f8f5::t_0173f188a91b2e 95,103,111,113-115,117,123,130,134,137,140,150,153,156,162,171,177,187
+control-plane/web/src/components/project-members/add-member-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 74,77,85,94,98,104,114,118,123,125,137,145
+control-plane/web/src/components/images/edit-image-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 120,123,135,147,160,172,175,191,205,218,231,240,248
+control-plane/web/src/components/layout/organization-switcher.tsx
+  s_674b14ea31f8f5::t_d63ed067bc659e 29-35,37-38,41,47,49-50,54,60,62
+control-plane/web/src/components/vms/log-viewer.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 38,42,46,50,55-59,117,119,128,144,167,180,189,191,203,207,210,226,228,246
+control-plane/web/src/app/(dashboard)/projects/[projectId]/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 24,31,34,36,41,47,49
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 128,143,161,167,171,173,180,182,188,191,197,199,206,208,212,215,225,228
+control-plane/web/src/components/volumes/volume-status-badge.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 9,13,18,22,27,32,37,42,46,50,56
+control-plane/web/src/app/(auth)/onboarding/page.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 79,81-82,85,95,97,100,107,116,122,124,132,138
+control-plane/web/src/components/api-keys/create-api-key-dialog.tsx
+  s_674b14ea31f8f5::t_0173f188a91b2e 108,113,122-123,131,135,143-144,150,158,169,177,183,188,195,198,201,211,222,225,235,243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e72d5267a09bfd05c74d4b24a604cb0de5f18746",
+  "prompts": {},
+  "sessions": {
+    "s_674b14ea31f8f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c0a6edd-662c-4469-90c9-5e6459064819",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

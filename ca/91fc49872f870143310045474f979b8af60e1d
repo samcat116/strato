@@ -1,0 +1,22 @@
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 5891-5892,5916-5921
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  h_a84d4ff76cadd1 13-14,67-70
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  h_a84d4ff76cadd1 763-765,1102-1104
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 17853,17912-17920
+docs/architecture/multi-replica.md
+  h_a84d4ff76cadd1 251-253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ca91fc49872f870143310045474f979b8af60e1d",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

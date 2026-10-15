@@ -1,0 +1,21 @@
+docs/.vitepress/config.mts
+  s_8185f190b06763::t_0226b3bdc68489 34
+docs/architecture/iam.md
+  s_8185f190b06763::t_429651012f4328 1-325
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "f253396fad7d5728edbd4544228c57a34b569cb8",
+  "prompts": {},
+  "sessions": {
+    "s_8185f190b06763": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ce32444-3211-4b93-b79b-4645f9c6c3af",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

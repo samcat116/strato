@@ -1,0 +1,56 @@
+control-plane/Tests/AppTests/BaseTestCase.swift
+  s_f260c5f9c6fc4b::t_f140285619fdd8 28-29
+control-plane/Tests/AppTests/TestUtilities.swift
+  s_f260c5f9c6fc4b::t_509a0708f9d73c 126-127
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_f260c5f9c6fc4b::t_b7a17c84eb0bf5 83
+  s_f260c5f9c6fc4b::t_62104fbf16bde9 55
+  s_f260c5f9c6fc4b::t_10e1317286ec5c 247,253,255,260,262,265-269,271-286,290
+  s_f260c5f9c6fc4b::t_0b6bfccd1b4033 345
+  s_f260c5f9c6fc4b::t_4172a60ee1dff4 376
+  s_f260c5f9c6fc4b::t_b5cf0baed5d892 388
+  s_f260c5f9c6fc4b::t_621d100294608b 72
+  s_f260c5f9c6fc4b::t_ede586cc05d04d 469
+  s_f260c5f9c6fc4b::t_fb1efa33985fd1 48
+  s_f260c5f9c6fc4b::t_448b4f611fa6c2 464
+  s_f260c5f9c6fc4b::t_452d54a3fffe26 138
+  s_f260c5f9c6fc4b::t_a20e9c593b8fc1 397
+  s_f260c5f9c6fc4b::t_20f06231d887dc 473,479-480,484,491-495,499,506-510
+  s_f260c5f9c6fc4b::t_7faee683c39d1b 385
+  s_f260c5f9c6fc4b::t_05e6c374c7ad14 400
+agent/Sources/StratoAgent/Agent.swift
+  s_f260c5f9c6fc4b::t_f8f8cf4bec934d 491
+  s_f260c5f9c6fc4b::t_6335202e26cc67 290-294
+  s_f260c5f9c6fc4b::t_b8387146d40d12 466,473-490,492-514
+  s_f260c5f9c6fc4b::t_d29ca6e7f98b5e 530
+  s_f260c5f9c6fc4b::t_67d72a64a81c89 17-20,32-33
+  s_f260c5f9c6fc4b::t_7d46a4258462fb 76-81
+  s_f260c5f9c6fc4b::t_33ca55d27052b7 332-336
+  s_f260c5f9c6fc4b::t_57736dd545fff7 577
+  s_f260c5f9c6fc4b::t_bfe7850f06177e 515
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_f260c5f9c6fc4b::t_065f7c9c41e24f 30,35-38
+  s_f260c5f9c6fc4b::t_64337cb627fab6 39-40
+control-plane/Sources/App/Services/AgentService.swift
+  s_f260c5f9c6fc4b::t_0e5e3986515cb4 697-707,709-711
+  s_f260c5f9c6fc4b::t_83ebe150dd77ed 69-72
+  s_f260c5f9c6fc4b::t_4b8402601f4a3b 728
+  s_f260c5f9c6fc4b::t_faf5f2f7e5ced4 676-680,682,684
+  s_f260c5f9c6fc4b::t_3d64739260f229 681
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6ab5e1529f96cc0d0b6f97864aac9af1c7fe0eb6",
+  "prompts": {},
+  "sessions": {
+    "s_f260c5f9c6fc4b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "31a70f23-54a2-4f84-9231-b066f062a646",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

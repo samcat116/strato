@@ -1,0 +1,21 @@
+deploy/compose/setup.sh
+  s_b041cfc9c7df01::t_c841766d995ed0 136-140
+deploy/compose/docker-compose.yml
+  s_b041cfc9c7df01::t_0cfc7c1a81c576 344-348
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "037484238e813fa17142b15c3da9705792b7e090",
+  "prompts": {},
+  "sessions": {
+    "s_b041cfc9c7df01": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd69bcc5-66a4-4e24-8f42-225a4bc65626",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

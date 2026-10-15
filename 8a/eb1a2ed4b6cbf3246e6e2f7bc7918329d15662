@@ -1,0 +1,33 @@
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_311e4d09212c99::t_7f3b5ad7c25339 39,70,97,147,196,252,280,337,381
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_311e4d09212c99::t_5c605a45e0371c 42,86,125,194,261,307,330,390,434
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_311e4d09212c99::t_2001db62a2f6de 125,146,225,248,271,308,333,381,408,456,466,468,470,473,475,478,482,484,486,489,491,494
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_311e4d09212c99::t_628223af0ac642 45,67,138,178,247,278,280,308
+control-plane/Sources/App/Services/OrganizationAccessService.swift
+  s_311e4d09212c99::t_4a73163f44fb8e 7-15,18,20-22,27-29,34-40,43-48
+control-plane/Sources/App/Services/SpiceDBOrgMemberReconciliation.swift
+  s_311e4d09212c99::t_c8b9be80aaf522 1-44
+control-plane/Tests/AppTests/GroupTests.swift
+  s_311e4d09212c99::t_f3004a427871c1 68-72
+control-plane/Tests/AppTests/OrganizationAccessServiceTests.swift
+  s_311e4d09212c99::t_ec8e4052d069ca 7-11,34-46,65,67,71-72,74-75,77-79,84,88-89,91-92,94-96,101-104,110,112-114,120-121,124-126,128-129,131-134,139-140,143-145,147-148,150-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8aeb1a2ed4b6cbf3246e6e2f7bc7918329d15662",
+  "prompts": {},
+  "sessions": {
+    "s_311e4d09212c99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b6dd57a-adf6-4dc0-8fd6-ae1126922c9b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

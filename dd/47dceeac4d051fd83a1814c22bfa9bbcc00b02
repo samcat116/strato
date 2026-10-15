@@ -1,0 +1,36 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_fc3ef75f1e2081::t_60d45161bda1a1 478-479
+  s_fc3ef75f1e2081::t_f86a455fe3e720 67-68,77-98
+  s_fc3ef75f1e2081::t_99a514e801d971 426-427
+  s_fc3ef75f1e2081::t_0a06797e1f27e9 455-456
+  s_fc3ef75f1e2081::t_92b7a019ee7812 397-398
+  s_fc3ef75f1e2081::t_14a015acb4ec95 534-535
+  s_fc3ef75f1e2081::t_4144c37a581d74 351-352
+  s_fc3ef75f1e2081::t_dbd38953955e08 376-377
+  s_fc3ef75f1e2081::t_8bba9215e40b63 579-580
+  s_03afc6c49f83ec::t_195b5607d16356 99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dd47dceeac4d051fd83a1814c22bfa9bbcc00b02",
+  "prompts": {},
+  "sessions": {
+    "s_03afc6c49f83ec": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9e155b85-3544-45f7-a4b9-7235c3ef1d8c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_fc3ef75f1e2081": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e3afe5d-053f-4dd4-9ed8-02a8a6b10a01",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

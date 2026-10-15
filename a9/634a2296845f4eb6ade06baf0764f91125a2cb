@@ -1,0 +1,33 @@
+control-plane/Sources/App/Bootstrap/RuntimeBootstrap.swift
+  s_448db3d02816b9::t_a17284b900dc71 1-53
+control-plane/Sources/App/configure.swift
+  s_448db3d02816b9::t_ff1c372b0ff8f2 2,9-17
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_448db3d02816b9::t_8ef2e0f8839f28 1-131
+control-plane/Sources/App/Bootstrap/StartupReconciliation.swift
+  s_448db3d02816b9::t_4413a2657bd8f0 1-59
+control-plane/Sources/App/Bootstrap/LifecycleBootstrap.swift
+  s_448db3d02816b9::t_9067d3441b78be 1-59
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  s_448db3d02816b9::t_44a1929fa4a2c9 1-200
+control-plane/Sources/App/Bootstrap/StateStoresBootstrap.swift
+  s_448db3d02816b9::t_03a4df2966a77b 1-100
+control-plane/Sources/App/Bootstrap/FoundationBootstrap.swift
+  s_448db3d02816b9::t_d63f21c6cff920 1-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "a9634a2296845f4eb6ade06baf0764f91125a2cb",
+  "prompts": {},
+  "sessions": {
+    "s_448db3d02816b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a012d2-ec0b-7830-a605-c46708080eb5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

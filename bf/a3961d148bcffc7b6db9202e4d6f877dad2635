@@ -1,0 +1,22 @@
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_2f5305cac3414b::t_12e782f1e8ec10 26,28-29
+  s_2f5305cac3414b::t_5ec5ec21ea826b 10-13
+control-plane/Sources/App/Controllers/VMController.swift
+  s_2f5305cac3414b::t_c00a1023216797 549-555
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "bfa3961d148bcffc7b6db9202e4d6f877dad2635",
+  "prompts": {},
+  "sessions": {
+    "s_2f5305cac3414b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c9241dd5-110e-431c-8b9b-10aef2b07717",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

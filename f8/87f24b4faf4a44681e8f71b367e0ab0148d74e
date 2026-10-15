@@ -1,0 +1,86 @@
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_006994cc89f4f7::t_68e2e87c2a9958 71,93-94,98
+deploy/agent/tests/install-sh-test.sh
+  s_006994cc89f4f7::t_f223423d1c7663 82-88
+  s_006994cc89f4f7::t_02c91721538b55 13-14,64-66,74-81,89-122
+  s_006994cc89f4f7::t_13beec321353f6 123
+control-plane/Sources/App/configure.swift
+  s_006994cc89f4f7::t_dc91960c7aed34 435-439
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_006994cc89f4f7::t_b0092d1c82e1ff 213-214
+  s_006994cc89f4f7::t_c913104b9f97a6 15-16,184-212,215-282,383-385,390,392,411-412,417,469-471
+  s_006994cc89f4f7::t_c9774c7144d218 388-389
+  s_006994cc89f4f7::t_1945d12e0385e3 537-538
+control-plane/Sources/App/Services/SPIFFE/OrgSPIREClientRegistry.swift
+  s_006994cc89f4f7::t_c680a8a414a7e2 186-213
+docs/guide/getting-started.md
+  s_006994cc89f4f7::t_3f210f65ad8a64 155-156
+README.md
+  s_006994cc89f4f7::t_1945d12e0385e3 57-58,61-62,65-68
+CLAUDE.md
+  s_006994cc89f4f7::t_1945d12e0385e3 53
+docs/deployment/agents.md
+  s_006994cc89f4f7::t_3f210f65ad8a64 96-99,121-124,135,138-139,142-145,584,591-597
+  s_006994cc89f4f7::t_15e5ac54435899 128-131
+control-plane/Sources/App/Models/AgentEnrollment.swift
+  s_006994cc89f4f7::t_798e233ce92f96 2-3,37-44,89,98,116,120-145,162-166,173-175,185-191,193-198,202-209,211,213-224
+  s_006994cc89f4f7::t_1945d12e0385e3 228-229
+  s_006994cc89f4f7::t_683c146b964c58 151
+  s_006994cc89f4f7::t_5eabf3a46ac527 113-114
+  s_006994cc89f4f7::t_c9774c7144d218 8-13,69-72
+  s_006994cc89f4f7::t_5c144d35413cce 146
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_006994cc89f4f7::t_0e1868296a7cc4 163-165
+deploy/agent/install.sh
+  s_006994cc89f4f7::t_f82980916bef1c 9-10,14-18,32-36,87-89,155-158,169-171,174,185,195-237
+  s_006994cc89f4f7::t_f223423d1c7663 186-194
+  s_006994cc89f4f7::t_2e6e302f75f192 238
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_006994cc89f4f7::t_c47aabe28729bf 153-155,157,230-233
+  s_006994cc89f4f7::t_668b72d221b2ab 107-134,207,216-228,356-388
+  s_006994cc89f4f7::t_c9774c7144d218 322-324,527-529,534
+  s_006994cc89f4f7::t_0a9be7eb6152bb 7-8,17-18
+  s_006994cc89f4f7::t_0e2cd7950056e7 229,389
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_006994cc89f4f7::t_b636f9bb78186f 579-580,585
+control-plane/web/src/types/openapi.ts
+  s_006994cc89f4f7::t_de155cd43789e2 8359
+  s_006994cc89f4f7::t_4fb0ca210fc985 8400
+  s_006994cc89f4f7::t_341cbff1535d3c 3690,3696,3698,3709-3748,8373,8381,8383-8388,8390,16383,16416-16466,16468-16476
+  s_006994cc89f4f7::t_9b9228cccb3d87 16467
+control-plane/web/src/components/agents/create-enrollment-dialog.tsx
+  s_006994cc89f4f7::t_9b9bef7c2949b0 178,186,193-195
+control-plane/web/src/types/api.ts
+  s_006994cc89f4f7::t_9b9bef7c2949b0 774-776,783-785
+control-plane/Sources/App/Services/AgentService.swift
+  s_006994cc89f4f7::t_68e2e87c2a9958 488-491
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_006994cc89f4f7::t_e1a1aa6a4425e3 133,138-139
+  s_006994cc89f4f7::t_ccb0b16787decc 86,94,106-108,111-112,114,116-132,134-137,140-147,150,153,170-171,192,204
+  s_006994cc89f4f7::t_b636f9bb78186f 13-15
+  s_006994cc89f4f7::t_7bcf276030050c 763-809
+control-plane/Sources/App/Migrations/AddAgentEnrollmentBootstrapTokens.swift
+  s_006994cc89f4f7::t_dc91960c7aed34 1-21
+control-plane/Sources/App/openapi.yaml
+  s_006994cc89f4f7::t_c5f9da6a4c5d40 14929-14931
+  s_006994cc89f4f7::t_5eabf3a46ac527 15014
+  s_006994cc89f4f7::t_11293a70bc531f 14952-14961,14973,14975-14976,14978-14979,14981-14985,14987-14990,14995-14996
+  s_006994cc89f4f7::t_c7ebc93b71e1c3 5238,5240-5242
+  s_006994cc89f4f7::t_774aa587c7be73 5261,5267-5271,5286,5309-5365
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f887f24b4faf4a44681e8f71b367e0ab0148d74e",
+  "prompts": {},
+  "sessions": {
+    "s_006994cc89f4f7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00d06-57d2-7862-8053-e4feb2cafb1e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-08-16-str-261-file-hashing-design.md
+  s_7989fec800a18c::t_a0d41d4f88fbdf 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c86130a901ccad06b01344d30455cdf849b89f95",
+  "prompts": {},
+  "sessions": {
+    "s_7989fec800a18c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ce8-e857-7ef3-849a-1ff0b868b368",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

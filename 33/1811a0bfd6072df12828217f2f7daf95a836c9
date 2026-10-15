@@ -1,0 +1,52 @@
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_f78144f69f7e4b::t_eee83439e12203 1-336
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_f78144f69f7e4b::t_9642d2824ff55e 287-289
+agent/Sources/StratoAgent/Agent.swift
+  s_f78144f69f7e4b::t_873c84034640b9 853-869,873,876
+  s_f78144f69f7e4b::t_06c6584c5055d0 126-133
+  s_f78144f69f7e4b::t_161ad7ddaaea8e 440-453
+agent/scripts/spawn-sim-fleet.sh
+  s_f78144f69f7e4b::t_738bf08757f8b0 6-8
+  s_f78144f69f7e4b::t_b566fdaea87f05 47-52
+agent/Tests/StratoAgentTests/SimulationConfigTests.swift
+  s_f78144f69f7e4b::t_11a8279f542a37 113-114
+  s_f78144f69f7e4b::t_de59274870a7aa 41-64
+  s_f78144f69f7e4b::t_e754b679bb6169 78-79
+  s_f78144f69f7e4b::t_1988d8ed2be61d 91-92
+agent/Tests/StratoAgentTests/MockSandboxRuntimeTests.swift
+  s_f78144f69f7e4b::t_aeb75a25b26988 1-76,79-80,83-84,87-103,106-107,110-112,115-134,139-145,147-165,168-388
+  s_f78144f69f7e4b::t_5b24444e380cc6 135-138
+  s_f78144f69f7e4b::t_719678319b48df 146
+  s_f78144f69f7e4b::t_3f3d8b287ea417 104-105,108-109,113-114
+  s_f78144f69f7e4b::t_0c8771ea959cf9 77-78,81-82,85-86
+  s_f78144f69f7e4b::t_8ed0e5f3530a6b 166-167
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_f78144f69f7e4b::t_047145bcaed950 130
+  s_f78144f69f7e4b::t_316501ca0941a4 95
+  s_f78144f69f7e4b::t_10ca71409a5dd6 7-17
+  s_f78144f69f7e4b::t_3d01326b91ae24 139
+config.toml.example
+  s_f78144f69f7e4b::t_7b34168099b0de 267-280
+  s_f78144f69f7e4b::t_e72f5fe6edf155 227-231
+  s_f78144f69f7e4b::t_fde1ae77b5a2df 238-244
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_f78144f69f7e4b::t_338c80c0713926 535-537
+  s_f78144f69f7e4b::t_22d88b19133834 25-32,39-40,43-50,55-56,65,74-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "331811a0bfd6072df12828217f2f7daf95a836c9",
+  "prompts": {},
+  "sessions": {
+    "s_f78144f69f7e4b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c5351509-b6f3-416a-8996-2d5218417c36",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

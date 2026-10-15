@@ -1,0 +1,82 @@
+control-plane/Sources/App/openapi.yaml
+  s_5bad541345f252::t_0d1a0de1442a55 12275-12277,13201-13203,13226-13228,13282-13284,13321-13323
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_5bad541345f252::t_a5f4c36a0b268b 201-206,294-299,345,679-684
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_5bad541345f252::t_be68bbb7f43839 121-124,132-139,142-153,156-165,167-172,174-182,191-211
+  s_5bad541345f252::t_09d049e1535b84 125-131,140-141,154-155,166,173
+  s_5bad541345f252::t_b9e52a530bbc96 183-190
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_5bad541345f252::t_be68bbb7f43839 589,604
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_5bad541345f252::t_a5f4c36a0b268b 75-80,422-432,456-464,495-497,526,553
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_5bad541345f252::t_a5f4c36a0b268b 213-216,653
+control-plane/web/src/types/openapi.ts
+  s_5bad541345f252::t_5973b06ed5da43 7038,7518,7531,7564,7583
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_5bad541345f252::t_a5f4c36a0b268b 50,53-54,65,70-72,75,77,127-128,168,174,177-178,288-290,294-296,302,314-316,320,322-323,410,413,418,426,435,437,439-442
+  s_5bad541345f252::t_3cfcd55f83e3ac 90-93
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_5bad541345f252::t_a5f4c36a0b268b 104,113,333
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_5bad541345f252::t_3cfcd55f83e3ac 478-481
+  s_5bad541345f252::t_a5f4c36a0b268b 6,31-50,69,79-80,82,84-87,243-258,344-345,347-352,427-438,494
+  s_060255e25a3ff5::t_08794ac64ac8e0 439
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_5bad541345f252::t_ffb7d31437f86d 164-216,585-631,645-669
+  s_5bad541345f252::t_09d049e1535b84 632-644
+  s_a42a9d2784714b::t_8b4ed507f335ad 670
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_5bad541345f252::t_0d1a0de1442a55 115-123
+control-plane/Sources/App/Migrations/BackfillNetworkQuotaAccounting.swift
+  s_5bad541345f252::t_7fd6ccc6f00a43 1-25
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_5bad541345f252::t_8d384e226aa2a6 125
+  s_5bad541345f252::t_0d1a0de1442a55 101-103,120-123,126-127,129,152,164,266-267
+control-plane/Sources/App/configure.swift
+  s_5bad541345f252::t_7fd6ccc6f00a43 958-961
+control-plane/Tests/AppResourceTests/QuotaUsageAggregatorTests.swift
+  s_5bad541345f252::t_be68bbb7f43839 106-107,188-214
+  s_ddeb586e218912::t_bc54851949101f 215-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bb28aa1605b3e70baf481176b3bff7664cf863b1",
+  "prompts": {},
+  "sessions": {
+    "s_060255e25a3ff5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe806-52b1-76f2-b4a4-c6461ebde37a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_5bad541345f252": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed8c-f5ab-7932-af6a-3f893ac9fb7f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a42a9d2784714b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec72-ad30-7452-8c83-cd7fbb9c43c4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_ddeb586e218912": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed8c-b388-7472-916c-7ec3516112a6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

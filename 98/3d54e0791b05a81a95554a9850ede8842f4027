@@ -1,0 +1,68 @@
+control-plane/Sources/App/configure.swift
+  s_3eec870db66b6c::t_c327326b2ab55e 329-335
+control-plane/Sources/App/Migrations/AddStoragePoolToVolume.swift
+  s_3eec870db66b6c::t_59c7bcdb9e6b7e 1-34
+control-plane/Sources/App/Models/Volume.swift
+  s_3eec870db66b6c::t_ec770aad528b82 124,137
+  s_3eec870db66b6c::t_4c69782c7ec6b8 189-190
+  s_3eec870db66b6c::t_c197a4d5422a95 65-77
+  s_3eec870db66b6c::t_161170ad069bc9 163-164
+  s_3eec870db66b6c::t_5ee7bcf9c23f04 293-294
+  s_3eec870db66b6c::t_4e794df24e8646 316-317
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_3eec870db66b6c::t_3590811d9c1a85 388-415
+  s_3eec870db66b6c::t_70700c42e0a393 426-428,433,450
+  s_3eec870db66b6c::t_c0d5fab092bd73 163-166,177
+  s_3eec870db66b6c::t_309f8cb3fa1308 727-728,738
+  s_3eec870db66b6c::t_ea45e6862e04ac 525
+control-plane/Sources/App/Services/VolumeService.swift
+  s_3eec870db66b6c::t_e88d793ed99f5d 362
+  s_3eec870db66b6c::t_3fb1d1ac2f0ea8 390
+  s_3eec870db66b6c::t_d6d1a15559f3a2 426,428
+  s_3eec870db66b6c::t_2875ad43947a4a 44-51
+  s_3eec870db66b6c::t_c3b8ef952f6840 264,267
+  s_3eec870db66b6c::t_b5460897e5468d 471-472
+  s_3eec870db66b6c::t_86ffb5444c9ab8 146-184,191-192,199
+  s_3eec870db66b6c::t_aac6e99d532376 90-94
+  s_3eec870db66b6c::t_65140e35015d85 306
+  s_3eec870db66b6c::t_550ebb08f7d9ef 244-255
+control-plane/Tests/AppTests/VolumeAgentSelectionTests.swift
+  s_3eec870db66b6c::t_5561bf72f77538 92-114
+control-plane/Sources/App/Migrations/BackfillVolumePools.swift
+  s_3eec870db66b6c::t_594e5249bfac0d 5-54,83-84,91-92,97-103
+  s_3eec870db66b6c::t_4069108f0d2625 1-4,55-82,85-90,93-96,104-111
+control-plane/Sources/App/Models/VolumeReplica.swift
+  s_3eec870db66b6c::t_429ffc37018f58 1-70
+control-plane/Sources/App/Models/StoragePool.swift
+  s_3eec870db66b6c::t_ef922931b83ebb 1-110
+control-plane/Sources/App/Migrations/CreateStoragePool.swift
+  s_3eec870db66b6c::t_27c3637cd68e63 2,5-37,60-66
+  s_3eec870db66b6c::t_0ea201960483f1 1,3-4,38-59,67-72
+control-plane/Sources/App/Migrations/MigrateVMDisksToVolumes.swift
+  s_3eec870db66b6c::t_e0646f28095273 2,5-62,94-96,128-136,139,171-172
+control-plane/Tests/AppTests/StoragePoolTests.swift
+  s_3eec870db66b6c::t_d36780e319f20a 162-163
+  s_3eec870db66b6c::t_c611d2490e20f7 1-122,125-161,164-181,184-212
+  s_3eec870db66b6c::t_8e69bb72c2e1d1 182-183
+  s_3eec870db66b6c::t_d6fd8ca83cd889 123-124
+docs/architecture/storage.md
+  s_3eec870db66b6c::t_7d509e689b10cf 69-86
+control-plane/Sources/App/Migrations/CreateVolumeReplica.swift
+  s_3eec870db66b6c::t_8cdd97528a341b 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "983d54e0791b05a81a95554a9850ede8842f4027",
+  "prompts": {},
+  "sessions": {
+    "s_3eec870db66b6c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a18bef36-0675-4502-880d-60293263f614",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

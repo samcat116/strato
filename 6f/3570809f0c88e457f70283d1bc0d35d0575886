@@ -1,0 +1,21 @@
+control-plane/web/Dockerfile
+  s_c8a4f75791a136::t_e3899e7958b429 4-9
+.github/workflows/build.yaml
+  s_c8a4f75791a136::t_a6ba284311e249 130-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6f3570809f0c88e457f70283d1bc0d35d0575886",
+  "prompts": {},
+  "sessions": {
+    "s_c8a4f75791a136": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09c6c-5c62-79a2-9fb6-698eedfc4cb1",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

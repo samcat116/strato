@@ -1,0 +1,32 @@
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_1d75adcef37961::t_b9a730794a3fe5 1-118
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_1d75adcef37961::t_2c4cc5f96753cf 100-112
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_1d75adcef37961::t_c0d763dcc39294 1-280
+control-plane/Tests/AppTests/IAMWhoCanTests.swift
+  s_1d75adcef37961::t_b5ac7598e5f5a4 1-430
+docs/architecture/iam.md
+  s_1d75adcef37961::t_56456b5ec37137 264-265,272-295
+  s_1d75adcef37961::t_73cfcafbfabcba 296
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_1d75adcef37961::t_6e595642ace545 41-45
+  s_1d75adcef37961::t_880bd39d1328af 4-9,17,29-34,37-40,54-55,57-70,85-88,110-114,118-120,124-223
+  s_1d75adcef37961::t_fe26b11080c2c0 115-117,121-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a0e0b1ab86fb98b287a98667291f733974c689c9",
+  "prompts": {},
+  "sessions": {
+    "s_1d75adcef37961": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3c167780-a0bc-4b3a-8198-865bd0ebf3b8",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

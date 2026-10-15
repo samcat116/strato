@@ -1,0 +1,34 @@
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_7051b6d9c6ec87::t_b8fb81553141c2 366-388
+agent/Sources/StratoAgent/Agent.swift
+  s_7051b6d9c6ec87::t_e8f3250738882b 303,440,477,1825,2963
+docs/architecture/agent-dependency-management.md
+  s_7051b6d9c6ec87::t_e8f3250738882b 70-75
+docs/deployment/agents.md
+  s_7051b6d9c6ec87::t_e8f3250738882b 477-480
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_7051b6d9c6ec87::t_8c3984f92ad01f 16-18,29
+  s_7051b6d9c6ec87::t_e8f3250738882b 30-32
+  s_7051b6d9c6ec87::t_56e7d67f54de7e 33
+agent/Sources/StratoAgentCore/InitialNodeDependencyModules.swift
+  s_7051b6d9c6ec87::t_40a5f53a66adb6 83-91,98-99
+  s_7051b6d9c6ec87::t_e8f3250738882b 55,63,70,100-101
+agent/Dockerfile
+  s_7051b6d9c6ec87::t_e8f3250738882b 167-169,177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4acae764db5d738718d64d76b88800769b915789",
+  "prompts": {},
+  "sessions": {
+    "s_7051b6d9c6ec87": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-7a5d-75f2-b785-93842a4bc0e2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

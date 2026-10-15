@@ -1,0 +1,36 @@
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_32489a5bc16f1b::t_80827208726df2 2
+  s_32489a5bc16f1b::t_fdde693a3eb3b1 345
+  s_32489a5bc16f1b::t_88d7c8f04cc17c 360
+  s_32489a5bc16f1b::t_78b620d8e92a0c 342-344,346-359,361-374,376-453
+  s_32489a5bc16f1b::t_9163b2a21c932f 375
+shared/Sources/StratoShared/WireProtocol.swift
+  s_32489a5bc16f1b::t_7970ea8a4b6188 256-269
+  s_32489a5bc16f1b::t_55c5f7de340aa4 141-151
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_32489a5bc16f1b::t_4e9acd1e82d3bd 300-301
+  s_32489a5bc16f1b::t_8defa36747861e 342-373
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_32489a5bc16f1b::t_c9331d48856c87 431-446
+  s_32489a5bc16f1b::t_bc0a08e3d72e15 502-513
+  s_32489a5bc16f1b::t_044204a303bf03 644-661,670-672
+control-plane/Sources/App/Services/AgentService.swift
+  s_32489a5bc16f1b::t_10e8055905e0d8 2135-2144
+  s_32489a5bc16f1b::t_a0397708421d9c 1804-1814
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "8c67f0d924e55658c229b4941340e76b4ce7fa43",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

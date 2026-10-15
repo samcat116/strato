@@ -1,0 +1,25 @@
+control-plane/Sources/App/Migrations/AddSandboxSnapshotMobility.swift
+  s_c1e74efaba2a64::t_0f575debbd65cb 19-22,24
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_c1e74efaba2a64::t_5ad81ca29c6849 263-267
+  s_c1e74efaba2a64::t_72a6b14c5caf33 359-370
+  s_c1e74efaba2a64::t_d75395c41b336b 145-159
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_c1e74efaba2a64::t_1e733e48c60c60 1087-1092
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "45887de438f2f891f456ef8fb0dd7a47fe356b5b",
+  "prompts": {},
+  "sessions": {
+    "s_c1e74efaba2a64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc4f4359-64cb-472e-836c-dd5f9c0edac9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

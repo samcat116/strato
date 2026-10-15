@@ -1,0 +1,19 @@
+control-plane/web/bun.lock
+  s_19b631a6420c64::t_07e0d1c606e077 3,21,110,150,152,154,156,158,160,162,164,166,168,170,172,174,176,178,180,182,184,186,188,190,192,194,196,198-202,216,220,222,224,226,228,230,232,234,356,932,1054,1226-1227,1292
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7302889c52c19109b44534ad64225893cdcb1fbf",
+  "prompts": {},
+  "sessions": {
+    "s_19b631a6420c64": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09c36-f5e6-7ad3-9a07-a0c7fb95e76b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

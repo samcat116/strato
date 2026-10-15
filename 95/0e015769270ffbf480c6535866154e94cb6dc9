@@ -1,0 +1,22 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_58ea99da84eeb2::t_48e477ddb91810 10-14
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_58ea99da84eeb2::t_213a96e298d524 381-384
+  s_58ea99da84eeb2::t_514518fe512eda 348-353,359-380,385-395,397,399-403
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "950e015769270ffbf480c6535866154e94cb6dc9",
+  "prompts": {},
+  "sessions": {
+    "s_58ea99da84eeb2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b8981f0-ac67-4dff-a3b7-ec65f8c5f700",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

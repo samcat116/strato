@@ -1,0 +1,35 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_3b51f876fe765a::t_d2e7b17fb188f3 1364-1379,1391-1392
+  s_3b51f876fe765a::t_0a5521775598e0 426-429
+  s_3b51f876fe765a::t_3f6d146c5b63b7 1127-1133,1135-1143
+  s_3b51f876fe765a::t_9959360f462879 171-175
+  s_3b51f876fe765a::t_6355b886da5464 93-101
+  s_3b51f876fe765a::t_e5839fe7a64fdb 908-915
+  s_3b51f876fe765a::t_3d3b6bdcec4f63 1189-1193
+  s_3b51f876fe765a::t_fc651192afca73 193-206
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_3b51f876fe765a::t_c108fa57e3ceba 1-136
+agent/Sources/StratoAgent/QEMUService.swift
+  s_3b51f876fe765a::t_9100d670b53374 461,463-464
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_3b51f876fe765a::t_fe9ba6ae6bbbf1 1-7,9-137
+  s_3b51f876fe765a::t_94b67e8f06ba52 8
+agent/Package.swift
+  s_3b51f876fe765a::t_32c3ad5b7e9867 54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2d2fcf94b055d94669ab27344a939b64b3dcc997",
+  "prompts": {},
+  "sessions": {
+    "s_3b51f876fe765a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "afc8942e-6b0f-47cb-893a-c3f33533d891",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

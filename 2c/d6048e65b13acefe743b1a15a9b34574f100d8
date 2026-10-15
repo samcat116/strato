@@ -1,0 +1,19 @@
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_8e2e429c8d274b::t_0e943ce969ecf6 42,67-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "2cd6048e65b13acefe743b1a15a9b34574f100d8",
+  "prompts": {},
+  "sessions": {
+    "s_8e2e429c8d274b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "145866ee-1121-45a2-bbb9-3b8a742aea54",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

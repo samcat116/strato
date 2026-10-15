@@ -1,0 +1,31 @@
+control-plane/Sources/App/Migrations/ConvertProjectEnvironmentsToArray.swift
+  s_81414e78df024a::t_5bdb042e907e61 38
+  s_81414e78df024a::t_53371bdb45015e 12-15,22,25-29,32-34,41
+  s_81414e78df024a::t_c1dbcccd6ad470 1-11,16,19,21,23-24,30-31,35-37,39-40,42-44
+  s_81414e78df024a::t_4245025cda270d 17-18,20
+control-plane/Sources/App/configure.swift
+  s_81414e78df024a::t_4cdf6ae5084edd 542-545
+control-plane/Sources/App/Migrations/MigrateExistingDataToProjects.swift
+  s_81414e78df024a::t_2f9ffe30158c0a 6-50
+  s_81414e78df024a::t_320d0a073d0fb8 106
+  s_81414e78df024a::t_a88d2d374283a6 57
+  s_81414e78df024a::t_a9a5a91d3d6d15 82-83
+control-plane/Sources/App/Models/Project.swift
+  s_81414e78df024a::t_78f22fdca34a12 32,34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "8e55d2dd3c3404bcdec7723f8ac6e48ee02d1eb4",
+  "prompts": {},
+  "sessions": {
+    "s_81414e78df024a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d327a70e-d541-49b9-969f-2f219cdb2caf",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

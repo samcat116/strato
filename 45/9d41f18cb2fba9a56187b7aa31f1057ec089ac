@@ -1,0 +1,58 @@
+control-plane/web/src/types/openapi.ts
+  s_918416530aede1::t_1e74762209c1ff 122,899-902,1163-1166,1251,1294-1297,1462,8922
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_918416530aede1::t_9d887701bd66b4 463-468
+control-plane/Tests/AppTests/SecurityGroupControllerTests.swift
+  s_918416530aede1::t_6a78697cf4b66f 399-400
+  s_918416530aede1::t_9c387ec41b51d3 410
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_918416530aede1::t_504b7ca14c10ce 492-497
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_918416530aede1::t_2d6703235fa2b3 383-387
+control-plane/Tests/AppTests/CrossProjectContainmentTests.swift
+  s_918416530aede1::t_16b5a65831d3ba 1-12,17,19-203,210-351,354,356-375,378,380-398,401,403-407
+  s_918416530aede1::t_9be0e15dd2df30 204-209
+  s_918416530aede1::t_2c94f4bfed958e 352-353,355
+  s_918416530aede1::t_e1d0fd4993b4bd 376-377,379
+  s_918416530aede1::t_9a463efa2e1900 399-400,402
+  s_918416530aede1::t_b53eabf7227a27 13-16,18
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_918416530aede1::t_2eb6816bf834fe 291
+  s_918416530aede1::t_241230eea62231 280-281
+control-plane/Sources/App/openapi.yaml
+  s_918416530aede1::t_e87beff2ed908f 1216-1219
+  s_918416530aede1::t_09ba11e8fbcc49 1621-1624
+  s_918416530aede1::t_bf812f561f840c 1806-1809
+  s_918416530aede1::t_1b4d85ce57deae 306
+  s_918416530aede1::t_16ec922256028c 2080-2083
+  s_918416530aede1::t_e8193a6512525b 287-293
+  s_918416530aede1::t_a6a39ba6f61235 1765-1767
+control-plane/Sources/App/Services/ProjectContainment.swift
+  s_918416530aede1::t_f90b1cd24a0931 1-42
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_918416530aede1::t_dc2cfd8bf3abea 458-463
+control-plane/Sources/App/Controllers/VMController.swift
+  s_918416530aede1::t_6a7668a1095aa4 297-299
+control-plane/Tests/AppTests/DNSZoneTests.swift
+  s_918416530aede1::t_92057ee8b0c516 311-313
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_918416530aede1::t_40f84a1f2fbdcc 138-142
+docs/development/code-review.md
+  s_918416530aede1::t_dcd94a516347fb 308-312
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "459d41f18cb2fba9a56187b7aa31f1057ec089ac",
+  "prompts": {},
+  "sessions": {
+    "s_918416530aede1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d7cd7c5-d540-42bb-9b8e-8503b7b6aa68",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

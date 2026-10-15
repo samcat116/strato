@@ -1,0 +1,41 @@
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_d17c676e315800::t_dcd12e770b8fdd 153
+  s_d17c676e315800::t_a0a11bcb84de53 3-4,14-17,26-27,35-44,47,53,56-60,62-64,70,85-90,92-122,125-136,144-145,152
+control-plane/web/src/lib/hooks/use-projects.ts
+  s_d17c676e315800::t_ba5c5468542c49 39-41
+control-plane/web/src/lib/api/projects.ts
+  s_d17c676e315800::t_ba5c5468542c49 43-47,49-51
+control-plane/web/src/components/projects/projects-table.tsx
+  s_d17c676e315800::t_f07ec949208f81 6-13,33,37-38,44,48-49,54,90,93,102-103,107,114,129-147,171-196,198-214
+  s_d17c676e315800::t_fc6efc52588e70 5
+control-plane/web/src/components/projects/transfer-project-dialog.tsx
+  s_d17c676e315800::t_10b8e2fa97d99d 38,46
+control-plane/web/src/components/projects/project-form-dialog.tsx
+  s_d17c676e315800::t_bdaac07b261801 72-82,260
+  s_d17c676e315800::t_dcd12e770b8fdd 23-27,58-62,97,160-170,238-249,251-256,258-259,262-263,266,268-275
+  s_d17c676e315800::t_b059ade6b27f10 29,33,40-42,51-52,71,103,178-179,250,257,261,264-265,267
+  s_d17c676e315800::t_0fb54fccce93c2 276
+control-plane/web/src/lib/api/projects.test.ts
+  s_d17c676e315800::t_ba5c5468542c49 1-38
+control-plane/web/src/components/projects/project-table-model.test.ts
+  s_d17c676e315800::t_0c50bf8e587ccf 3,40-52,60,63
+  s_d17c676e315800::t_0040e8d9310d5a 1-2,4-39,53-59,61-62,64-100
+control-plane/web/src/components/projects/project-table-model.ts
+  s_d17c676e315800::t_0040e8d9310d5a 1-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "588d33df9d5b951c47f05f7b406b625286824519",
+  "prompts": {},
+  "sessions": {
+    "s_d17c676e315800": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0017c-a188-7ad3-bf6b-06db75de0571",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

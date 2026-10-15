@@ -1,0 +1,37 @@
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_f5690667012577::t_e16c676be9ac62 31
+  s_f5690667012577::t_951148464260a8 10,18-24,43,84,89,91,119,148,208,218,227-231,233-235,362-365,384-398,453-454,484,488,495,504,525
+  s_f5690667012577::t_f0d7a5c1c84507 25-30,32-40
+  s_f5690667012577::t_5048e08b768ee8 54-60,65
+  s_f5690667012577::t_12fc0ad2c548ee 86-88,376
+  s_f5690667012577::t_341ff50211bb5e 418-421,428-452
+agent/Tests/StratoAgentTests/ImageCacheServiceTests.swift
+  s_f5690667012577::t_6b37eedb1eb78c 1-110,112-179,186-240,242-284,286-289
+  s_f5690667012577::t_58a6bc678bf65d 111,241,285
+  s_f5690667012577::t_1bc40aae010db9 180-185
+agent/Sources/StratoAgentCore/SingleFlight.swift
+  s_f5690667012577::t_cacf2f4c0be6ed 36-47
+  s_f5690667012577::t_309c32e25c5d19 1-35,48-61
+agent/Tests/StratoAgentTests/SingleFlightTests.swift
+  s_f5690667012577::t_6374fcda2e910b 1-139
+docs/architecture/agent.md
+  s_f5690667012577::t_456e7c634f493d 150-155
+docs/architecture/storage.md
+  s_f5690667012577::t_f45d910524f525 46,51-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "45b38a892a5c3844dcec24316fd032b14ef3ae38",
+  "prompts": {},
+  "sessions": {
+    "s_f5690667012577": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "196fc78d-0876-4cb2-85a0-136f7470eb66",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

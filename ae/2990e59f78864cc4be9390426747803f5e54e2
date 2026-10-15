@@ -1,0 +1,77 @@
+deploy/compose/setup.sh
+  s_7cb1100217f98a::t_423c6ceef65244 126-129
+control-plane/Sources/App/Migrations/AddEndSessionEndpointToOIDCProvider.swift
+  s_7cb1100217f98a::t_a56080aae30e28 1-18
+control-plane/Tests/AppTests/AuditLoggingTests.swift
+  s_7cb1100217f98a::t_4b7d34ede9d900 167-169
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_7cb1100217f98a::t_7658c350267720 21-22,33
+  s_7cb1100217f98a::t_7c028513a8bc33 782-912
+control-plane/Sources/App/configure.swift
+  s_7cb1100217f98a::t_af6ac37c377c8a 351-354
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_7cb1100217f98a::t_78b74336ae23d9 185-186
+  s_7cb1100217f98a::t_f96f344f680798 31
+  s_7cb1100217f98a::t_8ca994798fb845 44
+  s_7cb1100217f98a::t_602a77b843d985 1
+  s_7cb1100217f98a::t_c24a5089be3a78 179-184,187-226
+  s_7cb1100217f98a::t_58404637023df7 17
+control-plane/web/src/types/api.ts
+  s_7cb1100217f98a::t_f40a90a8cf3035 406,422,436
+control-plane/web/src/lib/api/auth.ts
+  s_7cb1100217f98a::t_2d292657f78b4b 19-22,24-25,27
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_7cb1100217f98a::t_6fae6c3743f470 262,279,295,314,331,347,367,392
+  s_7cb1100217f98a::t_69c8bb7cbdfdc8 86
+  s_7cb1100217f98a::t_c1a2856e0a3bb5 230-248
+  s_7cb1100217f98a::t_012a32a1bfd380 105
+  s_7cb1100217f98a::t_34dc24f0054792 41-43
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7cb1100217f98a::t_5df03532cd75f2 669-675
+  s_7cb1100217f98a::t_24554e6e80d5f8 619,621-635,641-646,648-651,655
+  s_7cb1100217f98a::t_2c4392c2913449 636-640
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_7cb1100217f98a::t_0a8a5938cd60b6 38-41
+  s_7cb1100217f98a::t_e677420da15bd7 17,28
+  s_7cb1100217f98a::t_5a05de78ed0faf 80-84,89-90,93,95
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_7cb1100217f98a::t_28fbed5af37add 681
+  s_7cb1100217f98a::t_2b053cd7bbe828 299
+  s_7cb1100217f98a::t_b2d1e37576a04b 91
+  s_7cb1100217f98a::t_dc74b227ac5d7b 553-560
+  s_7cb1100217f98a::t_24e808036522f0 488-491,495
+  s_7cb1100217f98a::t_82edac3d84976b 523
+  s_7cb1100217f98a::t_cbc6a6224c192a 170
+  s_7cb1100217f98a::t_7cde2d0357d6ca 574
+  s_7cb1100217f98a::t_a58d0744764196 720-730,734,743-744,746,753-755
+  s_7cb1100217f98a::t_fcd4a034b9a857 793-802,807,813-814,821-822,827-829
+  s_7cb1100217f98a::t_22b0a9ebb5e5a4 413-417,420,422,425,430-431,438-440
+control-plane/web/src/providers/auth-provider.tsx
+  s_7cb1100217f98a::t_ca9a0a7fef7cbf 72,74-79
+deploy/compose/docker-compose.yml
+  s_7cb1100217f98a::t_beb441fe74bec1 354-358
+deploy/compose/.env.example
+  s_7cb1100217f98a::t_d78aa0a4b3f1f5 27-29
+control-plane/web/src/components/oidc-providers/oidc-provider-dialog.tsx
+  s_7cb1100217f98a::t_f40a90a8cf3035 84-86,131,150,306-320
+  s_7cb1100217f98a::t_a034e539d8c873 321-323
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_7cb1100217f98a::t_cd0f7408b486b8 33
+  s_7cb1100217f98a::t_1829b2a32b74c1 304-355
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "ae2990e59f78864cc4be9390426747803f5e54e2",
+  "prompts": {},
+  "sessions": {
+    "s_7cb1100217f98a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "268f2271-7b73-49ec-a677-911ffbb65707",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

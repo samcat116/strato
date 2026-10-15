@@ -1,0 +1,35 @@
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_a1c4b9dc6208b2::t_e2ebaedc41936f 123,132-180
+  s_a1c4b9dc6208b2::t_e4490bae5da856 4-9,21-27,32-38
+  s_a1c4b9dc6208b2::t_6374ba8407a882 77
+  s_a1c4b9dc6208b2::t_8bb07f1dc31a91 39,181,235-284
+  s_a1c4b9dc6208b2::t_6b4c6bb3bd401e 202-211
+  s_a1c4b9dc6208b2::t_ddd90ab3cd913e 40
+  s_a1c4b9dc6208b2::t_fef6912a3eb26a 182
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_a1c4b9dc6208b2::t_8bb56773e44ba3 331-395
+  s_a1c4b9dc6208b2::t_59837be9a8c5a1 299-300,302-305
+SwiftFirecracker/Tests/SwiftFirecrackerTests/FirecrackerAdoptionTests.swift
+  s_a1c4b9dc6208b2::t_4fcffd51fb97a2 1-86,89-107,110-219,222-236
+  s_a1c4b9dc6208b2::t_10a59cd800bcd0 220-221
+  s_a1c4b9dc6208b2::t_87a0c6d959fecb 108-109
+  s_a1c4b9dc6208b2::t_f477ea471307e4 87-88
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_a1c4b9dc6208b2::t_a2fc99ce15c0c4 25-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "d019ad0c2390634040ea6db19522b2a5c7786eec",
+  "prompts": {},
+  "sessions": {
+    "s_a1c4b9dc6208b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ac20f3de-0b80-4bde-b64b-7977c85afe77",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

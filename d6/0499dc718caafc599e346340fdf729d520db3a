@@ -1,0 +1,29 @@
+control-plane/web/src/components/layout/nav.ts
+  s_41c5ac11ea7573::t_74c4e72e093c00 11,18-19,25-26,29,32-51,53-55,61-63,67-68,72-76,86-99,102-104
+control-plane/web/src/components/layout/sidebar.tsx
+  s_41c5ac11ea7573::t_cae3891b2ee389 193-201
+  s_41c5ac11ea7573::t_97ca8675ad7045 3
+  s_41c5ac11ea7573::t_12781b500a62e4 6,21,24,26,31,33-34,40,46-57,63-83,85-90,92-110
+  s_41c5ac11ea7573::t_ea837fffab5194 84,91
+  s_41c5ac11ea7573::t_f5097d315bfb37 58-62
+  s_41c5ac11ea7573::t_55a1d2b83c5fcf 111-112
+control-plane/web/src/components/layout/command-palette.tsx
+  s_41c5ac11ea7573::t_5d6da57269868c 50-56
+  s_41c5ac11ea7573::t_302a851dc39e13 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "d60499dc718caafc599e346340fdf729d520db3a",
+  "prompts": {},
+  "sessions": {
+    "s_41c5ac11ea7573": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5e7da32-f9c9-4e02-9985-b7f02cf47ed6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

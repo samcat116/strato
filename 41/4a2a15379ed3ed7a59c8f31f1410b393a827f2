@@ -1,0 +1,45 @@
+helm/strato-control-plane/values.yaml
+  s_5df0ba673f5c44::t_b288f8960f8ee7 758-761,763-769
+deploy/compose/spiffe/agent-cp-entrypoint.sh
+  s_5df0ba673f5c44::t_c81b4e101f1e79 15-16,32-38,43
+helm/strato-control-plane/templates/deployment.yaml
+  s_5df0ba673f5c44::t_b288f8960f8ee7 278-283,440-441,460-466,470,485-488
+  s_5df0ba673f5c44::t_01d147f0928c58 489-490
+deploy/compose/spiffe/bootstrap.sh
+  s_5df0ba673f5c44::t_c81b4e101f1e79 17-18,74-98
+  s_21a889dc5d67dd::t_23f0aaf8328f3d 99
+helm/strato-control-plane/templates/spire-agent-daemonset.yaml
+  s_5df0ba673f5c44::t_b288f8960f8ee7 39-42,50,104-106,123-126
+deploy/compose/.env.example
+  s_5df0ba673f5c44::t_cb691290f25352 54-55
+deploy/compose/docker-compose.yml
+  s_5df0ba673f5c44::t_c81b4e101f1e79 145-148,215,217,223,263-265,415-417,520
+helm/strato-control-plane/templates/spire-agent-configmap.yaml
+  s_5df0ba673f5c44::t_b288f8960f8ee7 20-22
+docs/architecture/guest-identity.md
+  s_5df0ba673f5c44::t_b288f8960f8ee7 388-393
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "414a2a15379ed3ed7a59c8f31f1410b393a827f2",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_5df0ba673f5c44": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f2-de7c-7612-b167-846130686495",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,66 @@
+control-plane/Sources/App/IAM/GuardrailWriteCheck.swift
+  s_bfe36270825994::t_5126daa94c8607 357,364
+  s_bfe36270825994::t_63d40eea644ca4 316
+  s_bfe36270825994::t_4713729c07b16e 229,237,241
+  s_bfe36270825994::t_3eef0083d93af7 204-208
+  s_bfe36270825994::t_255b9cccc6180a 164-169,172,176
+  s_bfe36270825994::t_4a79ee808f7132 392-395
+  s_bfe36270825994::t_65961167b46fe8 418
+  s_bfe36270825994::t_5d0f1d010843d7 264,266-276,278,285,293
+control-plane/Sources/App/IAM/Cedar/CedarPolicyAssembler.swift
+  s_bfe36270825994::t_9b75fcbf9934e1 11-14
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_bfe36270825994::t_20b36af5ac47db 448
+control-plane/Sources/App/IAM/GuardrailVocabulary.swift
+  s_bfe36270825994::t_a4ff0dfcf22e2d 136-138
+control-plane/Sources/App/IAM/Cedar/CedarPolicySetCache.swift
+  s_bfe36270825994::t_b47be219fb2fb6 329,332,338,343,349,351,365,373
+  s_bfe36270825994::t_1cc20586a41523 109
+control-plane/Tests/AppTests/IAMGuardrailTests.swift
+  s_bfe36270825994::t_4a8600f913ac51 223-224
+  s_bfe36270825994::t_98683a8c5bd29c 680,687
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_bfe36270825994::t_979db88086a78b 296
+control-plane/Sources/App/IAM/GuardrailRendering.swift
+  s_bfe36270825994::t_75aca22367392a 1-426
+control-plane/Sources/App/IAM/GuardrailText.swift
+  s_bfe36270825994::t_7aa5e8a2693edb 46-49
+docs/architecture/iam.md
+  s_bfe36270825994::t_c32a52c08f584b 607,611-615
+  s_bfe36270825994::t_14b0790b43fcd5 219-223
+control-plane/Sources/App/configure.swift
+  s_bfe36270825994::t_d29e87d516c9a8 637
+control-plane/Tests/AppTests/SwiftCedarEngineTests.swift
+  s_bfe36270825994::t_5a8c79e3c5bc10 184-185
+control-plane/Tests/AppTests/GuardrailRenderingTests.swift
+  s_bfe36270825994::t_eda351ae5ba777 221-222
+  s_bfe36270825994::t_3b03547dee6c3e 1-220,223-238
+control-plane/Tests/AppTests/CedarPolicyAssemblyTests.swift
+  s_bfe36270825994::t_c2f6bbdbb9929b 6-8
+control-plane/Tests/AppTests/WorkloadPrincipalTests.swift
+  s_bfe36270825994::t_27c9a3337230d7 351
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_bfe36270825994::t_b1f2509fa5ed0d 352-357,359
+  s_bfe36270825994::t_d765cc982c3012 243-282
+  s_bfe36270825994::t_8c54cb082696e0 236
+  s_bfe36270825994::t_dd6709e3ac767a 172
+  s_bfe36270825994::t_9fcbdf1941d0de 94
+  s_bfe36270825994::t_52528af612d744 15-20
+  s_bfe36270825994::t_e70d4faa026cb2 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2bc3509364f096b95045fd508668aef69f6f3418",
+  "prompts": {},
+  "sessions": {
+    "s_bfe36270825994": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0d528ba-c10c-4e4a-8737-98ab379eea04",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

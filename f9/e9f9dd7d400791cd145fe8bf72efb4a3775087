@@ -1,0 +1,59 @@
+control-plane/Sources/App/Controllers/PasskeyController.swift
+  s_64643b8829afbd::t_e91223c21057ec 267-268
+  s_64643b8829afbd::t_9eab03cf947957 279
+  s_64643b8829afbd::t_c7c90a87cf6b9d 87
+  s_64643b8829afbd::t_0314cd4d712a6e 80
+  s_64643b8829afbd::t_ac30da58ad552d 115
+control-plane/web/src/lib/api/auth.ts
+  s_64643b8829afbd::t_0ea1a3b6d97116 40,75
+control-plane/Sources/App/Migrations/BackfillPasskeyDeviceType.swift
+  s_64643b8829afbd::t_1268886726a6c7 1-36
+control-plane/Sources/App/configure.swift
+  s_64643b8829afbd::t_2aaf2f5a2235da 519-522
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_64643b8829afbd::t_57e47df131a6bf 22-27
+  s_64643b8829afbd::t_a41146d6115f96 113-139
+  s_64643b8829afbd::t_c5fbec407a8a27 251,253-261
+  s_64643b8829afbd::t_7e24fe5e88b0be 47
+  s_64643b8829afbd::t_112fc167edb1cc 90-93,99,102
+control-plane/Sources/App/Controllers/UserController.swift
+  s_64643b8829afbd::t_42d86d15dabf4f 584
+  s_64643b8829afbd::t_408eb95a98cbaf 415
+  s_64643b8829afbd::t_4069816f57059f 838
+  s_64643b8829afbd::t_fbfc5d4ccdbbb8 904
+  s_64643b8829afbd::t_5a7c0bfc3e4a75 847,849-850,860-882
+  s_64643b8829afbd::t_486090abc323b1 497
+  s_64643b8829afbd::t_49200f8a102bcd 824-825
+  s_64643b8829afbd::t_15f5c17fb5118d 888-889
+  s_64643b8829afbd::t_cde5f0cd9cb285 384,394
+  s_64643b8829afbd::t_5b3de70e4d2b21 509
+  s_64643b8829afbd::t_23be0b0515cc17 564
+  s_64643b8829afbd::t_626c4f880dc838 883-884
+control-plane/Sources/App/openapi.yaml
+  s_64643b8829afbd::t_a564ca406e0e07 7675-7682,7708-7715,7806-7808,7815-7817,7837-7844
+control-plane/web/src/lib/webauthn/client.ts
+  s_64643b8829afbd::t_2ac3e672d70fe6 160
+  s_64643b8829afbd::t_f5885aabab8852 208
+  s_64643b8829afbd::t_04dada6778c22c 76,80-88
+  s_64643b8829afbd::t_f88f6629e98bce 186
+control-plane/web/src/lib/api/passkeys.ts
+  s_64643b8829afbd::t_0ea1a3b6d97116 26
+control-plane/Tests/AppTests/PasskeyCredentialRecordTests.swift
+  s_64643b8829afbd::t_b886ba3aeb485c 1-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f9e9f9dd7d400791cd145fe8bf72efb4a3775087",
+  "prompts": {},
+  "sessions": {
+    "s_64643b8829afbd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0831d30e-f006-45d1-a60d-17acada7be92",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

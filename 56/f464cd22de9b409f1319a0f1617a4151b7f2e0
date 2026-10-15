@@ -1,0 +1,37 @@
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_be3b69b1d91e7a::t_670ec37ce9ff39 69,99-101
+control-plane/Sources/App/Models/SSFStream.swift
+  s_be3b69b1d91e7a::t_a01641e5190fdb 36-37
+control-plane/Sources/App/Services/SSFService.swift
+  s_be3b69b1d91e7a::t_962a26bd0a8045 91
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_be3b69b1d91e7a::t_0c89ae371b4fe9 10-12,20,124-129,131,133,137-151,153-154
+control-plane/Sources/App/configure.swift
+  s_be3b69b1d91e7a::t_7a6d0a96a3d733 95-99,104,366-370
+control-plane/Tests/AppTests/SSFTests.swift
+  s_be3b69b1d91e7a::t_c9a8f9e76751c9 470-568
+control-plane/Tests/AppTests/SecretsEncryptionServiceTests.swift
+  s_be3b69b1d91e7a::t_756dfcb9c2330e 146,159,164-219
+docs/architecture/overview.md
+  s_be3b69b1d91e7a::t_15490908030145 224
+docs/deployment/docker-compose.md
+  s_be3b69b1d91e7a::t_83444cdcb230d0 72-78
+helm/strato-control-plane/values.yaml
+  s_be3b69b1d91e7a::t_e07c4aa9330fe9 220-224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "56f464cd22de9b409f1319a0f1617a4151b7f2e0",
+  "prompts": {},
+  "sessions": {
+    "s_be3b69b1d91e7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "419afbfb-3602-4888-8609-cbfe2c05cdd0",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

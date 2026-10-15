@@ -1,0 +1,20 @@
+.github/workflows/README.md
+  s_3f1c2246b52b20::t_4dd2d1c6a5a6fe 110
+  s_3f1c2246b52b20::t_62abafae3f8248 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "c94312303aa43b0293739a2548daebf8f19e8571",
+  "prompts": {},
+  "sessions": {
+    "s_3f1c2246b52b20": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01270da9-fe77-4d9f-9fed-575c41485de0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

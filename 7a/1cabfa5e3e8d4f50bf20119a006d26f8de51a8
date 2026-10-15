@@ -1,0 +1,86 @@
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 898
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 614-617
+config.toml.example
+  s_2cdf553f8bed50::t_b07cde551475f1 3-10
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 71-74
+control-plane/Sources/App/Models/Agent.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 455,457-477,570-571,666
+agent/Tests/StratoAgentTests/SimulationConfigTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 10,15-19,67-68,83,96-97,107,118-119,127
+agent/Sources/StratoAgent/Agent.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 285-287,290-294,654-655,1250-1251,1310,1321-1322,1346,1364-1366,1602
+control-plane/Sources/App/Controllers/VMController.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 1744,1752,1756-1757
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_2cdf553f8bed50::t_b07cde551475f1 181,186
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 59,64,77-90,136,140,146,550-551,558,576
+control-plane/Sources/App/openapi.yaml
+  s_2cdf553f8bed50::t_b07cde551475f1 13413,13460-13464
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_2cdf553f8bed50::t_b07cde551475f1 39-57,260-261,271
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 34
+docs/deployment/agents.md
+  s_2cdf553f8bed50::t_b07cde551475f1 484-492
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 58,63,76-89,154,159,165,494,503
+control-plane/Sources/App/configure.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 922,925-927
+  s_2cdf553f8bed50::t_a01d76ce61f8fc 928
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 91-93,95-96,98-100
+control-plane/web/src/types/api.ts
+  s_2cdf553f8bed50::t_b07cde551475f1 603-606,609-611
+control-plane/web/src/types/openapi.ts
+  s_2cdf553f8bed50::t_b07cde551475f1 7631-7632
+agent/Package.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 28,81,83
+control-plane/Sources/App/Migrations/DropLegacyAgentCapabilities.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 1-27
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 231
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 61
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 67-75
+CLAUDE.md
+  s_2cdf553f8bed50::t_b07cde551475f1 52
+agent/Package.resolved
+  s_2cdf553f8bed50::t_b07cde551475f1 2,103-111,270
+control-plane/Sources/App/Migrations/ReplaceAgentHypervisorTypeWithHypervisors.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 18
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 10,19-29,35-36,45,53-54,59,68-69,78,88-89,94,102-103,111-112,120-121,131,146-147,158,175-176,186-187,193,197,207-208,227-228,239,253-254,259,270-271,280-281,290-291,295,304,311-312,319-320,327-328,339,349-350,355,373-374,381-382,395-396,403-404,412-413,420-421,429-430,438-439,445-446,455-456,463,466,508,514,521-522,534,545-546,559,574-575,584,590-591,606,616-618,622,631,641-642,656-657,664-665,680,698-699,711-712,719-720,732-733,740-741,749,756-757,764,770-771,779-780,786-787,794,804-805,813,822-823,832,841,844-849,854-855,863-864,870-871,880-881,887-888,897-898,906,909,931-932,940,951-952,955-956,964-965,973,982,987-1130,1148-1149,1168,1176-1177,1187,1200-1201,1206
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 262,266-267
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 57,68-72,74,400,430,465,496,523,571,617,662,729
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 483,493-494
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 287-304
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 2,5-6,567-574,579,584-594,598-604,613-623,625,632,638-642,647-649,654-657,660-664,669-670,675-676,681-684,690,699-700,702,714-716,722-724,727-729,762-775,777,779,807,819,821-830,832-836,839-841,843,855-864,866,868-872,895-903,905-906,911-914,919-930,932,934-939,941,1013-1014,1021-1069,1119,1121,1124-1127,1132-1147
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_2cdf553f8bed50::t_b07cde551475f1 167,171-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7a1cabfa5e3e8d4f50bf20119a006d26f8de51a8",
+  "prompts": {},
+  "sessions": {
+    "s_2cdf553f8bed50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe9b0-12ff-7a30-9a8b-6d15ba365148",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

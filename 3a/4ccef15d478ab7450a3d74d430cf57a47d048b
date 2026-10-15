@@ -1,0 +1,26 @@
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_5d7717eeeb4bf1::t_b4bbaef5a1262b 366-369
+  s_5d7717eeeb4bf1::t_a4d797f45adaa8 359-365,370-373,1287-1302
+  s_5d7717eeeb4bf1::t_0f5ea808ee3d16 1303
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_5d7717eeeb4bf1::t_4de9b8478a8f7d 403,410,433-434
+  s_5d7717eeeb4bf1::t_68882da4ec8133 322-325,332,412,416,484-487,497,505,514-515,528,560-563,565-567
+  s_5d7717eeeb4bf1::t_860f6b14efcc55 564,854-887,928-939
+  s_5d7717eeeb4bf1::t_84232413b0edc4 940
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3a4ccef15d478ab7450a3d74d430cf57a47d048b",
+  "prompts": {},
+  "sessions": {
+    "s_5d7717eeeb4bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-40ef-7863-978f-c926590eb759",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

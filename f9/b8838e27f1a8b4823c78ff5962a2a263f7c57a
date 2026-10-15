@@ -1,0 +1,32 @@
+agent/Sources/StratoAgent/NetworkServiceLinux+TopologySupport.swift
+  s_a794bdb6881990::t_c703969df7e2c3 18,60,73,98,123-125,142,146,177-178,199-200,207,227,301
+agent/Sources/StratoAgent/NetworkServiceLinux+DHCP.swift
+  s_a794bdb6881990::t_c703969df7e2c3 20-24,26-28,32-38,45-46,78-79
+  s_a794bdb6881990::t_1892b9430151e7 31
+agent/Sources/StratoAgent/NetworkServiceLinux+Connection.swift
+  s_a794bdb6881990::t_c703969df7e2c3 50,59,208,212
+agent/Sources/StratoAgent/NetworkServiceLinux+Topology.swift
+  s_a794bdb6881990::t_c703969df7e2c3 301,651
+agent/Sources/StratoAgent/NetworkServiceLinux+PortPlumbing.swift
+  s_a794bdb6881990::t_c703969df7e2c3 61,67,79,103,120-123,143-144,318,324,341,345,383,445,483,551,571,578-579
+agent/Sources/StratoAgent/NetworkServiceLinux+WorkloadPorts.swift
+  s_a794bdb6881990::t_c703969df7e2c3 261
+agent/Sources/StratoAgent/NetworkServiceLinux+Reconciliation.swift
+  s_a794bdb6881990::t_c703969df7e2c3 314,360,475,536
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "f9b8838e27f1a8b4823c78ff5962a2a263f7c57a",
+  "prompts": {},
+  "sessions": {
+    "s_a794bdb6881990": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0597d-f390-7ac3-b450-7fccc3a566ae",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

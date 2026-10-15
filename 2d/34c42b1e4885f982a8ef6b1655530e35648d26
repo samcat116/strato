@@ -1,0 +1,22 @@
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_0a6f49dab719ee::t_f5b1828cd84660 1011,1050,1065,1068,1101
+  s_0a6f49dab719ee::t_11dd37f3e9a101 867-882
+agent/Tests/StratoAgentPlatformTests/NetworkReconcilerTests.swift
+  s_0a6f49dab719ee::t_48ffc973f2dbc0 475-494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "2d34c42b1e4885f982a8ef6b1655530e35648d26",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,739 @@
+docs/guide/getting-started.md
+  s_77de6d97300258::t_bc779b9dfaef96 48,51,54-55
+control-plane/Package.swift
+  s_77de6d97300258::t_94d456dfbe268c 49-62,87
+  s_77de6d97300258::t_9113b06ef60a4e 44-46,95-96,99-102
+  s_77de6d97300258::t_994bf37a3a7086 160,164,186-188,190-193,202-221,223
+  s_77de6d97300258::t_ff21220990ce3d 42,118
+  s_77de6d97300258::t_1f5e77211e84bc 79
+  s_77de6d97300258::t_87e71c127a031c 90
+cli/Package.swift
+  s_77de6d97300258::t_c533a8f8189723 14-16
+agent/Tests/StratoAgentRuntimeTests/FirecrackerServiceLifecycleTests.swift
+  s_77de6d97300258::t_61d56007094f8d 1-80
+control-plane/web/src/components/ui/log-viewer-shell.tsx
+  s_77de6d97300258::t_4be6d203fbad55 6-12
+agent/Sources/StratoAgentCore/AgentConfigDefaults.swift
+  s_77de6d97300258::t_ffb285d40f0b77 2-4
+  s_77de6d97300258::t_a1dfcfeb9d87e6 1,5-191
+agent/Sources/StratoAgentCore/AgentConfigLoader.swift
+  s_77de6d97300258::t_65cbc13283ef6d 4
+  s_77de6d97300258::t_01570b51e1cb40 119,562
+  s_77de6d97300258::t_a1dfcfeb9d87e6 1-3,5-118,120-561,563-632
+helm/strato-control-plane/templates/NOTES.txt
+  s_77de6d97300258::t_e23ce1fda4721d 44,78
+control-plane/Tests/AppResourceTests/ProjectQuotaServiceTests.swift
+  s_77de6d97300258::t_19d5ef59306638 40-45
+control-plane/web/src/lib/api/vms.ts
+  s_77de6d97300258::t_05323001146c62 17
+CONTEXT.md
+  s_77de6d97300258::t_a0e399669716b4 15-16,85,106,196-199,248-250,271-283
+control-plane/web/src/lib/api/oidc-providers.ts
+  s_77de6d97300258::t_05323001146c62 14
+.github/workflows/release.yaml
+  s_77de6d97300258::t_5dc0133893eedb 167
+  s_77de6d97300258::t_a9a3730110ac2e 560
+  s_77de6d97300258::t_6867e79d5379fd 999
+control-plane/web/src/components/ui/detail-query-error.tsx
+  s_77de6d97300258::t_4be6d203fbad55 2-7
+control-plane/web/.dockerignore
+  s_77de6d97300258::t_07075d388719a5 1-7
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_77de6d97300258::t_72abb3d22dc1f5 1047-1057,1059-1073,1076-1077
+docs/.vitepress/config.mts
+  s_77de6d97300258::t_ff222191e4bbad 79-86
+  s_77de6d97300258::t_29132675a7b841 58-59
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_77de6d97300258::t_4be6d203fbad55 4-9
+docs/deployment/docker-compose.md
+  s_77de6d97300258::t_e0b5572b0e5fc6 305-307
+  s_77de6d97300258::t_500ddeef7561f0 163-164
+  s_77de6d97300258::t_43a70b3e172738 243
+agent/Sources/StratoAgentCore/AgentConfigSections.swift
+  s_77de6d97300258::t_52e4ba8845fe61 1-192
+shared/Sources/SPIFFEKit/Generated/README.md
+  s_77de6d97300258::t_1f5e77211e84bc 1-15
+agent/Sources/StratoAgent/main.swift
+  s_77de6d97300258::t_61d56007094f8d 1-3
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDVerification.swift
+  s_77de6d97300258::t_5d4d98c21a3eb2 96
+  s_77de6d97300258::t_3483aa05cabffe 121-137
+agent/Sources/StratoAgentDomainXML/DomainDeviceXML.swift
+  s_77de6d97300258::t_0fb6936c06146c 1-3,5-16,18-21,23-31,33-56,58-78,80-96,98-113
+agent/Tests/StratoAgentTests/EdgeNonceReconciliationTests.swift
+  s_77de6d97300258::t_dc373ace7085d3 5
+agent/Tests/README.md
+  s_77de6d97300258::t_2616558e37b479 10-12,18-19
+  s_77de6d97300258::t_73bf031bbf8387 13-16
+  s_77de6d97300258::t_bbbead93bbc257 1,3-4,7,17,20-21
+helm/strato-control-plane/templates/credentials-secret.yaml
+  s_77de6d97300258::t_14e7c43304cfd0 24-30,61-62,65
+.github/workflows/main-tests.yaml
+  s_77de6d97300258::t_7cb537da957510 61-65,156-160
+  s_77de6d97300258::t_e0b5572b0e5fc6 285-286
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_77de6d97300258::t_1ed6259012ff73 1476
+deploy/compose/vcpu-shrink-test.sh
+  s_77de6d97300258::t_005174e90348ca 65
+  s_77de6d97300258::t_41c90f0a84bce5 64
+control-plane/Sources/App/openapi-generator-config.yaml
+  s_77de6d97300258::t_94d456dfbe268c 5-6
+agent/Sources/StratoAgentCore/VsockCIDAllocator.swift
+  s_77de6d97300258::t_830356e84288d9 123,126,130
+agent/Sources/StratoAgentSPIFFE/SPIFFEGeneratedAliases.swift
+  s_77de6d97300258::t_87e71c127a031c 3-4
+  s_77de6d97300258::t_1f5e77211e84bc 1-2,5-26
+control-plane/Sources/StratoAPITypes/Module.swift
+  s_77de6d97300258::t_70c8bbe1346672 1
+agent/Package.swift
+  s_77de6d97300258::t_eccc8cb7c399ae 92-96,98-103,109,236
+  s_77de6d97300258::t_7318ee7fb416f1 86-87
+  s_77de6d97300258::t_0fb6936c06146c 81-85,88-91,97,108
+  s_77de6d97300258::t_1f5e77211e84bc 161
+  s_77de6d97300258::t_61d56007094f8d 168-172,196-204,278
+  s_77de6d97300258::t_3d2c513b5a75ef 227-231,237,256
+  s_77de6d97300258::t_308b2e03537470 208,211-212,215,217-218,224-226,232
+  s_77de6d97300258::t_2cb4bb3df9a765 247-249
+  s_77de6d97300258::t_eb9e477bd7ddc6 234-235,238,240-241,246,250-255,257-266,268-277,279-281
+  s_77de6d97300258::t_89d9727bc9d822 162
+  s_77de6d97300258::t_b428c7604087c8 10-13
+  s_77de6d97300258::t_dc373ace7085d3 267
+  s_77de6d97300258::t_c533a8f8189723 33-35
+  s_77de6d97300258::t_84d7b9c125b6aa 287
+  s_77de6d97300258::t_0448f2142ed7d5 233
+  s_77de6d97300258::t_7fc38b8c3b9af7 239
+  s_77de6d97300258::t_ba14467eef4779 242-243
+control-plane/web/src/components/images/image-detail-page.tsx
+  s_77de6d97300258::t_71c3ef769cad54 20,25,136-137,141-142,146-147,158-159,163-164
+  s_77de6d97300258::t_ddd15e60454c5a 19,21-24,26,55-59,64,85-91,94-98,122-124,343
+control-plane/web/src/components/agents/agent-detail-page.tsx
+  s_77de6d97300258::t_8960711ac0a398 14,19,115-116,121-122,141-142,149-150,161-162
+  s_77de6d97300258::t_28165aaa5b8a36 13,15-18,20,67-71,76,92-98,103-109,111-112,240
+control-plane/Sources/App/Services/NetworkCarrierAssembler.swift
+  s_77de6d97300258::t_115d2390ae6095 1-517
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_77de6d97300258::t_04fcaaec8e3398 2-3,96-143,345-401
+  s_77de6d97300258::t_2c2ce4b752e0cd 402
+agent/Tests/StratoAgentTests/HypervisorHangResilienceTests.swift
+  s_77de6d97300258::t_dc373ace7085d3 2
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_77de6d97300258::t_5f14000e471d87 2
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_77de6d97300258::t_755fc065064d66 74
+control-plane/Sources/App/Services/WorkloadObservedMerge.swift
+  s_77de6d97300258::t_eb82ca53b76c0c 1-572
+control-plane/web/src/lib/api/organizations.ts
+  s_77de6d97300258::t_05323001146c62 9
+control-plane/web/src/components/vms/vm-detail-page.tsx
+  s_77de6d97300258::t_0385e31e99919a 213-214,218-219,226-227
+  s_77de6d97300258::t_1cc61cbcae3f27 18,23,158-159,164-165
+  s_77de6d97300258::t_df2431eda5e8ba 17,19-22,24,76,81,99-107,380
+deploy/compose/spiffe/envoy.yaml
+  s_77de6d97300258::t_955c19c7eb4201 3-5
+control-plane/web/src/lib/api/iam.ts
+  s_77de6d97300258::t_05323001146c62 21
+control-plane/web/src/lib/api/users.ts
+  s_77de6d97300258::t_05323001146c62 11
+control-plane/web/src/components/ui/dialog-submit-footer.tsx
+  s_77de6d97300258::t_2151aad0698026 1-48
+agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift
+  s_77de6d97300258::t_806e5cfb40f13c 796,799
+.github/actions/swift-build-env/action.yml
+  s_77de6d97300258::t_42e6e29aeb7383 1-66
+control-plane/web/src/components/project-members/add-group-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,171-177
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_77de6d97300258::t_87e71c127a031c 4,9,13
+control-plane/web/src/components/sandboxes/sandbox-ttl-card.tsx
+  s_77de6d97300258::t_0193459a1ca6c7 6,33-35
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_77de6d97300258::t_200807f974e388 6
+docs/architecture/multi-replica.md
+  s_77de6d97300258::t_bc779b9dfaef96 129-134,147-148,197-199
+control-plane/web/src/components/security-groups/create-security-group-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,128-134
+agent/Tests/StratoAgentStorageTests/OCIRootfsCacheTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-200
+deploy/compose/docker-compose.yml
+  s_77de6d97300258::t_e0b5572b0e5fc6 253
+  s_77de6d97300258::t_43a70b3e172738 272
+  s_77de6d97300258::t_14e7c43304cfd0 432
+  s_77de6d97300258::t_500ddeef7561f0 313,378-380
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 3
+  s_77de6d97300258::t_a91f3e4501fd44 142,152
+agent/Tests/StratoAgentTests/DomainNetworkDetachConvergenceTests.swift
+  s_77de6d97300258::t_0e10433755aa4a 2
+.claude/settings.json
+  s_77de6d97300258::t_39181887f9e698 13,22,33,44,59,70,81
+control-plane/Sources/App/Services/ImageObjectStore.swift
+  s_77de6d97300258::t_1ed6259012ff73 156
+control-plane/Sources/App/Services/StorageCarrierAssembler.swift
+  s_77de6d97300258::t_115d2390ae6095 1-426
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  s_77de6d97300258::t_8b7c6a95242d5e 20
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_77de6d97300258::t_e6fa0e1641f681 238-240,253-255,710-715
+  s_77de6d97300258::t_5f14000e471d87 2
+control-plane/web/src/lib/hooks/use-resource-logs.ts
+  s_77de6d97300258::t_477be344d702ea 1,4,6,23
+control-plane/web/src/components/sandboxes/sandbox-detail-page.tsx
+  s_77de6d97300258::t_d141d1dc213b76 18,23,153-154,158-159,163,168,175-176
+  s_77de6d97300258::t_ee110b801e37ea 17,19-22,24,61-65,70,91-97,101-108,343
+control-plane/web/src/components/layout/create-organization-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,106-111
+agent/Tests/StratoAgentStorageTests/VMManifestStoreTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-807
+control-plane/Sources/App/OpenAPI/ProjectSchemaMapping.swift
+  s_77de6d97300258::t_5f14000e471d87 2
+docs/architecture/networking.md
+  s_77de6d97300258::t_a9a3730110ac2e 1359,1362
+agent/Tests/StratoAgentStorageTests/Ext4ImageBuilderTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-199
+shared/Sources/StratoShared/Base64URL.swift
+  s_77de6d97300258::t_a601475f6222ec 17-18
+  s_77de6d97300258::t_5d4d98c21a3eb2 1-16,19-24
+control-plane/web/src/app/(dashboard)/load-balancers/page.tsx
+  s_77de6d97300258::t_df85ef52af4bfa 16,67-69
+  s_77de6d97300258::t_5feae4a37083be 14,76
+  s_77de6d97300258::t_466df55e207694 6
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_77de6d97300258::t_5d4d98c21a3eb2 417
+  s_77de6d97300258::t_89d9727bc9d822 3
+agent/Sources/StratoAgentKit/FirmwareResolver.swift
+  s_77de6d97300258::t_cfcd6640297dac 84-88
+  s_77de6d97300258::t_5a3ca6648b3b74 1-83,89-343
+docs/architecture/overview.md
+  s_77de6d97300258::t_9b37c17339cb50 55-56
+  s_77de6d97300258::t_bc779b9dfaef96 124,142-143
+control-plane/web/src/lib/api/audit-events.ts
+  s_77de6d97300258::t_05323001146c62 4
+shared/Tests/StratoSharedTests/Base64URLTests.swift
+  s_77de6d97300258::t_539ae1d08eba73 1-22
+shared/Package.resolved
+  s_77de6d97300258::t_57acb1f4314503 2,76-82
+  s_77de6d97300258::t_c963a6ddc28f48 83-84
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_77de6d97300258::t_1ed6259012ff73 359
+control-plane/web/src/lib/api/passkeys.ts
+  s_77de6d97300258::t_05323001146c62 10
+agent/Sources/StratoAgentCore/BestEffort.swift
+  s_77de6d97300258::t_806e5cfb40f13c 1-24
+control-plane/web/src/lib/hooks/use-invalidating-mutation.ts
+  s_77de6d97300258::t_bcbf9123666bd6 1-24
+helm/strato-control-plane/templates/deployment.yaml
+  s_77de6d97300258::t_1fe7b6db47a74a 457,479
+  s_77de6d97300258::t_14e7c43304cfd0 216-222
+.github/workflows/main-build.yaml
+  s_77de6d97300258::t_7cb537da957510 81-82
+  s_77de6d97300258::t_5dc0133893eedb 56,87-88,110-111
+agent/Sources/StratoAgentCore/NetworkACLReconciler.swift
+  s_77de6d97300258::t_806e5cfb40f13c 587,599
+deploy/tests/lib.sh
+  s_77de6d97300258::t_f7906b664f26b3 2,4-7,9-10,12-13,15,19-28
+control-plane/web/src/lib/api/oauth.ts
+  s_77de6d97300258::t_05323001146c62 8
+agent/Sources/StratoAgentDomainXML/DomainXMLBuilder.swift
+  s_77de6d97300258::t_830356e84288d9 277
+  s_77de6d97300258::t_0fb6936c06146c 1-276,278-1076
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_77de6d97300258::t_a1dfcfeb9d87e6 173
+docs/agents/domain.md
+  s_77de6d97300258::t_ff222191e4bbad 51
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_77de6d97300258::t_ca5a857ca2caeb 84
+control-plane/Sources/App/Services/Sweeps/StrandedVolumeAttachmentSweep.swift
+  s_77de6d97300258::t_e383e1e47e51ff 1-73
+agent/Tests/StratoAgentTestSupport/ReconciliationTestSupport.swift
+  s_77de6d97300258::t_dc373ace7085d3 1-3
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_77de6d97300258::t_dc373ace7085d3 2
+  s_77de6d97300258::t_7cb0438139916e 396,398,402,775,812
+sandbox-guest/Dockerfile.build
+  s_77de6d97300258::t_33b3712674b80d 3,27
+control-plane/web/src/lib/hooks/use-networks.ts
+  s_77de6d97300258::t_05323001146c62 3
+deploy/compose/setup.sh
+  s_77de6d97300258::t_6c806128414f74 18-19
+  s_77de6d97300258::t_500ddeef7561f0 100,127-130,174
+docs/adr/0009-current-schema-baseline.md
+  s_77de6d97300258::t_c6d61471927d4b 26,64-65,68-70,82
+  s_77de6d97300258::t_072b8b25b09019 27-30,74-77,79-81,92-93
+agent/Sources/StratoAgentDomainXML/DomainMemoryTuning.swift
+  s_77de6d97300258::t_0fb6936c06146c 2-13,16-26,29-32,34-36,39-44,46
+agent/Tests/StratoAgentStorageTests/LayerDecompressorTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-123
+control-plane/web/src/lib/api/pagination.ts
+  s_77de6d97300258::t_05323001146c62 2-3
+deploy/compose/spiffe/agent-cp-entrypoint.sh
+  s_77de6d97300258::t_14e7c43304cfd0 30
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_77de6d97300258::t_eb82ca53b76c0c 20,25,34,88,115,167,193,437,506,744,750
+  s_77de6d97300258::t_27489ad0401624 27,56
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_77de6d97300258::t_1ed6259012ff73 1037
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  s_77de6d97300258::t_d4e2e5ed9de634 279-323
+docs/architecture/sandboxes.md
+  s_77de6d97300258::t_a9a3730110ac2e 162
+  s_77de6d97300258::t_9b37c17339cb50 611-613
+deploy/compose/README.md
+  s_77de6d97300258::t_2e146d8b814e3a 1,3-6,11,13,16-18,20-23,25-26,28-29
+.github/workflows/sandbox-guest.yaml
+  s_77de6d97300258::t_33b3712674b80d 22,37,58-59,89,169-170,213-214
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_77de6d97300258::t_59d2c1713733ea 1005-1007,1019-1038,1040,1092-1099,1102,1104,1106-1115
+  s_77de6d97300258::t_dfa243f7d48961 402-430
+  s_77de6d97300258::t_185050c7c1a208 354-358,362-365,436-464
+  s_77de6d97300258::t_01d24b8df32fd7 698-724,884-885,887,902-903,905,958-959,961-969,978-979,981-983,985-991,996-1004,1008-1018,1039
+  s_77de6d97300258::t_cd7a9a69017db6 1100-1101,1103,1105
+  s_77de6d97300258::t_9b8c049ededb67 465
+  s_77de6d97300258::t_0d975bbf68b6c5 1041
+  s_77de6d97300258::t_b6013a73a3f281 1116
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-5,8-9,289-295
+control-plane/web/src/components/projects/transfer-project-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,150-156
+agent/Tests/StratoAgentTests/DomainCapabilitiesTests.swift
+  s_77de6d97300258::t_0e10433755aa4a 4
+control-plane/Tests/AppTestSupport/DesiredStateFixtureHelpers.swift
+  s_77de6d97300258::t_5b7af887d3f76f 10,15,20,27,32,39,44,50
+control-plane/web/src/lib/api/images.ts
+  s_77de6d97300258::t_05323001146c62 11
+control-plane/Sources/App/Services/JWKSKeyCollectionBuilder.swift
+  s_77de6d97300258::t_5aab0bae7bd908 14-15,56,66,79
+  s_77de6d97300258::t_3483aa05cabffe 1-13,16-55,57-65,67-78,80-87
+control-plane/Sources/StratoAPITypes/openapi-generator-config.yaml
+  s_77de6d97300258::t_94d456dfbe268c 1-19
+control-plane/web/src/components/volumes/resize-volume-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,113-118
+agent/Sources/StratoAgentCore/HostPreflightRunner.swift
+  s_77de6d97300258::t_5f4d1b6b6f746b 1-129
+helm/strato-control-plane/templates/spire-agent-serviceaccount.yaml
+  s_77de6d97300258::t_e4b925c5622032 1
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_77de6d97300258::t_200807f974e388 7
+control-plane/web/src/lib/api/auth.ts
+  s_77de6d97300258::t_05323001146c62 4
+control-plane/web/src/lib/hooks/use-sandbox-logs.ts
+  s_77de6d97300258::t_477be344d702ea 5
+README.md
+  s_77de6d97300258::t_bc779b9dfaef96 11,97
+.claude/hooks/entire.sh
+  s_77de6d97300258::t_39181887f9e698 1-13
+control-plane/web/src/lib/api/ssf-streams.ts
+  s_77de6d97300258::t_05323001146c62 14
+control-plane/Tests/AppTestSupport/CaptureConsole.swift
+  s_77de6d97300258::t_47eb93fe07a8a9 14-15
+  s_77de6d97300258::t_4a5cae09362bc4 1-13,16-36
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_77de6d97300258::t_2151aad0698026 13,521-526,529-530
+control-plane/web/src/components/agents/create-enrollment-dialog.tsx
+  s_77de6d97300258::t_4be6d203fbad55 12
+  s_77de6d97300258::t_92147329de209c 3-5,10-11,282-288
+agent/Sources/StratoAgentCore/HostPreflightFilesystem.swift
+  s_77de6d97300258::t_5f4d1b6b6f746b 4-36
+agent/Sources/StratoAgentSPIFFE/JWTSVIDToken.swift
+  s_77de6d97300258::t_5d4d98c21a3eb2 59
+  s_77de6d97300258::t_89d9727bc9d822 2
+agent/Tests/StratoAgentTestSupport/TemporaryDirectory.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-12
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_77de6d97300258::t_a429a339d7e643 158-160,483-485,784-794,796-797,799-804,806-811,813-818,820-825,827-840
+  s_77de6d97300258::t_9b203f00fa6931 795,798,805,812,819,826
+  s_77de6d97300258::t_5f14000e471d87 3
+  s_77de6d97300258::t_e22439526c5151 841-842
+control-plane/web/src/components/ui/detail-page-shell.tsx
+  s_77de6d97300258::t_23d13fa9c0ed9d 5,15-36
+  s_77de6d97300258::t_df2431eda5e8ba 1-4,6-14,37-102
+control-plane/web/src/lib/api/quotas.ts
+  s_77de6d97300258::t_05323001146c62 8
+agent/Sources/StratoAgentKit/VsockCID.swift
+  s_77de6d97300258::t_830356e84288d9 1-11
+control-plane/web/src/components/security-groups/edit-security-group-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,140-145
+control-plane/Sources/SPIREServerAPI/Generated/README.md
+  s_77de6d97300258::t_31c3f75959ee13 26
+  s_77de6d97300258::t_9271b3967b8c39 3-4,8-10,25,27
+docs/adr/0008-resolver-in-host-namespace.md
+  s_77de6d97300258::t_ff222191e4bbad 3
+control-plane/web/src/lib/api/groups.ts
+  s_77de6d97300258::t_05323001146c62 9
+agent/Sources/StratoAgentCore/CephRBDStorageBackend.swift
+  s_77de6d97300258::t_e6fa0e1641f681 13,74-75,81-82
+control-plane/Sources/App/Services/SPIFFE/JWTAuthorityJWK.swift
+  s_77de6d97300258::t_89d9727bc9d822 2,55-56,64-65,74
+control-plane/web/src/lib/api/authorization.ts
+  s_77de6d97300258::t_05323001146c62 7
+agent/Tests/StratoAgentTests/DomainRedefinitionTests.swift
+  s_77de6d97300258::t_200807f974e388 6
+control-plane/web/src/app/(dashboard)/admin/audit/page.tsx
+  s_77de6d97300258::t_4be6d203fbad55 4-9
+docs/architecture/dns.md
+  s_77de6d97300258::t_a9a3730110ac2e 634
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_77de6d97300258::t_3483aa05cabffe 40-52
+control-plane/web/src/components/layout/project-switcher.tsx
+  s_77de6d97300258::t_4be6d203fbad55 5-10
+control-plane/Sources/App/Services/RegistryCarrierAssembler.swift
+  s_77de6d97300258::t_115d2390ae6095 1-191
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  s_77de6d97300258::t_dc373ace7085d3 5
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_77de6d97300258::t_0b22ad16f95230 460,467,470,478-482,484-492
+  s_77de6d97300258::t_eb4770c650f1b3 474-476
+  s_77de6d97300258::t_500ddeef7561f0 458,461-466,468-469,471-473,477
+agent/Tests/StratoAgentStorageTests/SandboxImageServiceTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-313
+agent/Sources/StratoAgentCore/ReconcileTypes.swift
+  s_77de6d97300258::t_a12aaaf7305052 1-19,21-28,30-41,43-78,80-108,110-135,137-158,160-175,177-182,184-235,237-251,253-285,287-290,292,294-298,300,302-305,308-336,339-352,355-382,384-389,391-395,397-400,403-448,450-460,464-478,481-497,499-513,517-557,559-568,570-671,673-676,678,681-704,706-711,713-752,754-760,762-774,776-790,792-805,807-809,811-814,816-831,833-835,837-839,841-843,845-859,861-865,867-869,871-873
+  s_77de6d97300258::t_090829d8f3f9f4 20,29,42,79,109,136,159,176,183,236,252,286,291,293,299,301,306-307,337-338,353-354,383,390,396,401-402,449,461-463,479-480,498,514-516,558,569,672,677,679-680,705,712,753,761,775,791,806,810,815
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_77de6d97300258::t_bf13f5a4371e5e 644-646,655
+  s_77de6d97300258::t_755fc065064d66 586,813,1007,1110
+  s_77de6d97300258::t_05ca901e234209 639-643,647-654,656-667,669,672-681
+control-plane/Sources/App/Services/OIDCValidation.swift
+  s_77de6d97300258::t_89d9727bc9d822 3
+  s_77de6d97300258::t_5d4d98c21a3eb2 126,133,201
+control-plane/Sources/App/Services/Sweeps/OrphanedTerminatingSweep.swift
+  s_77de6d97300258::t_e383e1e47e51ff 1-123
+helm/strato-control-plane/values.yaml
+  s_77de6d97300258::t_955c19c7eb4201 468
+  s_77de6d97300258::t_e4b925c5622032 479-482,796,802
+  s_77de6d97300258::t_40a3814114fc05 823
+control-plane/web/src/lib/api/project-members.ts
+  s_77de6d97300258::t_05323001146c62 10
+CLAUDE.md
+  s_77de6d97300258::t_85ec354b4b3a76 3-73,77-104
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_77de6d97300258::t_7cb0438139916e 894
+  s_77de6d97300258::t_dc373ace7085d3 2
+control-plane/web/src/lib/api/sandboxes.ts
+  s_77de6d97300258::t_05323001146c62 16
+control-plane/web/src/lib/api/hierarchy.ts
+  s_77de6d97300258::t_05323001146c62 7
+control-plane/Tests/AppPlatformTests/AgentWorkloadClaimEnumConstraintTests.swift
+  s_77de6d97300258::t_feea603393a739 79
+control-plane/web/src/components/layout/command-palette.tsx
+  s_77de6d97300258::t_4be6d203fbad55 6-11
+control-plane/web/src/components/layout/header.tsx
+  s_77de6d97300258::t_4be6d203fbad55 7-12
+shared/Sources/StratoShared/DesiredVolumeStorage.swift
+  s_77de6d97300258::t_e6fa0e1641f681 24,30-40
+  s_77de6d97300258::t_52cefc0a00ee7a 41
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_77de6d97300258::t_4cf0d12424b878 54,56-57,59-64,454
+  s_77de6d97300258::t_072b8b25b09019 13,50-51,65-72
+  s_77de6d97300258::t_c6d61471927d4b 52-53,55,58,73-82
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_77de6d97300258::t_d3572692f16a29 34-42,151-153,161-168,170,174,178,186,194
+  s_77de6d97300258::t_84d7b9c125b6aa 154-160
+  s_77de6d97300258::t_25bb096094af69 32
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_77de6d97300258::t_83150a1e746993 628-629,650-651
+  s_77de6d97300258::t_a3a368b1009cda 137-171
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_77de6d97300258::t_05ca901e234209 65-67
+agent/Tests/StratoAgentTests/FailureClassificationTests.swift
+  s_77de6d97300258::t_7cb0438139916e 43
+agent/Sources/StratoAgentCore/MTLSArtifactDownloader.swift
+  s_77de6d97300258::t_80d443b9bb6c5e 178,240-241,263-264,285,331-344,350,353,365-367
+control-plane/web/src/components/users/create-user-dialog.tsx
+  s_77de6d97300258::t_4be6d203fbad55 10
+  s_77de6d97300258::t_92147329de209c 3-5,247-252
+control-plane/web/src/lib/api/registration.ts
+  s_77de6d97300258::t_05323001146c62 8
+cli/Package.resolved
+  s_77de6d97300258::t_23dee107fcd0b4 2,76-84,216
+control-plane/Sources/App/Controllers/AgentGuestIdentityController.swift
+  s_77de6d97300258::t_755fc065064d66 357
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_77de6d97300258::t_cd1beea2b3cdef 5,18,137-147,149-150,233
+control-plane/web/src/components/volumes/clone-volume-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,110-115
+control-plane/web/src/providers/confirmation-provider.tsx
+  s_77de6d97300258::t_74365fc558ea4b 3,59,82
+control-plane/web/src/lib/hooks/use-vm-logs.ts
+  s_77de6d97300258::t_477be344d702ea 5
+agent/Tests/StratoAgentStorageTests/DiskCacheLRUTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-166
+agent/Tests/StratoAgentStorageTests/FileSystemStorageBackendTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-838
+control-plane/Sources/App/OpenAPI/OpenAPIRequestContext.swift
+  s_77de6d97300258::t_5f14000e471d87 2
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_77de6d97300258::t_6c806128414f74 150-196
+control-plane/web/src/lib/api/agents.ts
+  s_77de6d97300258::t_05323001146c62 11
+control-plane/web/src/components/project-members/members-section.tsx
+  s_77de6d97300258::t_4be6d203fbad55 4-9
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_77de6d97300258::t_0e10433755aa4a 6
+agent/Tests/StratoAgentTests/DomainSnapshotXMLTests.swift
+  s_77de6d97300258::t_0e10433755aa4a 7
+helm/strato-control-plane/templates/spire-entry-bootstrap-job.yaml
+  s_77de6d97300258::t_40a3814114fc05 35
+control-plane/web/src/lib/api/security-groups.ts
+  s_77de6d97300258::t_05323001146c62 12
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_77de6d97300258::t_c6d61471927d4b 78,80
+  s_77de6d97300258::t_4cf0d12424b878 86-93
+  s_77de6d97300258::t_0093b7decffa0e 77,79
+control-plane/web/src/lib/api/sites.ts
+  s_77de6d97300258::t_05323001146c62 15
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_77de6d97300258::t_bcbf9123666bd6 1,4,46-47,49-50,55-58,63-64,66-67,73-74,76-77,81-84
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_77de6d97300258::t_903bd6e0b3835f 970
+control-plane/web/src/components/images/edit-image-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,239-244
+.dockerignore
+  s_77de6d97300258::t_07075d388719a5 5-6
+config.toml.example
+  s_77de6d97300258::t_74fee7b46c64e0 85-88,90-93
+  s_77de6d97300258::t_9b37c17339cb50 350-352,356-357
+deploy/compose/tests/e2e-up-enrollment-test.sh
+  s_77de6d97300258::t_41c90f0a84bce5 9,15
+  s_77de6d97300258::t_f7906b664f26b3 16
+control-plane/web/src/components/sandboxes/create-sandbox-dialog.tsx
+  s_77de6d97300258::t_2151aad0698026 5,13,445-450,453-454
+control-plane/web/src/app/(dashboard)/admin/governance/page.tsx
+  s_77de6d97300258::t_4be6d203fbad55 9-14
+  s_77de6d97300258::t_df85ef52af4bfa 22,67-69
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_77de6d97300258::t_b237c65f77b361 260-261
+.claude/README.md
+  s_77de6d97300258::t_71c4b955a6f7b1 1,3,5-10,12-13
+control-plane/web/src/lib/api/operations.ts
+  s_77de6d97300258::t_05323001146c62 4
+control-plane/web/src/lib/hooks/index.ts
+  s_77de6d97300258::t_9d3649f18229a1 164
+  s_77de6d97300258::t_df85ef52af4bfa 8
+  s_77de6d97300258::t_477be344d702ea 65-66
+control-plane/web/src/app/(dashboard)/dns-zones/page.tsx
+  s_77de6d97300258::t_5feae4a37083be 14,101
+  s_77de6d97300258::t_df85ef52af4bfa 19,92-94
+  s_77de6d97300258::t_466df55e207694 6
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_77de6d97300258::t_115d2390ae6095 23,30,509,574
+control-plane/web/src/lib/api/webhooks.ts
+  s_77de6d97300258::t_05323001146c62 13
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_77de6d97300258::t_5f14000e471d87 2
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_77de6d97300258::t_755fc065064d66 339-345
+control-plane/web/src/app/(dashboard)/settings/project-integrations/page.tsx
+  s_77de6d97300258::t_5feae4a37083be 14,131
+  s_77de6d97300258::t_df85ef52af4bfa 15,125-127
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_77de6d97300258::t_755fc065064d66 68
+scripts/regen-spire-protos.sh
+  s_77de6d97300258::t_9271b3967b8c39 13,15-17,20,29,31-33
+  s_77de6d97300258::t_31c3f75959ee13 3,5-6,8-9,11-12,14,18-19,21-27
+control-plane/web/src/app/(dashboard)/floating-ips/page.tsx
+  s_77de6d97300258::t_df85ef52af4bfa 16,79-81
+  s_77de6d97300258::t_466df55e207694 6
+  s_77de6d97300258::t_5feae4a37083be 14,88
+control-plane/web/src/lib/api/authorization.test.ts
+  s_77de6d97300258::t_05323001146c62 4
+agent/Sources/StratoAgentCore/ReconcilePlanner.swift
+  s_77de6d97300258::t_a12aaaf7305052 1-692
+agent/Tests/StratoAgentTests/DomainMemoryInventoryTests.swift
+  s_77de6d97300258::t_0e10433755aa4a 6
+deploy/agent/tests/install-sh-test.sh
+  s_77de6d97300258::t_f7906b664f26b3 29
+  s_77de6d97300258::t_41c90f0a84bce5 22,28
+docs/guide/what-is-strato.md
+  s_77de6d97300258::t_bc779b9dfaef96 30-31
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_77de6d97300258::t_bcc420e93865fa 567-572
+  s_77de6d97300258::t_e72e843492b2b6 577-597
+docs/adr/0007-coredns-per-chassis-namespace.md
+  s_77de6d97300258::t_ff222191e4bbad 3-4,199-200,206-207
+control-plane/web/src/components/vms/vm-volumes-card.tsx
+  s_77de6d97300258::t_92147329de209c 3-7,9-11,13-16,248-254
+.github/workflows/build.yaml
+  s_77de6d97300258::t_33b3712674b80d 540
+  s_77de6d97300258::t_e5a3669046dd7c 500-505,569-574
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_77de6d97300258::t_2151aad0698026 12,337-343
+shared/Package.swift
+  s_77de6d97300258::t_84d7b9c125b6aa 75,83
+  s_77de6d97300258::t_9113b06ef60a4e 7
+  s_77de6d97300258::t_1f5e77211e84bc 18-21,34,61-70
+  s_77de6d97300258::t_6be90d1a7de9f6 71-74
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_77de6d97300258::t_cbe0e1f170b8f6 161,274-277,354-356,439-444,446-451
+  s_77de6d97300258::t_77a94239c4354e 445
+  s_77de6d97300258::t_f7ede8777c324c 452-453
+deploy/compose/tests/e2e-agent-test.sh
+  s_77de6d97300258::t_f7906b664f26b3 32
+  s_77de6d97300258::t_41c90f0a84bce5 25,31
+agent/Tests/StratoAgentTests/QEMUDiskIdentityTests.swift
+  s_77de6d97300258::t_0e10433755aa4a 5
+control-plane/web/src/lib/api/logs.ts
+  s_77de6d97300258::t_05323001146c62 3
+agent/Tests/StratoAgentStorageTests/OCIImageFlattenerTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 1-256
+shared/Sources/SPIFFEKit/SPIFFEIdentity.swift
+  s_77de6d97300258::t_87e71c127a031c 1-52
+control-plane/Sources/App/Controllers/VMController.swift
+  s_77de6d97300258::t_755fc065064d66 672
+control-plane/Sources/App/Services/GuardedHTTPClient.swift
+  s_77de6d97300258::t_1ed6259012ff73 409
+deploy/compose/lib/api.sh
+  s_77de6d97300258::t_005174e90348ca 2-9,11,13-55,57
+control-plane/web/src/lib/hooks/use-work-mutation.ts
+  s_77de6d97300258::t_df85ef52af4bfa 1-22
+docs/architecture/guest-identity.md
+  s_77de6d97300258::t_a9a3730110ac2e 511
+control-plane/web/src/components/project-members/add-member-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,145-151
+control-plane/web/src/lib/hooks/use-organization-members.ts
+  s_77de6d97300258::t_6867e79d5379fd 1
+deploy/compose/memory-growth-test.sh
+  s_77de6d97300258::t_41c90f0a84bce5 64
+  s_77de6d97300258::t_005174e90348ca 65
+control-plane/web/src/lib/api/workload-identity.ts
+  s_77de6d97300258::t_05323001146c62 4
+control-plane/web/src/components/volumes/create-snapshot-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,166-172
+control-plane/Sources/App/Services/Sweeps/SandboxExpirySweep.swift
+  s_77de6d97300258::t_e383e1e47e51ff 1-174
+.github/workflows/helm-test.yml
+  s_77de6d97300258::t_175a065ce721cf 8,16
+control-plane/web/src/lib/api/storage-devices.ts
+  s_77de6d97300258::t_05323001146c62 3
+control-plane/Sources/App/Services/StorageObservedMerge.swift
+  s_77de6d97300258::t_eb82ca53b76c0c 1-676
+agent/Sources/StratoAgentCore/DomainXMLExports.swift
+  s_77de6d97300258::t_eccc8cb7c399ae 2
+  s_77de6d97300258::t_0fb6936c06146c 1
+agent/Sources/StratoAgentCore/ManifestVolumeOrder.swift
+  s_77de6d97300258::t_dd97671a51d03d 1-31,33-38
+  s_77de6d97300258::t_556228cac4262d 32
+control-plane/web/src/components/api-keys/create-api-key-dialog.tsx
+  s_77de6d97300258::t_4be6d203fbad55 11
+  s_77de6d97300258::t_92147329de209c 3-5,323-328
+control-plane/web/src/components/users/edit-user-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,108-113
+control-plane/web/src/components/volumes/attach-volume-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-7,157-163
+.github/workflows/README.md
+  s_77de6d97300258::t_e0b5572b0e5fc6 67-68
+agent/Tests/StratoAgentTests/DomainNetworkInventoryTests.swift
+  s_77de6d97300258::t_0e10433755aa4a 3
+helm/strato-control-plane/README.md
+  s_77de6d97300258::t_27686e5154c940 3-5,7-8,10,13-14,17-19,21-22,25-26
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_77de6d97300258::t_9fb3e2996de948 36-38
+  s_77de6d97300258::t_92b7d7d022a915 493-496
+agent/Sources/StratoAgentRuntime/StratoAgent.swift
+  s_77de6d97300258::t_7f9402bdcb4f46 13-14
+  s_77de6d97300258::t_61d56007094f8d 1-12,15-411
+control-plane/web/src/lib/api/networks.ts
+  s_77de6d97300258::t_05323001146c62 12
+control-plane/Sources/App/OpenAPI/GeneratedAPIRegistration.swift
+  s_77de6d97300258::t_5f14000e471d87 2
+agent/Sources/StratoAgentCore/HostPreflightChecks.swift
+  s_77de6d97300258::t_5f4d1b6b6f746b 1-440
+docs/api-reference.md
+  s_77de6d97300258::t_9b37c17339cb50 135-136
+control-plane/web/src/types/api.ts
+  s_77de6d97300258::t_670e010d72871c 56,218-219,225,260,280,314
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  s_77de6d97300258::t_5f14000e471d87 5
+agent/Tests/StratoAgentTests/DomainBootOrderTests.swift
+  s_77de6d97300258::t_200807f974e388 6
+control-plane/web/src/lib/api/api-keys.ts
+  s_77de6d97300258::t_05323001146c62 8
+control-plane/Sources/App/Services/AuditService.swift
+  s_77de6d97300258::t_960b37031379ed 813-814,820,825
+  s_77de6d97300258::t_1ed6259012ff73 855
+control-plane/Dockerfile
+  s_77de6d97300258::t_31964fc7d45097 72
+  s_77de6d97300258::t_4d9a651bbe7e6b 61,63,76
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_77de6d97300258::t_9fb3e2996de948 62-64
+.gitignore
+  s_77de6d97300258::t_6867e79d5379fd 16-17
+control-plane/web/src/components/scim-tokens/create-scim-token-dialog.tsx
+  s_77de6d97300258::t_4be6d203fbad55 9
+  s_77de6d97300258::t_92147329de209c 3-5,188-193
+agent/Dockerfile
+  s_77de6d97300258::t_e4b925c5622032 177
+agent/Sources/StratoAgentSPIFFE/Generated/README.md
+  s_77de6d97300258::t_31c3f75959ee13 21
+  s_77de6d97300258::t_9271b3967b8c39 3-4,6,11-13,20,22
+control-plane/web/src/lib/api/volumes.ts
+  s_77de6d97300258::t_05323001146c62 14
+control-plane/Sources/App/Extensions/Application+LazyService.swift
+  s_77de6d97300258::t_54ded3647ef25b 14-24
+agent/Tests/StratoAgentPlatformTests/MetadataStoreTests.swift
+  s_77de6d97300258::t_dc373ace7085d3 1-476
+control-plane/Sources/SPIREServerAPI/SPIFFEGeneratedAliases.swift
+  s_77de6d97300258::t_1f5e77211e84bc 1-24
+agent/Sources/StratoAgentCore/AgentConfigError.swift
+  s_77de6d97300258::t_52e4ba8845fe61 1,3-6,8-16
+control-plane/web/src/lib/api/scim-tokens.ts
+  s_77de6d97300258::t_05323001146c62 13
+control-plane/Sources/App/Services/AgentMaintenanceLoop.swift
+  s_77de6d97300258::t_216474441f82dc 12
+  s_77de6d97300258::t_e383e1e47e51ff 9,36,131
+docs/index.md
+  s_77de6d97300258::t_bc779b9dfaef96 28,65-68
+control-plane/Sources/App/Extensions/ByteConversion.swift
+  s_77de6d97300258::t_e6fa0e1641f681 71-73,75,79
+control-plane/web/src/components/agents/agent-table.tsx
+  s_77de6d97300258::t_e4b925c5622032 106
+agent/Tests/StratoAgentTests/AgentUpdaterTests.swift
+  s_77de6d97300258::t_3d2c513b5a75ef 6
+control-plane/web/src/components/networks/edit-network-dialog.tsx
+  s_77de6d97300258::t_92147329de209c 3-4,185-190
+control-plane/Sources/App/Services/Sweeps/AgentAutoUpdateSweep.swift
+  s_77de6d97300258::t_e383e1e47e51ff 1-237
+agent/Sources/StratoAgentDomainXML/DomainNetworkDetachConvergence.swift
+  s_77de6d97300258::t_fcf626c7d4c377 1-15
+agent/Sources/StratoAgentRuntime/Agent+Reconciliation.swift
+  s_77de6d97300258::t_cfc8de3edf04e1 154-160,316-323,635,651
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+PortPlumbing.swift
+  s_77de6d97300258::t_ebb85254a528ab 235,250,257,262
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+SecurityGroups.swift
+  s_77de6d97300258::t_472ce63dff7e45 169,178,185
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+WorkloadPorts.swift
+  s_77de6d97300258::t_260b42e313c3c2 62,160
+agent/Tests/StratoAgentStorageTests/SandboxGuestImageTests.swift
+  s_77de6d97300258::t_40d8d89acc3af7 121
+control-plane/Sources/StratoAPITypes/openapi.yaml
+  s_77de6d97300258::t_e7364159566ca9 1
+control-plane/Tests/AppResourceTests/WorkloadTombstoneTests.swift
+  s_77de6d97300258::t_3e0cc7b88b1b39 646-648
+agent/Sources/StratoAgentRuntime/Agent+Lifecycle.swift
+  s_77de6d97300258::t_8b1abf553c09b4 626
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  s_77de6d97300258::t_47b8fe3f9fb25a 420,425-429,448,453-457,474,479-483,493,498-502,513,518,638,643-647,658,663-667,678,683-687,696,701-705,716,721,750,763-767,785,792-796,804,811,845,858-862,869,874-878,886,891
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_77de6d97300258::t_9abf3ab67fb555 38,58,72,94,103,115,130,173,214,241,250,254,280,332,344,347,350,362,367,371,377,382,390,400,424,428,446,455,499,527,531,540,642,647
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+Connection.swift
+  s_77de6d97300258::t_806ecd5b5a8c3c 16-43,115,120-129,131-132,144
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux.swift
+  s_77de6d97300258::t_2b98f7e8a7bb6c 77
+agent/Sources/StratoAgentRuntime/ResolverProcessHost.swift
+  s_77de6d97300258::t_8363a85d8cca51 142-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "404ef9f17605ec06eeafa72b6827ccd3538922f7",
+  "prompts": {},
+  "sessions": {
+    "s_77de6d97300258": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0645b-2847-7dd0-8adb-00234891d82d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

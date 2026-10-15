@@ -1,0 +1,72 @@
+control-plane/web/src/components/images/image-actions.tsx
+  s_81096890106c55::t_a78e805dfc8254 4-10,12-19,24,27,30,44-45,56-57,60-62,78-91,93-163
+control-plane/web/src/app/(dashboard)/admin/users/page.tsx
+  s_81096890106c55::t_847e8d3330e3f4 1-63
+control-plane/web/src/components/scim-tokens/create-scim-token-dialog.tsx
+  s_81096890106c55::t_05b02608f86605 1-213
+control-plane/web/src/components/users/user-table.tsx
+  s_81096890106c55::t_3d8167d50eaf2b 1-209
+control-plane/web/src/lib/api/index.ts
+  s_81096890106c55::t_76a0b3d4a448e2 12
+control-plane/web/src/components/scim-tokens/scim-tokens-section.tsx
+  s_81096890106c55::t_224ba24c8f7cf3 1-272
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_81096890106c55::t_9ad9daa5fbbd25 265,279-280
+  s_81096890106c55::t_04e9b3342d0baf 18
+control-plane/web/src/components/users/index.ts
+  s_81096890106c55::t_9a99189dd7bb46 1-2
+control-plane/web/src/types/api.ts
+  s_81096890106c55::t_312bf6e646122a 19-23
+  s_81096890106c55::t_ac5bf7e8cd9981 237-272
+control-plane/web/src/components/scim-tokens/index.ts
+  s_81096890106c55::t_aa38f33ece0cc3 1-2
+control-plane/web/src/components/images/edit-image-dialog.tsx
+  s_81096890106c55::t_e455cbfd9e12fe 42-43
+  s_81096890106c55::t_0063f981c79237 1-41,44-241
+control-plane/web/src/lib/errors.ts
+  s_81096890106c55::t_01779d25582633 1-64
+control-plane/web/src/lib/hooks/use-users.ts
+  s_81096890106c55::t_b79938e43fd746 1-44
+control-plane/web/src/lib/hooks/use-scim-tokens.ts
+  s_81096890106c55::t_8dbaad1225ae45 1-65
+control-plane/web/src/lib/hooks/index.ts
+  s_81096890106c55::t_63d07ca0a6f168 32-37
+  s_81096890106c55::t_368f3fb1b48e5c 25-31
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_81096890106c55::t_f22781c489499a 30
+  s_81096890106c55::t_06e09c3b103b57 80
+control-plane/web/src/components/layout/sidebar.tsx
+  s_81096890106c55::t_ed5f0662a9ba2a 19-20,23
+  s_81096890106c55::t_ca093bbff1e3e6 230-245
+  s_81096890106c55::t_5c218f247a82ec 126-127
+control-plane/web/src/components/users/edit-user-dialog.tsx
+  s_81096890106c55::t_60317b04b4eb0a 1-138
+control-plane/web/src/lib/api/scim-tokens.ts
+  s_81096890106c55::t_13822ca0196cf1 1-46
+control-plane/web/src/lib/api/users.ts
+  s_81096890106c55::t_8f2e7d5e35bd1c 4,11-27
+control-plane/web/src/lib/api/client.ts
+  s_81096890106c55::t_03d292aa4c76a0 49,52-56,58-63,65-78
+  s_81096890106c55::t_f1dbd5478091a4 17-27
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_81096890106c55::t_d33c667633a67f 3,9,15,22,24
+  s_81096890106c55::t_8015ea2f52b7b1 129-149,152-159
+  s_81096890106c55::t_deaf3822788b22 48
+  s_81096890106c55::t_5d30d3ad3cb03e 160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "11fd5b22a39dadfaae82d2d80ba7a905fea19092",
+  "prompts": {},
+  "sessions": {
+    "s_81096890106c55": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "162916ae-d6c5-41b6-9c47-075f4980a244",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

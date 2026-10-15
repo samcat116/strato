@@ -1,0 +1,40 @@
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_a80ae461e08851::t_07a3fe1f26caee 6-13,16-22,30-50,53-54,56,66,71-72,77-78,83-84,89,94,99,103,107-109,114,117,121,125,153-165,167-173
+agent/Tests/StratoAgentTests/MockStorageBackendTests.swift
+  s_a80ae461e08851::t_07a3fe1f26caee 1-229
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_a80ae461e08851::t_07a3fe1f26caee 11-55,213-215,245,275-276,305,490-513,552-553
+agent/scripts/spawn-sim-fleet.sh
+  s_a80ae461e08851::t_07a3fe1f26caee 1-496
+docs/architecture/iam.md
+  s_a80ae461e08851::t_07a3fe1f26caee 1-325
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_a80ae461e08851::t_07a3fe1f26caee 49-60,276-289,322,325-334,369
+docs/.vitepress/config.mts
+  s_a80ae461e08851::t_07a3fe1f26caee 34
+agent/Sources/StratoAgentCore/MockStorageBackend.swift
+  s_a80ae461e08851::t_07a3fe1f26caee 1-232
+agent/Tests/StratoAgentTests/SimulationConfigTests.swift
+  s_a80ae461e08851::t_07a3fe1f26caee 1-102
+agent/Sources/StratoAgent/Agent.swift
+  s_a80ae461e08851::t_62f9abb56bc070 473-510,514-527
+  s_a80ae461e08851::t_07a3fe1f26caee 196-204,256,285,333-357,359-363,365-367,369-373,375-382,385-413,415-420,423-447,449-466,468-472,528-529,531,809-824,832-841,846-847,852-855,859,874,1156-1172,1444-1456,1493-1513,1521-1522
+config.toml.example
+  s_a80ae461e08851::t_07a3fe1f26caee 220-264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "48902e6e1c37b395bbd8b74994e0dd171c9bc746",
+  "prompts": {},
+  "sessions": {
+    "s_a80ae461e08851": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8acc851f-5517-4c80-8b67-2216544b35d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,56 @@
+control-plane/Sources/App/configure.swift
+  s_bbbdb39ff81675::t_bdb685018f6606 368-372
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_bbbdb39ff81675::t_fcd83df1661b92 200
+  s_bbbdb39ff81675::t_76e73ec67ecbf5 158,160,199,306,319,331,347,369,386,398,414,426,436
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_bbbdb39ff81675::t_70db8048ebf1f7 5-8,22,26-35,39-40
+  s_bbbdb39ff81675::t_0e58eecc3c11f9 41-42
+control-plane/Tests/AppTests/VMOperationTests.swift
+  s_bbbdb39ff81675::t_76e73ec67ecbf5 78,80,126,147,150,158,173,180,193,200,215,220,233,258,292,298
+control-plane/Sources/App/Migrations/GeneralizeVMOperations.swift
+  s_bbbdb39ff81675::t_c24b55a9820846 1-79
+CLAUDE.md
+  s_bbbdb39ff81675::t_2164a2f557d9e7 90
+control-plane/Tests/AppTests/QuotaEnforcementTests.swift
+  s_bbbdb39ff81675::t_76e73ec67ecbf5 301
+  s_bbbdb39ff81675::t_fcd83df1661b92 302
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_bbbdb39ff81675::t_ad532cc68f6199 5-198,204-205
+control-plane/Sources/App/Services/AgentService.swift
+  s_bbbdb39ff81675::t_9c9deb18f0b042 855,863,874-879,886-887
+  s_bbbdb39ff81675::t_7ac3d3f6113b4c 906-908
+  s_bbbdb39ff81675::t_0c1c1ca9979350 1587-1589
+  s_bbbdb39ff81675::t_14077db7e92ea3 1501-1503
+  s_bbbdb39ff81675::t_e044c1229f2ce4 932-955
+control-plane/Sources/App/Controllers/VMController.swift
+  s_bbbdb39ff81675::t_c144a64f5fe7dc 144
+  s_bbbdb39ff81675::t_0e905fb65b4f82 163
+  s_bbbdb39ff81675::t_3ce17088edea91 721,727
+  s_bbbdb39ff81675::t_8a3766b5fdb0f8 809
+  s_bbbdb39ff81675::t_387acdd4fe50a2 658
+  s_bbbdb39ff81675::t_47cee580f5bc7e 214,222-223
+  s_bbbdb39ff81675::t_5c7e76411f7088 550
+  s_bbbdb39ff81675::t_6cbf46fd31f974 794,796
+  s_bbbdb39ff81675::t_7b01a63881fd99 118,120
+  s_bbbdb39ff81675::t_5851f58ff2b480 266-268
+  s_bbbdb39ff81675::t_2da2fdf4c996d6 65-68,76-83
+docs/architecture/distributed-storage.md
+  s_bbbdb39ff81675::t_280f11a49f5453 194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "9024f109e9d555bb89eb8f9dcd313698b99bc336",
+  "prompts": {},
+  "sessions": {
+    "s_bbbdb39ff81675": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec02230-75c8-4206-b806-6946daa2136c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

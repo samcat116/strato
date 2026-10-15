@@ -1,0 +1,471 @@
+control-plane/web/src/lib/hooks/index.ts
+  s_ad70cfcbbd12be::t_bbf56527ff2081 16
+  s_ad70cfcbbd12be::t_e24dd5770a5b2d 26
+control-plane/web/src/components/layout/header.tsx
+  s_ad70cfcbbd12be::t_c91a4d59159350 4-7,10,15,19-33,36
+control-plane/web/src/lib/hooks/use-volumes.ts
+  s_ad70cfcbbd12be::t_bbf56527ff2081 2,31-34,37-39
+  s_ad70cfcbbd12be::t_0a7a8262e2d0d7 25
+  s_ad70cfcbbd12be::t_f9ee761be68628 35-36
+  s_ad70cfcbbd12be::t_e80e72e9b411ff 22-24,26-27
+control-plane/web/src/lib/api/audit-events.ts
+  s_ad70cfcbbd12be::t_637ba9587bacbf 34-35
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_ad70cfcbbd12be::t_9a0e48ddac494f 38,83,92-93,99
+  s_ad70cfcbbd12be::t_38c4c73e58ffd5 31,94-98,155,162,171,178,196,202,211,220,227-229,235
+control-plane/web/src/app/(auth)/login/page.tsx
+  s_ad70cfcbbd12be::t_067fb9fd409b24 6,10,27-36
+  s_45f5bd5bc03fe4::t_b97e308b339b37 37-40
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 28
+  s_ad70cfcbbd12be::t_13c17ec6d90309 9,47-48,102-107
+  s_ad70cfcbbd12be::t_43c4bbe590ece8 108
+control-plane/web/src/app/(dashboard)/vms/[id]/page.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 1-10
+control-plane/web/src/lib/hooks/use-sites.ts
+  s_ad70cfcbbd12be::t_f4f059c0a7befc 11
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_ad70cfcbbd12be::t_3643bc58529547 35,82-85
+  s_ad70cfcbbd12be::t_8f469f94f3b59f 38,86-89,203,276,282,354-356,454,460,463
+  s_ad70cfcbbd12be::t_22d938664b11dd 36,90,302,330
+  s_ad70cfcbbd12be::t_358e9da794cb64 285-294
+control-plane/web/src/lib/hooks/use-scim-tokens.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 12
+control-plane/web/src/lib/api/sandboxes.ts
+  s_ad70cfcbbd12be::t_027b8b2958e663 102-103,106
+  s_ad70cfcbbd12be::t_ad463f829a8d29 26,29,33-34,57-58
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4,27-28,30
+control-plane/web/src/lib/api/webhooks.ts
+  s_ad70cfcbbd12be::t_637ba9587bacbf 18-19,55-56,60
+control-plane/web/src/components/webhooks/webhooks-section.tsx
+  s_ad70cfcbbd12be::t_a7f5ac2f67e5b3 6,53-63,141-148
+  s_ad70cfcbbd12be::t_16ec67fe422697 149
+control-plane/web/src/lib/api/passkeys.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 14-15
+control-plane/web/src/app/(dashboard)/sandboxes/[id]/page.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 1-10
+control-plane/web/src/components/ui/resource-list-controls.tsx
+  s_ad70cfcbbd12be::t_cf2b951b5bb394 25
+  s_ad70cfcbbd12be::t_56dba192cc2a90 1-24,26-139
+control-plane/web/src/components/images/image-actions.tsx
+  s_ad70cfcbbd12be::t_c27aa30ba09b2e 38,45,50-51,58
+  s_ad70cfcbbd12be::t_a10bea6ad00b5e 121
+  s_ad70cfcbbd12be::t_38c4c73e58ffd5 32,52-57,127-129,136
+control-plane/web/src/components/volumes/snapshot-table.tsx
+  s_ad70cfcbbd12be::t_4bdef9e154f5a1 25,47-51,176-177
+control-plane/web/src/app/(dashboard)/access/policies/page.tsx
+  s_ad70cfcbbd12be::t_fc6457a37e2613 4,9,20,38-46
+control-plane/web/src/app/(dashboard)/storage/volumes/page.tsx
+  s_ad70cfcbbd12be::t_607ea34848b0cd 7,16-17,50-55
+  s_ad70cfcbbd12be::t_56dba192cc2a90 8,25,65,67
+  s_ad70cfcbbd12be::t_3c367a0d5bd8da 10,20-24,41,47
+  s_ad70cfcbbd12be::t_2c41468e52283b 56
+control-plane/web/src/app/(dashboard)/workload-identity/page.tsx
+  s_ad70cfcbbd12be::t_2d01062f21ac30 6,41-52
+control-plane/web/src/components/layout/command-palette.tsx
+  s_ad70cfcbbd12be::t_2698f86b193460 47
+  s_ad70cfcbbd12be::t_1399da3324df2a 6,9,39-40,44-46,48-49,64-69,71-72,133
+  s_ad70cfcbbd12be::t_b4df87624d8523 100-101,104-105
+control-plane/web/src/lib/hooks/use-organization-members.ts
+  s_ad70cfcbbd12be::t_bcfdca772b75b2 8
+control-plane/web/src/lib/hooks/use-projects.ts
+  s_ad70cfcbbd12be::t_f4f059c0a7befc 12,14,23-24
+control-plane/web/src/app/global-error.tsx
+  s_ad70cfcbbd12be::t_0e717768df3c0c 1-17
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_ad70cfcbbd12be::t_45a6bee3ce5dc7 304
+  s_ad70cfcbbd12be::t_da306c4b43dce0 317
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 63,65
+control-plane/web/src/lib/hooks/use-cli-sessions.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 8,26
+control-plane/web/src/components/sandboxes/sandbox-log-viewer.tsx
+  s_ad70cfcbbd12be::t_f6331242444d4e 52-57,75-76
+control-plane/web/src/lib/hooks/use-resource-logs.test.ts
+  s_ad70cfcbbd12be::t_d479c434152f57 1-9
+control-plane/web/src/app/(dashboard)/layout.tsx
+  s_ad70cfcbbd12be::t_70687fd84ab9cc 20,23
+  s_ad70cfcbbd12be::t_c91a4d59159350 67-72,75,78-80
+  s_ad70cfcbbd12be::t_067fb9fd409b24 6,15,47-56
+  s_ad70cfcbbd12be::t_e4bb17496a72b4 57-59
+  s_ad70cfcbbd12be::t_975fe3e7299b78 60
+control-plane/web/src/components/workload-identity/workload-registration-manager.tsx
+  s_ad70cfcbbd12be::t_2d01062f21ac30 1-21,23-59
+  s_ad70cfcbbd12be::t_601490eca15fb4 22
+control-plane/web/src/lib/api/client.ts
+  s_ad70cfcbbd12be::t_b0253639e6acc0 101,105,109,113,117,121,125-126
+  s_ad70cfcbbd12be::t_0e218da0b1241c 97-98
+control-plane/web/src/app/(dashboard)/projects/[projectId]/page.tsx
+  s_ad70cfcbbd12be::t_7de724fbc15d85 8,19-24,27-31,66-74,81,98
+control-plane/web/src/app/(dashboard)/admin/governance/page.tsx
+  s_ad70cfcbbd12be::t_a5db170af0521f 92,94
+  s_ad70cfcbbd12be::t_601490eca15fb4 27,32,38,43,48
+  s_ad70cfcbbd12be::t_578854352ec4e8 1-26,28-31,33-37,39-42,44-47,49-91,93,95-101
+control-plane/web/src/app/(dashboard)/access/groups/page.tsx
+  s_ad70cfcbbd12be::t_fc6457a37e2613 4,9,20,38-44
+control-plane/web/src/components/hierarchy/hierarchy-tree.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 99
+control-plane/web/src/components/ui/query-error-notice.tsx
+  s_ad70cfcbbd12be::t_607ea34848b0cd 1-42
+control-plane/web/src/lib/api/pagination.ts
+  s_ad70cfcbbd12be::t_0e218da0b1241c 14-15,25
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 1-13,16-24,26-43
+control-plane/web/src/app/(dashboard)/loading.tsx
+  s_ad70cfcbbd12be::t_0e717768df3c0c 1-11
+control-plane/web/src/lib/api/agents.ts
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4,15-16,18
+  s_ad70cfcbbd12be::t_0a7a8262e2d0d7 14,17,21-22
+  s_ad70cfcbbd12be::t_e24dd5770a5b2d 43-46
+control-plane/web/src/components/vms/vm-table.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 69
+  s_ad70cfcbbd12be::t_ba0394b4ef0920 15-16,25-28,89
+control-plane/web/src/components/overview/recent-instances.tsx
+  s_ad70cfcbbd12be::t_8377a68edcacd1 13,28
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 65
+control-plane/web/src/app/(dashboard)/vms/page.tsx
+  s_ad70cfcbbd12be::t_3c367a0d5bd8da 10,22-26,47,53
+  s_ad70cfcbbd12be::t_607ea34848b0cd 7,15-16,56-61
+  s_ad70cfcbbd12be::t_56dba192cc2a90 8,31,72,74
+  s_ad70cfcbbd12be::t_682958f2518227 62
+control-plane/web/src/components/volumes/volume-table.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 117
+  s_ad70cfcbbd12be::t_baa072f9a05d14 17-18,33-43,137
+control-plane/web/src/lib/hooks/use-passkeys.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 9
+control-plane/web/next.config.ts
+  s_ad70cfcbbd12be::t_8904ab93c8b0d1 49,58
+  s_ad70cfcbbd12be::t_0e717768df3c0c 27-29
+control-plane/web/src/test/setup.ts
+  s_ad70cfcbbd12be::t_d479c434152f57 1
+control-plane/web/src/lib/hooks/use-resource-logs.ts
+  s_ad70cfcbbd12be::t_d479c434152f57 3-6,23
+  s_ad70cfcbbd12be::t_027b8b2958e663 15,20
+  s_ad70cfcbbd12be::t_f6331242444d4e 17
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_ad70cfcbbd12be::t_607ea34848b0cd 7,22-23,55-60
+  s_ad70cfcbbd12be::t_3c367a0d5bd8da 14,25-29,46,52
+  s_ad70cfcbbd12be::t_56dba192cc2a90 8,30,70,72
+  s_ad70cfcbbd12be::t_d59ed5af030840 61
+control-plane/web/src/lib/api/hierarchy.ts
+  s_ad70cfcbbd12be::t_0e521dbe95736e 11,13
+  s_ad70cfcbbd12be::t_2698f86b193460 21-22,28-29
+control-plane/web/src/components/organization-groups/groups-section.tsx
+  s_ad70cfcbbd12be::t_a7f5ac2f67e5b3 6,26,73-78
+control-plane/web/src/lib/api/security-groups.ts
+  s_ad70cfcbbd12be::t_0e521dbe95736e 15,18
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4,16-17,19
+control-plane/web/src/components/ui/log-viewer-shell.tsx
+  s_ad70cfcbbd12be::t_f6331242444d4e 3,35-36,49-50,111,135,149
+control-plane/web/src/app/globals.css
+  s_ad70cfcbbd12be::t_c91a4d59159350 140-150
+control-plane/web/src/lib/api/volumes.ts
+  s_ad70cfcbbd12be::t_ad463f829a8d29 27,30,34-35,78-79,82,85
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4,28-29,31,80-81,83-84
+control-plane/web/src/app/(dashboard)/admin/users/page.tsx
+  s_ad70cfcbbd12be::t_a866430c8115aa 21
+  s_ad70cfcbbd12be::t_3643bc58529547 8,18-19,66-71
+  s_ad70cfcbbd12be::t_4bdef9e154f5a1 9,80,82
+  s_ad70cfcbbd12be::t_7f51be5a602fdc 72
+control-plane/Tests/AppResourceTests/VolumeSnapshotListTests.swift
+  s_ad70cfcbbd12be::t_0ba3a311a59145 1-23,25,27-78
+  s_ad70cfcbbd12be::t_0a29f4a7f4defb 24,26
+control-plane/web/src/components/networks/network-table.tsx
+  s_ad70cfcbbd12be::t_a73b70f59ad05b 18,35,44,185-186,197-198
+  s_ad70cfcbbd12be::t_eccd42dbe5398d 19,36-43
+control-plane/web/src/app/(dashboard)/settings/cli-sessions/page.tsx
+  s_ad70cfcbbd12be::t_7de724fbc15d85 5,9,21-26
+  s_ad70cfcbbd12be::t_d91bd64b00fe80 27
+control-plane/web/src/app/error.tsx
+  s_ad70cfcbbd12be::t_0e717768df3c0c 1-17
+control-plane/web/src/lib/hooks/use-audit-events.ts
+  s_ad70cfcbbd12be::t_637ba9587bacbf 11
+control-plane/web/vitest.config.mts
+  s_ad70cfcbbd12be::t_0a29f4a7f4defb 1-15
+control-plane/web/src/app/(dashboard)/sandboxes/page.tsx
+  s_ad70cfcbbd12be::t_3c367a0d5bd8da 10,22-26,45,51
+  s_ad70cfcbbd12be::t_56dba192cc2a90 8,70,72
+  s_ad70cfcbbd12be::t_607ea34848b0cd 7,15-16,54-59
+  s_ad70cfcbbd12be::t_cf2b951b5bb394 31
+  s_ad70cfcbbd12be::t_b365ee2b6d69eb 60
+control-plane/web/src/lib/api/scim-tokens.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 16,18
+control-plane/web/src/proxy.ts
+  s_ad70cfcbbd12be::t_0e717768df3c0c 4-8,10,15,18,22,26-30
+control-plane/web/src/app/(dashboard)/access/roles/page.tsx
+  s_ad70cfcbbd12be::t_fc6457a37e2613 4,9,20,38-46
+control-plane/Sources/App/openapi.yaml
+  s_ad70cfcbbd12be::t_4041c01962d2ac 170-171
+  s_ad70cfcbbd12be::t_41ba18b21a4611 8310-8333
+  s_ad70cfcbbd12be::t_3776bc9911a713 15178-15181,15187
+  s_ad70cfcbbd12be::t_bbf56527ff2081 1335-1341
+  s_ad70cfcbbd12be::t_5ff3ad03bd9c04 1761-1971
+  s_ad70cfcbbd12be::t_e80e72e9b411ff 1325-1334,1342-1354
+  s_ad70cfcbbd12be::t_392356a43f6deb 11055-11242
+control-plane/web/src/app/(dashboard)/images/detail/page.tsx
+  s_ad70cfcbbd12be::t_45a6bee3ce5dc7 35-41,43-44
+control-plane/web/src/lib/hooks/use-images.ts
+  s_ad70cfcbbd12be::t_0a7a8262e2d0d7 12,21,23
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_ad70cfcbbd12be::t_e24dd5770a5b2d 21,125-128
+  s_ad70cfcbbd12be::t_da306c4b43dce0 25,27
+control-plane/web/src/app/(dashboard)/security-groups/page.tsx
+  s_ad70cfcbbd12be::t_cc2f83f937a600 7-8,15,29,32-33,53,59,62-63,72-74
+control-plane/web/src/types/api.ts
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 12
+  s_ad70cfcbbd12be::t_1145cf9d8b0c0c 435
+  s_ad70cfcbbd12be::t_dc584056ab4904 437-439
+  s_ad70cfcbbd12be::t_8a9f18c9ab9bd8 436
+control-plane/web/src/components/sandboxes/sandbox-snapshots-card.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 91
+control-plane/web/src/lib/hooks/use-oidc-providers.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 12
+control-plane/web/src/app/(dashboard)/images/page.tsx
+  s_ad70cfcbbd12be::t_3643bc58529547 5,21-22,88-93
+  s_ad70cfcbbd12be::t_56dba192cc2a90 4,10,24-25,83,104,106
+  s_ad70cfcbbd12be::t_567b0d90a169ed 94
+control-plane/web/src/app/(dashboard)/settings/project-integrations/page.tsx
+  s_ad70cfcbbd12be::t_f1a66f1b7c4c6e 1-27,31-50,52-55,57-58,71-74,76-111,120-166,168-186,188,190-193,210-214
+  s_ad70cfcbbd12be::t_601490eca15fb4 51,56,61
+  s_ad70cfcbbd12be::t_a5db170af0521f 167,189,207
+  s_ad70cfcbbd12be::t_8f10b8c0e46617 28-30,59-60,62-70,75,112-119,187,194-206,208-209
+control-plane/web/src/app/(dashboard)/agents/page.tsx
+  s_ad70cfcbbd12be::t_607ea34848b0cd 7,15-16,48-53
+  s_ad70cfcbbd12be::t_56dba192cc2a90 8,27,101-102
+  s_ad70cfcbbd12be::t_680a12e1bd2ec2 10-11,18-23,39,45
+  s_ad70cfcbbd12be::t_ac480b886ba201 54
+control-plane/web/src/lib/hooks/use-resource-queries.ts
+  s_ad70cfcbbd12be::t_0e218da0b1241c 17-19,25,34,42
+control-plane/web/src/lib/api/images.ts
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4
+  s_ad70cfcbbd12be::t_0a7a8262e2d0d7 13-14,17-18
+control-plane/web/src/components/agents/agent-force-offline-action.tsx
+  s_ad70cfcbbd12be::t_e24dd5770a5b2d 1-66
+control-plane/web/src/app/(dashboard)/settings/webhooks/page.tsx
+  s_ad70cfcbbd12be::t_fc6457a37e2613 4,9,20,38-44
+control-plane/web/src/lib/api/groups.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 12-13,36,38
+control-plane/web/src/lib/api/oidc-providers.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 19-20
+control-plane/web/src/lib/api/vms.ts
+  s_ad70cfcbbd12be::t_ad463f829a8d29 27,30,34-35,108-109
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4,28-29,31
+  s_ad70cfcbbd12be::t_027b8b2958e663 139,141
+control-plane/web/src/lib/api/auth.ts
+  s_ad70cfcbbd12be::t_d8d5c1366a25a0 3,14-16,24-25
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_ad70cfcbbd12be::t_601490eca15fb4 42
+control-plane/web/src/providers/organization-provider.tsx
+  s_ad70cfcbbd12be::t_7de724fbc15d85 20,41,83
+  s_ad70cfcbbd12be::t_0a29f4a7f4defb 33-36
+  s_ad70cfcbbd12be::t_1fae46aa3aa39e 31,44,52,67,71
+  s_ad70cfcbbd12be::t_bcfdca772b75b2 45
+  s_ad70cfcbbd12be::t_7b55a6b3df5269 51
+control-plane/web/src/lib/api/sites.ts
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4,13-14,16
+  s_ad70cfcbbd12be::t_0e521dbe95736e 12,15
+control-plane/web/src/components/security-groups/security-group-table.tsx
+  s_ad70cfcbbd12be::t_cc2f83f937a600 18-19,37-40,138-139,150-151,162-163
+control-plane/web/src/lib/hooks/use-iam.ts
+  s_ad70cfcbbd12be::t_ffc02b847008ee 20,29,88,101
+control-plane/web/src/app/(dashboard)/dashboard/page.tsx
+  s_ad70cfcbbd12be::t_8469ccfed64d18 162-168
+  s_ad70cfcbbd12be::t_37432a241aaf83 23,45-46,153,159
+  s_ad70cfcbbd12be::t_358e9da794cb64 7,36-37
+control-plane/web/src/app/(dashboard)/agents/[id]/page.tsx
+  s_ad70cfcbbd12be::t_da306c4b43dce0 1-10
+control-plane/web/src/app/(dashboard)/network-services/page.tsx
+  s_ad70cfcbbd12be::t_4cdf2a268ad5e3 236-242,244-248
+  s_ad70cfcbbd12be::t_ddd6870d9f8fef 17,75-76
+  s_ad70cfcbbd12be::t_601490eca15fb4 93,99,103,108,113
+  s_ad70cfcbbd12be::t_9004befac2b3c9 183-192,194-207,209-215,217-219
+  s_ad70cfcbbd12be::t_9fa74171b50cf7 256,258-265,267,269-270
+  s_ad70cfcbbd12be::t_1a3407e6e3e389 12,58,62-65,71,78-79,116-135,160-163
+  s_ad70cfcbbd12be::t_644ab039ecc5dd 1-11,13-16,18-57,59-61,66-70,72-74,77,80-92,94-98,100-102,104-107,109-112,114-115,136-149,153-159,164-182,220-235,249-255,271-275
+  s_ad70cfcbbd12be::t_30e13d957484fe 150-152,193,208,216,243,257,266
+  s_ad70cfcbbd12be::t_c2ca9c585dd03e 268
+control-plane/web/src/components/images/image-table.tsx
+  s_ad70cfcbbd12be::t_45a6bee3ce5dc7 3-4,81
+  s_ad70cfcbbd12be::t_c27aa30ba09b2e 16-17,32-35,140
+control-plane/web/src/lib/hooks/use-current-org-access.ts
+  s_ad70cfcbbd12be::t_7de724fbc15d85 10-15,18-23,39-43
+control-plane/web/src/lib/hooks/use-users.ts
+  s_ad70cfcbbd12be::t_f4f059c0a7befc 13
+control-plane/web/src/components/vms/log-viewer.tsx
+  s_ad70cfcbbd12be::t_f6331242444d4e 99-104,118-119
+control-plane/web/src/providers/query-provider.tsx
+  s_ad70cfcbbd12be::t_d8d5c1366a25a0 13-15
+control-plane/web/src/components/project-members/vm-grants-table.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 148
+control-plane/web/src/lib/api/pagination.test.ts
+  s_ad70cfcbbd12be::t_d479c434152f57 1-24,26-29,31-39,53-54
+  s_ad70cfcbbd12be::t_8d98f73c48d24a 25,30,40-52
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_ad70cfcbbd12be::t_ae87b5de837cd1 95
+  s_ad70cfcbbd12be::t_ba0394b4ef0920 39,82,90-91,99
+  s_ad70cfcbbd12be::t_a73b70f59ad05b 32,92-94,96-98,159,166,175,182,200,206,215,224,231-232,241,250-251,257
+control-plane/web/src/components/users/create-user-dialog.tsx
+  s_ad70cfcbbd12be::t_bcfdca772b75b2 61
+control-plane/web/src/lib/api/iam.ts
+  s_ad70cfcbbd12be::t_ffc02b847008ee 27-28,33,38-39,44,66-67,73-74,79
+control-plane/web/src/components/overview/agent-health-donut.tsx
+  s_ad70cfcbbd12be::t_8377a68edcacd1 20-25
+control-plane/web/src/lib/hooks/use-hierarchy.ts
+  s_ad70cfcbbd12be::t_0eb2a318e907b8 3,6,21
+  s_ad70cfcbbd12be::t_f4f059c0a7befc 8,10,23,25
+control-plane/web/src/lib/hooks/use-permissions.ts
+  s_ad70cfcbbd12be::t_d4472f5261a7a6 22
+  s_ad70cfcbbd12be::t_7de724fbc15d85 32-37
+control-plane/web/src/lib/hooks/use-workload-identity.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 11
+control-plane/web/src/app/(dashboard)/quotas/page.tsx
+  s_ad70cfcbbd12be::t_601490eca15fb4 109
+control-plane/web/src/components/sandboxes/sandbox-table.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 74
+  s_ad70cfcbbd12be::t_9a0e48ddac494f 16-17,30-33,95
+control-plane/web/src/components/layout/nav.ts
+  s_ad70cfcbbd12be::t_f5acf54acff4a3 121-126
+  s_ad70cfcbbd12be::t_1d75bc59c2dbc7 28
+  s_ad70cfcbbd12be::t_f9cfd7252cc7db 14,17,68-75,97-101
+control-plane/web/src/lib/api/organizations.ts
+  s_ad70cfcbbd12be::t_bcfdca772b75b2 13-14,18-19,22-23,39-40
+control-plane/web/src/lib/api/project-members.ts
+  s_ad70cfcbbd12be::t_8ca1cf5c89a7d1 13-14,17,19,23-24
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_ad70cfcbbd12be::t_e80e72e9b411ff 8,12,32,1054-1074
+  s_c6cbfb839458a0::t_1eade93cfa68da 1075
+control-plane/web/src/lib/api/users.ts
+  s_ad70cfcbbd12be::t_0e521dbe95736e 25-26
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4
+control-plane/web/src/app/(dashboard)/error.tsx
+  s_ad70cfcbbd12be::t_0e717768df3c0c 1-17
+control-plane/web/src/lib/api/projects.ts
+  s_ad70cfcbbd12be::t_0e521dbe95736e 24-25,29-30,34-35
+control-plane/web/src/lib/api/ssf-streams.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 19-20
+control-plane/web/src/lib/hooks/use-webhooks.ts
+  s_ad70cfcbbd12be::t_637ba9587bacbf 9,79
+control-plane/web/src/lib/api/workload-identity.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 8-9
+control-plane/web/src/components/agents/agent-table.tsx
+  s_ad70cfcbbd12be::t_da306c4b43dce0 3-4,85
+control-plane/web/src/providers/auth-provider.tsx
+  s_ad70cfcbbd12be::t_09abfbe498f531 7,13,22,35,37,39-51,56-61,65,75-76,86-87,96,103,112
+control-plane/web/src/lib/api/registration.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 11-12
+control-plane/web/src/lib/api/auth.test.ts
+  s_ad70cfcbbd12be::t_d479c434152f57 1-40
+control-plane/web/src/components/layout/sidebar.tsx
+  s_ad70cfcbbd12be::t_4640a9e71511f3 8,163-170
+  s_ad70cfcbbd12be::t_c91a4d59159350 180,182-187
+control-plane/web/package.json
+  s_ad70cfcbbd12be::t_d479c434152f57 10-11
+  s_ad70cfcbbd12be::t_6082ce76f9b082 38-39,45,49-50
+control-plane/web/src/app/(dashboard)/storage/snapshots/page.tsx
+  s_ad70cfcbbd12be::t_4bdef9e154f5a1 8,36,81,83
+  s_ad70cfcbbd12be::t_3643bc58529547 7,21-24,61-71
+  s_ad70cfcbbd12be::t_3c367a0d5bd8da 14,26-35,52,58
+  s_ad70cfcbbd12be::t_bbf56527ff2081 12
+  s_ad70cfcbbd12be::t_9ba55f223b6c7c 72
+control-plane/web/src/lib/hooks/use-api-keys.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 8
+control-plane/web/src/lib/api/oauth.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 11,13,36-37
+control-plane/web/src/lib/hooks/use-ssf-streams.ts
+  s_ad70cfcbbd12be::t_efe5e7e693550f 12
+control-plane/web/src/lib/api/platform-services.ts
+  s_ad70cfcbbd12be::t_7a8a4555b6a20a 1-24,33,55,57-59,62-73,76-78,81-84,89-91,94,96,98-100,103-105,112-113,116-117,125,127-128,132-133,148
+  s_ad70cfcbbd12be::t_8a9f18c9ab9bd8 34,39-44,53-54
+  s_ad70cfcbbd12be::t_ea18b5cf6e80c9 35-36,56,60-61,74-75,79-80,92-93,101-102,110-111,119,126,129-131,134-137,142
+  s_ad70cfcbbd12be::t_1cf0c7c94cb5bf 30-32,37-38,49
+  s_ad70cfcbbd12be::t_5414731521dfa0 95,97
+  s_ad70cfcbbd12be::t_578854352ec4e8 25-29,138-141,143-147
+  s_ad70cfcbbd12be::t_3e5346221a7571 106-109,114-115
+  s_ad70cfcbbd12be::t_dc584056ab4904 45-48,50-52,85-88
+  s_ad70cfcbbd12be::t_2d01062f21ac30 118,120-124
+control-plane/web/src/lib/hooks/use-security-groups.ts
+  s_ad70cfcbbd12be::t_f4f059c0a7befc 8
+control-plane/web/src/components/iam/policies-section.tsx
+  s_ad70cfcbbd12be::t_a7f5ac2f67e5b3 6,30-35,75-80
+control-plane/web/src/lib/hooks/use-project-members.ts
+  s_ad70cfcbbd12be::t_8ca1cf5c89a7d1 9,22,31
+control-plane/web/src/components/overview/fleet-capacity-chart.tsx
+  s_ad70cfcbbd12be::t_4f58a38e3212e6 25-29
+  s_ad70cfcbbd12be::t_8377a68edcacd1 39,78
+control-plane/web/src/lib/api/authorization.ts
+  s_ad70cfcbbd12be::t_d4472f5261a7a6 19-34
+  s_ad70cfcbbd12be::t_b0253639e6acc0 14,17
+  s_ad70cfcbbd12be::t_d13aee4ce8ca93 18
+control-plane/web/src/lib/api/authorization.test.ts
+  s_ad70cfcbbd12be::t_2b55333d5673c3 1-32
+control-plane/web/src/app/(dashboard)/settings/api-keys/page.tsx
+  s_ad70cfcbbd12be::t_7de724fbc15d85 8,13,34-39
+  s_ad70cfcbbd12be::t_357df0e4e8cfdf 40
+control-plane/web/src/app/(dashboard)/images/[projectId]/[id]/page.tsx
+  s_ad70cfcbbd12be::t_65a614715f25cf 1
+  s_ad70cfcbbd12be::t_45a6bee3ce5dc7 2-10
+control-plane/web/src/components/overview/busiest-agents.tsx
+  s_ad70cfcbbd12be::t_8377a68edcacd1 35-42
+control-plane/web/src/lib/hooks/use-networks.ts
+  s_ad70cfcbbd12be::t_0a7a8262e2d0d7 7
+control-plane/web/src/lib/api/networks.ts
+  s_ad70cfcbbd12be::t_e22bfe3fd63dfa 4,13-14,16
+  s_ad70cfcbbd12be::t_0a7a8262e2d0d7 12,15,19-20
+control-plane/web/src/lib/hooks/use-registration-policy.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 15
+control-plane/web/src/app/(dashboard)/sandboxes/detail/page.tsx
+  s_ad70cfcbbd12be::t_23b0cf993d7e1d 48-50,52
+  s_ad70cfcbbd12be::t_da306c4b43dce0 265
+control-plane/web/src/app/not-found.tsx
+  s_ad70cfcbbd12be::t_0e717768df3c0c 1-16
+control-plane/web/src/lib/hooks/use-groups.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 9,17-18
+control-plane/web/src/types/openapi.ts
+  s_ad70cfcbbd12be::t_12a6de1d7b254b 1252-1378,6386-6474,8482,9807-9812,11411-11412,11871-12200
+  s_ad70cfcbbd12be::t_096a968e2b7422 960-979,11383-11410
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_ad70cfcbbd12be::t_0a7a8262e2d0d7 20,36
+  s_ad70cfcbbd12be::t_e24dd5770a5b2d 96-106
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_ad70cfcbbd12be::t_a866430c8115aa 310,312
+control-plane/web/src/components/iam/roles-section.tsx
+  s_ad70cfcbbd12be::t_a7f5ac2f67e5b3 6,30,72-77
+control-plane/web/src/components/volumes/volume-actions.tsx
+  s_ad70cfcbbd12be::t_a73b70f59ad05b 34,56-65,131,144,152,160,168,176,185
+  s_ad70cfcbbd12be::t_3bded6a80cab31 44,48
+  s_ad70cfcbbd12be::t_baa072f9a05d14 50,54-55,66
+control-plane/web/src/lib/api/api-keys.ts
+  s_ad70cfcbbd12be::t_87e6ca3c23f78c 11-12
+control-plane/web/bun.lock
+  s_ad70cfcbbd12be::t_f6c4b74c0bbf5b 30-31,37,42,50-51,54-57,84-85,92-105,130-131,240-241,314-343,346-347,384-389,392-397,468-481,496-497,522-523,538-539,556-557,580-583,588-589,598-599,606-607,614-615,624-625,634-635,678-679,682-683,708-709,758-759,768-769,808-809,842-843,894,898-899,904-905,910-911,946-947,962-963,970-971,984-985,996,1004-1005,1020-1021,1030-1031,1056-1057,1064-1067,1084-1085,1094-1095,1102-1105,1108-1113,1116-1119,1146-1147,1164-1175,1186-1187,1190-1193,1210-1211,1246-1249,1260-1261,1276-1279,1282-1287,1291-1312
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3a7f02a6a9e5691b8629d764df5abda6e88c7f9a",
+  "prompts": {},
+  "sessions": {
+    "s_45f5bd5bc03fe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdff-9a39-74b3-8ce3-c403f19183b6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_ad70cfcbbd12be": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffe02-ce7b-7dc3-b453-d02621103a2c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_c6cbfb839458a0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdbf-e30c-7bd1-87e7-1ece7d3a89cd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

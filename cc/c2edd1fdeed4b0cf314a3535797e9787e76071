@@ -1,0 +1,81 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_b120d599dfc41b::t_7141f8451ee7be 171-180
+  s_b120d599dfc41b::t_1c0c46581e3532 1679-1809
+  s_b120d599dfc41b::t_d16d856cad2125 3057-3058
+  s_b120d599dfc41b::t_b6af0739ee9422 1304-1308
+control-plane/Sources/App/configure.swift
+  s_b120d599dfc41b::t_270042f7517aeb 399-402
+control-plane/Sources/App/Services/AgentService.swift
+  s_b120d599dfc41b::t_9a60b55ba38158 812-817
+  s_b120d599dfc41b::t_8f116dc79ff6de 162-174,177-205
+  s_b120d599dfc41b::t_50d03eb62cdfde 175-176
+  s_b120d599dfc41b::t_814c675b7eeb91 1649-1692
+  s_b120d599dfc41b::t_a8ac59cc6ce2cf 1990-2038
+  s_b120d599dfc41b::t_c77d876128bfff 1959
+  s_b120d599dfc41b::t_7dab3874a9b572 1084-1274
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_b120d599dfc41b::t_883dc196fd6957 59-83
+control-plane/Sources/App/Migrations/AddAgentAutoUpdate.swift
+  s_b120d599dfc41b::t_7ca3e965b26fca 1-50
+control-plane/web/src/lib/api/agents.ts
+  s_b120d599dfc41b::t_4942f0af452bf0 35-38
+control-plane/Sources/App/Models/Agent.swift
+  s_b120d599dfc41b::t_3787054595b705 314-323
+  s_b120d599dfc41b::t_54c2a2b9c4ccd1 353-357
+  s_b120d599dfc41b::t_711e219069212b 104-137
+  s_b120d599dfc41b::t_497132ebcdd352 170
+control-plane/web/src/components/agents/agent-auto-update.tsx
+  s_b120d599dfc41b::t_a85a9580df8384 1-105
+control-plane/web/src/types/api.ts
+  s_b120d599dfc41b::t_9d2d2befe60a2f 282-291
+shared/Sources/StratoShared/WireProtocol.swift
+  s_b120d599dfc41b::t_606e9d07531f63 175-188
+  s_b120d599dfc41b::t_b3cdbc14e841bc 97-109
+control-plane/Tests/AppTests/AgentAutoUpdateTests.swift
+  s_b120d599dfc41b::t_970974f527fd09 102-103
+  s_b120d599dfc41b::t_4fbf7c1f10b215 1-101,104-485
+agent/Tests/StratoAgentTests/AutoUpdateGateTests.swift
+  s_b120d599dfc41b::t_273a29b96e9f4e 1-59
+agent/Sources/StratoAgentCore/AutoUpdateGate.swift
+  s_b120d599dfc41b::t_c79f678734730e 1-63
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_b120d599dfc41b::t_851fb28cff80e4 225-227
+  s_b120d599dfc41b::t_74726970e03173 18
+control-plane/web/src/lib/hooks/use-agents.ts
+  s_b120d599dfc41b::t_094dd8128d2403 53-65
+shared/Tests/StratoSharedTests/AgentAutoUpdateProtocolTests.swift
+  s_b120d599dfc41b::t_911666dbcce328 1-104
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_b120d599dfc41b::t_3bbccbf8c8d81a 429-462
+  s_b120d599dfc41b::t_e35c0aba989ace 109-158
+  s_b120d599dfc41b::t_1b2ab28cc37a78 483-488,496-497,505
+  s_b120d599dfc41b::t_4aa98662569497 241
+  s_b120d599dfc41b::t_c31844e6fce1e2 197-203,212-213,222
+  s_b120d599dfc41b::t_25efeafb4b4f5b 519
+docs/.vitepress/config.mts
+  s_b120d599dfc41b::t_ac9bf436ebc8e0 33-34
+control-plane/web/src/lib/hooks/index.ts
+  s_b120d599dfc41b::t_b763fa4ae0845e 9-17
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b120d599dfc41b::t_46f42f2c61d7ae 894-922,926-946
+  s_b120d599dfc41b::t_2790602f5b3206 21
+  s_b120d599dfc41b::t_0e82909c6beb91 923-925
+docs/architecture/agent-updates.md
+  s_b120d599dfc41b::t_d5ccba099b774b 1-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "ccc2edd1fdeed4b0cf314a3535797e9787e76071",
+  "prompts": {},
+  "sessions": {
+    "s_b120d599dfc41b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a1c557cb-2f28-4262-9548-463cb2d341e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

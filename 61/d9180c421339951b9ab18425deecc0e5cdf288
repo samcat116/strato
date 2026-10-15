@@ -1,0 +1,35 @@
+control-plane/Sources/App/Migrations/CreateLoadBalancerListener.swift
+  s_29c73f0503496f::t_530e0774335557 9-10
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_29c73f0503496f::t_530e0774335557 301-306,311-315,317-323
+control-plane/Sources/App/Migrations/CreateLoadBalancer.swift
+  s_29c73f0503496f::t_530e0774335557 12-13,39-40
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_29c73f0503496f::t_530e0774335557 206-208,312-313,700-702
+control-plane/Sources/App/Migrations/CreateLoadBalancerBackend.swift
+  s_29c73f0503496f::t_530e0774335557 9-10,13-14
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_29c73f0503496f::t_530e0774335557 641-643
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_29c73f0503496f::t_530e0774335557 149-151,279-283,306-310,342-347
+control-plane/Sources/App/Models/FloatingIP.swift
+  s_29c73f0503496f::t_530e0774335557 125-126
+control-plane/Sources/App/Models/LoadBalancer.swift
+  s_29c73f0503496f::t_530e0774335557 249-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "61d9180c421339951b9ab18425deecc0e5cdf288",
+  "prompts": {},
+  "sessions": {
+    "s_29c73f0503496f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee44-e04e-77c1-8bb6-33ca2ed727bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_d7b76f6bc3896c::t_750e2a092620b5 1329-1331,1336-1350
+  s_d7b76f6bc3896c::t_8c14f360e82738 1618-1619,1624
+  s_d7b76f6bc3896c::t_dc81c36f88c5b3 697-698
+  s_d7b76f6bc3896c::t_85edef16938810 1575-1576,1581
+  s_d7b76f6bc3896c::t_5201ae92c52d29 728-730,733-744,747,750
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_d7b76f6bc3896c::t_a7dcbd55ac2473 301-325
+  s_d7b76f6bc3896c::t_24c805cdbdfaf4 438-453
+agent/Sources/StratoAgent/QEMUService.swift
+  s_d7b76f6bc3896c::t_fc928d666b659a 518-527
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_d7b76f6bc3896c::t_2e02b6c220bf1f 5-25
+  s_d7b76f6bc3896c::t_c38b9c91b6e53e 76-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d6fe1e72ab336f16f9648cb7140ef0b886b4b90b",
+  "prompts": {},
+  "sessions": {
+    "s_d7b76f6bc3896c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c914d13f-9770-496b-9306-f684310e2f09",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

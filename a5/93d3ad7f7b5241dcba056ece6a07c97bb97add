@@ -1,0 +1,29 @@
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 20
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_16ac4040d846a2::t_284bffbf707e40 333-337
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 21
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 64,89
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 65,90
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_16ac4040d846a2::t_34ca8201c239c3 105,114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "a593d3ad7f7b5241dcba056ece6a07c97bb97add",
+  "prompts": {},
+  "sessions": {
+    "s_16ac4040d846a2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02697-9725-7601-a595-a54bc7786ab7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    }
+  }
+}

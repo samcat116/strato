@@ -1,0 +1,52 @@
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_a0c971eaee22de::t_ea1876eba52bb0 71-108
+control-plane/Tests/AppTests/RoleEndpointTests.swift
+  s_a0c971eaee22de::t_e19669d809ff0b 687
+control-plane/Tests/AppTests/IAMGuardrailTests.swift
+  s_a0c971eaee22de::t_469eb34c2a5a04 687
+  s_a0c971eaee22de::t_2af955fb00f5d4 694
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_a0c971eaee22de::t_ea2f50ebb8c0bf 268
+  s_a0c971eaee22de::t_a383bdf24c8e57 305-352
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_a0c971eaee22de::t_86d18329ca701c 101
+  s_a0c971eaee22de::t_2213d6498ee3a4 93
+  s_a0c971eaee22de::t_6154e95a7d8397 122,129,131
+  s_a0c971eaee22de::t_ccb015dc074c12 187,192-193
+  s_a0c971eaee22de::t_213b15a92bf0bc 214-221
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_a0c971eaee22de::t_38fe9bf00f57f7 219
+  s_a0c971eaee22de::t_c43b336b5ccd78 456-457
+  s_a0c971eaee22de::t_c44d0efb87cbaf 188
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_a0c971eaee22de::t_31b44b3cf10bc8 79-80
+control-plane/Sources/App/Controllers/RoleController.swift
+  s_a0c971eaee22de::t_6f9ba4aa8a65cf 511-512
+  s_a0c971eaee22de::t_72e11549723afd 383,385
+  s_a0c971eaee22de::t_4c619b6340e4be 370
+  s_a0c971eaee22de::t_1eecd0a5cb9848 165-193
+  s_a0c971eaee22de::t_bd7c4e89167f75 390-418
+control-plane/Sources/App/configure.swift
+  s_a0c971eaee22de::t_7c4611ad2a7f9c 637
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_a0c971eaee22de::t_e91fa2358732bc 15-27
+control-plane/Sources/App/Controllers/PolicyController.swift
+  s_a0c971eaee22de::t_e1c4f8e2ad1670 345
+  s_a0c971eaee22de::t_02a5e2654b0dda 346-347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a7e0115900a4027ab690c4fbbd35d54a21910232",
+  "prompts": {},
+  "sessions": {
+    "s_a0c971eaee22de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6a27efb4-e656-4211-acbb-0b9b5d827138",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+agent/Sources/StratoAgentCore/OCI/OCIRegistryClient.swift
+  s_7989fec800a18c::t_f6ae9f03847951 537-539
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_7989fec800a18c::t_f6ae9f03847951 311-313
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_7989fec800a18c::t_f6ae9f03847951 408-410
+agent/Tests/StratoAgentTests/FileHashingTests.swift
+  s_7989fec800a18c::t_9a92d04a2990df 57-62,68-70,73,76,80
+  s_7989fec800a18c::t_c766361d9029e7 1,11,16,19-23,40,45,48-56,63-67,72,74-75,77-79,81
+  s_7989fec800a18c::t_48c64e39e359d5 9-10,12-15,17-18,24-25,82-122
+  s_7989fec800a18c::t_df4caba0a39ded 37-39,41-44,46-47,71,123
+  s_7989fec800a18c::t_34f72375e19127 2-8,26-36,124
+agent/Sources/StratoAgentCore/FileHashing.swift
+  s_7989fec800a18c::t_6d101290ebf9cf 2-6,8-14,25-26
+  s_7989fec800a18c::t_8ac034b653ac35 1,7,15-24
+agent/Sources/StratoAgentCore/SnapshotArtifactTransfer.swift
+  s_7989fec800a18c::t_f6ae9f03847951 140-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9bc20a2cfd15767b1c39e38df0aab5cae1396af1",
+  "prompts": {},
+  "sessions": {
+    "s_7989fec800a18c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00ce8-e857-7ef3-849a-1ff0b868b368",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_04668c00218957::t_81414c7c86a049 444-496
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_04668c00218957::t_3dc3a475fbc5df 458-460
+  s_04668c00218957::t_adaa55ff860a47 49-50,59
+  s_04668c00218957::t_80856c9c9c36dc 827-841
+  s_04668c00218957::t_a0733835db3d26 429,457
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_04668c00218957::t_3dc3a475fbc5df 3,497-534
+  s_04668c00218957::t_e6bd826e2ea472 298-308
+  s_04668c00218957::t_9243a7c8cfe2ba 432-447
+  s_04668c00218957::t_196347c2a83b75 403-404
+  s_04668c00218957::t_24fef662faaed2 535
+docs/architecture/sandboxes.md
+  s_04668c00218957::t_3959739c7e2f5b 652-657
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "0809563ce97a8a74ede4d5400d297efc9a57d569",
+  "prompts": {},
+  "sessions": {
+    "s_04668c00218957": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7870-a7d6-7432-b876-995018118ce3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

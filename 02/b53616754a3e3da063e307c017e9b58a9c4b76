@@ -1,0 +1,69 @@
+control-plane/Tests/AppTests/HierarchyVisibilityTests.swift
+  s_eaba43f87d51f5::t_849fd115b3bcf2 1-141,143-167,171-210,215-217,244-258,262-369,394-405,408-448
+  s_eaba43f87d51f5::t_3def839a849e43 406-407
+  s_eaba43f87d51f5::t_2773c472162387 168-170
+  s_eaba43f87d51f5::t_23a630da2e8290 142
+  s_eaba43f87d51f5::t_515af8e4af9f2a 370-393
+  s_eaba43f87d51f5::t_cd0ff0acd92e58 218-243
+  s_eaba43f87d51f5::t_5474899a92dbe6 259-261
+  s_eaba43f87d51f5::t_8fec9bc892c910 211-214
+docs/architecture/iam.md
+  s_eaba43f87d51f5::t_e9fca43a4442de 524-530
+  s_eaba43f87d51f5::t_3d703506eca4f4 510-523,531-537
+control-plane/Sources/App/Services/HierarchyPathResolver.swift
+  s_eaba43f87d51f5::t_fa545b8b0ab8da 87-123
+  s_eaba43f87d51f5::t_81b6e52b8eb6ae 8-13
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_eaba43f87d51f5::t_b1ba2c5e4da22f 5-19
+  s_eaba43f87d51f5::t_c785e90938527a 66-68
+  s_eaba43f87d51f5::t_7452e32c2d8920 150-152
+  s_eaba43f87d51f5::t_c209c5f763a621 188
+  s_eaba43f87d51f5::t_970c78b4cf8fa2 256,262
+  s_eaba43f87d51f5::t_7368e38dfcca55 87-89
+  s_eaba43f87d51f5::t_1c835eb07ef442 210-213,230
+control-plane/Sources/App/Services/HierarchySnapshot.swift
+  s_eaba43f87d51f5::t_ff991d6a977832 13-19,27
+  s_eaba43f87d51f5::t_c63aafbdbad796 72-86,95-102,119-120,122-126,128,130-131,141-142,147,151,155,158-160,162-184
+  s_eaba43f87d51f5::t_cdc42f95128632 87-94
+  s_eaba43f87d51f5::t_8deb75e9645d56 29-33
+  s_eaba43f87d51f5::t_79a38c84f0129d 103-118,129,132-140
+  s_eaba43f87d51f5::t_8db6422a4204de 121,127
+  s_eaba43f87d51f5::t_71722f56ad37a9 28
+control-plane/Sources/App/openapi.yaml
+  s_eaba43f87d51f5::t_cd08055ba24f6c 3599-3601
+  s_eaba43f87d51f5::t_e527308244b4de 3571-3576
+  s_eaba43f87d51f5::t_808440e3a120bc 3699-3704
+  s_eaba43f87d51f5::t_b6404f6936c07e 3620-3623
+  s_eaba43f87d51f5::t_864ac788ddd1a6 3594,3596-3598
+docs/development/code-review.md
+  s_eaba43f87d51f5::t_451e3c17a58940 308-326
+control-plane/web/src/types/openapi.ts
+  s_eaba43f87d51f5::t_d19b42d48246cd 2597,2619,2641-2644,2715-2718
+  s_eaba43f87d51f5::t_fc02bb39c8ab86 2620
+control-plane/Sources/App/Services/HierarchySearchService.swift
+  s_eaba43f87d51f5::t_a2cf8540c19f6e 69,71
+  s_eaba43f87d51f5::t_335495cec17af1 181-182,240-241
+  s_eaba43f87d51f5::t_52de15bb93fd12 97,99
+  s_eaba43f87d51f5::t_80bff14fb1344c 8-13,15-26,29,32,51,54,76,79,104,107,125,128,141,144,167,178,183,209,230-239,242-246
+  s_eaba43f87d51f5::t_06020e59967bd5 210-229,247
+  s_eaba43f87d51f5::t_0332b71f5dbc8b 35-40
+control-plane/Sources/App/Services/HierarchyTreeBuilder.swift
+  s_eaba43f87d51f5::t_f02c73a82aee71 13-21
+  s_eaba43f87d51f5::t_04e4bd6b5e6379 42-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "02b53616754a3e3da063e307c017e9b58a9c4b76",
+  "prompts": {},
+  "sessions": {
+    "s_eaba43f87d51f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "752b1789-a0cf-475e-93d1-9ea34b7fbb0e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

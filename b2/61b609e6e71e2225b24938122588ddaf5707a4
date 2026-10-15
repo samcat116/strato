@@ -1,0 +1,51 @@
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_b46e1e8521f8aa::t_b3bed912a0c93d 1285
+  s_b46e1e8521f8aa::t_3ae54e0853ac71 1149-1160,1189,1216,1227,1252-1254,1268,1277,1345-1347,1374,1386
+  s_b46e1e8521f8aa::t_4f5b22a2a4bbc5 1186-1188
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_b46e1e8521f8aa::t_d6a26b45400a9d 194-195,214-215
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_b46e1e8521f8aa::t_d6a26b45400a9d 192-193,209
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_b46e1e8521f8aa::t_763ae841fa58bc 116,118-130,133-144,181,191-206,229-231,238-247
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_b46e1e8521f8aa::t_d6d95080cb04e2 1055-1074,1104-1107,1109-1110
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_b46e1e8521f8aa::t_919c3ddc62d505 834-846,1250-1255,1567-1574,1714-1725
+  s_b46e1e8521f8aa::t_b3bed912a0c93d 1624
+  s_b46e1e8521f8aa::t_121ccb1e576689 1575
+  s_b46e1e8521f8aa::t_4eac3f8056401c 1726-1727
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_b46e1e8521f8aa::t_d6a26b45400a9d 876,945,971
+docs/architecture/wire-protocol.md
+  s_b46e1e8521f8aa::t_db0436c1120496 341-344
+  s_b46e1e8521f8aa::t_4f5b22a2a4bbc5 340
+  s_b46e1e8521f8aa::t_b3bed912a0c93d 301
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_b46e1e8521f8aa::t_ae70038826db25 233-292
+  s_b46e1e8521f8aa::t_20d174e19dac09 20-22,25-27,40-42,47-49,56-58,74-77,90-92,95-97,112-114,116-118
+shared/Sources/StratoShared/SnapshotReconciliation.swift
+  s_b46e1e8521f8aa::t_b3bed912a0c93d 287
+  s_b46e1e8521f8aa::t_3ae54e0853ac71 317-319,331-332,344
+agent/Sources/StratoAgent/Agent.swift
+  s_b46e1e8521f8aa::t_1ec67c23a9e0be 5735,5762,5786-5787,5804-5805,5823-5824,5948-5949,5967-5969,5987-5989,6006-6008,6026-6027,6067-6069,6097-6099,6116-6117,6162-6164,6179-6181,6196-6197
+  s_b46e1e8521f8aa::t_5060244ec347f1 4341,4343-4344,5086,5209,5601,5655,5658-5659
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_b46e1e8521f8aa::t_48f70dd02a8994 605-606,613,621-622,630-650
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "b261b609e6e71e2225b24938122588ddaf5707a4",
+  "prompts": {},
+  "sessions": {
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

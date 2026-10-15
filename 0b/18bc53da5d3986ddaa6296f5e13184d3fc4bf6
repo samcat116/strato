@@ -1,0 +1,23 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_b7aa8b7679a04b::t_c7cffadf745952 669-675
+control-plane/Sources/App/Services/VolumeService.swift
+  s_b7aa8b7679a04b::t_1a36334c7044e3 355-366
+  s_b7aa8b7679a04b::t_d82a1743e7106e 506
+  s_b7aa8b7679a04b::t_45ee50e2b5acff 529-530
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0b18bc53da5d3986ddaa6296f5e13184d3fc4bf6",
+  "prompts": {},
+  "sessions": {
+    "s_b7aa8b7679a04b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b37436d7-1284-4fbc-b3d4-82b79756d7c2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

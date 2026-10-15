@@ -1,0 +1,28 @@
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_a920201f7c1034::t_79fff41a803a2e 340-345
+  s_a920201f7c1034::t_be97962db469e5 297-305
+control-plane/Sources/App/Services/AgentService.swift
+  s_a920201f7c1034::t_85d59266bf59a7 303-305,308-309
+  s_a920201f7c1034::t_00dc6823acefc5 350-352,355-356
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_a920201f7c1034::t_ddce3dc0f4b681 109-123
+  s_a920201f7c1034::t_ba357ae8966e12 714-723
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_a920201f7c1034::t_9facf0ab436fc7 402,404-416
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "a6770e9ef519f3ce3f4a033cc4c86498e42f0d69",
+  "prompts": {},
+  "sessions": {
+    "s_a920201f7c1034": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e474b736-80eb-41cc-aeb3-ac5e04e1363a",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

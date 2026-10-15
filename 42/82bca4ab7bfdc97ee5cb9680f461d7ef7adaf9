@@ -1,0 +1,31 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_5778441fd8e552::t_7f76118c33c42d 984,1008-1036,1039-1044,1046,1048-1054
+  s_5778441fd8e552::t_e1ad60a4862913 1037-1038,1583-1588
+  s_5778441fd8e552::t_af83d3e9765ece 1045,1047
+  s_5778441fd8e552::t_84f6ccb4a0dd28 2114-2125
+  s_d97f14ca566b90::t_9723ef0ed3025e 1055-1056
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4282bca4ab7bfdc97ee5cb9680f461d7ef7adaf9",
+  "prompts": {},
+  "sessions": {
+    "s_5778441fd8e552": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05533-87f2-7ff0-b3ac-d855f8d8f986",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d97f14ca566b90": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05533-0e01-7bf3-927c-514ebc0b161c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

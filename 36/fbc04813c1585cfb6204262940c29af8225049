@@ -1,0 +1,21 @@
+control-plane/Tests/AppTests/OIDCAuthFlowTests.swift
+  s_9354bedab11ea2::t_fb46bde7f9c444 1-191,194-195,197-649,652-730
+  s_9354bedab11ea2::t_83d4501d85e5ef 192-193,196
+  s_9354bedab11ea2::t_64a555d027c8c2 650-651
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "36fbc04813c1585cfb6204262940c29af8225049",
+  "prompts": {},
+  "sessions": {
+    "s_9354bedab11ea2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "573ec797-73b2-4d36-aa2e-c9459272dddc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

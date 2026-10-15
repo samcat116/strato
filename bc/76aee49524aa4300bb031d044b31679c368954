@@ -1,0 +1,16 @@
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  h_a84d4ff76cadd1 478-491
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  h_a84d4ff76cadd1 765,1104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bc76aee49524aa4300bb031d044b31679c368954",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_a36dd7ef4412d5::t_e30fc54c77ffa1 75-88
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_a36dd7ef4412d5::t_cf1e2dd8a900c0 52-60
+  s_a36dd7ef4412d5::t_4db45b009cfa09 74-76
+shared/Sources/StratoShared/WireProtocol.swift
+  s_a36dd7ef4412d5::t_0c9ccc2ce089b6 109-119
+  s_a36dd7ef4412d5::t_e984321b5d9c6b 199-211
+shared/Tests/StratoSharedTests/SandboxExecMessageTests.swift
+  s_a36dd7ef4412d5::t_1ed7916d610449 1-96
+shared/Sources/StratoShared/SandboxExecMessages.swift
+  s_a36dd7ef4412d5::t_b3adf0eb8888d7 1-284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "64d7533359670fb13fde80b60b615cbacad7cafd",
+  "prompts": {},
+  "sessions": {
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

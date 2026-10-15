@@ -1,0 +1,27 @@
+agent/Sources/StratoAgentCore/SandboxJail.swift
+  s_a80ae461e08851::t_a8c167f3358b96 33-39,45,49
+  s_a80ae461e08851::t_a50ca5516dfe81 71-78
+  s_a80ae461e08851::t_cc7051c5bae5a6 96
+agent/Tests/StratoAgentTests/SandboxJailTests.swift
+  s_a80ae461e08851::t_65c367dfe8d7a1 130-136
+agent/Sources/StratoAgent/Agent.swift
+  s_a80ae461e08851::t_ba0545a8f6f61c 479,483-484,490
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a80ae461e08851::t_b0344ab62cefd3 1245-1248,1250-1254,1258-1259,1262,1274-1275,1281-1285
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "0ebc7558f382ea51831b20d161fab81d5e2bf9ee",
+  "prompts": {},
+  "sessions": {
+    "s_a80ae461e08851": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8acc851f-5517-4c80-8b67-2216544b35d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

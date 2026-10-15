@@ -1,0 +1,36 @@
+.github/workflows/README.md
+  s_e65c7c5f59a208::t_49f134e8c57f9e 187-189
+  s_e65c7c5f59a208::t_f920c3e4b28e26 165-167
+  s_e65c7c5f59a208::t_ca58d9b6964cd5 170-175
+  s_e65c7c5f59a208::t_229029c888d105 116
+  s_e65c7c5f59a208::t_94122572ea432b 3
+  s_e65c7c5f59a208::t_613548aac674c8 124-125
+CLAUDE.md
+  s_e65c7c5f59a208::t_56172b5ee3e451 35
+.github/workflows/release.yaml
+  s_e65c7c5f59a208::t_7d245e0ae5b206 511-512
+  s_e65c7c5f59a208::t_343824a4a0bb8e 707-708
+  s_e65c7c5f59a208::t_bc58ae11eac736 121-122
+  s_e65c7c5f59a208::t_adaba969782531 555
+  s_e65c7c5f59a208::t_9d278838cb79e2 524-532,534,536
+  s_e65c7c5f59a208::t_3c2152fb5bef4a 972-973
+  s_e65c7c5f59a208::t_8418c3e0ebee26 26
+  s_e65c7c5f59a208::t_0b17fd447f8c0c 91
+  s_e65c7c5f59a208::t_d2b25192c33415 128-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b911e324a1b2229791a07e25ad68acd0b13c4049",
+  "prompts": {},
+  "sessions": {
+    "s_e65c7c5f59a208": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9b25976-c5c1-47c4-9da1-376e9738818e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

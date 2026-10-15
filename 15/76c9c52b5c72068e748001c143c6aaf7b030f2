@@ -1,0 +1,49 @@
+docs/architecture/webhooks.md
+  s_44bd6e3ddfffa0::t_bf64f63abebddd 100-105
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_44bd6e3ddfffa0::t_d2f1871f52dfb5 12,119-121
+  s_44bd6e3ddfffa0::t_69c326df1eba1e 33
+  s_a794bdb6881990::t_fd92aab7a7817d 122-127
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_44bd6e3ddfffa0::t_dd2b249a6814f5 216-221
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_44bd6e3ddfffa0::t_dd2b249a6814f5 1479
+control-plane/Sources/App/Models/WebhookDelivery.swift
+  s_44bd6e3ddfffa0::t_dd2b249a6814f5 74-79,143
+control-plane/Sources/App/Migrations/AddWebhookDeliveryClaimLease.swift
+  s_44bd6e3ddfffa0::t_dd2b249a6814f5 4-6,16,26-28,30-37,102,127-132
+  s_44bd6e3ddfffa0::t_38fd833628e6aa 29
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_44bd6e3ddfffa0::t_ccd486bb43d6fc 157-159
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_44bd6e3ddfffa0::t_dd2b249a6814f5 359,372,425,434,447,455,481,490-491,535,543,552,557-558,566,641,670,716
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_44bd6e3ddfffa0::t_dd2b249a6814f5 432-467,472-487
+  s_44bd6e3ddfffa0::t_cecfcf1f90c6b7 468-471
+  s_44bd6e3ddfffa0::t_5e92c625bee5e9 1087-1123
+  s_44bd6e3ddfffa0::t_0f264e383586c4 397
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1576c9c52b5c72068e748001c143c6aaf7b030f2",
+  "prompts": {},
+  "sessions": {
+    "s_44bd6e3ddfffa0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05535-5425-78a3-8c11-26c59021e9ce",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a794bdb6881990": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0597d-f390-7ac3-b450-7fccc3a566ae",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

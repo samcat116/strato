@@ -1,0 +1,208 @@
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 89,123,153,182,213,456,507,527,574,634,667,788,817,879,937
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_1caa12ce689fe8::t_f0547e57748103 201-203,206-208,307-317,361,695-697,700-702,720
+control-plane/Sources/App/Models/LoadBalancer.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-359
+control-plane/Sources/App/configure.swift
+  s_1caa12ce689fe8::t_f0547e57748103 383-389,480
+control-plane/Sources/App/Migrations/CreateLoadBalancer.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-60
+control-plane/web/src/types/openapi.ts
+  s_1caa12ce689fe8::t_f0547e57748103 145,5391,9815
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_1caa12ce689fe8::t_f0547e57748103 304,337-340,408-410,419,437-452,458,467,476,487-489,563,573,577,580,585,619-698,820-826,829
+  s_1caa12ce689fe8::t_695906aefc2600 827-828
+control-plane/Sources/App/Extensions/Request+LoadBalancerAuthorization.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-16
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_1caa12ce689fe8::t_f0547e57748103 737,740,742-744,752-853,987-989,1008-1009,1028,1490-1545,1606-1608,1622-1623,1637
+control-plane/Sources/App/Migrations/CreateLoadBalancerBackend.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-28
+control-plane/Sources/App/Controllers/VMController.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1078-1083,1279-1295,1365-1370
+  s_1caa12ce689fe8::t_55b9e319054067 1371-1372
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_1caa12ce689fe8::t_f0547e57748103 51,55,66-67,78,80-81,179-180,295,309-311,318-319
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_1caa12ce689fe8::t_f0547e57748103 105,115,336-339
+deploy/compose/vcpu-shrink-test.sh
+  s_1caa12ce689fe8::t_f0547e57748103 1-191
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_1caa12ce689fe8::t_f0547e57748103 25-55,122-128,230-284,291-293,341-387,697,746-754,756,763,771,913-947
+  s_1caa12ce689fe8::t_6f83d5220aa5f5 948
+agent/Tests/StratoAgentTests/EC2MetadataRendererTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-189
+agent/Tests/StratoAgentTests/LibvirtDomainTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 155-177
+agent/Tests/StratoAgentTests/MetadataRouterTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 95,100-118,126-127,156,172-199
+  s_1caa12ce689fe8::t_ebae07625ee38a 200-201
+control-plane/Sources/App/IAM/Cedar/CedarSchemaBuilder.swift
+  s_1caa12ce689fe8::t_f0547e57748103 78,249
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_1caa12ce689fe8::t_f0547e57748103 67,71-74,207-238,252,259,361-377,1507,1559-1565,1619-1622,3266-3523
+agent/Sources/StratoAgentCore/MetadataService/MetadataResponder.swift
+  s_1caa12ce689fe8::t_f0547e57748103 35-36,39-45,50-51,72-79,86-90,177,199-248
+control-plane/Sources/App/Controllers/AgentGuestIdentityController.swift
+  s_1caa12ce689fe8::t_f0547e57748103 130-131,136-140
+control-plane/Sources/App/Services/IPAMService.swift
+  s_1caa12ce689fe8::t_f0547e57748103 115-123
+agent/Sources/StratoAgent/MetadataServerCommand.swift
+  s_1caa12ce689fe8::t_f0547e57748103 74-81,91-92,148-152,169-180
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_1caa12ce689fe8::t_f0547e57748103 285-302,314,341-346,533-546,637
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_1caa12ce689fe8::t_8f914a2b362a6e 80-82
+agent/Tests/StratoAgentTests/MetadataServerSupervisorTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 408-469
+control-plane/Sources/App/Services/SPIFFE/GuestIdentityIssuanceConfig.swift
+  s_1caa12ce689fe8::t_f0547e57748103 2,18-19,31,33,37-40,75-90
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 70-76,78-81,116-120,123,161-247
+  s_1caa12ce689fe8::t_61ca9c0daac8cd 248-249
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_1caa12ce689fe8::t_f0547e57748103 79,127,156,206,239
+control-plane/Sources/App/IAM/ResourceBindingCleanup.swift
+  s_1caa12ce689fe8::t_f0547e57748103 43,199-202
+  s_1caa12ce689fe8::t_d0a2c454213b1b 203
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_1caa12ce689fe8::t_f0547e57748103 89-97,127,154-155,232-236,455-464,498-506,538,570-571,599-600,629,640,652,685-686,696-697,706-707,732,743-757,768
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_1caa12ce689fe8::t_f0547e57748103 647-656,661-663
+docs/architecture/control-plane.md
+  s_1caa12ce689fe8::t_f0547e57748103 228-238
+agent/Sources/StratoAgentCore/MetadataService/MetadataDocument.swift
+  s_1caa12ce689fe8::t_f0547e57748103 13-17,32-35
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_1caa12ce689fe8::t_8f914a2b362a6e 20
+control-plane/Sources/App/Migrations/AddLoadBalancerCountToResourceQuota.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-29
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-474
+control-plane/Sources/App/routes.swift
+  s_1caa12ce689fe8::t_f0547e57748103 74
+agent/Sources/StratoAgentCore/MTLSArtifactDownloader.swift
+  s_1caa12ce689fe8::t_f0547e57748103 7,279-334,337
+  s_1caa12ce689fe8::t_901299f2d55e50 335-336,338-339
+agent/Tests/StratoAgentTests/MetadataIdentityTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-339
+agent/Sources/StratoAgentCore/MetadataService/EC2MetadataRenderer.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-382
+agent/Sources/StratoAgentCore/MetadataService/MetadataRouter.swift
+  s_1caa12ce689fe8::t_f0547e57748103 2,31-34,144-146,151-152,160-162,184,187-190,195,214-222,256-260,263,265-285,297-306,311-323
+  s_1caa12ce689fe8::t_492210cd342b96 324
+shared/Sources/StratoShared/WireProtocol.swift
+  s_1caa12ce689fe8::t_8f914a2b362a6e 14-18
+agent/Tests/StratoAgentTests/MetadataResponderTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 432-434,437-439,490
+docs/architecture/guest-identity.md
+  s_1caa12ce689fe8::t_f0547e57748103 11-15,72-80
+control-plane/Sources/App/Services/QuotaUsageService.swift
+  s_1caa12ce689fe8::t_f0547e57748103 22-23,32-33,42-43
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 53,61-65,91,491-576
+  s_1caa12ce689fe8::t_a19a4329844e66 577
+agent/Sources/StratoAgentCore/ResolverSupervisor.swift
+  s_1caa12ce689fe8::t_f0547e57748103 12-16,46-49,59-90,122,127-130,149-151,179-193,211-213,227-233,258-276,284,292,301-308,316-319,323,325,338,343,352-359,365,372,376,386-390,403-473
+  s_1caa12ce689fe8::t_ccaf13b783ba09 474
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 9-10,12-14,288-289,295,302-336,416-417,420,468-495
+  s_1caa12ce689fe8::t_80f6c12320857a 496
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_1caa12ce689fe8::t_f0547e57748103 212-214,372-373
+docs/adr/0006-imds-session-auth.md
+  s_1caa12ce689fe8::t_f0547e57748103 90-94
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_1caa12ce689fe8::t_f0547e57748103 143-149,209-210,254-258,284-285,1333-1415,1417,1419,1461-1473
+agent/Tests/StratoAgentTests/LoadBalancerReconcilerTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-293
+agent/Tests/StratoAgentTests/MetadataHTTPServerTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 8,25-62,75,82-84,91-96,99-100,176-218,241-254
+  s_1caa12ce689fe8::t_4da50947dc44fc 255
+agent/Tests/StratoAgentTests/ResolverSupervisorTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 49,87,117-146,162-173,179,192,196-199,202,212-214,217-219,221-229,231-249,385-397,400-428,431-432,442,464,466,482,492-496,499-501,503,509-510,513-515,517,531-533,537,540
+agent/Sources/StratoAgentCore/MetadataService/MetadataServerProcess.swift
+  s_1caa12ce689fe8::t_f0547e57748103 22,27,33,63,66,71-72,143,164-167,171,214,242-243,247-257,259,262,273-311,350-362
+  s_1caa12ce689fe8::t_7162cbf92c73ad 363
+control-plane/Sources/App/openapi.yaml
+  s_1caa12ce689fe8::t_f0547e57748103 373-381,405-407,9114-9117
+docs/architecture/agent.md
+  s_1caa12ce689fe8::t_f0547e57748103 271-274,704-710,1326-1337,1339-1341
+agent/Sources/StratoAgentCore/MetadataService/MetadataControlProtocol.swift
+  s_1caa12ce689fe8::t_f0547e57748103 2-34,44-47,82-170
+  s_1caa12ce689fe8::t_d7a1a9920d692d 171
+agent/Sources/StratoAgent/NetworkServiceMacOS.swift
+  s_1caa12ce689fe8::t_f0547e57748103 13,80-109
+  s_1caa12ce689fe8::t_97ab67d8397c9c 110
+agent/Sources/StratoAgent/ResolverProcessHost.swift
+  s_1caa12ce689fe8::t_f0547e57748103 83-85,92-94,101-104
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_1caa12ce689fe8::t_f0547e57748103 644-646,653-656
+  s_1caa12ce689fe8::t_3b9467ed8c0e94 657-658
+control-plane/Tests/AppIdentityTests/GuestIdentityIssuanceConfigTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 16-40
+control-plane/web/src/types/api.ts
+  s_1caa12ce689fe8::t_f0547e57748103 1191
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_1caa12ce689fe8::t_f0547e57748103 41-43,52-53,86-90
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 182-183,243-265
+  s_1caa12ce689fe8::t_aba61832113483 266-268
+shared/Sources/StratoShared/GuestIdentityMinting.swift
+  s_1caa12ce689fe8::t_f0547e57748103 3-32
+agent/Sources/StratoAgentCore/MetadataService/MetadataHTTPServer.swift
+  s_1caa12ce689fe8::t_f0547e57748103 52,59-62,67,79,84-88,122-123,260,263-265,267,270-276,280,290-291,295-297,307-314,321,331,368,372-412,424
+control-plane/Sources/App/Models/FloatingIP.swift
+  s_1caa12ce689fe8::t_f0547e57748103 39-44,62,70,88,91-92,104,111-115,123-127
+agent/Tests/StratoAgentTests/MTLSArtifactDownloaderTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 7,157-176
+  s_1caa12ce689fe8::t_e80e35af157192 177-178
+control-plane/Tests/AppPlatformTests/LoadBalancerControllerTests.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-173
+agent/Sources/StratoAgentCore/LibvirtDomain.swift
+  s_1caa12ce689fe8::t_f0547e57748103 272-291
+control-plane/Sources/App/IAM/IAMResourceTree.swift
+  s_1caa12ce689fe8::t_f0547e57748103 367-371
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_1caa12ce689fe8::t_f0547e57748103 140-187,1217-1226,1233-1239,1242
+control-plane/Sources/App/Migrations/CreateLoadBalancerListener.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-22
+agent/Sources/StratoAgentCore/LoadBalancerReconciler.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-262
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_1caa12ce689fe8::t_f0547e57748103 562-564,575
+docs/deployment/agents.md
+  s_1caa12ce689fe8::t_f0547e57748103 523-527,631,633
+control-plane/Sources/App/IAM/Cedar/CedarModel.swift
+  s_1caa12ce689fe8::t_f0547e57748103 32,73
+agent/Sources/StratoAgent/Agent.swift
+  s_1caa12ce689fe8::t_f0547e57748103 377-380,3956-3958,4184-4209,5607-5608,5994-6000,6068-6086
+  s_1caa12ce689fe8::t_7cc8399dd9c8c7 6087
+docs/architecture/iam.md
+  s_1caa12ce689fe8::t_f0547e57748103 932-935
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_1caa12ce689fe8::t_f0547e57748103 86-89,102-103
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1509-1512,1515-1516,1583-1586,1593,1595
+agent/Sources/StratoAgentCore/MetadataService/GuestIdentityTokenCache.swift
+  s_1caa12ce689fe8::t_f0547e57748103 1-127
+docs/development/e2e-testing.md
+  s_1caa12ce689fe8::t_f0547e57748103 135-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "48ec6baab2ffec0db70e3bbae3753f21e702a0c4",
+  "prompts": {},
+  "sessions": {
+    "s_1caa12ce689fe8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6f-4fa5-7fd0-bf2a-063474d3e1e0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
