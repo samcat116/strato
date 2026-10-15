@@ -3,6 +3,7 @@ import Foundation
 import NIOCore
 import SQLKit
 import StratoShared
+import Synchronization
 import Testing
 import Vapor
 
@@ -264,14 +265,39 @@ struct DesiredStatePollTests {
         }
     }
 
+    @Test("Hold jitter uses the injected source and retains the production ceiling")
+    func boundedHoldJitter() async throws {
+        try await withTestApp { app in
+            app.desiredStatePollHoldWindow = .seconds(60)
+            let samples = Mutex<[Double]>([0, 0.5, 1, -1, 2, .nan])
+            app.desiredStatePollRandomUnit = { samples.withLock { $0.removeFirst() } }
+            let windows = (0..<6).map { _ in app.nextDesiredStatePollHoldWindow() }
+            #expect(
+                windows == [
+                    .seconds(36), .milliseconds(40_500), .seconds(45),
+                    .seconds(36), .seconds(45), .seconds(45),
+                ])
+            #expect(samples.withLock { $0.isEmpty })
+            app.desiredStatePollHoldWindow = .milliseconds(200)
+            app.desiredStatePollRandomUnit = { 0 }
+            #expect(app.nextDesiredStatePollHoldWindow() == .milliseconds(160))
+            app.desiredStatePollHoldWindow = .seconds(-1)
+            #expect(app.nextDesiredStatePollHoldWindow() == .zero)
+        }
+    }
+
     // MARK: Conditional requests
 
-    @Test("A matching If-None-Match parks and answers 304 with the same ETag")
-    func matchingValidatorParksThen304() async throws {
+    @Test("A matching If-None-Match parks and answers 304 with the same ETag", arguments: [0.0, 1.0])
+    func matchingValidatorParksThen304(unit: Double) async throws {
         try await withRunningPollApp { app, port in
             self.enableSPIRE(on: app)
             _ = try await self.registerAgentRow(app: app, name: "poll-agent")
             app.desiredStatePollHoldWindow = .milliseconds(200)
+            let samples = Mutex(0)
+            app.desiredStatePollRandomUnit = {
+                samples.withLock { $0 += 1 }; return unit
+            }
 
             let first = try await self.poll(app: app, port: port)
             let etag = try #require(first.headers.first(name: .eTag))
@@ -284,7 +310,8 @@ struct DesiredStatePollTests {
             #expect(second.headers.first(name: .eTag) == etag)
             // It parked rather than answering immediately, which is the whole
             // point: an instant 304 would make the agent spin.
-            #expect(elapsed >= .milliseconds(150))
+            #expect(elapsed >= .milliseconds(unit == 0 ? 110 : 150))
+            #expect(samples.withLock { $0 } == 2)
         }
     }
 
@@ -527,6 +554,7 @@ struct DesiredStatePollTests {
 /// demands a loopback remote address).
 private func withRunningPollApp(_ test: (Application, Int) async throws -> Void) async throws {
     try await withTestApp { app in
+        app.desiredStatePollRandomUnit = { 1 }
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
 
         // `defer` cannot hold an `await`, so the outcome is captured and

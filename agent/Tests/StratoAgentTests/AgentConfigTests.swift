@@ -32,6 +32,15 @@ struct AgentConfigTests {
             environmentVariables: [:])
     }
 
+    @Test(
+        "Full-refetch configuration retains the 1–300 second bounds",
+        arguments: [(-1, 1), (0, 1), (1, 1), (240, 240), (300, 300), (600, 300)])
+    func fullRefetchBounds(seconds: Int, expectedSeconds: Int) {
+        let config = AgentConfig(
+            controlPlaneURL: "ws://localhost:8080/agent/ws", desiredStateFullRefetchSeconds: seconds)
+        #expect(config.desiredStateFullRefetchInterval == .seconds(expectedSeconds))
+    }
+
     // MARK: - Storage paths
 
     @Test("Load volume_storage_dir alongside vm_storage_dir")

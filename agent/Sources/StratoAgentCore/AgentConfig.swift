@@ -164,12 +164,12 @@ public struct AgentConfig {
 
     /// The forced-unconditional-fetch interval, floored at one second so a
     /// zero or negative value in a config file cannot turn the loop into a
-    /// spin.
+    /// spin, and capped at 300 seconds to retain the correctness backstop.
     public var desiredStateFullRefetchInterval: Duration {
         guard let seconds = desiredStateFullRefetchSeconds else {
             return DesiredStatePoller<ContinuousClock>.defaultFullRefetchInterval
         }
-        return .seconds(max(1, seconds))
+        return .seconds(min(300, max(1, seconds)))
     }
 
     /// The teardown blast-radius guard this configuration asks for.

@@ -87,14 +87,16 @@ struct DesiredStatePollerTests {
         controlPlane: FakeControlPlane,
         log: DeliveryLog,
         fullRefetchInterval: Duration = .seconds(300),
-        clock: PollClock = ContinuousClock()
+        clock: PollClock = ContinuousClock(),
+        randomUnit: @escaping @Sendable () -> Double = { 1 }
     ) -> DesiredStatePoller<PollClock> where PollClock.Duration == Duration {
         DesiredStatePoller(
             fetch: { ifNoneMatch in try await controlPlane.answer(ifNoneMatch: ifNoneMatch) },
             deliver: { envelope in await log.append(envelope) },
             logger: Logger(label: "test"),
             fullRefetchInterval: fullRefetchInterval,
-            clock: clock)
+            clock: clock,
+            randomUnit: randomUnit)
     }
 
     // MARK: Validators
@@ -485,6 +487,121 @@ struct DesiredStatePollerTests {
 
         #expect(clock.sleeps.isEmpty)
         #expect(await poller.notModifiedResponses == 1)
+    }
+
+    // MARK: Bounded jitter (STR-329)
+
+    @Test("Simultaneously started pollers spread failure retries within each backoff bound")
+    func retryRequestTimesSpread() async throws {
+        var requestTimes: [[Duration]] = []
+        for unit in [0.0, 0.5, 1.0] {
+            let clock = TestClock()
+            let times = Mutex<[Duration]>([])
+            let samples = Mutex(0)
+            let poller = DesiredStatePoller(
+                fetch: { _ in
+                    times.withLock { $0.append(clock.now.offset) }
+                    return Self.garbage()
+                },
+                deliver: { _ in }, logger: Logger(label: "test"), clock: clock,
+                randomUnit: {
+                    samples.withLock { $0 += 1 }; return unit
+                })
+            for _ in 0..<9 { await poller.runOnce() }
+            #expect(samples.withLock { $0 } == 9)
+            let ceilings: [Duration] = [1, 2, 4, 8, 16, 30, 30, 30, 30].map { .seconds($0) }
+            for (delay, ceiling) in zip(clock.sleeps, ceilings) {
+                #expect(delay >= ceiling - ceiling / 5)
+                #expect(delay <= ceiling)
+                #expect(delay <= .seconds(30))
+            }
+            requestTimes.append(times.withLock { $0 })
+        }
+        #expect(requestTimes.allSatisfy { $0.first == .zero })
+        // Actual next-fetch times, not just samples or delay calculations.
+        for attempt in 1..<9 {
+            #expect(requestTimes[0][attempt] < requestTimes[1][attempt])
+            #expect(requestTimes[1][attempt] < requestTimes[2][attempt])
+        }
+    }
+
+    @Test("Simultaneously started pollers refetch at 240, 270 and 300 seconds")
+    func fullRefetchRequestTimesSpread() async throws {
+        var refetchTimes: [Duration] = []
+        for unit in [0.0, 0.5, 1.0] {
+            let clock = TestClock()
+            let fullFetches = Mutex<[Duration]>([])
+            let body = try Self.ok(etag: "a")
+            let poller = DesiredStatePoller(
+                fetch: { validator in
+                    if validator == nil {
+                        fullFetches.withLock { $0.append(clock.now.offset) }
+                        return body
+                    }
+                    return Self.notModified(etag: "a")
+                },
+                deliver: { _ in }, logger: Logger(label: "test"), clock: clock,
+                randomUnit: { unit })
+            await poller.runOnce()
+            #expect(clock.sleeps.isEmpty)  // Initial payloads are never delayed.
+            for _ in 0..<301 {
+                if fullFetches.withLock({ $0.count }) == 2 { break }
+                await poller.runOnce()
+            }
+            let times = fullFetches.withLock { $0 }
+            #expect(times.count == 2)
+            #expect(times[0] == .zero)
+            refetchTimes.append(times[1])
+        }
+        #expect(refetchTimes == [.seconds(240), .seconds(270), .seconds(300)])
+    }
+
+    @Test("A sampled refetch deadline survives conditional responses and failed due attempts")
+    func dueRefetchIsNotResampledByFailures() async throws {
+        struct Boom: Error {}
+        let cp = FakeControlPlane(
+            responses: [
+                .success(try Self.ok(etag: "a")),
+                .success(try Self.ok(etag: "b")),
+                .success(Self.notModified(etag: "b")),
+                .failure(Boom()),
+                .success(DesiredStatePollResponse(status: 503, etag: nil, body: Data())),
+                .success(try Self.ok(etag: "c")),
+            ], fallback: .success(Self.notModified(etag: "c")))
+        let samples = Mutex<[Double]>([0, 1, 1, 1])
+        let clock = TestClock()
+        let poller = makePoller(
+            controlPlane: cp, log: DeliveryLog(), clock: clock,
+            randomUnit: { samples.withLock { $0.removeFirst() } })
+        await poller.runOnce()  // Sample 240 seconds only after the full payload.
+        clock.advance(by: .seconds(239))
+        await poller.runOnce()  // Conditional 200 cannot postpone the deadline.
+        await poller.runOnce()  // Conditional 304 floors the attempt to 240s.
+        await poller.runOnce()  // Due transport failure, still unconditional.
+        await poller.runOnce()  // Due unusable response, still unconditional.
+        await poller.runOnce()  // Success starts a fresh 300-second threshold.
+        #expect(await cp.validators == [nil, "a", "b", nil, nil, nil])
+        #expect(samples.withLock { $0.isEmpty })
+        #expect(clock.sleeps == [.seconds(1), .seconds(1), .seconds(2)])
+    }
+
+    @Test("Injected randomness cannot widen retry or refetch bounds", arguments: [-1.0, 2.0, Double.nan])
+    func invalidRandomnessStaysBounded(unit: Double) async throws {
+        struct Boom: Error {}
+        let cp = FakeControlPlane(
+            responses: [.success(try Self.ok(etag: "a")), .failure(Boom())],
+            fallback: .success(try Self.ok(etag: "a")))
+        let clock = TestClock()
+        let poller = makePoller(
+            controlPlane: cp, log: DeliveryLog(), fullRefetchInterval: .seconds(600),
+            clock: clock, randomUnit: { unit })
+        await poller.runOnce()
+        await poller.runOnce()
+        #expect(clock.sleeps[0] >= .milliseconds(800))
+        #expect(clock.sleeps[0] <= .seconds(1))
+        clock.advance(by: .seconds(300))
+        await poller.runOnce()
+        #expect(await cp.validators == [nil, "a", nil])
     }
 
     // MARK: Lifecycle
