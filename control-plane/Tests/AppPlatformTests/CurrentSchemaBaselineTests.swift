@@ -18,10 +18,11 @@ struct CurrentSchemaBaselineTests {
     // (deadline, id) index; administrative revocation adds one agents column.
     // Compute adds net accounting, class snapshots/ledgers, and one durable admission table.
     // Account identity validation adds three checks after the compute migrations.
+    // STR-333 adds four nullable update-verification fields on agents.
     // The combined catalog was measured from PostgreSQL, not inferred from migration text.
     // Historical catalogs and the frozen baseline remain
     // independently asserted below.
-    private static let expectedCurrentCatalogMD5 = "4bd921c32dce26b3108987ba0a16649e"
+    private static let expectedCurrentCatalogMD5 = "3f966e11e1dd9c53fd4c1702385efb93"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -75,7 +76,7 @@ struct CurrentSchemaBaselineTests {
             #expect(baselineMD5 == Self.expectedCatalogMD5)
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Observed current catalog: \(upgradedMD5)")
             #expect(upgradedCounts.tables == 85)
-            #expect(upgradedCounts.columns == 1090)
+            #expect(upgradedCounts.columns == 1094)
             #expect(upgradedCounts.constraints == 391)
             #expect(upgradedCounts.indexes == 256)
             #expect(upgradedCounts.enums == baselineCounts.enums)
@@ -92,6 +93,36 @@ struct CurrentSchemaBaselineTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("Update verification migration round trips without rewriting existing assignments")
+    func updateHealthMigrationRoundTrip() async throws {
+        try await withTestApp { app in
+            let migration = AddAgentUpdateHealthVerification()
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Migration fixture")
+            let agent = try await builder.createAgent(
+                named: "preserved-assignment",
+                organizationScope: .organization(try org.requireID()))
+            agent.assignUpdate(version: "next-version", source: .manual, at: .testing(Date()))
+            try await agent.save(on: app.db)
+            let full = try await self.catalogMD5(on: app.db)
+            try await migration.revert(on: app.db)
+            #expect(try await self.catalogMD5(on: app.db) == "4bd921c32dce26b3108987ba0a16649e")
+            let sql = try #require(app.db as? any SQLDatabase)
+            // Existing assignments acquire no invented successful baseline.
+            try await migration.prepare(on: app.db)
+            #expect(try await self.catalogMD5(on: app.db) == full)
+            let missing = try await sql.raw(
+                "SELECT count(*) AS count FROM agents WHERE update_health_baseline IS NOT NULL"
+            )
+            .first(decodingColumn: "count", as: Int.self)
+            #expect(missing == 0)
+            let preserved = try await Agent.find(agent.requireID(), on: app.db)
+            #expect(preserved?.updateDesiredVersion == "next-version")
+            #expect(preserved?.updateAssignmentSource == .manual)
+            #expect(preserved?.updateHealthBaseline == nil)
+        }
+    }
+
     @Test("Suspension and idle migrations preserve the reviewed current catalog round trip")
     func suspensionAndIdleCatalogRoundTrip() async throws {
         let app = try await Application.makeForBareDatabaseTesting()
@@ -100,6 +131,8 @@ struct CurrentSchemaBaselineTests {
             try await app.autoMigrate()
             app.registerForwardMigrations()
             try await app.autoMigrate()
+            // Keep this historical round trip independent of later additions.
+            try await AddAgentUpdateHealthVerification().revert(on: app.db)
             let full = try await catalogMD5(on: app.db)
             let fences = AddSandboxIdleFences()
             let idle = AddSandboxIdleActivity()

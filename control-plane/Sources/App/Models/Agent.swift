@@ -247,6 +247,20 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "update_failure_reason")
     var updateFailureReason: String?
 
+    /// Assignment-time working capabilities and inventory state (STR-333).
+    @OptionalField(key: "update_health_baseline")
+    var updateHealthBaseline: AgentUpdateHealthBaseline?
+
+    @OptionalField(key: "update_target_registered_at")
+    var updateTargetRegisteredAt: Date?
+
+    @OptionalField(key: "update_verification_started_at")
+    var updateVerificationStartedAt: Date?
+
+    /// Receipt of an observed inventory report, distinct from registration/heartbeat.
+    @OptionalField(key: "update_inventory_received_at")
+    var updateInventoryReceivedAt: Date?
+
     /// Why this agent last refused to converge a sync's workload teardowns
     /// (STR-98 phase 2), as reported. Non-nil means the host is holding
     /// workloads the control plane authorized it to remove, because removing
@@ -415,6 +429,13 @@ extension Agent {
         updateDesiredVersion = version
         updateAssignmentSource = source
         updateArtifactOverride = artifact
+        updateHealthBaseline = AgentUpdateHealthBaseline(
+            assignedAt: now.date,
+            capabilities: workingUpdateCapabilities(at: now).sorted(),
+            inventoryHealthy: manifestInventoryComplete != false && manifestStatusReason == nil)
+        updateTargetRegisteredAt = nil
+        updateVerificationStartedAt = nil
+        updateInventoryReceivedAt = nil
         updateAttemptedAt = now.date
         updateBlockedReason = nil
         updateFailureReason = nil
@@ -430,13 +451,16 @@ extension Agent {
         updateAssignmentSource = nil
         updateArtifactOverride = nil
         updateAttemptedAt = nil
+        updateHealthBaseline = nil
+        updateTargetRegisteredAt = nil
+        updateVerificationStartedAt = nil
+        updateInventoryReceivedAt = nil
         updateBlockedReason = nil
         updateFailureReason = nil
     }
 
     /// Records a terminal failure for the current assignment. The assignment
-    /// itself stays — it is what an operator sees, and what a returning agent
-    /// could still converge on if the blocker was environmental — but the
+    /// itself stays for operator inspection and explicit recovery, but the
     /// pinned artifact goes, because it may carry a presigned credential and
     /// this update is not finishing on its own. Re-issuing the update supplies
     /// a fresh one. Callers save.
@@ -458,6 +482,13 @@ extension Agent {
         dependencyObservations: [NodeDependencyObservation],
         receivedAt: Date
     ) {
+        if let target = updateDesiredVersion {
+            updateTargetRegisteredAt =
+                AgentVersionTarget.updateAvailable(agentVersion: registration.version, target: target)
+                ? nil : receivedAt
+            updateVerificationStartedAt = nil
+            updateInventoryReceivedAt = nil
+        }
         hostname = registration.hostname
         version = registration.version
         architecture = registration.architecture.rawValue
@@ -890,5 +921,93 @@ struct AgentResponse: Content {
         self.manifestStatusAt = agent.manifestStatusAt
         self.manifestInventoryComplete = agent.manifestInventoryComplete
         self.heldWorkloads = heldWorkloads
+    }
+}
+
+struct AgentUpdateHealthBaseline: Codable, Sendable {
+    let assignedAt: Date
+    let capabilities: [String]
+    let inventoryHealthy: Bool
+}
+
+extension Agent {
+    func workingUpdateCapabilities(at instant: ClusterInstant) -> Set<String> {
+        var result = Set<String>()
+        for capability in NodeCapability.allCases where dependencyAllows(capability, at: instant) {
+            result.insert("dependency:" + capability.rawValue)
+        }
+        for backend in hypervisors where supportedHypervisors(at: instant).contains(backend.type) {
+            let prefix = "hypervisor:" + backend.type.rawValue
+            result.insert(prefix)
+            if backend.accelerated { result.insert(prefix + ":accelerated") }
+            if backend.supportsSnapshots { result.insert(prefix + ":snapshots") }
+            if backend.supportsVsock == true { result.insert(prefix + ":vsock") }
+            if backend.supportsGuestExec == true { result.insert(prefix + ":guest_exec") }
+            if backend.supportsVolumeIOLimits == true { result.insert(prefix + ":volume_io_limits") }
+        }
+        if sandboxCapable && hostMemoryProfileAllowsPlacement(at: instant) { result.insert("sandbox") }
+        if effectiveSandboxNetworkingCapable(at: instant) { result.insert("sandbox_networking") }
+        if supportsInterVMNetworking(at: instant) {
+            result.insert("overlay_networking")
+            result.insert("networking")
+        }
+        if networkCapability == NetworkCapability.userMode.rawValue { result.insert("networking") }
+        if tpmCapable { result.insert("tpm") }
+        if effectiveResolverCapable(at: instant) { result.insert("resolver") }
+        if metadataServiceCapable { result.insert("metadata_service") }
+        return result
+    }
+}
+
+extension Agent {
+    func hasFreshUpdateHealth(at instant: ClusterInstant) -> Bool {
+        guard let assignedAt = updateHealthBaseline?.assignedAt,
+            let registeredAt = updateTargetRegisteredAt, registeredAt > assignedAt,
+            let inventoryAt = updateInventoryReceivedAt, inventoryAt >= registeredAt,
+            inventoryAt >= (updateAttemptedAt ?? assignedAt),
+            let dependenciesAt = dependencyObservationsReceivedAt, dependenciesAt >= registeredAt,
+            dependenciesAt >= (updateAttemptedAt ?? assignedAt),
+            isOnline(at: instant)
+        else { return false }
+        return [registeredAt, inventoryAt, dependenciesAt].allSatisfy { $0 <= instant.date }
+            && instant.date.timeIntervalSince(inventoryAt) < Self.dependencyObservationStaleAfter
+            && instant.date.timeIntervalSince(dependenciesAt) < Self.dependencyObservationStaleAfter
+    }
+
+    func updateHealthVerificationFailure(at instant: ClusterInstant) -> String? {
+        guard let baseline = updateHealthBaseline else {
+            return
+                "missing pre-update health baseline; review agent health and explicitly cancel this assignment after any needed recovery"
+        }
+        guard baseline.inventoryHealthy else {
+            return
+                "inventory was degraded at assignment; recover inventory, review agent health, and explicitly cancel this assignment"
+        }
+        if updateVerificationStartedAt != nil && !hasFreshUpdateHealth(at: instant) {
+            return
+                "agent disappeared or target-version health became stale during verification; check agent and inventory reports"
+        }
+        guard hasFreshUpdateHealth(at: instant) else { return nil }
+        if manifestInventoryComplete == false || manifestStatusReason != nil {
+            return "target-version inventory is incomplete or degraded: "
+                + (manifestStatusReason ?? "inventory enumeration failed")
+        }
+        let required = Set(baseline.capabilities)
+        for observation in dependencyObservations where observation.desiredState == .required {
+            let requiredFeature = observation.affectedCapabilities.contains {
+                required.contains("dependency:" + $0.rawValue)
+            }
+            if (requiredFeature || observation.id == .hostMemoryProfile), observation.functionalState != .healthy {
+                return "target-version required dependency is degraded or unhealthy: " + observation.id.rawValue
+            }
+        }
+        let lost = required.subtracting(workingUpdateCapabilities(at: instant)).sorted()
+        if !lost.isEmpty {
+            return "target-version lost required working capabilities: " + lost.joined(separator: ", ")
+        }
+        guard hostMemoryProfileAllowsPlacement(at: instant) else {
+            return "target-version host memory dependency is unhealthy"
+        }
+        return nil
     }
 }
