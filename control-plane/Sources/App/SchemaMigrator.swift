@@ -57,6 +57,16 @@ enum SchemaMigrator {
     /// control-plane process takes before touching the schema.
     static let lockName = AdvisoryLockNamespace.schemaMigration.name
 
+    /// Completed post-baseline data migrations that were deliberately retired.
+    /// BackfillNetworkQuotaAccounting (introduced in 87b79418, removed in
+    /// da964334) refreshed cached quota counters and performed no DDL. Current
+    /// admissions resync those counters before making a quota decision. Retain
+    /// its exact applied name as supported history without replaying old code
+    /// or registering it as pending work on fresh databases.
+    private static let supportedRetiredDataMigrationNames: Set<String> = [
+        "App.BackfillNetworkQuotaAccounting"
+    ]
+
     /// Whether this process migrates at all. Defaults to true, so compose,
     /// local development and the test harness are untouched; a deployment that
     /// gates migrations behind a separate job (a Helm `pre-upgrade` hook) sets it
@@ -239,14 +249,15 @@ enum SchemaMigrator {
         )
     }
 
-    /// The supported applied catalog is exactly the names registered by this
-    /// binary. Unknown names fail closed: they may belong to a newer build or a
-    /// different schema history. Batch numbers describe boot attempts, not schema
+    /// The supported applied catalog contains registered names and explicitly
+    /// reviewed retired data-only names. Unknown names fail closed: they may
+    /// belong to a newer build or a different schema history. Batch numbers
+    /// describe boot attempts, not schema
     /// versions, and neither names nor their lexical order establish compatibility.
     ///
     /// Fluent keeps its registry private. Its public prepare/revert previews
     /// partition that registry into pending and applied migrations, so their union
-    /// defines support without duplicating registration or accessing internals.
+    /// defines active support without duplicating registration or accessing internals.
     /// Call after `setupIfNeeded()`, on the same pinned database as the migrator;
     /// the migrating path additionally holds the migration lock.
     static func previewCompatiblePrepareBatch(
@@ -256,7 +267,7 @@ enum SchemaMigrator {
     ) async throws -> [any Migration] {
         let pending = try await migrator.previewPrepareBatch().get().map(\.0)
         let prepared = try await migrator.previewRevertAllBatches().get().map(\.0)
-        let supportedNames = Set((pending + prepared).map(\.name))
+        let supportedNames = Set((pending + prepared).map(\.name)).union(supportedRetiredDataMigrationNames)
         let appliedNames = try await MigrationLog.query(on: connection).field(\.$name).all().map(\.name)
         let unsupported = Set(appliedNames).subtracting(supportedNames).sorted()
         guard unsupported.isEmpty else {
