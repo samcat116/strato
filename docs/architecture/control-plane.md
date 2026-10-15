@@ -82,6 +82,8 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
    once — see "Model and migration conventions" for how that is made safe
    (STR-183). `STRATO_RUN_MIGRATIONS=false` turns a replica into a verifier: it
    refuses to boot if anything is unapplied rather than migrating itself.
+   Both paths reject applied migration names outside this binary's registered
+   history before readiness opens; see the applied-catalog contract below.
 5. Post-migration convergence: the Cedar policy set is compiled at its
    current version and stored secrets are re-encrypted. Grant completeness is
    a schema-migration invariant; startup does not scan membership relations to
@@ -710,6 +712,28 @@ what makes the test harness safe.
     what keeps the connection budget at one: a migrator drawing its own
     connections while the lock sat on a pinned one would need a pool of ≥2 *per
     event loop*, and Vapor's Postgres pool defaults to exactly 1.
+- **Applied-catalog compatibility (STR-323)**: this binary supports exactly
+  the migration names registered by `Application.registerMigrations()` in
+  `Bootstrap/DatabaseBootstrap.swift`: the frozen `CurrentSchemaBaseline` plus
+  its registered forward migrations.
+  Both startup paths compare every `_fluent_migrations` name against that
+  history before applying pending migrations or opening readiness. An unknown
+  applied name is an unsupported catalog, even if its change looks additive;
+  migration batch numbers and name ordering are not schema versions. Diagnostics
+  name the unsupported entries and direct operators to a build that supports
+  them. Known but unapplied migrations remain a separate error when
+  `STRATO_RUN_MIGRATIONS=false`.
+  Fresh databases can boot with migrations enabled. A catalog containing only
+  supported applied entries can advance through known pending migrations; with
+  migrations disabled, all registered migrations must already be applied.
+  The STR-234 baseline still requires a fresh database at its cutover; this check
+  does not make pre-baseline history eligible for an in-place upgrade.
+  After an upgrade, rollback to a binary missing an applied migration is refused.
+  Restore a compatible database backup with its matching build, or run a build
+  supporting the applied history. Do not delete migration log rows to bypass the
+  gate: that neither reverts schema changes nor establishes compatibility.
+  This contract checks recorded migration history, not arbitrary schema drift,
+  and does not establish safe concurrent serving by different binary versions.
 - `UntransactedMigration` is the documented opt-out, for the one case Postgres
   forbids in a transaction block: `CREATE INDEX CONCURRENTLY`. No production
   migration conforms today. Opting out gives back the crash window above, so

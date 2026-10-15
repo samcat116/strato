@@ -132,7 +132,7 @@ enum SchemaMigrator {
             )
 
             guard options.runMigrations else {
-                try await verifyNothingPending(migrator: migrator, logger: logger)
+                try await verifyNothingPending(migrator: migrator, on: connection, logger: logger)
                 return
             }
 
@@ -148,7 +148,8 @@ enum SchemaMigrator {
                     // than before the lock — a list read outside it is exactly the
                     // stale read every replica acts on today.
                     try await migrator.setupIfNeeded().get()
-                    let pending = try await migrator.previewPrepareBatch().get().map(\.0)
+                    let pending = try await previewCompatiblePrepareBatch(
+                        migrator: migrator, on: lockedConnection, logger: logger)
                     if pending.isEmpty {
                         logger.info("[SchemaMigrator] Schema is up to date")
                     } else {
@@ -222,9 +223,11 @@ enum SchemaMigrator {
     /// `setupIfNeeded()` still runs, because `previewPrepareBatch()` cannot read a
     /// log table that does not exist yet. Its DDL is `IF NOT EXISTS`, so on a
     /// database that has ever been migrated this writes nothing.
-    static func verifyNothingPending(migrator: Migrator, logger: Logger) async throws {
+    static func verifyNothingPending(migrator: Migrator, on connection: any Database, logger: Logger) async throws {
         try await migrator.setupIfNeeded().get()
-        let pending = try await migrator.previewPrepareBatch().get().map(\.0.name)
+        let pending = try await previewCompatiblePrepareBatch(
+            migrator: migrator, on: connection, logger: logger
+        ).map(\.name)
         guard pending.isEmpty else {
             let error = SchemaMigrationError.migrationsPendingButDisabled(names: pending)
             logger.critical("\(error.description)")
@@ -234,6 +237,34 @@ enum SchemaMigrator {
             "[SchemaMigrator] Migrations disabled for this process; schema is up to date",
             metadata: ["setting": .string(runMigrationsKey)]
         )
+    }
+
+    /// The supported applied catalog is exactly the names registered by this
+    /// binary. Unknown names fail closed: they may belong to a newer build or a
+    /// different schema history. Batch numbers describe boot attempts, not schema
+    /// versions, and neither names nor their lexical order establish compatibility.
+    ///
+    /// Fluent keeps its registry private. Its public prepare/revert previews
+    /// partition that registry into pending and applied migrations, so their union
+    /// defines support without duplicating registration or accessing internals.
+    /// Call after `setupIfNeeded()`, on the same pinned database as the migrator;
+    /// the migrating path additionally holds the migration lock.
+    static func previewCompatiblePrepareBatch(
+        migrator: Migrator,
+        on connection: any Database,
+        logger: Logger
+    ) async throws -> [any Migration] {
+        let pending = try await migrator.previewPrepareBatch().get().map(\.0)
+        let prepared = try await migrator.previewRevertAllBatches().get().map(\.0)
+        let supportedNames = Set((pending + prepared).map(\.name))
+        let appliedNames = try await MigrationLog.query(on: connection).field(\.$name).all().map(\.name)
+        let unsupported = Set(appliedNames).subtracting(supportedNames).sorted()
+        guard unsupported.isEmpty else {
+            let error = SchemaMigrationError.unsupportedAppliedCatalog(names: unsupported)
+            logger.critical("\(error.description)")
+            throw error
+        }
+        return pending
     }
 
     // MARK: - Applying a batch
@@ -383,6 +414,9 @@ enum SchemaMigrationError: Error, CustomStringConvertible {
     /// This process does not migrate, and the schema is behind the binary.
     case migrationsPendingButDisabled(names: [String])
 
+    /// Applied migrations outside this binary's explicitly supported history.
+    case unsupportedAppliedCatalog(names: [String])
+
     var description: String {
         switch self {
         case .lockTimeout(let lockName, let seconds):
@@ -434,6 +468,16 @@ enum SchemaMigrationError: Error, CustomStringConvertible {
                     """
             }
             return message
+
+        case .unsupportedAppliedCatalog(let names):
+            return """
+                Unsupported applied schema catalog: \(names.count) migration(s) in _fluent_migrations \
+                are not supported by this control-plane build: \(names.joined(separator: ", ")). \
+                The database may have been migrated by a newer build or a different schema history. \
+                Refusing to serve or apply migrations. Restart with a build that supports every applied \
+                migration. For rollback, restore a compatible database backup together with its matching \
+                build; do not delete migration log rows or assume additive changes are safe for older binaries.
+                """
 
         case .migrationsPendingButDisabled(let names):
             return """
