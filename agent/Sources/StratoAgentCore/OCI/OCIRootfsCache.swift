@@ -160,6 +160,9 @@ public actor OCIRootfsCache {
             throw OCIError.malformedResponse(detail: "malformed manifest digest \(manifestDigest)")
         }
         let staging = directory + ".partial"
+        guard !FileManager.default.fileExists(atPath: staging + "/.building") else {
+            throw SubprocessStagingBlockedError(path: staging)
+        }
         try? FileManager.default.removeItem(atPath: staging)
         try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: true)
         return staging
@@ -230,6 +233,8 @@ public actor OCIRootfsCache {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: imagesPath)) ?? []
         let stagingDirectories = names.filter { $0.hasSuffix(".partial") }
             .map { imagesPath + "/" + $0 }
+            // Age cannot prove that an aborted builder stopped using staging.
+            .filter { !FileManager.default.fileExists(atPath: $0 + "/.building") }
         DiskCacheLRU.removeStaleStaging(
             candidates: stagingDirectories,
             olderThan: Self.stalePartialAge,

@@ -111,7 +111,7 @@ struct KRBDDiskRealizerTests {
             mappingStatePath: state.path,
             deviceExists: { _ in true },
             readTextFile: textReader(),
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorder.run(executable, arguments)
             })
 
@@ -146,7 +146,7 @@ struct KRBDDiskRealizerTests {
             mappingStatePath: state.path,
             deviceExists: { _ in true },
             readTextFile: textReader(readOnlyDevices: ["rbd0"]),
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorder.run(executable, arguments)
             })
 
@@ -165,7 +165,7 @@ struct KRBDDiskRealizerTests {
         let recorder = KRBDCommandRecorder()
         let state = temporaryMappingStatePath()
         defer { try? FileManager.default.removeItem(at: state.directory) }
-        let runner: SubprocessRunner = { executable, arguments in
+        let runner: SubprocessRunner = { executable, arguments, _ in
             await recorder.run(executable, arguments)
         }
 
@@ -203,7 +203,7 @@ struct KRBDDiskRealizerTests {
         let recorder = KRBDCommandRecorder()
         let state = temporaryMappingStatePath()
         defer { try? FileManager.default.removeItem(at: state.directory) }
-        let runner: SubprocessRunner = { executable, arguments in
+        let runner: SubprocessRunner = { executable, arguments, _ in
             await recorder.run(executable, arguments)
         }
         let original = KRBDDiskRealizer(
@@ -237,7 +237,7 @@ struct KRBDDiskRealizerTests {
         let realizer = KRBDDiskRealizer(
             rbdPath: "/fake/rbd", mappingStatePath: state.path,
             deviceExists: { _ in true }, readTextFile: textReader(),
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorder.run(executable, arguments)
             })
         let disk = try await realizer.realize(attachment, readOnly: false)

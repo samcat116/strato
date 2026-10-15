@@ -81,9 +81,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         readTextFile: @escaping @Sendable (String) throws -> String = {
             try String(contentsOfFile: $0, encoding: .utf8)
         },
-        runSubprocess: @escaping SubprocessRunner = {
-            try await ProcessRunner.run(executableURL: $0, arguments: $1)
-        }
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run
     ) {
         self.rbdPath = rbdPath
         self.mappingStatePath = mappingStatePath
@@ -139,7 +137,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             "--options", "ms_mode=secure",
         ]
         if readOnly { arguments.append("--read-only") }
-        let result = try await runSubprocess(URL(fileURLWithPath: rbdPath), arguments)
+        let result = try await runCommand(URL(fileURLWithPath: rbdPath), arguments)
         guard result.terminationStatus == 0 else {
             throw StorageBackendError.hostMisconfiguration(
                 "rbd map exited with status \(result.terminationStatus)")
@@ -156,7 +154,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             try persistMappings()
         } catch {
             mappings.removeValue(forKey: key)
-            _ = try? await runSubprocess(
+            _ = try? await runCommand(
                 URL(fileURLWithPath: rbdPath),
                 ["unmap", path])
             throw StorageBackendError.hostMisconfiguration(
@@ -216,7 +214,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             throw StorageBackendError.hostMisconfiguration(
                 "refusing to unmap a Firecracker RBD device whose live identity no longer matches")
         }
-        let result = try await runSubprocess(
+        let result = try await runCommand(
             URL(fileURLWithPath: rbdPath),
             ["unmap", mapping.path])
         guard result.terminationStatus == 0 else {
@@ -272,7 +270,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             let deviceName = Self.deviceName(for: path)
         else { return false }
 
-        let listing = try await runSubprocess(
+        let listing = try await runCommand(
             URL(fileURLWithPath: rbdPath),
             ["device", "list", "--format", "json", "--device-type", "krbd"])
         guard listing.terminationStatus == 0 else {
@@ -358,4 +356,8 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { return nil }
         return "rbd\(suffix)"
     }
+    private func runCommand(_ executable: URL, _ arguments: [String]) async throws -> ProcessResult {
+        try await runSubprocess(executable, arguments, .storage(executable: executable, arguments: arguments))
+    }
+
 }

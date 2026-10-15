@@ -44,9 +44,7 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
         minimumHeadroomBytes: Int64 = 32 * 1024 * 1024,
         minimumImageBytes: Int64 = 64 * 1024 * 1024,
         logger: Logger,
-        runSubprocess: @escaping SubprocessRunner = {
-            try await ProcessRunner.run(executableURL: $0, arguments: $1)
-        }
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run
     ) {
         self.init(
             mkfsPath: mkfsPath,
@@ -64,9 +62,7 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
         minimumHeadroomBytes: Int64 = 32 * 1024 * 1024,
         minimumImageBytes: Int64 = 64 * 1024 * 1024,
         logger: Logger,
-        runSubprocess: @escaping SubprocessRunner = {
-            try await ProcessRunner.run(executableURL: $0, arguments: $1)
-        },
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run,
         prepareImage: @escaping @Sendable (String, UInt64) throws -> Void
     ) {
         self.mkfsPath = mkfsPath
@@ -102,7 +98,7 @@ public struct Ext4ImageBuilder: RootfsImageBuilder {
             ])
 
         let result = try await runSubprocess(
-            URL(fileURLWithPath: mkfs), ["-F", "-q", "-d", treePath, imagePath])
+            URL(fileURLWithPath: mkfs), ["-F", "-q", "-d", treePath, imagePath], .imageWork(bytes: sizeBytes))
         guard result.terminationStatus == 0 else {
             try? FileManager.default.removeItem(atPath: imagePath)
             if result.combinedOutput.localizedCaseInsensitiveContains("No space left on device") {

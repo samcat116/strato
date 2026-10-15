@@ -13,9 +13,7 @@ public struct CloudInitProvisioner: Sendable {
     private enum ProvisioningError: Error { case generatorFailed }
 
     let logger: Logger
-    var runISO: @Sendable (URL, [String]) async throws -> ProcessResult = { executable, arguments in
-        try await ProcessRunner.run(executableURL: executable, arguments: arguments)
-    }
+    var runISO: SubprocessRunner = SubprocessBudget.run
 
     /// Password set on the guest image's default user for serial-console login.
     /// This is a development/test convenience for user-mode-networked VMs that
@@ -151,7 +149,7 @@ public struct CloudInitProvisioner: Sendable {
             #endif
 
             try staging.generatorWillStart()
-            let result = try await runISO(executableURL, arguments)
+            let result = try await runISO(executableURL, arguments, .cloudInit)
             try staging.generatorDidFinish()
 
             if result.terminationStatus == 0 {

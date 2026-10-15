@@ -102,7 +102,7 @@ struct ManagedStatePermissionsTests {
         defer { _ = umask(previous) }
         try await fixture { root async throws in
             var provisioner = CloudInitProvisioner(logger: Logger(label: "test"))
-            provisioner.runISO = { _, arguments in
+            provisioner.runISO = { _, arguments, _ in
                 let staging = arguments.last!
                 let attrs = try FileManager.default.attributesOfItem(atPath: staging)
                 #expect((attrs[.posixPermissions] as! NSNumber).intValue == 0o700)
@@ -154,7 +154,7 @@ struct ManagedStatePermissionsTests {
             let iso = root + "/cloud-init.iso"
             try DurableFileWriter().write(Data("previous seed".utf8), to: iso)
             var provisioner = CloudInitProvisioner(logger: Logger(label: "test"))
-            provisioner.runISO = { _, arguments in
+            provisioner.runISO = { _, arguments, _ in
                 let documents = arguments.last!
                 let metadata = try String(contentsOfFile: documents + "/meta-data", encoding: .utf8)
                 #expect(metadata.contains("seedfrom:"))
@@ -166,7 +166,7 @@ struct ManagedStatePermissionsTests {
             }
             #expect(try String(contentsOfFile: iso, encoding: .utf8) == "previous seed")
             #expect(!FileManager.default.fileExists(atPath: root + "/.cloud-init-staging"))
-            provisioner.runISO = { _, _ in throw CocoaError(.fileWriteUnknown) }
+            provisioner.runISO = { _, _, _ in throw CocoaError(.fileWriteUnknown) }
             await #expect(throws: (any Error).self) {
                 try await provisioner.makeNoCloudISO(at: iso, vmId: "fixture")
             }
