@@ -1,0 +1,26 @@
+agent/Sources/StratoAgentCore/FirecrackerDiskRealizer.swift
+  h_a84d4ff76cadd1 1,133-140,149-157,159,181-184,265-273,395-402
+agent/Tests/StratoAgentStorageTests/KRBDDiskRealizerTests.swift
+  h_a84d4ff76cadd1 104-162
+control-plane/Sources/App/Services/Sweeps/AgentAutoUpdateSweep.swift
+  h_a84d4ff76cadd1 162-196
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  h_a84d4ff76cadd1 3,932-977
+docs/architecture/agent-updates.md
+  h_a84d4ff76cadd1 167-171
+docs/architecture/storage.md
+  h_a84d4ff76cadd1 933-940
+docs/guide/getting-started.md
+  h_a84d4ff76cadd1 199-201,209-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "80e89739ec1245b921daf197d5fcbac4f8a8ebfd",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
