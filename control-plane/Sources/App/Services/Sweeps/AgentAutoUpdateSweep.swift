@@ -159,8 +159,42 @@ extension AgentMaintenanceLoop {
                             min(inventoryAt, dependenciesAt).timeIntervalSince(startedAt)
                                 >= Self.autoUpdateVerificationSeconds
                         {
+                            let id = try agent.requireID()
+                            let converged = try await db.transaction { transaction in
+                                guard let sql = transaction as? any SQLDatabase else {
+                                    throw Abort(.internalServerError)
+                                }
+                                // Reports and operator actions may have committed
+                                // since the candidate snapshot. Serialize the final
+                                // verdict with them and recheck current evidence.
+                                try await sql.raw("SELECT id FROM agents WHERE id = \(bind: id) FOR UPDATE").run()
+                                guard let current = try await Agent.find(id, on: transaction),
+                                    current.updateDesiredVersion == assigned,
+                                    current.updateAttemptedAt == agent.updateAttemptedAt,
+                                    current.updateHealthBaseline?.assignedAt == agent.updateHealthBaseline?.assignedAt,
+                                    current.updateFailureReason == nil,
+                                    !AgentVersionTarget.updateAvailable(
+                                        agentVersion: current.version, target: assigned),
+                                    current.updateHealthVerificationFailure(at: evaluationInstant) == nil,
+                                    current.hasFreshUpdateHealth(at: evaluationInstant),
+                                    let startedAt = current.updateVerificationStartedAt,
+                                    now.timeIntervalSince(startedAt) >= Self.autoUpdateVerificationSeconds,
+                                    let inventoryAt = current.updateInventoryReceivedAt,
+                                    let dependenciesAt = current.dependencyObservationsReceivedAt,
+                                    min(inventoryAt, dependenciesAt).timeIntervalSince(startedAt)
+                                        >= Self.autoUpdateVerificationSeconds
+                                else { return false }
+                                current.clearUpdateAssignment()
+                                try await current.save(on: transaction)
+                                return true
+                            }
+                            guard converged else {
+                                // The next sweep classifies the newer state. This
+                                // tick must not advance using its stale snapshot.
+                                waitingOnAgent = true
+                                continue
+                            }
                             agent.clearUpdateAssignment()
-                            try await agent.save(on: db)
                             Telemetry.agentAutoUpdateConverged()
                             app.logger.notice(
                                 "Agent update passed post-update health verification",

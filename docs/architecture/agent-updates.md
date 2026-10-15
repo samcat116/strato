@@ -164,7 +164,11 @@ where another stopped:
     continuous on-host monitoring.
   - **Converged** — the target agent passes the interval with unchanged or
     improved capabilities and healthy inventory: assignment and verification
-    state cleared, rollout advances.
+    state cleared, rollout advances. The final verdict locks and re-reads the
+    agent row, checking the current assignment, failure, and health evidence
+    before clearing it. If the current assignment or health no longer qualifies,
+    the next sweep classifies that state; stale evidence cannot erase a newer
+    terminal failure or advance the fleet.
   - **Blocked** — the agent reports why it will not act yet (see
     preconditions below). Past the health budget (10 minutes) the agent is
     *parked*: its assignment stays, so it converges whenever the blocker

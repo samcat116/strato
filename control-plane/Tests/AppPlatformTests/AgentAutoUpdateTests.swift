@@ -1,5 +1,6 @@
 import Fluent
 import StratoShared
+import Synchronization
 import Testing
 import Vapor
 import VaporTesting
@@ -924,6 +925,52 @@ final class AgentAutoUpdateTests {
             try await row.save(on: app.db)
             await self.sweep(app, at: .testing(end))
             #expect(try await self.reload(first, on: app).updateFailureReason?.contains("stale") == true)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test(
+        "Convergence rechecks reports and assignments committed after its snapshot",
+        arguments: ["failure", "inventory", "assignment"])
+    func convergenceRechecksCurrentAgent(change: String) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            second.lastHeartbeat = now
+            try await second.save(on: app.db)
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now.addingTimeInterval(-120)))
+            first.version = Self.target
+            first.updateTargetRegisteredAt = now.addingTimeInterval(-119)
+            first.updateVerificationStartedAt = now.addingTimeInterval(-60)
+            self.targetHealth(first, at: now)
+            try await first.save(on: app.db)
+            let id = try first.requireID()
+            let injected = Mutex(false)
+            app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
+            await app.agentMaintenance.sweepAgentAutoUpdates(
+                at: .testing(now),
+                currentInstant: { db in
+                    // This hook runs after candidates were loaded, before convergence.
+                    let shouldInject = injected.withLock { value in
+                        guard !value else { return false }
+                        value = true
+                        return true
+                    }
+                    guard shouldInject else { return .testing(now) }
+                    let current = try #require(try await Agent.find(id, on: db))
+                    switch change {
+                    case "failure": current.recordUpdateFailure("late terminal failure")
+                    case "inventory": current.manifestStatusReason = "late inventory degradation"
+                    default: current.assignUpdate(version: "different-target", source: .manual, at: .testing(now))
+                    }
+                    try await current.save(on: db)
+                    return .testing(now)
+                })
+            let retained = try await self.reload(first, on: app)
+            #expect(retained.updateDesiredVersion == (change == "assignment" ? "different-target" : Self.target))
+            if change == "failure" { #expect(retained.updateFailureReason == "late terminal failure") }
+            if change == "inventory" { #expect(retained.manifestStatusReason == "late inventory degradation") }
             #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
         }
     }
