@@ -1,0 +1,19 @@
+docs/architecture/wire-protocol.md
+  s_c353912d75372b::t_84b8de90e41aab 54,65-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c463d0f49059eb353391eab1ec266dec266f794e",
+  "prompts": {},
+  "sessions": {
+    "s_c353912d75372b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14682-7857-7951-95c8-43f48c308c4a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
