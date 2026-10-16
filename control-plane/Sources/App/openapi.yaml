@@ -16268,7 +16268,7 @@ components:
     AgentHypervisorSupport:
       type: object
       description: One hypervisor on an agent host, as probed at agent startup.
-      required: [type, available, accelerated, capabilities]
+      required: [type, available, accelerated, supportsSnapshots]
       properties:
         type:
           $ref: "#/components/schemas/AgentHypervisorType"
@@ -16281,8 +16281,9 @@ components:
         unavailabilityReason:
           type: string
           nullable: true
-        capabilities:
-          $ref: "#/components/schemas/AgentHypervisorCapabilities"
+        supportsSnapshots:
+          type: boolean
+          description: Whether this backend can create and restore snapshots.
         supportsVsock:
           type: boolean
           nullable: true
@@ -16307,36 +16308,6 @@ components:
           description: >-
             The hypervisor binary's probed version; null for agents predating
             version probing or when the probe failed.
-
-    AgentHypervisorCapabilities:
-      type: object
-      description: Feature support of one hypervisor backend.
-      required:
-        - type
-        - supportsPause
-        - supportsLiveMigration
-        - supportsSnapshots
-        - requiresDirectKernelBoot
-        - maxVCPUs
-        - maxMemory
-      properties:
-        type:
-          $ref: "#/components/schemas/AgentHypervisorType"
-        supportsPause:
-          type: boolean
-        supportsLiveMigration:
-          type: boolean
-        supportsSnapshots:
-          type: boolean
-        requiresDirectKernelBoot:
-          type: boolean
-          description: Whether booting requires an explicit kernel + rootfs.
-        maxVCPUs:
-          type: integer
-        maxMemory:
-          type: integer
-          format: int64
-          description: Bytes.
 
     AgentHostInfo:
       type: object

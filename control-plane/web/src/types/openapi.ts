@@ -9130,7 +9130,8 @@ export interface components {
             /** @description Whether hardware acceleration (KVM/HVF) backs this hypervisor. */
             accelerated: boolean;
             unavailabilityReason?: string | null;
-            capabilities: components["schemas"]["AgentHypervisorCapabilities"];
+            /** @description Whether this backend can create and restore snapshots. */
+            supportsSnapshots: boolean;
             /** @description Whether this host can attach a virtio-vsock device for this hypervisor; null for agents that predate vsock probing. */
             supportsVsock?: boolean | null;
             /** @description Whether this agent can bridge guest-exec sessions to VMs using this hypervisor; null for agents that predate VM guest exec. */
@@ -9139,21 +9140,6 @@ export interface components {
             supportsVolumeIOLimits?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
-        };
-        /** @description Feature support of one hypervisor backend. */
-        AgentHypervisorCapabilities: {
-            type: components["schemas"]["AgentHypervisorType"];
-            supportsPause: boolean;
-            supportsLiveMigration: boolean;
-            supportsSnapshots: boolean;
-            /** @description Whether booting requires an explicit kernel + rootfs. */
-            requiresDirectKernelBoot: boolean;
-            maxVCPUs: number;
-            /**
-             * Format: int64
-             * @description Bytes.
-             */
-            maxMemory: number;
         };
         /** @description Descriptive hardware/platform details for operator display. Purely informational, best-effort, and every field may be absent. */
         AgentHostInfo: {
