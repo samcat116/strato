@@ -1,0 +1,21 @@
+docs/architecture/idempotency.md
+  s_1da39708548843::t_56bbfd4496b6d9 27-28,36
+control-plane/Tests/AppPlatformTests/IdempotencyRouteTests.swift
+  s_1da39708548843::t_56bbfd4496b6d9 66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a3d999d5c0ce9c156e1befbe1e64c634b63baf3c",
+  "prompts": {},
+  "sessions": {
+    "s_1da39708548843": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14289-590b-7281-bc6d-17cfe1239636",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
