@@ -1,0 +1,16 @@
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 544-545
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "03302eb27c1b322f6492ee3cc9fb2d6602b1746a",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

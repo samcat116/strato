@@ -1,0 +1,19 @@
+control-plane/Tests/AppPlatformTests/InventoryPresenceConnectionTests.swift
+  s_1da39708548843::t_f0d75e8395adef 22-24,26,66-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c1946ab41eff83f4ff104e3bdaeb508aac24dd7",
+  "prompts": {},
+  "sessions": {
+    "s_1da39708548843": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14289-590b-7281-bc6d-17cfe1239636",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+control-plane/Sources/App/Controllers/VMController+PlacementRetry.swift
+  h_a84d4ff76cadd1 11,18,23-29
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 542-543
+control-plane/Tests/AppResourceTests/VMPlacementRetryTests.swift
+  h_a84d4ff76cadd1 128,136-138,167-204
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 220
+docs/architecture/scheduler.md
+  h_a84d4ff76cadd1 68-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e71f7f6bd6df3a5ad0d35a71bc60ea93bf8d9dc",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

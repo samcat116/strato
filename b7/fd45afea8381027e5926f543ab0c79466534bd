@@ -1,0 +1,18 @@
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  h_a84d4ff76cadd1 236-239
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  h_a84d4ff76cadd1 625-627,629
+control-plane/Tests/AppPlatformTests/InventoryPresenceConnectionTests.swift
+  h_a84d4ff76cadd1 1-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b7fd45afea8381027e5926f543ab0c79466534bd",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

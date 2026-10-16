@@ -1,0 +1,26 @@
+control-plane/Sources/App/Services/OperationFacade.swift
+  h_a84d4ff76cadd1 179-180,208-211
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  h_a84d4ff76cadd1 690-710
+control-plane/Tests/AppResourceTests/VMPlacementRetryTests.swift
+  h_a84d4ff76cadd1 366,397-403
+control-plane/web/src/components/vms/mutation-watcher.tsx
+  h_a84d4ff76cadd1 14-15
+control-plane/web/src/lib/mutation-outcome.test.ts
+  h_a84d4ff76cadd1 1-37
+control-plane/web/src/lib/mutation-outcome.ts
+  h_a84d4ff76cadd1 1-24
+docs/architecture/scheduler.md
+  h_a84d4ff76cadd1 309-311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6429b71fa5fcdcc9f67241665a435f988da3d03b",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
