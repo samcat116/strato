@@ -3,6 +3,7 @@ import Fluent
 import Foundation
 import Logging
 import Metrics
+import PostgresNIO
 import SQLKit
 
 /// Every PostgreSQL advisory-lock namespace the control plane owns, in global
@@ -31,6 +32,9 @@ enum AdvisoryLockNamespace: Int32, CaseIterable, Sendable {
     case agentEnrollment = 12
     // Site-wide CIDR admission is distinct from per-pool address allocation.
     case floatingIPSiteAdmission = 13
+    // Serializes reservation ownership across placement attempts/replicas.
+    // Placement acquires no lower-namespace advisory locks while holding it.
+    case vmPlacement = 14
 
     /// Stable, bounded label used in logs, metrics, and operator tooling.
     var name: String {
@@ -49,6 +53,7 @@ enum AdvisoryLockNamespace: Int32, CaseIterable, Sendable {
         case .securityGroupMembership: "security_group_membership"
         case .agentEnrollment: "agent_enrollment"
         case .floatingIPSiteAdmission: "floating_ip_site_admission"
+        case .vmPlacement: "vm_placement"
         }
     }
 }
@@ -209,6 +214,9 @@ enum AdvisoryLock {
     /// Run `operation` while holding one session-scoped lock on a pinned
     /// PostgreSQL connection. Busy attempts return their connection to the
     /// pool before sleeping. Acquisition stops at the monotonic deadline.
+    /// A caller whose operation durably commits may preserve its completed
+    /// result if cleanup fails. Cleanup still logs/counts the error and closes
+    /// the unhealthy session; an operation failure always propagates.
     static func withSessionLock<Value: Sendable>(
         _ key: AdvisoryLockKey,
         on db: any Database,
@@ -216,6 +224,7 @@ enum AdvisoryLock {
         pollInterval: Duration,
         logger: Logger,
         metricsFactory: (any MetricsFactory)? = nil,
+        preserveCompletedValueOnReleaseFailure: Bool = false,
         operation: @escaping @Sendable (any Database) async throws -> Value
     ) async throws -> Value {
         let clock = ContinuousClock()
@@ -261,10 +270,16 @@ enum AdvisoryLock {
                         metadata: releaseFailureMetadata(key: key, error: releaseError))
                     Telemetry.advisoryLockReleaseFailed(
                         namespace: key.namespace, factory: metricsFactory)
+                    // A failed unlock must never return a possibly locked
+                    // session to the pool. Discard it independently of the
+                    // operation's durable success or failure.
+                    if let postgres = connection as? any PostgresDatabase {
+                        try? await postgres.withConnection { $0.close() }.get()
+                    }
                 }
 
                 if let operationError { throw operationError }
-                if let releaseError { throw releaseError }
+                if let releaseError, !preserveCompletedValueOnReleaseFailure { throw releaseError }
                 return .completed(operationValue!)
             }
 
@@ -354,6 +369,14 @@ enum AdvisoryLock {
         on sql: any SQLDatabase
     ) async -> AdvisoryLockError? {
         do {
+            if let postgres = sql as? any PostgresDatabase {
+                let closed = try await postgres.withConnection { connection in
+                    connection.eventLoop.makeSucceededFuture(connection.isClosed)
+                }.get()
+                if closed {
+                    return .releaseFailed(key: key, reason: "PostgreSQL connection closed before lock cleanup")
+                }
+            }
             guard try await unlock(key, on: sql) else {
                 return .releaseFailed(key: key, reason: "PostgreSQL reported that this session did not hold the lock")
             }

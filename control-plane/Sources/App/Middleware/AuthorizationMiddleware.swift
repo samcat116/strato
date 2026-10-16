@@ -74,6 +74,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             // nothing: the path 404s either way.
             actionVerbs: [
                 "start": "vm:start", "stop": "vm:stop", "restart": "vm:restart",
+                "retry-placement": "vm:start",
                 "pause": "vm:pause", "resume": "vm:resume", "exec": "vm:exec",
                 "run": "vm:runCommand",
             ]

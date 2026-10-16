@@ -528,6 +528,32 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/retry-placement:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: retryVMPlacement
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      summary: Retry placement of a failed, unplaced virtual machine
+      description: >-
+        Requires vm:start. Retries a failed create only when the VM has no
+        assigned host and exactly one existing boot volume with no physical
+        placement and no active convergence deadline. Metadata-only generation
+        advances before or during queued placement do not cancel it. Reuses its
+        NICs, addresses, identity and boot volume, and preserves its desired
+        power state. The existing boot volume receives a new
+        generation and provisioning budget. A pending or already placed VM is
+        refused with 409. Completion is reported through the new generation's
+        conditions; a VM whose desired state is shutdown can then be started.
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}/interfaces:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -16272,7 +16298,7 @@ components:
     AgentHypervisorSupport:
       type: object
       description: One hypervisor on an agent host, as probed at agent startup.
-      required: [type, available, accelerated, capabilities]
+      required: [type, available, accelerated, supportsSnapshots]
       properties:
         type:
           $ref: "#/components/schemas/AgentHypervisorType"
@@ -16285,8 +16311,9 @@ components:
         unavailabilityReason:
           type: string
           nullable: true
-        capabilities:
-          $ref: "#/components/schemas/AgentHypervisorCapabilities"
+        supportsSnapshots:
+          type: boolean
+          description: Whether this backend can create and restore snapshots.
         supportsVsock:
           type: boolean
           nullable: true
@@ -16311,36 +16338,6 @@ components:
           description: >-
             The hypervisor binary's probed version; null for agents predating
             version probing or when the probe failed.
-
-    AgentHypervisorCapabilities:
-      type: object
-      description: Feature support of one hypervisor backend.
-      required:
-        - type
-        - supportsPause
-        - supportsLiveMigration
-        - supportsSnapshots
-        - requiresDirectKernelBoot
-        - maxVCPUs
-        - maxMemory
-      properties:
-        type:
-          $ref: "#/components/schemas/AgentHypervisorType"
-        supportsPause:
-          type: boolean
-        supportsLiveMigration:
-          type: boolean
-        supportsSnapshots:
-          type: boolean
-        requiresDirectKernelBoot:
-          type: boolean
-          description: Whether booting requires an explicit kernel + rootfs.
-        maxVCPUs:
-          type: integer
-        maxMemory:
-          type: integer
-          format: int64
-          description: Bytes.
 
     AgentHostInfo:
       type: object

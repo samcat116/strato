@@ -233,8 +233,10 @@ extension AgentService {
         }
 
         // The report arrived over this process's socket: refresh presence
-        // alongside, mirroring the heartbeat path.
-        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
+        // alongside, mirroring the heartbeat path. Reuse the inventory fence's
+        // pinned connection: an app.db checkout here waits on our own lease
+        // when the per-event-loop pool has only one connection.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey, on: db)
 
         // The guard covers the whole report, before any row deletion, error
         // transition, replica removal, network merge, or reservation release.
