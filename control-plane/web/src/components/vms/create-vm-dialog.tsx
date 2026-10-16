@@ -242,7 +242,7 @@ export function CreateVMDialog({
       networkInterfaces: networkInterfaces.map((nic) => ({
         networkId: nic.networkId,
         securityGroupIds:
-          nic.securityGroupIds.length > 0
+          !isAppleVirtualization && nic.securityGroupIds.length > 0
             ? nic.securityGroupIds
             : undefined,
         mtu: nic.mtu ? Number(nic.mtu) : undefined,
@@ -547,6 +547,7 @@ export function CreateVMDialog({
 
             <VMNetworkInterfacesFields
               isLoading={isLoading}
+              nativeNAT={isAppleVirtualization}
               networkInterfaces={networkInterfaces}
               setNetworkInterfaces={setNetworkInterfaces}
               networks={networks}

@@ -198,7 +198,11 @@ enum VMCreationWorkflow {
             chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
         }
 
+        let usesManagedNetworking = chosenHypervisor != .appleVirtualization
         if chosenHypervisor == .appleVirtualization {
+            guard !requestedInterfaces.contains(where: { $0.securityGroupIds?.isEmpty == false }) else {
+                throw Abort(.badRequest, reason: "Apple Virtualization NAT cannot enforce security groups")
+            }
             guard bootPool.mode == .local else {
                 throw Abort(.badRequest, reason: "Apple Virtualization requires a local boot storage pool")
             }
@@ -433,7 +437,8 @@ enum VMCreationWorkflow {
 
                     // Resolve every requested network in the VM's project. They
                     // stay as distinct NIC requests even when two select the
-                    // same logical network: each receives its own MAC and IPs.
+                    // same logical network. Each gets its own MAC; managed
+                    // networking also allocates addresses.
                     var resolvedInterfaces:
                         [(
                             request: CreateVMNetworkInterfaceRequest,
@@ -502,8 +507,14 @@ enum VMCreationWorkflow {
                     // disambiguated with a suffix, because two VMs called
                     // "web server" is an ordinary thing to do and failing the
                     // create over an implicit label would be baffling.
-                    let registrationZones = try await DNSZoneService.registrationZones(
-                        networkIDs: Array(Set(resolvedInterfaces.map(\.networkID))), on: db)
+                    let registrationZones: [DNSZone]
+                    if usesManagedNetworking {
+                        registrationZones = try await DNSZoneService.registrationZones(
+                            networkIDs: Array(Set(resolvedInterfaces.map(\.networkID))), on: db)
+                    } else {
+                        // NAT uses this hostname inside the guest only.
+                        registrationZones = []
+                    }
                     if let requestedHostname = createRequest.hostname {
                         vm.hostname = try await DNSZoneService.validatedExplicitHostname(
                             requestedHostname, forVM: vmID, in: registrationZones, on: db)
@@ -566,7 +577,7 @@ enum VMCreationWorkflow {
                         on: db)
 
                     let defaultGroupID: UUID?
-                    if resolvedInterfaces.contains(where: { $0.securityGroupIDs.isEmpty }) {
+                    if usesManagedNetworking, resolvedInterfaces.contains(where: { $0.securityGroupIDs.isEmpty }) {
                         let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                             projectID: projectId, on: db)
                         defaultGroupID = try defaultGroup.requireID()
@@ -578,11 +589,11 @@ enum VMCreationWorkflow {
                     // still share this outer retrying transaction, so any IPAM
                     // race rolls back the whole VM rather than leaving a partial
                     // interface set.
-                    try await IPAMService.lockNetworkAllocations(
-                        resolvedInterfaces.map(\.networkID), on: db)
+                    if usesManagedNetworking {
+                        try await IPAMService.lockNetworkAllocations(
+                            resolvedInterfaces.map(\.networkID), on: db)
+                    }
                     for (orderIndex, resolved) in resolvedInterfaces.enumerated() {
-                        let allocation = try await IPAMService.allocateIP(for: resolved.network, on: db)
-                        let allocation6 = try await IPAMService.allocateIPv6(for: resolved.network, on: db)
                         let interfaceID = UUID()
                         let macAddress = try await MACAllocator.allocate(
                             for: .vmInterface, ownerID: interfaceID, on: db)
@@ -596,6 +607,12 @@ enum VMCreationWorkflow {
                             orderIndex: orderIndex)
                         networkInterface.attachGeneration = vm.generation
                         try await networkInterface.save(on: db)
+
+                        // Native NAT uses host DHCP. The logical network selects
+                        // the site; it supplies no managed addresses or OVN policy.
+                        guard usesManagedNetworking else { continue }
+                        let allocation = try await IPAMService.allocateIP(for: resolved.network, on: db)
+                        let allocation6 = try await IPAMService.allocateIPv6(for: resolved.network, on: db)
 
                         let groupIDs: [UUID]
                         if resolved.securityGroupIDs.isEmpty {

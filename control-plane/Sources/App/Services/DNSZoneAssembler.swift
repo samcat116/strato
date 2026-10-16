@@ -146,7 +146,9 @@ enum DNSZoneAssembler {
 
         let vmIDs = Array(Set(interfaces.map { $0.$vm.id }))
         var hostnames: [UUID: String] = [:]
-        for vm in try await VM.query(on: db).filter(\.$id ~~ vmIDs).all() {
+        for vm in try await VM.query(on: db).filter(\.$id ~~ vmIDs)
+            .filter(\.$hypervisorType != .appleVirtualization).all()
+        {
             guard let id = vm.id, let hostname = vm.hostname else { continue }
             hostnames[id] = hostname
         }

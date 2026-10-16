@@ -91,6 +91,29 @@ final class DNSZoneTests {
         return vm
     }
 
+    @Test("Apple NAT neither publishes managed DNS nor reserves a logical-zone hostname")
+    func appleNATDoesNotRegisterDNS() async throws {
+        try await withDNSTestApp { app, _, _, project, _ in
+            let network = try await TestDataBuilder(db: app.db).createNetwork(name: "nat-site", project: project)
+            let zone = DNSZone(name: "nat.example", projectID: try project.requireID())
+            try await zone.save(on: app.db)
+            network.$primaryDNSZone.id = try zone.requireID()
+            try await network.save(on: app.db)
+            // Even stale rows created by an older Apple implementation must
+            // never become managed DNS records for an unrelated DHCP guest.
+            let vm = try await self.createVM(
+                app: app, project: project, network: network, hostname: "nat-guest",
+                addresses: [("10.0.0.22", .ipv4, 24), ("fd12::22", .ipv6, 64)])
+            vm.hypervisorType = .appleVirtualization
+            try await vm.save(on: app.db)
+            #expect(
+                try await DNSZoneAssembler.derivedRecords(zoneID: zone.requireID(), zoneName: zone.name, on: app.db)
+                    .isEmpty)
+            #expect(try await DNSZoneService.registrationZones(vmID: vm.requireID(), on: app.db).isEmpty)
+            #expect(try await DNSZoneService.hostnameIsAvailable("nat-guest", forVM: nil, in: [zone], on: app.db))
+        }
+    }
+
     // MARK: - Names
 
     @Test("Zone names are validated as FQDNs and normalized, with no TLD constraint")

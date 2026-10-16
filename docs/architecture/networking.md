@@ -6,9 +6,17 @@
 > implemented.
 
 Strato's networking is built on **OVN/OVS** on Linux (via
-[SwiftOVN](https://github.com/samcat116/swift-ovn)) and QEMU user-mode SLIRP on
-macOS (dev/test only). The control plane owns **IPAM** and network CRUD; agents
-translate desired state into the OVN/OVS data plane on each hypervisor.
+[SwiftOVN](https://github.com/samcat116/swift-ovn)) and native
+Virtualization.framework NAT on macOS (dev/test only). The control plane owns
+**IPAM** and network CRUD; agents translate desired state into the OVN/OVS data plane on each hypervisor.
+
+Apple NAT interfaces retain a logical-network reference for project/site
+placement and a unique managed MAC, but receive addresses from host DHCP.
+Creation does not reserve IPv4/IPv6 from logical-network IPAM, attach security
+groups, or register hostnames in managed DNS. Explicit security groups are
+rejected because NAT cannot enforce them. New Apple NICs report empty managed
+address and security-group lists; existing Apple address rows are excluded from DNS
+assembly and hostname reservations.
 
 This document covers where we are, the target deployment topology (a SaaS
 control plane orchestrating customer-run sites), the layered model we are
