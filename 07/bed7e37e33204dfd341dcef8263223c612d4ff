@@ -1,0 +1,22 @@
+control-plane/Tests/AppResourceTests/VMGuestConfigurationTests.swift
+  s_a9f6438f8d49a4::t_c75de5c3ef6ea5 272-275,279,334-362
+  s_a9f6438f8d49a4::t_65ec61b1b0cbea 363-365
+control-plane/Sources/App/Services/WorkloadObservedMerge.swift
+  s_a9f6438f8d49a4::t_08514a5a8a6d67 153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "07bed7e37e33204dfd341dcef8263223c612d4ff",
+  "prompts": {},
+  "sessions": {
+    "s_a9f6438f8d49a4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a146ca-7c62-7f41-8781-3a2aa9e66f67",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
