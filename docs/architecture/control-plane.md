@@ -483,12 +483,13 @@ sandboxes, volumes, networks, security groups, floating IPs/pools, agents,
 enrollments, sites, users, images, snapshots, quotas) returns a
 `PagedResponse` envelope — `items` plus `total`/`limit`/`offset` — with
 `limit` defaulting to 50 and capped at 500 (`Extensions/ListPaging.swift`).
-Handlers fetch the SQL-scoped rows with a deterministic sort (`createdAt` or
-`name`, `id` tiebreak), run the batched authorization filter, and slice the
-page from the filtered result — so `total` counts exactly the rows the caller
-may read, at the cost of still materializing the scoped set server-side.
-Pushing the slice into SQL requires authorization-aware query scoping and is
-future work.
+Handlers retain a deterministic sort (`createdAt` or `name`, `id` tiebreak)
+and authorize before slicing, so `total` counts exactly the rows the caller
+may read. VM and sandbox lists authorize lightweight candidate IDs, then load
+NICs, addresses, enforcement and identities only for the selected page.
+Volume lists authorize the candidate projects first, then count and page their
+volumes in SQL before loading replicas. The other list families still slice
+their authorized row sets in memory.
 
 ## The agent WebSocket (`/agent/ws`)
 

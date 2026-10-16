@@ -145,6 +145,39 @@ final class AgentAutoUpdateTests {
 
     // MARK: - Rollout sweep
 
+    @Test(
+        "assignment respects changes during artifact resolution",
+        arguments: ["manual", "withdraw", "offline", "updated", "platform", "removed"])
+    func assignmentRace(change: String) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let agent = try await self.makeAgent(app: app, org: org, name: "audit-agent")
+            let id = try agent.requireID()
+            app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in
+                let current = try #require(try await Agent.find(id, on: app.db))
+                switch change {
+                case "manual":
+                    current.assignUpdate(version: "operator-target", source: .manual, at: .testing(Date()))
+                case "withdraw": current.autoUpdate = false
+                case "updated": current.version = Self.target
+                case "platform": current.operatingSystem = "macos"
+                case "removed":
+                    try await current.delete(on: app.db)
+                    return Self.stubArtifact
+                default: current.administrativelyOffline = true
+                }
+                try await current.save(on: app.db)
+                return Self.stubArtifact
+            }
+            await self.sweep(app)
+            if change == "removed" {
+                #expect(try await Agent.find(id, on: app.db) == nil)
+            } else {
+                let row = try await self.reload(agent, on: app)
+                #expect(row.updateDesiredVersion == (change == "manual" ? "operator-target" : nil))
+            }
+        }
+    }
+
     @Test("the sweep judges heartbeat freshness with the cluster clock")
     func heartbeatFreshnessUsesClusterClock() async throws {
         try await withAutoUpdateApp { app, _, org, _ in

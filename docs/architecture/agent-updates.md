@@ -131,6 +131,10 @@ where another stopped:
   platform artifact actually resolves. An agent already carrying an assignment
   — including one an operator made by hand — counts as in flight, so only one
   agent in the fleet is ever restarting.
+  Artifact resolution runs before taking the candidate's row lock. The sweep
+  then reloads and rechecks enrollment, assignment, liveness, version and
+  platform under that lock before writing, so an operator's intervening update,
+  withdrawal or administrative shutdown wins over the earlier snapshot.
 - The assignment (`update_desired_version`) rides the agent's periodic
   desired-state sync as `desiredAgentUpdate`, with the artifact URL and
   checksum re-resolved on every assembly so a long-desired update never

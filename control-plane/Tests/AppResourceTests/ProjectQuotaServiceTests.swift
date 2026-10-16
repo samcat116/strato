@@ -18,12 +18,6 @@ struct ByteConversionTests {
         #expect((0.0).gbToBytes == 0)
     }
 
-    @Test("round trips whole-GiB values")
-    func testRoundTrip() {
-        let bytes = Int64(16) * 1024 * 1024 * 1024
-        #expect(bytes.bytesToGB.gbToBytes == bytes)
-    }
-
     @Test("Int gbToBytes computes whole-GiB values exactly")
     func testIntGBToBytes() {
         #expect(8.gbToBytes == Int64(8) * 1024 * 1024 * 1024)

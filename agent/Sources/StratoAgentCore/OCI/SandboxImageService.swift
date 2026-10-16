@@ -65,6 +65,7 @@ public actor SandboxImageService {
     private let workRoot: String
 
     private let materializations = SingleFlight<MaterializedRootfs>()
+    private let contentMaterializations = SingleFlight<MaterializedRootfs>()
 
     /// Default cache root (platform-specific, same convention as
     /// `ImageCacheService.defaultCachePath`).
@@ -177,9 +178,24 @@ public actor SandboxImageService {
             return compression
         }
 
-        let compressedBytes = resolved.manifest.layers.reduce(Int64(0)) { $0 + max($1.size, 0) }
+        var compressedBytes: Int64 = 0
+        for layer in resolved.manifest.layers {
+            guard layer.size >= 0 else {
+                throw OCIError.malformedResponse(detail: "layer \(layer.digest) declares a negative size")
+            }
+            let (sum, overflow) = compressedBytes.addingReportingOverflow(layer.size)
+            guard !overflow else {
+                throw OCIError.insufficientDiskSpace(detail: "declared layer sizes exceed the supported image size")
+            }
+            compressedBytes = sum
+        }
+        let (requiredBytes, overflow) = compressedBytes.multipliedReportingOverflow(
+            by: Self.spaceFactorOverCompressedSize)
+        guard !overflow else {
+            throw OCIError.insufficientDiskSpace(detail: "projected image work exceeds the supported disk size")
+        }
         try await cache.precheckFreeSpace(
-            requiredBytes: compressedBytes * Self.spaceFactorOverCompressedSize)
+            requiredBytes: requiredBytes)
 
         logger.info(
             "Materializing sandbox rootfs",
@@ -236,8 +252,25 @@ public actor SandboxImageService {
         }
         try flattener.finalize()
 
-        // Stage config + image, then publish the directory atomically.
-        let stagingDir = try await cache.stagingDirectory(for: resolved.manifestDigest)
+        // Pulls retain their source-specific credentials and failures. Only
+        // the digest-owned build/publication is shared across references.
+        do {
+            return try await contentMaterializations.run(key: resolved.manifestDigest) { [self] in
+                if let hit = await self.cachedRootfs(manifestDigest: resolved.manifestDigest) { return hit }
+                return try await self.publishRootfs(
+                    treePath: treePath, guestConfig: guestConfig,
+                    manifestDigest: resolved.manifestDigest)
+            }
+        } catch {
+            retainWork = SubprocessBudget.preserveStaging(after: error)
+            throw error
+        }
+    }
+
+    private func publishRootfs(
+        treePath: String, guestConfig: SandboxGuestConfig, manifestDigest: String
+    ) async throws -> MaterializedRootfs {
+        let stagingDir = try await cache.stagingDirectory(for: manifestDigest)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try (try encoder.encode(guestConfig)).write(
@@ -249,12 +282,11 @@ public actor SandboxImageService {
                 fromTree: treePath, at: stagingDir + "/" + OCIRootfsCache.rootfsFileName)
             try FileManager.default.removeItem(atPath: building)
         } catch {
-            retainWork = SubprocessBudget.preserveStaging(after: error)
-            if !retainWork { try? FileManager.default.removeItem(atPath: building) }
+            if !SubprocessBudget.preserveStaging(after: error) { try? FileManager.default.removeItem(atPath: building) }
             throw error
         }
 
-        let published = try await cache.publish(manifestDigest: resolved.manifestDigest)
+        let published = try await cache.publish(manifestDigest: manifestDigest)
         logger.info(
             "Sandbox rootfs materialized",
             metadata: [

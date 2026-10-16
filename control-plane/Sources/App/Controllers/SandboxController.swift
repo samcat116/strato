@@ -64,41 +64,36 @@ struct SandboxController: RouteCollection {
     /// limit/offset (optional) — select the page.
     func index(req: Request) async throws -> PagedResponse<SandboxDetailResponse> {
         let paging = try ListPaging.decode(from: req)
-        let sandboxes = try await visibleSandboxes(req: req)
-        return paging.page(sandboxes)
-    }
-
-    /// Every sandbox the caller may read, newest first, ready for slicing.
-    func visibleSandboxes(req: Request) async throws -> [SandboxDetailResponse] {
-        // Any authenticated principal, as in VMController.visibleVMs — which
+        // Any authenticated principal, as in VMController.index — which
         // sandboxes it may see is the `canFilter` answer below (issue #495).
         _ = try req.requireActingPrincipal()
 
         // Scoped through the sandbox's project, as in VMController.index.
         var query = Sandbox.query(on: req.db)
-            // The response reports each NIC's network, addresses and security
-            // groups (STR-34, STR-102). Fluent batches children one `IN` query
-            // per relation, so this is three extra queries for the whole page,
-            // not three per sandbox.
-            .with(\.$networkInterfaces) {
-                $0.with(\.$securityGroupMemberships).with(\.$addresses).with(\.$logicalNetwork)
-            }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
-            if projectIDs.isEmpty { return [] }
+            if projectIDs.isEmpty {
+                return PagedResponse(items: [], total: 0, limit: paging.limit, offset: paging.offset)
+            }
             query = query.filter(\.$project.$id ~~ projectIDs)
         }
 
-        // One batched decision for the whole page, as in VMController.index.
-        let allSandboxes = try await query.all()
-        let nodes = allSandboxes.compactMap { $0.id.map { IAMNode(type: .sandbox, id: $0) } }
-        let readable = try await req.canFilter("sandbox:read", on: nodes)
-
-        let visible = allSandboxes.filter { sandbox in
-            sandbox.id.map { readable.contains(IAMNode(type: .sandbox, id: $0)) } ?? false
+        let ids = try await query.all(\.$id).compactMap { $0 }
+        let readable = try await req.canFilter("sandbox:read", on: ids.map { IAMNode(type: .sandbox, id: $0) })
+        let visibleIDs = ids.filter { readable.contains(IAMNode(type: .sandbox, id: $0)) }
+        let selected = paging.slice(visibleIDs)
+        guard !selected.isEmpty else {
+            return PagedResponse(items: [], total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
         }
+        let visible = try await Sandbox.query(on: req.db)
+            .filter(\.$id ~~ selected)
+            .with(\.$networkInterfaces) {
+                $0.with(\.$securityGroupMemberships).with(\.$addresses).with(\.$logicalNetwork)
+            }
+            .sort(\.$createdAt, .descending).sort(\.$id, .descending)
+            .all()
         // Batched, like the VM list: since STR-103 the enforcement verdict reads
         // the host row (it needs the sandbox-networking capability), so a
         // per-row call would be one query per sandbox plus a site lookup each.
@@ -106,11 +101,12 @@ struct SandboxController: RouteCollection {
             visible,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
             on: req.db)
-        return visible.map { sandbox in
+        let items = visible.map { sandbox in
             SandboxDetailResponse(
                 from: sandbox,
                 securityGroupsEnforced: sandbox.id.flatMap { enforcedBySandbox[$0] })
         }
+        return PagedResponse(items: items, total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
     }
 
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a

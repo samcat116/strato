@@ -50,7 +50,7 @@ extension AgentMaintenanceLoop {
     /// release actually publishes an artifact for that agent's platform.
     func sweepAgentAutoUpdates(
         at instant: ClusterInstant,
-        currentInstant: @Sendable (any Database) async throws -> ClusterInstant = {
+        currentInstant: @escaping @Sendable (any Database) async throws -> ClusterInstant = {
             try await ClusterClock.read(on: $0)
         }
     ) async {
@@ -308,20 +308,33 @@ extension AgentMaintenanceLoop {
                 return
             }
 
-            // Artifact resolution and every earlier sweep may take time. Use a
-            // current database instant for the assignment itself so none of
-            // that work consumes the agent's health budget. Recheck liveness
-            // against the same instant before committing the assignment.
-            let assignmentInstant = try await currentInstant(db)
-            guard next.isOnline(at: assignmentInstant) else { return }
-            next.assignUpdate(version: target, source: .rollout, at: assignmentInstant)
-            try await next.save(on: db)
+            // Artifact resolution suspends while operator actions and reports
+            // keep committing. Lock and reload before assigning: fresh time
+            // alone cannot make the candidate snapshot current again.
+            let assigned = try await db.transaction { transaction -> Agent? in
+                guard let sql = transaction as? any SQLDatabase else {
+                    throw Abort(.internalServerError)
+                }
+                try await sql.raw("SELECT id FROM agents WHERE id = \(bind: nextId) FOR UPDATE").run()
+                guard let current = try await Agent.find(nextId, on: transaction) else { return nil }
+                let assignmentInstant = try await currentInstant(transaction)
+                guard current.autoUpdate, current.updateDesiredVersion == nil,
+                    current.isOnline(at: assignmentInstant),
+                    AgentVersionTarget.updateAvailable(agentVersion: current.version, target: target),
+                    current.hostOperatingSystem == next.hostOperatingSystem,
+                    current.cpuArchitecture == next.cpuArchitecture
+                else { return nil }
+                current.assignUpdate(version: target, source: .rollout, at: assignmentInstant)
+                try await current.save(on: transaction)
+                return current
+            }
+            guard let assigned else { return }
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(
                 "Agent auto-update assigned",
                 metadata: [
-                    "strato.agent.name": .string(next.name),
-                    "currentVersion": .string(next.version),
+                    "strato.agent.name": .string(assigned.name),
+                    "currentVersion": .string(assigned.version),
                     "targetVersion": .string(target),
                 ])
             // Ring now for low latency; the agent's unconditional refetch is
