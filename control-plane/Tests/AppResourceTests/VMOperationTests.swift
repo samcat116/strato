@@ -687,6 +687,27 @@ final class VMOperationTests {
         }
     }
 
+    @Test("A newer failure settles only an older target that was never observed", arguments: [false, true])
+    func facadeAttributesNewerFailure(targetWasObserved: Bool) async throws {
+        try await withVMTestApp { app, user, vm, token in
+            vm.generation = 2
+            vm.observedGeneration = targetWasObserved ? 2 : 0
+            try await vm.save(on: app.db)
+            let event = try await record(.create, on: vm, by: user, on: app.db)
+            vm.generation = 3
+            vm.failedGeneration = 3
+            vm.lastError = "placement failed after metadata edit"
+            try await vm.save(on: app.db)
+            try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                let operation = try response.content.decode(OperationResponse.self)
+                #expect(operation.status == (targetWasObserved ? .succeeded : .failed))
+                #expect(operation.error == (targetWasObserved ? nil : "placement failed after metadata edit"))
+            }
+        }
+    }
+
     @Test("A superseded mutation reads as succeeded, not pending forever")
     func facadeReportsSupersededAsSucceeded() async throws {
         try await withVMTestApp { app, user, vm, token in

@@ -363,7 +363,7 @@ struct VMPlacementRetryTests {
             let id = try vm.requireID()
             let gate = DispatchFailureGate()
             let mutation = ResourceMutation(agentDispatch: FakeAgentDispatch(), logger: app.logger)
-            _ = try await mutation.accept(
+            let accepted = try await mutation.accept(
                 .create, on: vm, actor: .user(try fixture.user.requireID()),
                 dispatch: .placement { db in
                     // Capture the same snapshot and attempt deadline as the
@@ -394,6 +394,13 @@ struct VMPlacementRetryTests {
                 #expect(current.failedGeneration == 3)
                 #expect(current.convergenceDeadline == nil)
                 #expect(current.tags == ["purpose": "post-snapshot-edit"])
+                try await app.test(.GET, "/api/operations/\(accepted.mutationID)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                } afterResponse: { response in
+                    let operation = try response.content.decode(OperationResponse.self)
+                    #expect(operation.status == .failed)
+                    #expect(operation.error == "No eligible agent")
+                }
                 #expect(try await retry(app, vmID: id, token: fixture.token).0 == .accepted)
             } else {
                 #expect(current.failedGeneration == 1)
