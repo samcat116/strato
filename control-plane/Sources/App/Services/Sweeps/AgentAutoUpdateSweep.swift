@@ -8,11 +8,13 @@ import Vapor
 extension AgentMaintenanceLoop {
     // MARK: - Agent auto-update rollout (issue #434)
 
-    /// How long an assigned agent has to either re-register at its target
-    /// version or report a blocker before the sweep treats the silence as a
+    /// How long an assigned agent has to verify fresh target-version health
+    /// or report a blocker before the sweep treats the silence as a
     /// failed update and halts the rollout. Generous on purpose: it spans the
-    /// artifact download, the restart, and re-registration.
+    /// artifact download, restart, registration, and health verification.
     static let autoUpdateHealthBudgetSeconds: TimeInterval = 600
+
+    static let autoUpdateVerificationSeconds: TimeInterval = 60
 
     /// Advances the fleet's declarative agent updates one agent at a time
     /// (issue #434). Cluster-singleton via the sweep lock; all rollout state
@@ -24,7 +26,7 @@ extension AgentMaintenanceLoop {
     /// and reported exactly like a rollout one, and an in-flight manual update
     /// holds the fleet rollout for the same reason a rollout assignment does:
     /// one agent restarts at a time.
-    /// - **converged** — re-registered at the target: assignment cleared.
+    /// - **converged** — fresh target-version health sustained for the verification interval.
     /// - **stale** — a *rollout* assignment whose version the deployment target
     ///   has moved past: reset, including failures, so an old halt never blocks
     ///   a new target. Manual assignments are exempt — the operator named that
@@ -48,7 +50,7 @@ extension AgentMaintenanceLoop {
     /// release actually publishes an artifact for that agent's platform.
     func sweepAgentAutoUpdates(
         at instant: ClusterInstant,
-        currentInstant: @Sendable (any Database) async throws -> ClusterInstant = {
+        currentInstant: @escaping @Sendable (any Database) async throws -> ClusterInstant = {
             try await ClusterClock.read(on: $0)
         }
     ) async {
@@ -59,7 +61,6 @@ extension AgentMaintenanceLoop {
         }
 
         let db = app.db
-        let now = instant.date
         // Nil on a dev build with no configured target: no *rollout* can run,
         // but assignments an operator made by hand (which supply their own
         // artifact, precisely for builds a release does not serve) still need
@@ -80,6 +81,12 @@ extension AgentMaintenanceLoop {
                 }
                 .sort(\.$name)
                 .all()
+
+            // Earlier sweeps can outlive the tick instant, and reports may
+            // arrive while they run. Read the database clock after loading the
+            // snapshot so valid newer receipts are not classified as future.
+            let evaluationInstant = try await currentInstant(db)
+            let now = evaluationInstant.date
 
             var rolloutHalted = false
             var waitingOnAgent = false
@@ -103,21 +110,6 @@ extension AgentMaintenanceLoop {
                     continue
                 }
 
-                // Converged: the agent re-registered at the target (or was
-                // updated by hand, which counts just the same).
-                if !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned) {
-                    agent.clearUpdateAssignment()
-                    try await agent.save(on: db)
-                    Telemetry.agentAutoUpdateConverged()
-                    app.logger.notice(
-                        "Agent auto-update converged",
-                        metadata: [
-                            "strato.agent.name": .string(agent.name),
-                            "version": .string(agent.version),
-                        ])
-                    continue
-                }
-
                 if agent.updateFailureReason != nil {
                     // A *rollout* failure halts the fleet until an operator
                     // intervenes: the next agent would most likely hit the same
@@ -132,6 +124,100 @@ extension AgentMaintenanceLoop {
                     // agent simply holds its own failure.
                     if agent.updateAssignmentSource != .manual {
                         rolloutHalted = true
+                    }
+                    continue
+                }
+
+                if !AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned) {
+                    // A retained assignment's budget clock can restart under
+                    // existing operator actions. Never reuse an earlier interval.
+                    // Withdrawal instead clears the entire rollout assignment.
+                    if let attemptedAt = agent.updateAttemptedAt,
+                        let startedAt = agent.updateVerificationStartedAt, attemptedAt > startedAt
+                    {
+                        agent.updateVerificationStartedAt = nil
+                        try await agent.save(on: db)
+                    }
+                    if let reason = agent.updateHealthVerificationFailure(at: evaluationInstant) {
+                        agent.recordUpdateFailure(reason)
+                        try await agent.save(on: db)
+                        Telemetry.agentAutoUpdateFailed(reason: "post_update_health")
+                        app.logger.error(
+                            "Agent update failed post-update health verification",
+                            metadata: [
+                                "strato.agent.name": .string(agent.name), "reason": .string(reason),
+                                "assignmentSource": .string(agent.updateAssignmentSource?.rawValue ?? "rollout"),
+                            ])
+                        rolloutHalted = rolloutHalted || agent.updateAssignmentSource != .manual
+                        continue
+                    }
+                    if agent.hasFreshUpdateHealth(at: evaluationInstant) {
+                        if let startedAt = agent.updateVerificationStartedAt,
+                            now.timeIntervalSince(startedAt) >= Self.autoUpdateVerificationSeconds,
+                            let inventoryAt = agent.updateInventoryReceivedAt,
+                            let dependenciesAt = agent.dependencyObservationsReceivedAt,
+                            min(inventoryAt, dependenciesAt).timeIntervalSince(startedAt)
+                                >= Self.autoUpdateVerificationSeconds
+                        {
+                            let id = try agent.requireID()
+                            let converged = try await db.transaction { transaction in
+                                guard let sql = transaction as? any SQLDatabase else {
+                                    throw Abort(.internalServerError)
+                                }
+                                // Reports and operator actions may have committed
+                                // since the candidate snapshot. Serialize the final
+                                // verdict with them and recheck current evidence.
+                                try await sql.raw("SELECT id FROM agents WHERE id = \(bind: id) FOR UPDATE").run()
+                                guard let current = try await Agent.find(id, on: transaction),
+                                    current.updateDesiredVersion == assigned,
+                                    current.updateAttemptedAt == agent.updateAttemptedAt,
+                                    current.updateHealthBaseline?.assignedAt == agent.updateHealthBaseline?.assignedAt,
+                                    current.updateFailureReason == nil,
+                                    !AgentVersionTarget.updateAvailable(
+                                        agentVersion: current.version, target: assigned),
+                                    current.updateHealthVerificationFailure(at: evaluationInstant) == nil,
+                                    current.hasFreshUpdateHealth(at: evaluationInstant),
+                                    let startedAt = current.updateVerificationStartedAt,
+                                    now.timeIntervalSince(startedAt) >= Self.autoUpdateVerificationSeconds,
+                                    let inventoryAt = current.updateInventoryReceivedAt,
+                                    let dependenciesAt = current.dependencyObservationsReceivedAt,
+                                    min(inventoryAt, dependenciesAt).timeIntervalSince(startedAt)
+                                        >= Self.autoUpdateVerificationSeconds
+                                else { return false }
+                                current.clearUpdateAssignment()
+                                try await current.save(on: transaction)
+                                return true
+                            }
+                            guard converged else {
+                                // The next sweep classifies the newer state. This
+                                // tick must not advance using its stale snapshot.
+                                waitingOnAgent = true
+                                continue
+                            }
+                            agent.clearUpdateAssignment()
+                            Telemetry.agentAutoUpdateConverged()
+                            app.logger.notice(
+                                "Agent update passed post-update health verification",
+                                metadata: ["strato.agent.name": .string(agent.name), "version": .string(agent.version)])
+                            continue
+                        }
+                        if agent.updateVerificationStartedAt == nil {
+                            agent.updateVerificationStartedAt = now
+                            try await agent.save(on: db)
+                        }
+                    }
+                    if let attemptedAt = agent.updateAttemptedAt ?? agent.updateTargetRegisteredAt
+                        ?? agent.updateHealthBaseline?.assignedAt,
+                        now.timeIntervalSince(attemptedAt) > Self.autoUpdateHealthBudgetSeconds
+                    {
+                        agent.recordUpdateFailure(
+                            "no fresh target-version inventory and capability verification within \(Int(Self.autoUpdateHealthBudgetSeconds))s; review agent health, perform any needed recovery, and explicitly cancel this assignment"
+                        )
+                        try await agent.save(on: db)
+                        Telemetry.agentAutoUpdateFailed(reason: "health_budget")
+                        rolloutHalted = rolloutHalted || agent.updateAssignmentSource != .manual
+                    } else {
+                        waitingOnAgent = true
                     }
                     continue
                 }
@@ -222,20 +308,33 @@ extension AgentMaintenanceLoop {
                 return
             }
 
-            // Artifact resolution and every earlier sweep may take time. Use a
-            // current database instant for the assignment itself so none of
-            // that work consumes the agent's health budget. Recheck liveness
-            // against the same instant before committing the assignment.
-            let assignmentInstant = try await currentInstant(db)
-            guard next.isOnline(at: assignmentInstant) else { return }
-            next.assignUpdate(version: target, source: .rollout, at: assignmentInstant)
-            try await next.save(on: db)
+            // Artifact resolution suspends while operator actions and reports
+            // keep committing. Lock and reload before assigning: fresh time
+            // alone cannot make the candidate snapshot current again.
+            let assigned = try await db.transaction { transaction -> Agent? in
+                guard let sql = transaction as? any SQLDatabase else {
+                    throw Abort(.internalServerError)
+                }
+                try await sql.raw("SELECT id FROM agents WHERE id = \(bind: nextId) FOR UPDATE").run()
+                guard let current = try await Agent.find(nextId, on: transaction) else { return nil }
+                let assignmentInstant = try await currentInstant(transaction)
+                guard current.autoUpdate, current.updateDesiredVersion == nil,
+                    current.isOnline(at: assignmentInstant),
+                    AgentVersionTarget.updateAvailable(agentVersion: current.version, target: target),
+                    current.hostOperatingSystem == next.hostOperatingSystem,
+                    current.cpuArchitecture == next.cpuArchitecture
+                else { return nil }
+                current.assignUpdate(version: target, source: .rollout, at: assignmentInstant)
+                try await current.save(on: transaction)
+                return current
+            }
+            guard let assigned else { return }
             Telemetry.agentAutoUpdateAssigned()
             app.logger.notice(
                 "Agent auto-update assigned",
                 metadata: [
-                    "strato.agent.name": .string(next.name),
-                    "currentVersion": .string(next.version),
+                    "strato.agent.name": .string(assigned.name),
+                    "currentVersion": .string(assigned.version),
                     "targetVersion": .string(target),
                 ])
             // Ring now for low latency; the agent's unconditional refetch is

@@ -1,4 +1,6 @@
 import Fluent
+import FluentPostgresDriver
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -125,6 +127,120 @@ final class VMInstanceIdentityTests {
     }
 
     // MARK: - Create
+
+    @Test("An aborted create retries with one committed audit event and quota webhook")
+    func retriedCreateCommitsOnce() async throws {
+        try await withIdentityTestApp { app, user, org, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let quota = try await builder.createResourceQuota(
+                name: "retry quota", maxVCPUs: 1, project: project)
+            try await WebhookSubscription(
+                organizationID: try org.requireID(), projectID: try project.requireID(),
+                name: "retry quota webhook", url: "https://example.invalid/webhook",
+                eventTypes: [.quotaThresholdExceeded],
+                signingSecret: WebhookSubscription.generateSigningSecret(),
+                createdByID: try user.requireID()
+            ).save(on: app.db)
+            let sql = try #require(app.db as? any SQLDatabase)
+            // PostgreSQL sequences are not transactional: only the first event
+            // insertion aborts, after VM/volume/quota/outbox writes have occurred.
+            try await sql.raw("CREATE SEQUENCE retry_create_attempt").run()
+            try await sql.raw(
+                """
+                CREATE FUNCTION abort_first_create() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF NEW.resource_kind = 'virtual_machine' AND NEW.mutation = 'create'
+                       AND nextval('retry_create_attempt') = 1 THEN
+                        RAISE EXCEPTION 'forced transaction abort' USING ERRCODE = '40001';
+                    END IF;
+                    RETURN NEW;
+                END $$
+                """
+            ).run()
+            try await sql.raw(
+                """
+                CREATE TRIGGER abort_first_create BEFORE INSERT ON resource_events
+                FOR EACH ROW EXECUTE FUNCTION abort_first_create()
+                """
+            ).run()
+            let vm = try await createVM(
+                app, project: project, user: user, token: token,
+                name: "retried-create", suffix: "retry")
+            let id = try #require(vm.id)
+            #expect(
+                try await sql.raw("SELECT last_value FROM retry_create_attempt").first(
+                    decodingColumn: "last_value", as: Int.self) == 2)
+            #expect(try await VM.query(on: app.db).filter(\.$name == "retried-create").count() == 1)
+            #expect(try await Volume.query(on: app.db).filter(\.$vm.$id == id).count() == 1)
+            #expect(
+                try await ResourceEvent.query(on: app.db)
+                    .filter(\.$resourceKind == .virtualMachine).filter(\.$resourceID == id)
+                    .filter(\.$mutation == .create).count() == 1)
+            #expect(try await WebhookDelivery.query(on: app.db).count() == 1)
+            let storedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(storedQuota.reservedVCPUs == 1)
+            #expect(storedQuota.vmCount == 1)
+        }
+    }
+
+    @Test("Contended VM creates return retryable 503 while readiness remains available")
+    func createConvoyKeepsReadinessAvailable() async throws {
+        try await withIdentityTestApp { app, user, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let network = try await builder.createNetwork(name: "convoy-network", project: project)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let databaseName = try #require(
+                try await sql.raw("SELECT current_database() AS name").first(decodingColumn: "name", as: String.self))
+            app.databases.use(
+                try DatabaseStatementTimeout(milliseconds: 30_000).applying(
+                    to: .postgres(
+                        configuration: PostgresTestDatabases.configuration(database: databaseName),
+                        maxConnectionsPerEventLoop: 2),
+                    sessionTimeouts: DatabaseSessionTimeouts(
+                        lockMilliseconds: 100, idleInTransactionMilliseconds: 60_000)),
+                as: .psql)
+            // Fixtures/configure already checked out the original driver.
+            // Fluent caches drivers independently of configuration replacement.
+            app.databases.reinitialize(.psql)
+            let networkID = try network.requireID()
+            let gib = Int64(1) << 30
+            try await app.db.transaction { tx in
+                try await IPAMService.lockNetworkAllocations([networkID], on: tx)
+                let clock = ContinuousClock()
+                let start = clock.now
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    for index in 0..<4 {
+                        group.addTask {
+                            try await app.test(.POST, "/api/vms") { req in
+                                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                                req.headers.replaceOrAdd(name: "Idempotency-Key", value: UUID().uuidString)
+                                try req.content.encode(
+                                    CreateVMBody(
+                                        name: "convoy-\(index)", imageId: image.id, projectId: project.id,
+                                        cpu: 1, memory: gib, disk: 10 * gib, networkId: networkID))
+                            } afterResponse: { response in
+                                #expect(response.status == .serviceUnavailable)
+                                #expect(response.headers.first(name: "Retry-After") == "1")
+                            }
+                        }
+                    }
+                    group.addTask {
+                        for _ in 0..<8 {
+                            try await app.test(.GET, "/health/ready") { response in
+                                #expect(response.status == .ok)
+                            }
+                            try await Task.sleep(for: .milliseconds(30))
+                        }
+                    }
+                    try await group.waitForAll()
+                }
+                #expect(start.duration(to: clock.now) < .seconds(5))
+            }
+            #expect(try await VM.query(on: app.db).filter(\.$project.$id == project.requireID()).count() == 0)
+            #expect(try await ResourceEvent.query(on: app.db).filter(\.$mutation == .create).count() == 0)
+        }
+    }
 
     @Test("One idempotency key creates one complete VM transaction")
     func repeatedCreateReplaysOneVM() async throws {

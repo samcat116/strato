@@ -8,10 +8,6 @@ import Glibc
 import Darwin
 #endif
 
-/// Runs a subprocess to completion. Injectable so tests can stub qemu-img.
-public typealias SubprocessRunner =
-    @Sendable (_ executableURL: URL, _ arguments: [String]) async throws -> ProcessResult
-
 /// The "qemu-img on a filesystem directory" storage backend.
 ///
 /// Owns the on-disk layout for managed volumes:
@@ -78,7 +74,7 @@ public actor FileSystemStorageBackend: StorageBackend {
             HostPreflight.freeDiskSpace(atPath: $0)
         },
         publishItem: (@Sendable (String, String) throws -> Void)? = nil,
-        runSubprocess: @escaping SubprocessRunner = { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run
     ) {
         self.logger = logger
         self.volumeStoragePath = volumeStoragePath ?? Self.defaultStoragePath
@@ -230,8 +226,22 @@ public actor FileSystemStorageBackend: StorageBackend {
             throw StorageBackendError.imageSourceUnavailable
         }
 
-        let sourcePath = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
-        let sourceFormat = try await detectFormat(of: sourcePath)
+        let cachedPath = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
+        let prepared: ImportedDiskImageValidation.PreparedImage
+        do {
+            prepared = try ImportedDiskImageValidation.prepare(filePath: cachedPath)
+        } catch {
+            throw StorageBackendError.createFailed("Image import validation failed: \(error.localizedDescription)")
+        }
+        var retainPrepared = false
+        defer { if !retainPrepared { prepared.remove() } }
+        let sourcePath = prepared.path
+        let sourceInfo: QemuImgInfo
+        do { sourceInfo = try await queryImageInfo(path: sourcePath) } catch {
+            retainPrepared = SubprocessBudget.preserveStaging(after: error)
+            throw error
+        }
+        let sourceFormat = sourceInfo.format
 
         let destinationDirectory = (path as NSString).deletingLastPathComponent
         try DurableFileWriter().createDirectory(at: destinationDirectory)
@@ -251,9 +261,9 @@ public actor FileSystemStorageBackend: StorageBackend {
                     + "\(destinationDirectory).")
         }
 
-        // Discard any partial output left by a previous crashed materialization.
-        let stagingPath = path + ".partial"
-        try? FileManager.default.removeItem(atPath: stagingPath)
+        // Every retry owns a fresh path. Retained output from an aborted
+        // subprocess may still be in use and cannot authorize reclamation.
+        let stagingPath = path + ".partial." + UUID().uuidString.lowercased()
 
         do {
             if sourceFormat == format.rawValue {
@@ -261,13 +271,14 @@ public actor FileSystemStorageBackend: StorageBackend {
             } else {
                 // Source and target formats differ — convert instead of copying,
                 // so e.g. a qcow2 image really becomes a raw disk.
-                let result = try await runQemuImg([
-                    "convert",
-                    "-f", sourceFormat,
-                    "-O", format.rawValue,
-                    sourcePath,
-                    stagingPath,
-                ])
+                let result = try await runQemuImg(
+                    [
+                        "convert",
+                        "-f", sourceFormat,
+                        "-O", format.rawValue,
+                        sourcePath,
+                        stagingPath,
+                    ], budget: .imageWork(bytes: sourceInfo.virtualSize))
                 if result.terminationStatus != 0 {
                     let output = result.combinedOutput
                     logger.error(
@@ -286,7 +297,8 @@ public actor FileSystemStorageBackend: StorageBackend {
             // directory entry before reporting success.
             try publishItem(stagingPath, path)
         } catch {
-            try? FileManager.default.removeItem(atPath: stagingPath)
+            retainPrepared = SubprocessBudget.preserveStaging(after: error)
+            if !retainPrepared { try? FileManager.default.removeItem(atPath: stagingPath) }
             guard Self.isInsufficientDiskSpace(error) else { throw error }
             throw StorageBackendError.insufficientDiskSpace(
                 "materializing \(path) ran out of space on the filesystem backing "
@@ -607,13 +619,14 @@ public actor FileSystemStorageBackend: StorageBackend {
             at: volumeDirectory(volumeId: targetVolumeId))
 
         try await publishAtomically(to: targetPath) { stagingPath in
-            let result = try await self.runQemuImg([
-                "convert",
-                "-f", format.rawValue,
-                "-O", format.rawValue,
-                sourcePath,
-                stagingPath,
-            ])
+            let result = try await self.runQemuImg(
+                [
+                    "convert",
+                    "-f", format.rawValue,
+                    "-O", format.rawValue,
+                    sourcePath,
+                    stagingPath,
+                ], budget: .imageWork(bytes: sourceInfo.virtualSize))
             if result.terminationStatus != 0 {
                 let output = result.combinedOutput
                 self.logger.error(
@@ -830,13 +843,14 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// directory synchronization, power loss could leave a canonical name
     /// pointing at incomplete or stale bytes.
     private func publishAtomically(to path: String, _ write: (String) async throws -> Void) async throws {
-        let stagingPath = path + ".partial"
-        try? FileManager.default.removeItem(atPath: stagingPath)
+        let stagingPath = path + ".partial." + UUID().uuidString.lowercased()
         do {
             try await write(stagingPath)
             try DurableFileWriter().publish(stagingPath: stagingPath, to: path)
         } catch {
-            try? FileManager.default.removeItem(atPath: stagingPath)
+            if !SubprocessBudget.preserveStaging(after: error) {
+                try? FileManager.default.removeItem(atPath: stagingPath)
+            }
             throw error
         }
     }
@@ -869,18 +883,20 @@ public actor FileSystemStorageBackend: StorageBackend {
         let directory = (volumePath as NSString).deletingLastPathComponent
         let path = (directory as NSString).appendingPathComponent(
             ".strato-discard-probe-\(UUID().uuidString.lowercased())")
-        defer { try? FileManager.default.removeItem(atPath: path) }
+        var retainProbe = false
+        defer { if !retainProbe { try? FileManager.default.removeItem(atPath: path) } }
         do {
             try Data(repeating: 0x5a, count: 4096).write(
                 to: URL(fileURLWithPath: path), options: .withoutOverwriting)
             let result = try await runSubprocess(
                 URL(fileURLWithPath: fallocatePath),
-                ["--keep-size", "--punch-hole", "--offset", "0", "--length", "4096", path])
+                ["--keep-size", "--punch-hole", "--offset", "0", "--length", "4096", path], .inspection)
             guard result.terminationStatus == 0 else {
                 return "the backing filesystem rejected a hole-punch probe (exit \(result.terminationStatus))"
             }
             return nil
         } catch {
+            retainProbe = SubprocessBudget.preserveStaging(after: error)
             return "the backing filesystem hole-punch probe could not run: \(error.localizedDescription)"
         }
         #else
@@ -898,7 +914,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 [
                     "bench", "-c", "1", "-d", "1", "-f", format.rawValue,
                     "-i", "io_uring", "-t", "none", "-s", "512", path,
-                ])
+                ], .inspection)
             guard result.terminationStatus == 0 else {
                 return
                     "qemu-img rejected cache=none with io_uring on this file, kernel, or QEMU build "
@@ -915,9 +931,13 @@ public actor FileSystemStorageBackend: StorageBackend {
 
     // MARK: - qemu-img Helpers
 
-    private func runQemuImg(_ arguments: [String]) async throws -> ProcessResult {
+    private func runQemuImg(_ arguments: [String], budget: SubprocessBudget? = nil) async throws -> ProcessResult {
         do {
-            return try await runSubprocess(URL(fileURLWithPath: qemuImgPath), arguments)
+            let executable = URL(fileURLWithPath: qemuImgPath)
+            return try await runSubprocess(
+                executable, arguments, budget ?? .storage(executable: executable, arguments: arguments))
+        } catch  where SubprocessBudget.preserveStaging(after: error) {
+            throw error
         } catch let error as StorageBackendError {
             throw error
         } catch {

@@ -558,6 +558,7 @@ extension Agent {
         while !shutdownRequested {
             _ = reconnectState.consumeStartupConnectionLoss()
             do {
+                try await prepareForWorkloadRegistration()
                 let generation = try await client.connect()
                 try await registerWithControlPlane()
                 guard

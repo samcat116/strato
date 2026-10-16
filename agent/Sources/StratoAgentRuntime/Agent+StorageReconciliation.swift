@@ -1313,6 +1313,7 @@ extension Agent {
     }
 
     func reconcileDelete(_ item: ReconcileWorkItem) async throws {
+        guestConfigObservationCache.removeValue(forKey: item.id)
         // Orphan with no live session: try to re-adopt first so the surviving
         // hypervisor process is actually torn down instead of leaking. If the
         // session cannot be reattached, fall back to releasing the manifest

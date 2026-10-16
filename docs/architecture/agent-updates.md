@@ -3,7 +3,7 @@
 Strato updates hypervisor agents from the control plane — no SSH, no
 configuration management run. An agent's build is desired state like anything
 else: the control plane records which version an agent should run, the version
-rides that agent's desired-state sync as `desiredAgentUpdate`, and the agent
+rides that matching-version agent's desired-state sync as `desiredAgentUpdate`, and the agent
 converges on it. There are two ways a version gets assigned:
 
 - **Fleet auto-update** (issue #434): enrolled agents are advanced to the
@@ -17,8 +17,8 @@ reasons, and the one-agent-at-a-time property (an in-flight manual update holds
 the fleet rollout, and vice versa). The end is always the same: the agent
 downloads the artifact, verifies its SHA-256, atomically swaps its own binary
 (preserving the old one as `<binary>.prev`), exits with a restart code for its
-supervisor, and proves the update by re-registering with the new build's
-version.
+supervisor, and proves the update through target-version registration followed
+by fresh inventory and capability health across a 60-second verification interval.
 
 Until wire v28 the operator path was a separate imperative `agent_update`
 message answered synchronously over the socket. It is gone (ADR 0001 stage 6):
@@ -131,26 +131,77 @@ where another stopped:
   platform artifact actually resolves. An agent already carrying an assignment
   — including one an operator made by hand — counts as in flight, so only one
   agent in the fleet is ever restarting.
+  Artifact resolution runs before taking the candidate's row lock. The sweep
+  then reloads and rechecks enrollment, assignment, liveness, version and
+  platform under that lock before writing, so an operator's intervening update,
+  withdrawal or administrative shutdown wins over the earlier snapshot.
 - The assignment (`update_desired_version`) rides the agent's periodic
   desired-state sync as `desiredAgentUpdate`, with the artifact URL and
   checksum re-resolved on every assembly so a long-desired update never
   carries a stale link.
-- The next agent is assigned only after the previous one **re-registers at
-  the target version**. Outcomes per assigned agent:
-  - **Converged** — re-registered at the target (or updated by hand):
-    assignment cleared, rollout advances.
+- Assignment captures a durable baseline of previously working capabilities
+  (usable backends and their subcapabilities, networking, sandbox, TPM, resolver,
+  metadata, and fresh dependency-gated features) and inventory health. Capability
+  gains are allowed; losing any required capability conservatively fails the
+  update without requiring proof that the update caused it.
+- The next agent is assigned only after the previous one **registers at the
+  target and passes post-update verification**. Outcomes per assigned agent:
+  - **Verifying** — target registration must occur after assignment. A fresh
+    observed inventory report and dependency snapshot must arrive at or after
+    that registration, with an online heartbeat. All receipt times use the
+    control-plane cluster clock. The sweep reads database time after loading its
+    candidate snapshot, so a report received during earlier awaited maintenance
+    work is evaluated against current time; genuinely future timestamps fail
+    closed. Inventory must
+    be complete and free of manifest degradation, including unroutable entries.
+    Registration alone cannot prove inventory health. After the first healthy
+    sweep, the assignment remains in flight for at least 60 seconds and needs
+    fresh inventory and dependency evidence at the far boundary. Every sweep
+    checks the required baseline again; a degraded required dependency fails
+    verification even where placement policy temporarily permits it. If an
+    existing operator action restarts a retained assignment's budget clock,
+    verification requires a new interval using reports received after that clock
+    restart. A heartbeat, inventory receipt, or
+    dependency receipt reaching 60 seconds old during verification fails the
+    assignment, including a target agent that disappears. Re-registration
+    restarts the verification interval. These are sampled health checks, not
+    continuous on-host monitoring.
+  - **Converged** — the target agent passes the interval with unchanged or
+    improved capabilities and healthy inventory: assignment and verification
+    state cleared, rollout advances. The final verdict locks and re-reads the
+    agent row, checking the current assignment, failure, and health evidence
+    before clearing it. If the current assignment or health no longer qualifies,
+    the next sweep classifies that state; stale evidence cannot erase a newer
+    terminal failure or advance the fleet.
   - **Blocked** — the agent reports why it will not act yet (see
     preconditions below). Past the health budget (10 minutes) the agent is
     *parked*: its assignment stays, so it converges whenever the blocker
     clears, but the rollout stops waiting on it.
   - **Failed** — the agent reported a terminal failure (download, checksum,
-    probe, or swap), or went silent past the health budget. A *rollout*
+    probe, or swap), regressed capabilities/inventory, lost fresh health during
+    verification, or exhausted the 10-minute assignment budget without verified
+    target health. Version equality never erases a terminal failure. A *rollout*
     failure **halts** the fleet — no further agents are assigned — until an
-    operator intervenes (re-enable auto-update on the failed agent to retry,
-    which also restarts its budget clock; re-issue the update, which
-    overwrites the assignment with a fresh artifact; or cancel it) or the
-    target version moves on, which resets stale rollout assignments and
-    failures.
+    operator explicitly withdraws the failed assignment or the target version
+    moves on, which resets stale rollout assignments and failures.
+
+    After reviewing the agent's capabilities, inventory, and health, perform
+    manual recovery as needed (see [agent deployment](../deployment/agents.md))
+    and explicitly cancel with
+    `DELETE /api/agents/:id/actions/update` (or **Cancel**). Cancellation clears
+    the assignment, failure, and original baseline; it is an operator decision
+    to withdraw verification, not proof that verification succeeded. If no other
+    assignment holds or halts the fleet, rollout can advance. An enrolled agent
+    still below target can be assigned again, so disable its auto-update first
+    if it should remain excluded.
+
+    `POST /api/agents/:id/actions/update` refuses a version the agent already
+    runs, even with `force`: same-target reassignment cannot recover a failed
+    verification after target registration. A genuinely different target may be
+    explicitly assigned through the existing update action. Disabling
+    auto-update withdraws a rollout assignment and its baseline; re-enabling
+    does not restore or retry that original baseline, and an agent already at
+    target is not assigned again. Disabling leaves manual assignments intact.
 
     A *manual* failure does not halt the fleet. One operator action on one
     agent — possibly not even an enrolled one — must not stop every other
@@ -159,9 +210,19 @@ where another stopped:
     as stale (the deployment target has no opinion about a version an operator
     chose). Cancelling is what clears it.
 
+    Assignments preserved from a build without baseline fields cannot establish
+    their pre-update health retrospectively. They fail verification with explicit
+    guidance to review health, perform any needed recovery, and explicitly
+    cancel the unverifiable assignment. A degraded inventory baseline likewise
+    requires inventory recovery and operator review before cancellation. The
+    migration is additive and does not invent successful evidence for old rows. Parked assignments retain their
+    baseline and must pass the same interval when they eventually register;
+    parking does not waive target health. STR-138 inventory admission and session
+    safeguards continue to gate reports before they can count as evidence.
+
     Either way the failure drops the pinned artifact, so a presigned
-    credential does not outlive the update that needed it; re-issuing supplies
-    a fresh one.
+    credential does not outlive the update that needed it. A permitted new
+    assignment supplies a fresh artifact; same-target reinstalls remain refused.
 
 ### Convergence preconditions (agent)
 
@@ -184,7 +245,90 @@ downloads (or restart-loop on an artifact whose binary reports the wrong
 version) — and the failure is pushed immediately so the rollout halts on the
 real error rather than a timeout.
 
-### Wire protocol
+### Stable bridge exchange (STR-340)
+
+The bridge release implements `GET /agent/update/v1` on both peers. Its frozen
+JSON contains `exchangeVersion: 1`, the control plane's `workloadWireVersion`,
+and an optional artifact (`targetVersion`, `artifactURL`, `sha256`,
+`artifactKind` as `binary`/`tarball`, optional `tarballMember`). It has no
+workload envelopes, resources, or newly issued credentials. It does not create a
+workload registration session. The existing authenticator may persist the
+principal mapping for an already enrolled identity in the workload registry.
+Changes to the workload contract must preserve this v1 exchange; incompatible
+changes to the exchange require another path and another staged bridge release.
+
+The route uses the existing SVID mTLS identity, trust-domain mapping, workload
+registry, and administrative revocation checks. It looks up the authenticated
+agent's existing assignment and reuses artifact resolution. It never assigns an
+update, enrolls an agent, or makes a disconnected agent eligible for a manual
+update. With no assignment it returns no artifact. Authentication errors and
+malformed exchanges fail closed. A missing route (404) on a prebridge control
+plane falls back only to the ordinary exact-version registration handshake.
+
+The agent authenticates the server's exact configured control-plane SPIFFE ID
+with the same chain-and-identity verifier as its WebSocket. Each probe derives
+client credentials and peer-domain roots (including federation) from one fresh
+SVID snapshot. The bridge requires HTTPS, does not follow redirects, bounds the
+body to 64 KiB and the whole request to 15 seconds, and closes the connection on
+completion, cancellation or failure. An unverified 404 cannot enable fallback.
+
+Before registration the bridge agent probes this route. A failed probe during
+network capability refresh leaves the existing exact-version session and its
+poller active; explicit skew stops polling before an update is applied.
+Matching workload versions retain ordinary registration, desired-state updates, and status
+reports. Under skew, it stops workload polling, refuses to send a workload
+registration DTO or update status report, and applies only the staged artifact
+through `AgentUpdater`, including SHA-256 verification and the existing local
+restart gates. Every bridge desired-state poll also advertises
+`Strato-Workload-Wire-Version`; mismatches return 409 before workload assembly,
+including polls that survive a control-plane cutover. Legacy clients retain the
+registration-only contract while versions match; they are not supported across
+wire cutover. No general workload DTO compatibility window is introduced.
+
+#### Upgrade order and bootstrap limit
+
+1. While workload versions still match, install the paired bridge release on
+   the control plane first, then every agent. A prebridge control plane may
+   default-deny the unknown v1 route with 403; that denial never falls back. Existing matching agents can receive the
+   bridge artifact through ordinary updates. If they cannot use that path,
+   install the verified bridge artifact out of band. Confirm all nodes actually
+   run a bridge-capable binary before crossing a workload-version boundary.
+2. Resolve and explicitly assign the intended next release to the agents while
+   they are still online and matching. Keep the existing authorization and
+   sandbox `force` acknowledgement. For a next-release artifact before the
+   deployment target changes, use the existing explicit override fields
+   (`artifactUrl`, `sha256`, `targetVersion`, `artifactKind`, `tarballMember`)
+   with the existing `agent:updateArtifact` authorization; do not grant new
+   permissions to perform staging. Assignment may immediately start the
+   upgrade; a bridge-capable newer agent can wait in update-only mode against
+   the older control plane. The target release must also preserve v1. Do not
+   rely on the fleet sweep to assign updates to already disconnected agents.
+3. Replace the control plane with the corresponding target release. Any
+   still-old bridge agents obtain their already staged assignment via v1;
+   already-updated agents register when workload equality is restored. Perform
+   the cutover within the existing assignment health budget; this exchange
+   does not redesign fleet health gating or restart policy.
+4. Verify each agent re-registers at the target before ordinary workload
+   reconciliation resumes. A skewed node logs its required update-only mode;
+   the server logs its identity, both wire versions, and whether an artifact
+   assignment is available. No assignment, failed verification, or a blocked
+   restart requires operator intervention; logs do not claim convergence.
+
+Already deployed binaries that lack v1 do not learn it from a server change.
+They must first receive the bridge while matching, or require explicit
+out-of-band installation. Containerized agents require replacement images.
+
+#### Rollback order
+
+Keep a verified previous bridge-capable artifact or `<binary>.prev`. While the
+current peers still match, explicitly assign the rollback artifact before
+replacing the control plane with the corresponding older bridge-capable
+release. Either side can then wait in update-only mode until equality returns.
+A disconnected node with no assignment, or a rollback to a prebridge binary,
+requires out-of-band installation. Automatic downgrade is not introduced, and
+schema rollback safety remains a separate deployment requirement.
+
+### Historical workload wire fields
 
 Version 7 adds both fields, additively and backward-tolerantly:
 `DesiredStateMessage.desiredAgentUpdate` (nil = "no opinion", never
@@ -194,10 +338,10 @@ rollout nor the update endpoint assigns to one — it would burn its health
 budget against silence.
 
 Version 28 removed the imperative `agent_update` message, leaving these fields
-as the only update path. A control plane at v28 never sends the old message to
+as the only workload-channel update path. A control plane at v28 never sends the old message to
 any agent; the only skew that regresses is an *older* control plane driving a
 v28 agent, whose manual update would time out against an envelope the agent no
-longer decodes. Upgrade the control plane first.
+longer decodes. Use the staged bridge procedure above for subsequent wire transitions.
 
 ### Rollback
 
@@ -210,7 +354,7 @@ supervisor helper and is out of scope until halting proves insufficient.
 
 - `strato_agent_auto_update_assignments_total`,
   `..._converged_total`, `..._failures_total{reason}` (`agent_reported` |
-  `health_budget`), `..._parked_total`. `assignments_total` counts what the
+  `health_budget` | `post_update_health`), `..._parked_total`. `assignments_total` counts what the
   fleet rollout assigned; the rest are recorded by the sweep, which since
   STR-145 classifies operator-assigned updates too, so they cover both.
 - Version transitions log at `notice` on registration ("Agent re-registered

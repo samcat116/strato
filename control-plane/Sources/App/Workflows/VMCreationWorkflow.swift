@@ -386,16 +386,16 @@ enum VMCreationWorkflow {
             // transaction (not the insert): the loser re-reads the used set
             // and allocates the next free address.
             let initialGeneration = vm.generation
-            accepted = try await VMController.retryingOnConstraintFailure {
+            accepted = try await DatabaseTransactionRetry.retrying(
+                on: req.db, uniqueConstraints: DatabaseTransactionRetry.workloadCreateConstraints
+            ) {
                 // A retried attempt reuses this model after its insert was
                 // rolled back: Fluent recorded the generated id and marked the
                 // model as existing, so saving again would UPDATE a row that no
                 // longer exists (and the failed attempt's SQL writer refreshed
                 // its in-memory generation). Reset both so every attempt starts
                 // as a fresh insert.
-                vm.id = nil
-                vm.$id.exists = false
-                vm.generation = initialGeneration
+                DatabaseTransactionRetry.resetNewResource(vm, generation: initialGeneration)
                 return try await req.db.transaction { db in
                     try await IdempotencyService.reserve(
                         req.idempotencyContext, actor: .user(userID), on: db)

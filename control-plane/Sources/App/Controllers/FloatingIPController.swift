@@ -1,4 +1,5 @@
 import Fluent
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -7,7 +8,7 @@ import Vapor
 /// site's network-controller agent on the desired-state sync and realized as
 /// an OVN `dnat_and_snat` rule on the NIC's network router.
 ///
-/// Pools are infrastructure (scoped like sites: org-or-OU owner, optional
+/// Pools are infrastructure (scoped like sites: org-or-OU owner, required
 /// site pin); allocations are project resources (scoped like networks).
 struct FloatingIPController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -164,12 +165,15 @@ struct FloatingIPController: RouteCollection {
             throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
         }
         try await requireSiteManage(req, site: site)
-        try await Self.assertNoPoolOverlap(cidr: cidr, siteId: siteId, excluding: nil, on: req.db)
 
         let pool = FloatingIPPool(
             name: create.name, cidr: cidr, gateway: gateway, siteID: siteId, organizationScope: scope)
         do {
-            try await pool.save(on: req.db)
+            try await req.db.transaction { db in
+                try await AdvisoryLock.acquireTransactionLock(.object(.floatingIPSiteAdmission, id: siteId), on: db)
+                try await Self.assertNoPoolOverlap(cidr: cidr, siteId: siteId, excluding: nil, on: db)
+                try await pool.save(on: db)
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             // Names are unique per owner (STR-105), so this only ever reports a
             // collision inside the caller's own scope — it can't be used to
@@ -225,36 +229,44 @@ struct FloatingIPController: RouteCollection {
             }
             try await requireSiteManage(req, site: site)
         }
-        // Moving the pool between sites (or unpinning it) changes which pools
-        // it can conflict with — re-check at the new scope. And it must not
-        // strand live attachments: the site constraint is only enforced at
-        // attach time, so a move would leave the old site advertising
-        // addresses from a pool that now claims to answer elsewhere.
-        if siteId != pool.$site.id {
-            let attached = try await FloatingIP.query(on: req.db)
-                .filter(\.$pool.$id == pool.requireID())
-                .all()
-                .filter { $0.$interface.id != nil }
-                .count
-            guard attached == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Pool has \(attached) attached floating IP(s); detach them before changing the pool's site"
-                )
+        let poolID = try pool.requireID()
+        let preparedGateway = canonicalGateway
+        let committed = try await req.db.transaction { db -> FloatingIPPool in
+            // Lock the destination admission scope before the row: requests
+            // entering that site must see each other's committed CIDRs.
+            try await AdvisoryLock.acquireTransactionLock(.object(.floatingIPSiteAdmission, id: siteId), on: db)
+            guard let sql = db as? any SQLDatabase else {
+                throw Abort(.internalServerError, reason: "Pool admission requires PostgreSQL")
             }
-            try await Self.assertNoPoolOverlap(
-                cidr: pool.cidr, siteId: siteId, excluding: pool.id, on: req.db)
+            try await sql.raw("SELECT id FROM \(ident: FloatingIPPool.schema) WHERE id = \(bind: poolID) FOR UPDATE")
+                .run()
+            guard let current = try await FloatingIPPool.find(poolID, on: db) else {
+                throw Abort(.notFound, reason: "Floating IP pool no longer exists")
+            }
+            if siteId != current.$site.id {
+                let attached = try await FloatingIP.query(on: db)
+                    .filter(\.$pool.$id == poolID)
+                    .all()
+                    .filter { $0.$interface.id != nil }
+                    .count
+                guard attached == 0 else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Pool has \(attached) attached floating IP(s); detach them before changing the pool's site")
+                }
+                try await Self.assertNoPoolOverlap(cidr: current.cidr, siteId: siteId, excluding: poolID, on: db)
+            }
+            current.gateway = preparedGateway
+            current.$site.id = siteId
+            try await current.save(on: db)
+            return current
         }
-
-        pool.gateway = canonicalGateway
-        pool.$site.id = siteId
-        try await pool.save(on: req.db)
 
         let count = try await FloatingIP.query(on: req.db)
             .filter(\.$pool.$id == pool.requireID())
             .count()
-        return try FloatingIPPoolResponse(from: pool, allocatedCount: count)
+        return try FloatingIPPoolResponse(from: committed, allocatedCount: count)
     }
 
     /// DELETE /api/floating-ip-pools/:poolId
@@ -690,15 +702,12 @@ struct FloatingIPController: RouteCollection {
     /// answering scope. Allocation only deduplicates within one pool, so two
     /// overlapping pools that one OVN deployment answers for could both hand
     /// out the same external address. Pools pinned to *different* sites are
-    /// separate fabrics and may overlap; a site-pinned pool conflicts with
-    /// same-site and unpinned pools, and an unpinned pool conflicts with
-    /// everything.
+    /// separate fabrics and may overlap. Every pool has a required site.
     static func assertNoPoolOverlap(
-        cidr: String, siteId: UUID?, excluding poolId: UUID?, on db: Database
+        cidr: String, siteId: UUID, excluding poolId: UUID?, on db: Database
     ) async throws {
-        let others = try await FloatingIPPool.query(on: db).all()
+        let others = try await FloatingIPPool.query(on: db).filter(\.$site.$id == siteId).all()
         for other in others where other.id != poolId {
-            if let siteId, siteId != other.$site.id { continue }
             if NetworkController.subnetsOverlap(cidr, other.cidr) {
                 throw Abort(
                     .conflict,

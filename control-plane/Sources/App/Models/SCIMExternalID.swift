@@ -100,9 +100,10 @@ extension SCIMExternalID {
         internalId: UUID,
         on db: Database
     ) async throws {
-        // Try to find and update existing, or create new with retry for race conditions
+        // Only an autocommit INSERT race can be recovered here. A failed
+        // INSERT inside an outer transaction aborts it; its owner must decide
+        // whether the complete transaction is safe to replay.
         for attempt in 1...3 {
-            // Check if mapping already exists
             if let existing = try await SCIMExternalID.query(on: db)
                 .filter(\.$organization.$id == organizationID)
                 .filter(\.$resourceType == resourceType.rawValue)
@@ -114,25 +115,20 @@ extension SCIMExternalID {
                 return
             }
 
-            // Try to create new mapping
             let mapping = SCIMExternalID(
-                organizationID: organizationID,
-                resourceType: resourceType.rawValue,
-                externalId: externalId,
-                internalId: internalId
+                organizationID: organizationID, resourceType: resourceType.rawValue,
+                externalId: externalId, internalId: internalId
             )
             do {
                 try await mapping.save(on: db)
                 return
             } catch {
-                // If unique constraint violation, retry to find the existing record
-                let errorDescription = String(describing: error).lowercased()
-                if errorDescription.contains("unique") || errorDescription.contains("duplicate") {
-                    if attempt < 3 {
-                        continue
-                    }
-                }
-                throw error
+                guard !db.inTransaction, attempt < 3,
+                    DatabaseTransactionFailure.uniqueConstraint(error)
+                        == "uq:scim_external_ids.organization_id+scim_external_ids.resource"
+                else { throw error }
+                // Reread the winner on the next attempt. Lookup/update errors
+                // are outside this catch and propagate without replay.
             }
         }
     }

@@ -183,7 +183,7 @@ jobs:
               postgres:15
           ' > "$RUNNER_TEMP/postgres-start.log" 2>&1 &
 
-      # The write-time guardrail check and the role-nesting subsumption proof
+      # The write-time guardrail check and conditioned-policy implication tests
       # (#484) skip themselves without a solver, which would leave them
       # silently covering nothing.
       # Into the workspace rather than /usr/local/bin: the ARC runner pod's

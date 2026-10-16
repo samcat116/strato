@@ -69,6 +69,14 @@ struct AgentDesiredStateController: RouteCollection {
             throw Abort(.unauthorized, reason: "Desired state requires an agent client certificate")
         }
         let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
+        // Bridge clients advertise their exact workload contract on every poll,
+        // including polls that outlive a control-plane cutover. Legacy matching
+        // clients retain their registration-only contract until bridge install.
+        if let version = req.headers.first(name: AgentUpdateBridgeResponse.wireVersionHeader),
+            version != String(WireProtocol.currentVersion)
+        {
+            throw Abort(.conflict, reason: "Workload wire version must match; use the update-only exchange")
+        }
 
         // Resolved by the SVID's full identity, not its bare name: two
         // organizations may each enroll an `agent-1` (issue #613), and one
@@ -96,7 +104,7 @@ struct AgentDesiredStateController: RouteCollection {
         let ifNoneMatch = req.headers.first(name: .ifNoneMatch)
         let mode = Telemetry.DesiredStatePollMode.from(ifNoneMatch: ifNoneMatch)
         let clock = ContinuousClock()
-        let deadline = clock.now + req.application.desiredStatePollHoldWindow
+        let deadline = clock.now + req.application.nextDesiredStatePollHoldWindow()
         var assemblies = 0
 
         while true {
@@ -198,7 +206,27 @@ extension Application {
         typealias Value = Duration
     }
 
-    /// How long a desired-state poll parks before answering `304`. Settable so
+    private struct DesiredStatePollRandomUnitKey: StorageKey {
+        typealias Value = @Sendable () -> Double
+    }
+
+    /// Injectable randomness for each poll's hold deadline, sampled once so
+    /// doorbells and assembly-budget exhaustion cannot extend the window.
+    var desiredStatePollRandomUnit: @Sendable () -> Double {
+        get { storage[DesiredStatePollRandomUnitKey.self] ?? { Double.random(in: 0...1) } }
+        set { storage[DesiredStatePollRandomUnitKey.self] = newValue }
+    }
+
+    func nextDesiredStatePollHoldWindow() -> Duration {
+        let ceiling = min(max(.zero, desiredStatePollHoldWindow), AgentDesiredStateController.defaultHoldWindow)
+        let sample = desiredStatePollRandomUnit()
+        let unit = sample.isFinite ? min(1, max(0, sample)) : 1
+        let floor = ceiling - ceiling / 5
+        return min(ceiling, max(floor, floor + (ceiling - floor) * unit))
+    }
+
+    /// The ceiling for how long a desired-state poll parks before answering `304`.
+    /// Each request uses 80–100% of it, never above the production 45s ceiling. Settable so
     /// tests can drive the park/expire path without waiting out a production
     /// hold window.
     var desiredStatePollHoldWindow: Duration {

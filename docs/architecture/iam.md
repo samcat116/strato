@@ -262,10 +262,10 @@ bindings it now shadows (`shadowedBindings`). A binding write returns the
 ceilings that narrow it (`ceilings`). Same relation, both directions, and each
 write is logged with what it changed.
 
-The same machinery proves the role-nesting invariant in CI
-(`RoleNestingSubsumptionTests`): `check_implies` over the compiled role
-policies, in both directions, so `viewer ⊂ operator ⊂ editor ⊂ admin` is
-verified rather than assumed.
+The seeded role-nesting invariant `viewer ⊂ operator ⊂ editor ⊂ admin` is
+checked directly by `CedarSchemaTests.seededRoleChainNested`;
+`SwiftCedarEngineTests.roleActionEnumeration` evaluates the actual assembled
+role policies. Solver coverage remains on conditioned guardrails and write reports.
 
 ## Grants (tier 3)
 
@@ -381,9 +381,8 @@ narrow per-type roles can be added later if needed. This is deliberately not
 GCP's basic-roles mistake: membership is a curated, reviewable schema change —
 new actions join roles by explicit decision, never by default. (Ceilings are
 the opposite: subtractive and automatically covering, per tier 2. The
-asymmetry is intentional.) The implication-nesting direction is verified with
-symcc subsumption checks in CI (`RoleNestingSubsumptionTests`, #484); it is
-easy to get backwards.
+asymmetry is intentional.) The implication-nesting direction is checked by the registry subset contract
+and actual role-policy evaluation described above; it is easy to get backwards.
 
 Today's environment roles (`environment_manager`, deployer, approver) are
 expressed as an environment-scoped restriction rather than a role per

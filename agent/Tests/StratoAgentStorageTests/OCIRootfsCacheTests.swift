@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import Synchronization
 import Testing
 import StratoAgentTestSupport
 
@@ -7,6 +8,76 @@ import StratoAgentTestSupport
 
 @Suite("OCI Rootfs Cache")
 struct OCIRootfsCacheTests {
+
+    @Test("invalidation during verification leaves a replacement entry untouched")
+    func invalidationDuringVerification() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let started = AsyncStream<Void>.makeStream()
+        // Only the dedicated verification queue waits on this semaphore.
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let calls = Mutex(0)
+        let cache = OCIRootfsCache(
+            rootPath: root, logger: Logger(label: "test"),
+            hashFile: { path in
+                let first = calls.withLock { count in
+                    count += 1; return count == 1
+                }
+                if first {
+                    started.continuation.yield(())
+                    release.wait()
+                }
+                return try FileHashing.sha256Hex(ofFileAt: path)
+            })
+        let published = try await stageAndPublish(cache, digest: digest)
+        let directory = (published.rootfsPath as NSString).deletingLastPathComponent
+        let completion = try Data(contentsOf: URL(fileURLWithPath: directory + "/" + OCIRootfsCache.completionFileName))
+        let pending = Task { await cache.lookup(manifestDigest: digest) }
+        var events = started.stream.makeAsyncIterator()
+        _ = await events.next()
+        // This must finish while hashing is suspended: the cache actor stays
+        // responsive, and the old proof must not delete this successor.
+        await cache.invalidate(manifestDigest: digest)
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try Data("wrong".utf8).write(to: URL(fileURLWithPath: published.rootfsPath))
+        try Data("{}".utf8).write(to: URL(fileURLWithPath: published.configPath))
+        try completion.write(to: URL(fileURLWithPath: directory + "/" + OCIRootfsCache.completionFileName))
+        release.signal()
+        #expect(await pending.value == nil)
+        #expect(FileManager.default.fileExists(atPath: published.rootfsPath))
+        // A later, independent lookup still detects the successor's damage.
+        #expect(await cache.lookup(manifestDigest: digest) == nil)
+        #expect(!FileManager.default.fileExists(atPath: directory))
+    }
+
+    @Test(
+        "concurrent warm cache lookup benchmark",
+        .enabled(
+            if:
+                ProcessInfo.processInfo.environment["STRATO_CACHE_BENCHMARK"] == "1"))
+    func concurrentLookupBenchmark() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root)
+        let staging = try await cache.stagingDirectory(for: digest)
+        try Data(repeating: 0x5a, count: 64 * 1024 * 1024).write(
+            to: URL(fileURLWithPath: staging + "/" + OCIRootfsCache.rootfsFileName))
+        try Data("{}".utf8).write(to: URL(fileURLWithPath: staging + "/" + OCIRootfsCache.configFileName))
+        _ = try await cache.publish(manifestDigest: digest)
+        let clock = ContinuousClock()
+        for pass in 0..<3 {
+            let start = clock.now
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<16 {
+                    group.addTask { #expect(await cache.lookup(manifestDigest: digest) != nil) }
+                }
+            }
+            print(
+                "Rootfs lookup benchmark pass=\(pass) callers=16 bytes=67108864 elapsed=\(start.duration(to: clock.now))"
+            )
+        }
+    }
 
     private let digest = "sha256:" + String(repeating: "1", count: 64)
     private let otherDigest = "sha256:" + String(repeating: "2", count: 64)
@@ -134,6 +205,7 @@ struct OCIRootfsCacheTests {
         defer { try? FileManager.default.removeItem(atPath: root) }
         let cache = makeCache(root)
         let published = try await stageAndPublish(cache, digest: digest)
+        #expect(await cache.lookup(manifestDigest: digest) != nil)
 
         try Data("wrong".utf8).write(to: URL(fileURLWithPath: published.rootfsPath))
         let result = await cache.lookup(manifestDigest: digest)
@@ -203,6 +275,30 @@ struct OCIRootfsCacheTests {
         #expect(!FileManager.default.fileExists(atPath: idleDir))
         #expect(!FileManager.default.fileExists(atPath: stalePartial))
         #expect(FileManager.default.fileExists(atPath: fresh.rootfsPath))
+    }
+
+    @Test("cleanup retains aged staging while builder termination is unconfirmed")
+    func cleanupPreservesAgedBuildingStage() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = makeCache(root, ttl: 1, maxSizeBytes: 0)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let marked = try await cache.stagingDirectory(for: digest)
+        let abandoned = try await cache.stagingDirectory(for: otherDigest)
+        let payload = Data("potentially active output".utf8)
+        try payload.write(to: URL(fileURLWithPath: marked + "/rootfs.ext4"))
+        try Data().write(to: URL(fileURLWithPath: marked + "/.building"))
+        for path in [marked, abandoned] {
+            try FileManager.default.setAttributes(
+                [.modificationDate: now.addingTimeInterval(-172_800)], ofItemAtPath: path)
+        }
+        await cache.cleanup(now: now)
+        #expect(FileManager.default.fileExists(atPath: marked + "/.building"))
+        #expect(FileManager.default.contents(atPath: marked + "/rootfs.ext4") == payload)
+        #expect(!FileManager.default.fileExists(atPath: abandoned))
+        await #expect(throws: SubprocessStagingBlockedError.self) {
+            try await cache.stagingDirectory(for: digest)
+        }
     }
 
     @Test("cleanup evicts LRU entries beyond the size budget, protecting recent ones")

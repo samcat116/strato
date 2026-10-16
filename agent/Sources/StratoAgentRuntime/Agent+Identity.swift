@@ -151,6 +151,47 @@ extension Agent {
         }
     }
 
+    func prepareForWorkloadRegistration(
+        fetchBridge: (@Sendable () async throws -> AgentUpdateBridgeResponse?)? = nil,
+        updater: AgentUpdater? = nil
+    ) async throws {
+        // Probe the frozen exchange before sending a workload registration DTO.
+        // Failure is retryable; ordinary registration never resolves wire skew.
+        guard let url = URL(string: controlPlaneHTTPBase + AgentUpdateBridgeResponse.path) else {
+            throw AgentError.registrationFailed("Invalid update-only exchange URL")
+        }
+        let bridge: AgentUpdateBridgeResponse?
+        if let fetchBridge {
+            bridge = try await fetchBridge()
+        } else {
+            guard let svidManager, let spiffe = configuration.spiffeConfig else {
+                throw AgentError.spiffeConfigurationError("no SPIFFE identity is available for the update bridge")
+            }
+            // One snapshot supplies both client credentials and expected peer
+            // roots, including federation, across credential rotation.
+            let svid = try await svidManager.getSVID()
+            bridge = try await SPIFFEUpdateBridge.fetch(
+                url: url, svid: svid,
+                expectedSPIFFEID: spiffe.resolvedControlPlaneSPIFFEID,
+                on: eventLoopGroup, logger: logger)
+        }
+        if let bridge {
+            guard bridge.exchangeVersion == 1 else {
+                throw AgentUpdateBridgeResponse.BridgeError.unsupportedExchange
+            }
+            if bridge.workloadWireVersion != WireProtocol.currentVersion {
+                // Preserve the established exact-version session on a failed
+                // probe. Only verified skew can withdraw its workload poller.
+                await desiredStatePoller?.stop()
+                let update = try bridge.skewUpdate(agentWireVersion: WireProtocol.currentVersion)
+                logger.notice("Wire skew: workload registration refused; using staged update-only assignment")
+                await handleDesiredAgentUpdate(update, reportWorkloadStatus: false, updater: updater)
+                throw AgentError.registrationFailed(
+                    "Wire skew requires a staged bridge update or out-of-band installation")
+            }
+        }
+    }
+
     func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
 

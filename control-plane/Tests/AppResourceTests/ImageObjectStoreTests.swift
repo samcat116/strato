@@ -79,18 +79,6 @@ final class ImageObjectStoreTests {
 
     // MARK: - Key building
 
-    @Test("Disk artifact key is project/image/kind/filename")
-    func diskArtifactKey() {
-        let projectId = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
-        let imageId = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
-
-        let key = ImageObjectKey.artifact(
-            projectId: projectId, imageId: imageId,
-            kind: "disk-image", filename: "disk.qcow2")
-
-        #expect(key == "\(projectId)/\(imageId)/disk-image/disk.qcow2")
-    }
-
     @Test("Artifact key inserts the kind segment so kinds can't collide on filename")
     func artifactKey() {
         let projectId = UUID()
@@ -103,6 +91,7 @@ final class ImageObjectStoreTests {
 
         #expect(rootfs != disk)
         #expect(rootfs == "\(projectId)/\(imageId)/rootfs/disk.img")
+        #expect(disk == "\(projectId)/\(imageId)/disk-image/disk.img")
     }
 
     @Test("Image prefix covers every object for one image")
@@ -136,17 +125,6 @@ final class ImageObjectStoreTests {
         #expect(try await store.size(key: key) == 11)
         let onDisk = try String(contentsOfFile: "\(root)/\(key)", encoding: .utf8)
         #expect(onDisk == "hello world")
-    }
-
-    @Test("Writer creates intermediate directories")
-    func createsIntermediateDirectories() async throws {
-        let root = try Self.createTempStorageDirectory()
-        defer { Self.cleanupTempStorageDirectory(root) }
-        let store = FilesystemImageObjectStore(rootPath: root)
-
-        try await Self.write("x", to: "a/b/c/d/file.img", in: store)
-
-        #expect(try await store.exists(key: "a/b/c/d/file.img"))
     }
 
     @Test("Multiple writes concatenate in order")

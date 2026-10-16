@@ -7,8 +7,10 @@ extension Application {
     /// Configures PostgreSQL, registers the ordered schema history, and runs it
     /// through the control plane's serialized migration runner.
     func bootstrapDatabase() async throws {
-        databases.middleware.use(UserIdentityMiddleware(), on: .psql)
         let databaseStatementTimeouts = try configureDatabaseDriver()
+        // Fluent attaches model middleware to an existing configuration. Test
+        // fixtures already register .psql, but normal startup must do so first.
+        databases.middleware.use(UserIdentityMiddleware(), on: .psql)
         registerMigrations()
 
         // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
@@ -47,9 +49,13 @@ extension Application {
             milliseconds: controlPlaneConfiguration.int(.databaseStatementTimeoutMS))
         let migrationStatementTimeout = try DatabaseStatementTimeout(
             milliseconds: controlPlaneConfiguration.int(.databaseMigrationStatementTimeoutMS))
+        let sessionTimeouts = try DatabaseSessionTimeouts(
+            lockMilliseconds: controlPlaneConfiguration.int(.databaseLockTimeoutMS),
+            idleInTransactionMilliseconds: controlPlaneConfiguration.int(.databaseIdleInTransactionTimeoutMS))
         let statementTimeouts = SchemaMigrator.StatementTimeouts(
             normal: statementTimeout,
-            migration: migrationStatementTimeout
+            migration: migrationStatementTimeout,
+            session: sessionTimeouts
         )
         let databaseConfiguration = SQLPostgresConfiguration(
             hostname: controlPlaneConfiguration.requiredString(.databaseHost),
@@ -60,17 +66,19 @@ extension Application {
             tls: databaseTLS
         )
         logger.info(
-            "Database statement timeouts configured",
+            "Database timeouts configured",
             metadata: [
                 "servingMilliseconds": .stringConvertible(statementTimeout.milliseconds),
                 "migrationMilliseconds": .stringConvertible(migrationStatementTimeout.milliseconds),
+                "lockMilliseconds": .stringConvertible(sessionTimeouts.lockMilliseconds),
+                "idleInTransactionMilliseconds": .stringConvertible(sessionTimeouts.idleInTransactionMilliseconds),
             ]
         )
         databases.use(
             statementTimeout.applying(
                 to: DatabaseConfigurationFactory.postgres(
                     configuration: databaseConfiguration
-                )
+                ), sessionTimeouts: sessionTimeouts
             ), as: .psql)
         return statementTimeouts
     }
@@ -242,5 +250,6 @@ extension Application {
         migrations.add(AddSandboxSuspension())
         migrations.add(AddSandboxIdleActivity())
         migrations.add(AddSandboxIdleFences())
+        migrations.add(AddAgentUpdateHealthVerification())
     }
 }

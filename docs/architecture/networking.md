@@ -67,6 +67,21 @@ What genuinely remains missing (details in §Known gaps):
   Inbound resolution from outside the overlay and external publication are still
   open. See [dns](./dns.md).
 
+## CIDR admission
+
+Network create and update serialize sibling subnet checks and writes in one
+transaction under the project's network-mutation admission lock, before row,
+quota, resolver, and DNS locks. Load-balancer deletion also takes project
+admission before its row/cascade locks and network generation write, preventing
+a cycle with network updates during its later quota release. IPv4 and IPv6 are checked independently within
+the project; legacy project-less rows retain their existing overlap behavior.
+
+External pool create and site moves check and save under a transaction-scoped
+`floating_ip_site_admission` lock for the destination site. Updates reload the
+pool under a row lock after admission. This namespace is separate from the
+per-pool `floating_ip_pool` address-allocation lock; admission in one project or
+site does not block an unrelated scope. Pool creation remains IPv4-only.
+
 ## Fabric convergence observations
 
 The agent reports the outcome of fabric reconciliation through

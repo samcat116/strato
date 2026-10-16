@@ -340,6 +340,9 @@ strato:
     # minutes is deliberately generous while still preventing a blocked query
     # from pinning a pool slot forever.
     statementTimeoutMs: 300000
+    # Bound contended locks and abandoned transactions on serving sessions.
+    lockTimeoutMs: 5000
+    idleInTransactionTimeoutMs: 60000
 
     # TLS mode for the Postgres connection (DATABASE_TLS) — issue #56:
     #   require  - encrypt and fail if the server won't negotiate TLS

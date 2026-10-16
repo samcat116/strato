@@ -12,8 +12,30 @@ passwords to remember to change.
 git clone https://github.com/samcat116/strato.git
 cd strato/helm/strato-control-plane
 helm dependency build
-helm install strato .
+helm install strato . \
+  --set image.repository=ghcr.io/samcat116/strato-control-plane \
+  --set frontend.image.repository=ghcr.io/samcat116/strato-frontend \
+  --set image.tag=main --set frontend.image.tag=main
 ```
+
+The chart defaults to local image names. The overrides above select the
+published images used by the Compose deployment; pin matching immutable tags
+for reproducible installations and include those image values in your
+production values file. If using local builds, make both images available to
+every eligible cluster node instead.
+
+For local browser access, forward the frontend service:
+
+```bash
+kubectl port-forward service/strato-strato-control-plane-frontend 8080:3000
+```
+
+Visit `http://localhost:8080`, matching the default WebAuthn origin. Forwarding
+the control-plane service exposes the API only. This browser-only setup does
+not expose the agent mTLS or SPIRE endpoints; configure the external routes
+below before enrolling hypervisors. Continue with
+[first login](/guide/getting-started#first-login) and the
+[first VM checklist](/guide/getting-started#create-your-first-vm).
 
 Every control-plane pod applies pending database migrations before it starts
 serving. PostgreSQL advisory locking serializes concurrent replicas; a migration
@@ -274,6 +296,34 @@ The chart still ships startup/liveness/readiness probes and a `preStop` drain
 delay so old requests and agent WebSockets receive the configured shutdown
 budget. See [Health checks & controlled deploys](/deployment/health-checks) for
 what each probe promises and which knobs to raise for a slow database or ingress.
+
+### Agent wire-version transitions
+
+Before changing the workload wire version, install a paired bridge-capable
+release on the control plane first, then every agent while versions still match.
+Prebridge agents may receive it through ordinary matching-version updates;
+otherwise install the verified bridge binary out of band. A server endpoint
+cannot teach an already deployed binary a new protocol. Containerized agents
+need replacement images.
+
+While agents are online, explicitly assign the intended target artifacts using
+the existing authorized update action and sandbox acknowledgement. Assignments
+can start immediately: a newer bridge agent waits in authenticated update-only
+mode against the older control plane. Then replace the control plane with the
+target bridge-capable release using the `Recreate` procedure above. Still-old
+bridge agents use their staged assignment through `GET /agent/update/v1`.
+Finish within the existing assignment health budget and confirm target-version
+registration before treating workloads as reconciled. Missing assignments or
+verification failures require operator intervention; no incompatible workload
+state is sent to bridge clients to repair skew.
+
+For rollback, stage the previous verified bridge artifact while peers still
+match, then replace the control plane with the corresponding older
+bridge-capable release. Retain `<binary>.prev` for manual recovery. Nodes
+without a staged assignment and rollback to prebridge binaries require an
+out-of-band agent install. This procedure does not establish schema rollback
+compatibility or change rollout health policy. See the full
+[agent update procedure](/architecture/agent-updates#stable-bridge-exchange-str-340).
 
 ## Adding hypervisors
 

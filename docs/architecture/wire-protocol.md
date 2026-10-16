@@ -596,13 +596,12 @@ documentation — `MessageEnvelopeTests.swift`, `ReconciliationProtocolTests.swi
 `WireProtocolTests.swift`, and `GuestExecMessageTests.swift` show the
 expected encode/decode flows and compatibility behavior.
 
-## Managed VM guest configuration (STR-90, staged vocabulary)
+## Managed VM guest configuration (STR-90 / STR-91)
 
-STR-90 introduces shared vocabulary, not a live realization capability. Its
-standalone model-only build remains on wire v63. This compute integration uses
-wire v67 for host observations, accounting, and resource classes while retaining
-the staged model. STR-91 must introduce a subsequent exact version together
-with the agent consumer. GuestConfig vocabulary does not advertise realization.
+STR-90 introduced the shared vocabulary without a live realization capability.
+STR-91 enables the agent consumer and generation-scoped guest observations on
+exact wire v70. Control plane and agent builds must match; v69 agents cannot
+register and acknowledge guest intent without realizing it.
 
 `DesiredVMState.guestConfig: GuestConfig?` extends the VM's existing desired
 state. It uses **the enclosing VM generation**: every accepted edit must bump
@@ -660,7 +659,7 @@ capability checks, generation guarding, and content-free observations. STR-92
 owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
-remain decodable; realization-capable live peers use the current exact wire v66
+remain decodable; realization-capable live peers use the current exact wire v70
 registration.
 
 STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
@@ -677,8 +676,8 @@ bounded arrays: packages (`name`, nullable `version`), files (`path`, nullable
 sysctls (`key`, nullable `value`). No file contents or command output are reported.
 Success requires complete identities and no error; failure may contain partial
 facts but also sets the existing VM `lastError` / `failedGeneration` fields.
-Old payloads without this optional field decode as nil. This extends STR-90's
-contract without another wire-version change.
+Stored payloads without this optional field decode as nil. Guest realization
+and observations ship together on exact wire v70.
 
 Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`)
 and `guest_config_state` (`nonce`, `observation`). These are additive to the
@@ -689,7 +688,7 @@ and every reply is checked against that boot nonce. Generic guest-control lines
 remain bounded at 1 MiB. Only `converge_guest_config` requests and their response
 line use a 4 MiB bound, including when convergence is the first control frame.
 The bound derives from worst-case JSON escaping of the existing STR-90 field
-limits; the model and wire version remain unchanged.
+limits; the guest-control protocol remains v4, independently of workload wire v70.
 
 Item-level failures are explicit: optional `failedItem` contains `section`
 (`packages`, `files`, `services`, or `sysctls`), `identity` (package/service
@@ -698,3 +697,12 @@ name, file path, or sysctl key), and fixed `reason` matching the top-level
 were not necessarily attempted. Journal, validation, or interrupted-pass errors
 have no failed item. Failed-item identity and reason survive restart in the
 metadata journal.
+
+## Update-only bridge
+
+`GET /agent/update/v1` is a separate frozen, SVID-authenticated contract for
+bridge-capable binaries. It carries only the control plane's workload version
+and an already authorized update artifact. It neither registers a workload
+session nor relaxes exact workload equality. Bridge desired-state polls carry
+`Strato-Workload-Wire-Version`; mismatches are rejected before assembly.
+See [staging and bootstrap limits](./agent-updates.md#stable-bridge-exchange-str-340).

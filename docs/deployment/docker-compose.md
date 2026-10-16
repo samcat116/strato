@@ -244,6 +244,8 @@ add those to `.env` (or an override file) to change them:
 | `STRATO_GRAVATAR_ENABLED` | `true` | Frontend Gravatar profile pictures; `false` avoids third-party requests (not written by `setup.sh`). |
 | `IMAGE_STORAGE_BACKEND` / `IMAGE_S3_*` | `filesystem` | Keep image bytes in an S3-compatible bucket instead of the `image_storage` volume (not written by `setup.sh`); see [Storage](/architecture/storage). |
 | `DATABASE_TLS` | `disable` | Postgres TLS mode — set `require` if you point the stack at an external database (not written by `setup.sh`). |
+| `DATABASE_LOCK_TIMEOUT_MS` | `5000` | Maximum lock wait per statement. Must be positive, at most 2147483647 ms, and shorter than `DATABASE_STATEMENT_TIMEOUT_MS`; disabled on the pinned migration session and restored afterward. |
+| `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS` | `60000` | Terminates sessions idle inside a transaction. Positive milliseconds up to 2147483647; disabled during migrations. Connection loss is never automatically retried. |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | `300000` | Maximum duration of any control-plane Postgres statement, in milliseconds. Must be an integer from 1 through 2147483647; invalid values stop startup instead of leaving queries unbounded. |
 | `DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS` | `300000` | Timeout used only while SchemaMigrator owns its pinned connection; the serving value is restored afterward. Uses the same validation range. |
 | `WEBHOOK_DELIVERY_ENABLED` | `true` | Arm user-managed webhook delivery. Disabling it leaves pending outbox rows durable until delivery is re-enabled. |
@@ -252,6 +254,33 @@ add those to `.env` (or an override file) to change them:
 | `WEBHOOK_AUTO_DISABLE_DAYS` | `3` | Continuous delivery-failure window before a subscription is automatically disabled. |
 | `OTEL_METRICS_ENABLED` | `false` | Export control-plane metrics to `OTEL_EXPORTER_OTLP_ENDPOINT`. Compose has no bundled control-plane OTLP collector, so enable this only when you provide one. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP gRPC collector destination used when metric export is enabled. From the control-plane container, use a collector hostname that is reachable on the Compose network. |
+
+PostgreSQL transaction recovery is opt-in on workload creation, IPAM attachment,
+network mutations, and load-balancer mutations. A
+confirmed `40001`, `40P01`, or `55P03` abort retries the complete transaction up
+to three times with jittered backoff after rollback. Unique violations retry
+only for explicitly named allocation/default-group race indexes.
+Exhausted attempts and confirmed aborts on other API paths return `503` with
+`Retry-After: 1`. On routes that support `Idempotency-Key`, reuse the same key
+when retrying a mutation; the header does not provide replay protection on
+other routes.
+Cancellation, connection loss, and unknown commit outcomes are never replayed
+automatically. Already-closed pinned connections fail immediately rather than
+posting another statement or rollback through the legacy SQL bridge.
+Audit and webhook outbox rows roll back with failed attempts;
+agent dispatch and webhook delivery remain outside the retry boundary.
+
+SCIM external-ID upsert separately retries only its own named unique INSERT
+race, with at most three attempts and a reread/update of the winning row.
+Lookup/update errors and unrelated INSERT errors propagate immediately;
+exhaustion preserves the original PostgreSQL error. Inside an outer transaction,
+the insert error propagates to that transaction's owner without local replay.
+
+`strato_database_transaction_aborts_total` reports SQLSTATE class and retry or
+exhaustion outcome. Advisory waits of at least one second also produce a
+namespace-scoped warning and `strato_advisory_lock_slow_waits_total`, including
+failed acquisitions. This does not define or enforce a global order for row
+locks; the debug advisory-lock ledger retains its existing advisory ordering.
 
 The webhook outbox has a fixed pending ceiling of 10,000 rows per subscription.
 When enqueueing would overflow it, the same transaction moves the oldest

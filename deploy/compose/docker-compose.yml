@@ -268,6 +268,8 @@ services:
       # defaults to five minutes when this variable is absent.
       COORDINATION_STORE_DEADLINE_MS: ${COORDINATION_STORE_DEADLINE_MS:-2000}
       DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-300000}
+      DATABASE_LOCK_TIMEOUT_MS: ${DATABASE_LOCK_TIMEOUT_MS:-5000}
+      DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: ${DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS:-60000}
       # Allow schema changes more time only while SchemaMigrator owns its pinned
       # connection, then restore the serving budget above.
       DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-300000}

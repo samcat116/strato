@@ -621,10 +621,9 @@ extension Agent {
                     guestInfo: guestInfoCache[vmId],
                     guestAgentObservation: status == .running && entry.spec.guestAgentEnabled
                         ? guestAgentObservationCache[vmId] : nil,
-                    guestConfigObservation: status == .running
-                        && guestConfigObservationCache[vmId]?.generation
-                            == max(facts.observedGeneration, facts.failedGeneration ?? 0)
-                        ? guestConfigObservationCache[vmId] : nil,
+                    guestConfigObservation: guestConfigObservation(
+                        for: vmId, status: status, observedGeneration: facts.observedGeneration,
+                        failedGeneration: facts.failedGeneration),
                     memoryStats: memoryStatsCache[vmId],
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(

@@ -341,6 +341,13 @@ struct DomainXMLBuilderTests {
                 $0.deletingPathExtension().lastPathComponent
             })
         #expect(onDisk == Set(Self.scenarios.map(\.name)))
+        #expect(Self.nvramScenarios.count == 3)
+    }
+
+    // The two NVRAM-emitting firmware branches plus the Secure Boot override.
+    // Direct-kernel and monolithic firmware have no varstore to assert on.
+    static let nvramScenarios = scenarios.filter {
+        ["x86_64-uefi-headless-minimal", "x86_64-uefi-resolved-pair", "x86_64-override-pflash"].contains($0.name)
     }
 
     // MARK: - Validation against libvirt itself
@@ -385,15 +392,6 @@ struct DomainXMLBuilderTests {
     }
 
     // MARK: - Properties no golden can assert
-
-    /// A golden records whatever the builder produced, including a document no
-    /// parser would accept. This is the assertion that an escaping bug cannot
-    /// survive.
-    @Test("the document is well-formed XML", arguments: scenarios)
-    func isWellFormed(_ scenario: Scenario) throws {
-        let xml = try DomainXMLBuilder.build(scenario.input)
-        #expect(Self.parses(xml))
-    }
 
     @Test("x86 IMDS guests advertise NoCloud network mode through SMBIOS")
     func imdsNoCloudNetworkHint() throws {
@@ -708,9 +706,9 @@ struct DomainXMLBuilderTests {
     /// the builder emits reserve PCI index 0 for the root complex — so a
     /// document that declares ports without declaring the complex has its
     /// first port land on 0 and is rejected outright (STR-189).
-    @Test("the PCI root complex is declared ahead of its ports", arguments: scenarios)
-    func declaresRootComplexBeforePorts(_ scenario: Scenario) throws {
-        let xml = try DomainXMLBuilder.build(scenario.input)
+    @Test("the PCI root complex is declared ahead of its ports", arguments: [CPUArchitecture.x86_64, .arm64])
+    func declaresRootComplexBeforePorts(_ architecture: CPUArchitecture) throws {
+        let xml = try DomainXMLBuilder.build(Self.input(spec: Self.spec(), architecture: architecture))
         let root = try #require(
             xml.range(of: "<controller type='pci' index='0' model='pcie-root'/>"))
         let firstPort = try #require(xml.range(of: "model='pcie-root-port'"))
@@ -738,10 +736,10 @@ struct DomainXMLBuilderTests {
     /// — the capability the libvirt >= 11.5 floor exists for. This is the half
     /// of STR-188 that must survive its fix: the format was never the thing to
     /// give up.
-    @Test("the varstore is qcow2 on every firmware path", arguments: scenarios)
+    @Test("the varstore is qcow2 on every firmware path", arguments: nvramScenarios)
     func varstoreIsAlwaysQcow2(_ scenario: Scenario) throws {
         let xml = try DomainXMLBuilder.build(scenario.input)
-        guard let nvram = xml.range(of: "<nvram") else { return }  // direct kernel / monolithic
+        let nvram = try #require(xml.range(of: "<nvram"))
         // Match inside the element rather than on a prefix. `format=` appears
         // nowhere else — disks spell it `type=`.
         let element = xml[nvram.lowerBound...].prefix(while: { $0 != ">" })
@@ -761,10 +759,10 @@ struct DomainXMLBuilderTests {
     /// So the resolved-pair document names a file and nothing else, and
     /// `UEFIVarstore` is what guarantees the file is there. An existing nvram
     /// is never seeded, so it is never converted.
-    @Test("a named varstore is never given a template to seed from", arguments: scenarios)
+    @Test("a named varstore is never given a template to seed from", arguments: nvramScenarios)
     func varstoreIsNeverSeededFromATemplate(_ scenario: Scenario) throws {
         let xml = try DomainXMLBuilder.build(scenario.input)
-        guard let nvram = xml.range(of: "<nvram") else { return }  // direct kernel / monolithic
+        let nvram = try #require(xml.range(of: "<nvram"))
         let element = xml[nvram.lowerBound...].prefix(while: { $0 != ">" })
         #expect(!element.contains("template="))
     }

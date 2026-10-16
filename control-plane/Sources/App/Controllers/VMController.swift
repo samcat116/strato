@@ -142,41 +142,22 @@ struct VMController: RouteCollection {
         return userData
     }
 
-    /// Runs `body` again (up to `attempts` total) when it fails with a
-    /// database constraint violation. Used around the VM-create transaction:
-    /// two concurrent creates can race IPAM to the same address, and the
-    /// loser's unique-index violation is only recoverable by rerunning the
-    /// whole transaction with a fresh read of the used set. A violation that
-    /// persists through every attempt propagates.
-    static func retryingOnConstraintFailure<T>(
-        attempts: Int = 3, _ body: () async throws -> T
-    ) async throws -> T {
-        precondition(attempts >= 1)
-        for attempt in 1...attempts {
-            do {
-                return try await body()
-            } catch let error as any DatabaseError where error.isConstraintFailure && attempt < attempts {
-                continue
-            }
-        }
-        preconditionFailure("unreachable: the final attempt either returns or throws")
-    }
-
     func boot(routes: any RoutesBuilder) throws {
         let vms = routes.grouped("api", "vms")
         vms.get(use: index)
-        vms.post(use: create)
+        vms.post(use: create).supportsIdempotency()
         vms.group(":vmID") { vm in
             vm.get(use: show)
             vm.get("project-grant", use: projectGrant)
-            vm.put(use: update)
+            vm.put(use: update).supportsIdempotency()
             vm.patch(use: patchMetadata)
-            vm.delete(use: delete)
-            vm.post("start", use: start)
-            vm.post("stop", use: stop)
-            vm.post("restart", use: restart)
-            vm.post("pause", use: pause)
-            vm.post("resume", use: resume)
+            vm.delete(use: delete).supportsIdempotency()
+            vm.post("start", use: start).supportsIdempotency()
+            vm.post("retry-placement", use: retryPlacement).supportsIdempotency()
+            vm.post("stop", use: stop).supportsIdempotency()
+            vm.post("restart", use: restart).supportsIdempotency()
+            vm.post("pause", use: pause).supportsIdempotency()
+            vm.post("resume", use: resume).supportsIdempotency()
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
             vm.post("exec", use: exec)
@@ -186,18 +167,18 @@ struct VMController: RouteCollection {
                 actions.post("run", use: runCommand)
             }
             vm.get("interfaces", use: listInterfaces)
-            vm.post("interfaces", use: attachInterface)
+            vm.post("interfaces", use: attachInterface).supportsIdempotency()
             vm.group("interfaces", ":interfaceID") { interface in
-                interface.delete(use: detachInterface)
-                interface.post("retry", use: retryInterfaceMutation)
+                interface.delete(use: detachInterface).supportsIdempotency()
+                interface.post("retry", use: retryInterfaceMutation).supportsIdempotency()
             }
             // Full-VM checkpoints (issue #564); handlers live in
             // VMSnapshotController.swift.
-            vm.post("snapshots", use: createSnapshot)
+            vm.post("snapshots", use: createSnapshot).supportsIdempotency()
             vm.get("snapshots", use: listSnapshots)
             vm.group("snapshots", ":snapshotID") { snapshot in
-                snapshot.delete(use: deleteSnapshot)
-                snapshot.post("restore", use: restoreSnapshot)
+                snapshot.delete(use: deleteSnapshot).supportsIdempotency()
+                snapshot.post("restore", use: restoreSnapshot).supportsIdempotency()
             }
         }
     }
@@ -232,7 +213,9 @@ struct VMController: RouteCollection {
             request.securityGroupIds, projectID: projectID, on: req.db)
         let userID = try user.requireID()
 
-        let accepted = try await Self.retryingOnConstraintFailure {
+        let accepted = try await DatabaseTransactionRetry.retrying(
+            on: req.db, uniqueConstraints: DatabaseTransactionRetry.ipamConstraints
+        ) {
             try await req.resourceMutation.accept(
                 .attach, on: vm, actor: .user(userID), dispatch: .stateSync,
                 on: req.db, app: req.application
@@ -410,12 +393,6 @@ struct VMController: RouteCollection {
     /// limit/offset (optional) — select the page.
     func index(req: Request) async throws -> PagedResponse<VMDetailResponse> {
         let paging = try ListPaging.decode(from: req)
-        let vms = try await visibleVMs(req: req)
-        return paging.page(vms)
-    }
-
-    /// Every VM the caller may read, newest first, ready for slicing.
-    func visibleVMs(req: Request) async throws -> [VMDetailResponse] {
         // Any authenticated principal — a user, or a service account /
         // workload authenticated by JWT-SVID (issue #495). Which VMs it may
         // actually see is `canFilter`'s answer below, not this guard's.
@@ -425,53 +402,44 @@ struct VMController: RouteCollection {
         // narrowing to that org's projects. An org with no projects matches no VMs —
         // return early rather than let an empty `~~ []` stand in for "unfiltered".
         var query = VM.query(on: req.db)
-            .with(\.$networkInterfaces) {
-                $0.with(\.$addresses)
-                $0.with(\.$observedAddresses)
-                // The response reports each NIC's network by name as well as id.
-                $0.with(\.$logicalNetwork)
-                // …and which security groups filter it (STR-34).
-                $0.with(\.$securityGroupMemberships)
-            }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
-            if projectIDs.isEmpty { return [] }
+            if projectIDs.isEmpty {
+                return PagedResponse(items: [], total: 0, limit: paging.limit, offset: paging.offset)
+            }
             query = query.filter(\.$project.$id ~~ projectIDs)
         }
 
-        // Scope the page to what the caller may read. One batched decision for
-        // the whole page (#687): looping `req.can` per VM cost a full entity
-        // slice and a decision-log insert each, so a hundred rows meant
-        // hundreds of queries to answer one question a hundred times.
-        let allVMs = try await query.all()
-        let nodes = allVMs.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
-        let readable = try await req.canFilter("vm:read", on: nodes)
+        // Authorization still precedes slicing, so totals and full pages retain
+        // Cedar's object-level decisions. Only IDs cross this fleet-wide read;
+        // NICs, addresses, enforcement and identities are loaded for one page.
+        let ids = try await query.all(\.$id).compactMap { $0 }
+        let readable = try await req.canFilter("vm:read", on: ids.map { IAMNode(type: .virtualMachine, id: $0) })
+        let visibleIDs = ids.filter { readable.contains(IAMNode(type: .virtualMachine, id: $0)) }
+        let selected = paging.slice(visibleIDs)
+        guard !selected.isEmpty else {
+            return PagedResponse(items: [], total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
+        }
+        let visible = try await VM.query(on: req.db)
+            .filter(\.$id ~~ selected)
+            .with(\.$networkInterfaces) {
+                $0.with(\.$addresses).with(\.$observedAddresses)
+                    .with(\.$logicalNetwork).with(\.$securityGroupMemberships)
+            }
+            .sort(\.$createdAt, .descending).sort(\.$id, .descending)
+            .all()
 
-        // Batched for the same reason the authorization decision is: a
-        // per-row realizer walk would be three queries per VM.
         let enforcement = try await SecurityGroupService.enforcementByVM(
-            allVMs,
+            visible,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
             on: req.db)
 
-        let visible = allVMs.filter { vm in
-            vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
-        }
-
-        // …and for the same reason again: the page's instance identities
-        // (STR-55) in one query rather than one per row.
-        //
-        // Over `visible`, not `allVMs`: this is the one lookup here whose `IN`
-        // list grows with the *fleet* rather than with the host count, so it is
-        // also the one worth not widening with rows whose identity is about to
-        // be discarded — and resolving an identity for a VM the caller may not
-        // read is work with no reader.
         let identities = try await GuestIdentity.registrations(
             forVMs: visible.compactMap(\.id), on: req.db)
 
-        return visible.compactMap { vm in
+        let items = visible.compactMap { vm -> VMDetailResponse? in
             guard let id = vm.id else { return nil }
             return VMDetailResponse(
                 from: vm,
@@ -480,6 +448,7 @@ struct VMController: RouteCollection {
                 instanceIdentityPrincipalId: identities[id]?.principalID,
                 instanceIdentityStatus: identities[id] == nil ? .revoked : .enabled)
         }
+        return PagedResponse(items: items, total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
     }
 
     /// Fetch a VM by its :vmID route parameter and enforce a permission on it.

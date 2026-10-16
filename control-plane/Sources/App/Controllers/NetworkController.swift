@@ -144,8 +144,6 @@ struct NetworkController: RouteCollection {
         // opt-out), every new network gets a generated unique-local /64.
         let addressing6 = try Self.resolveIPv6Addressing(
             subnet6: request.subnet6, gateway6: request.gateway6, ipv6Enabled: request.ipv6Enabled)
-        try await Self.assertNoSubnetOverlap(
-            subnet: subnet, subnet6: addressing6?.subnet6, projectId: projectId, excluding: nil, on: req.db)
         let dnsServers = try Self.validatedDNS(request.dnsServers ?? [])
         try Self.validateLeaseTime(request.leaseTime)
 
@@ -211,7 +209,13 @@ struct NetworkController: RouteCollection {
             // The creator's explicit, revocable binding on the network, in the
             // same transaction as the row (issue #477).
             let creatorID = user.id!
-            try await req.db.transaction { db in
+            try await DatabaseTransactionRetry.run(on: req.db) { db in
+                DatabaseTransactionRetry.resetNewModel(network)
+                network.resolverIndex = nil
+                // Serialize sibling overlap checks before quota and allocation locks.
+                try await QuotaEnforcementService.lockProjectNetworkMutations(projectID: projectId, on: db)
+                try await Self.assertNoSubnetOverlap(
+                    subnet: subnet, subnet6: addressing6?.subnet6, projectId: projectId, excluding: nil, on: db)
                 // Admission precedes resolver allocation: resolver addresses are
                 // fleet-wide, while the quota is what stops one project from
                 // draining them (STR-236).
@@ -294,7 +298,6 @@ struct NetworkController: RouteCollection {
 
         // Track changes that alter how agents realize the network's L3, so the
         // generation is bumped (and agents accept the new desired network state).
-        let originalSubnet = network.subnet
         if let newSubnet = request.subnet, newSubnet != network.subnet {
             guard interfaceCount == 0 else {
                 throw Abort(
@@ -336,12 +339,6 @@ struct NetworkController: RouteCollection {
             guard request.subnet6 == nil, request.gateway6 == nil else {
                 throw Abort(.badRequest, reason: "subnet6/gateway6 cannot be combined with ipv6Enabled=false")
             }
-        }
-
-        if network.subnet != originalSubnet {
-            try await Self.assertNoSubnetOverlap(
-                subnet: network.subnet, subnet6: network.subnet6, projectId: network.$project.id,
-                excluding: network.id, on: req.db)
         }
 
         if let externalAccess = request.externalAccess {
@@ -450,7 +447,10 @@ struct NetworkController: RouteCollection {
             // successive generations instead of saving one stale model over
             // the other.
             let prepared = network
-            let committed = try await req.db.transaction { db -> (LogicalNetwork, Int) in
+            let committed = try await DatabaseTransactionRetry.run(on: req.db) { db -> (LogicalNetwork, Int) in
+                // Project admission precedes the row lock, matching create/delete
+                // and quota admission.
+                try await QuotaEnforcementService.lockProjectNetworkMutations(projectID: prepared.$project.id, on: db)
                 switch try await DesiredStateGenerationWriter.lockCurrent(
                     schema: LogicalNetwork.schema, id: networkID, expectedGeneration: nil, on: db)
                 {
@@ -706,11 +706,15 @@ struct NetworkController: RouteCollection {
             )
         }
 
-        try await req.db.transaction { db in
+        let networkID = try network.requireID()
+        try await DatabaseTransactionRetry.run(on: req.db) { db in
             try await QuotaEnforcementService.lockProjectNetworkMutations(
                 projectID: network.$project.id, on: db)
-            try await network.delete(on: db)
-            try await QuotaEnforcementService.release(for: network, on: db)
+            guard let current = try await LogicalNetwork.find(networkID, on: db) else {
+                throw Abort(.notFound, reason: "Network no longer exists")
+            }
+            try await current.delete(on: db)
+            try await QuotaEnforcementService.release(for: current, on: db)
             // Bindings have no FK to the resources they protect, so drop
             // them with the node.
             try await RoleBindingService.revokeAll(

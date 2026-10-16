@@ -211,6 +211,7 @@ let package = Package(
             name: "StratoAgentSPIFFETests",
             dependencies: [
                 "StratoAgentSPIFFE",
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "NIOCore", package: "swift-nio"),
@@ -280,6 +281,11 @@ let package = Package(
             dependencies: [
                 "StratoAgentRuntime",
                 "StratoAgentCore",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOWebSocket", package: "swift-nio"),
+                .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(

@@ -5,7 +5,7 @@ import StratoAgentCore
 func runtimeTestConfiguration(
     path: String, volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
     simulation: SimulationConfig? = nil, hypervisorType: HypervisorType = .qemu,
-    hostMemoryReserveBytes: Int64 = 1024 * 1024 * 1024
+    hostMemoryReserveBytes: Int64 = 1024 * 1024 * 1024, installMode: AgentInstallMode = .detect()
 ) -> AgentRuntimeConfiguration {
     AgentRuntimeConfiguration(
         networkMode: nil,
@@ -39,7 +39,7 @@ func runtimeTestConfiguration(
         qemuMemoryOverheadBytes: Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
         hostMemoryReserveBytes: hostMemoryReserveBytes,
         simulation: simulation,
-        installMode: .detect(),
+        installMode: installMode,
         spiffeConfig: nil,
         teardownGuard: TeardownGuard(),
         desiredStateFullRefetchInterval: DesiredStatePoller<ContinuousClock>.defaultFullRefetchInterval,

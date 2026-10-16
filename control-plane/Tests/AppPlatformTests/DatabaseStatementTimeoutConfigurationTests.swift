@@ -135,10 +135,22 @@ struct DatabaseStatementTimeoutIntegrationTests {
                     logger: app.logger
                 ) {
                     #expect(try await currentStatementTimeout(on: sql) == "1s")
+                    #expect(
+                        try await sql.raw("SELECT current_setting('lock_timeout') AS value").first(
+                            decodingColumn: "value", as: String.self) == "0")
+                    #expect(
+                        try await sql.raw("SELECT current_setting('idle_in_transaction_session_timeout') AS value")
+                            .first(decodingColumn: "value", as: String.self) == "0")
                     try await sql.raw("SELECT pg_sleep(0.2)").run()
                 }
 
                 #expect(try await currentStatementTimeout(on: sql) == "50ms")
+                #expect(
+                    try await sql.raw("SELECT current_setting('lock_timeout') AS value").first(
+                        decodingColumn: "value", as: String.self) == "5s")
+                #expect(
+                    try await sql.raw("SELECT current_setting('idle_in_transaction_session_timeout') AS value").first(
+                        decodingColumn: "value", as: String.self) == "1min")
 
                 do {
                     try await SchemaMigrator.withMigrationStatementTimeout(
@@ -152,6 +164,12 @@ struct DatabaseStatementTimeoutIntegrationTests {
                     // Expected: cleanup must still restore the serving value.
                 }
                 #expect(try await currentStatementTimeout(on: sql) == "50ms")
+                #expect(
+                    try await sql.raw("SELECT current_setting('lock_timeout') AS value").first(
+                        decodingColumn: "value", as: String.self) == "5s")
+                #expect(
+                    try await sql.raw("SELECT current_setting('idle_in_transaction_session_timeout') AS value").first(
+                        decodingColumn: "value", as: String.self) == "1min")
             }
         } catch {
             try? await app.shutdownForTesting()

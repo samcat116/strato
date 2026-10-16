@@ -233,8 +233,10 @@ extension AgentService {
         }
 
         // The report arrived over this process's socket: refresh presence
-        // alongside, mirroring the heartbeat path.
-        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
+        // alongside, mirroring the heartbeat path. Reuse the inventory fence's
+        // pinned connection: an app.db checkout here waits on our own lease
+        // when the per-event-loop pool has only one connection.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey, on: db)
 
         // The guard covers the whole report, before any row deletion, error
         // transition, replica removal, network merge, or reservation release.
@@ -371,6 +373,11 @@ extension AgentService {
     func applyReportedManifestStatus(
         _ status: ObservedManifestStatus?, to agent: Agent, at instant: ClusterInstant
     ) -> Bool {
+        // Even a clean report must prove inventory arrived after the target
+        // registration. Registration and generic heartbeat alone cannot do so.
+        if agent.updateDesiredVersion != nil {
+            agent.updateInventoryReceivedAt = instant.date
+        }
         Telemetry.agentManifestUnreadable(
             agentName: agent.name, unreadable: status.map { !$0.inventoryComplete } ?? false)
 
@@ -378,7 +385,7 @@ extension AgentService {
             guard
                 agent.manifestStatusReason != nil || agent.manifestStatusAt != nil
                     || agent.manifestInventoryComplete != nil
-            else { return false }
+            else { return agent.updateDesiredVersion != nil }
             app.logger.notice(
                 "Agent workload inventory is healthy again",
                 metadata: ["strato.agent.name": .string(agent.name)])
@@ -392,9 +399,8 @@ extension AgentService {
             agent.manifestStatusReason != status.reason
                 || agent.manifestInventoryComplete != status.inventoryComplete
         else {
-            // Same condition, re-reported on a heartbeat: already logged,
-            // already on the row.
-            return false
+            // Persist assignment verification receipt even for unchanged status.
+            return agent.updateDesiredVersion != nil
         }
         app.logger.error(
             status.inventoryComplete
@@ -420,7 +426,7 @@ extension AgentService {
         guard let status else {
             // Nothing in the way (or nothing desired): clear a stale blocked
             // reason so the API stops surfacing it. Failures stay — they are
-            // rollout state, resolved by convergence or operator action.
+            // rollout state, resolved only by operator action or a new fleet target.
             agent.updateBlockedReason = nil
             return
         }

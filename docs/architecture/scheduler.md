@@ -21,14 +21,14 @@ When a new VM is created, the Scheduler Service analyzes all available agents an
    - Registered as an Application service
    - Accessible via `req.scheduler` in request handlers
 
-2. **AgentService Integration** (`control-plane/Sources/App/Services/AgentService.swift`)
+2. **Placement Service** (`control-plane/Sources/App/Services/WorkloadPlacementService.swift`)
    - Builds `SchedulableAgent` candidates from the database
      (`schedulableAgentsFromDatabase()`)
    - Calls scheduler during VM creation
    - Persists hypervisor assignment to database
 
 3. **VMController Integration** (`control-plane/Sources/App/Controllers/VMController.swift`)
-   - Invokes `agentService.createVM()` with database context
+   - Invokes `workloadPlacement.createVM()` with database context
    - Properly persists `hypervisorId` field in VM model
 
 ### Data Flow
@@ -38,9 +38,9 @@ VM Creation Request
     ↓
 VMController.create()
     ↓
-AgentService.createVM()
+WorkloadPlacementService.createVM()
     ↓
-AgentService.getSchedulableAgents()
+WorkloadPlacementService.schedulableAgentsFromDatabase()
     ↓
 SchedulerService.selectAgent()
     ↓
@@ -61,6 +61,30 @@ There is no imperative create message: once the placement is persisted, the
 VM is part of the chosen agent's desired state. The immediate doorbell wakes a
 parked poll for low latency; reconnect and unconditional full refetches keep
 carrying it until the agent's reconciler converges.
+
+### Retrying a failed initial placement
+
+`POST /api/vms/{id}/retry-placement` requires `vm:start` and accepts only a
+failed VM with no active convergence deadline, no assigned host and one
+unplaced boot volume. Metadata edits can advance the generation after failure
+without losing retry eligibility; a pending retry's deadline prevents overlap.
+It reuses the existing VM, NICs, IP allocations, identity and boot volume.
+The acceptance transaction locks and refreshes the VM, advances its generation
+and records one create-attempt event. Concurrent unkeyed retries are refused
+after that advance; `Idempotency-Key` replays return the original acceptance.
+The caller follows the new generation's `conditions`, then starts the VM if
+its preserved desired power state is shutdown.
+The same acceptance transaction locks the existing boot volume, advances its
+generation and renews its create deadline. An expired original budget or
+terminal boot-volume failure cannot immediately fail the new attempt, and a
+sweep that selected the old generation cannot settle the renewed one.
+
+VM placement attempts use a per-VM `vm_placement` advisory session lock across
+planning, reservation and commit or rollback. This keeps a losing or stale
+attempt from releasing another attempt's reservation across replicas. All
+placement SQL reuses the pinned connection, and doorbells run after its
+release. Planning rereads current intent: metadata and sizing edits accepted
+while placement is queued are retained, and deletion prevents placement.
 
 ## Scheduling Strategies
 
@@ -273,6 +297,27 @@ The scheduler throws specific errors for different failure scenarios:
 - **`agentServiceUnavailable`**: AgentService not properly initialized
 
 ### How placement failures surface
+
+Placement preserves a completed result if session-lock cleanup fails after the
+commit. Cleanup logs and counts the failure and discards the unhealthy database
+connection; the committed placement still rings its desired-state doorbell.
+
+Retry acceptance fences the original failed generation rather than a pre-lock
+metadata generation. A metadata-only change is preserved, while a newer failed
+attempt invalidates a stale request.
+
+A failed placement retry locks and refreshes the unplaced VM before recording
+its terminal result. The accepted convergence deadline identifies the attempt:
+metadata edits may advance generation, while a later deadline, deletion, or
+committed placement fences the old worker out of failure recording.
+The placement transaction also rechecks the accepted deadline and its expiry,
+including before commit, so a worker cannot provision after a terminal timeout
+or take over a newer retry. Any stale reservation is released under the same
+per-VM placement lock.
+The operations API and UI attribute a newer failure to an older accepted target
+only while that target remains unobserved; an already observed older target
+retains its successful verdict.
+
 
 VM create is asynchronous: the controller answers **202 Accepted** with the VM
 and the generation it is converging on before placement runs, and scheduling

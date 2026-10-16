@@ -1,6 +1,7 @@
 import Testing
 import Vapor
 import Fluent
+import SQLKit
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -2039,6 +2040,48 @@ final class SandboxTests {
             #expect(reopened.desiredStatus == .running)
             #expect(reopened.suspensionComputeReserved)
             #expect(reopened.suspensionStorageBytes == 0)
+        }
+    }
+
+    @Test("Keyed sandbox exec refuses both wake and session branches before side effects")
+    func keyedExecRejectsBeforeWakeOrSessionMint() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, token in
+            _ = try await self.registerAgent(app: app, sandbox: sandbox)
+            struct LeaseCount: Decodable { let count: Int }
+            let sql = try #require(app.db as? any SQLDatabase)
+            for (status, desiredStatus) in [
+                (SandboxStatus.suspended, DesiredSandboxStatus.suspended), (.running, .running),
+            ] {
+                sandbox.status = status
+                sandbox.desiredStatus = desiredStatus
+                sandbox.suspensionComputeReserved = false
+                try await sandbox.save(on: app.db)
+                let generation = sandbox.generation
+                let events = try await ResourceEvent.query(on: app.db).count()
+                let claims = try await IdempotencyKey.query(on: app.db).count()
+                let leases = try await sql.raw("SELECT COUNT(*) AS count FROM sandbox_activity_leases")
+                    .first(decoding: LeaseCount.self)?.count
+                try await app.testing().test(
+                    .POST, "/api/sandboxes/\(sandbox.id!)/exec",
+                    beforeRequest: { req in
+                        req.headers.bearerAuthorization = .init(token: token)
+                        req.headers.replaceOrAdd(name: "Idempotency-Key", value: "sandbox-exec-retry")
+                        try req.content.encode(["command": ["true"]])
+                    },
+                    afterResponse: { response in
+                        #expect(response.status == .badRequest)
+                        #expect(response.body.string.contains("Idempotency-Key is not supported for this route"))
+                    })
+                let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+                #expect(reopened.generation == generation)
+                #expect(reopened.desiredStatus == desiredStatus)
+                #expect(!reopened.suspensionComputeReserved)
+                #expect(try await ResourceEvent.query(on: app.db).count() == events)
+                #expect(try await IdempotencyKey.query(on: app.db).count() == claims)
+                #expect(
+                    try await sql.raw("SELECT COUNT(*) AS count FROM sandbox_activity_leases")
+                        .first(decoding: LeaseCount.self)?.count == leases)
+            }
         }
     }
 

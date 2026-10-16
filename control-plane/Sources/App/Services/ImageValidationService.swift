@@ -1,6 +1,8 @@
 import Foundation
 import Crypto
 import NIOCore
+import StratoShared
+import Vapor
 
 /// Service for validating image files (format detection, checksum computation)
 struct ImageValidationService {
@@ -22,9 +24,16 @@ struct ImageValidationService {
         (Array("KDMV".utf8), .vmdk),
     ]
 
-    /// Number of leading bytes retained while streaming an image. This covers
-    /// every format signature plus qcow2's virtual-size field at offset 24.
-    static let headerProbeLength = 64
+    /// Retain the bounded qcow2 header-extension area as well as format signatures.
+    static let headerProbeLength = ImportedDiskImageValidation.probeLength
+
+    static func validateImport(headerBytes: [UInt8]) throws {
+        do {
+            try ImportedDiskImageValidation.validate(prefix: headerBytes)
+        } catch {
+            throw Abort(.badRequest, reason: error.localizedDescription)
+        }
+    }
 
     /// Formats that *always* carry their signature at offset 0, so a header
     /// probe finding nothing positively disproves a claim of that format.

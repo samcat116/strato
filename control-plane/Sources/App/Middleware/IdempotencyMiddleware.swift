@@ -13,6 +13,12 @@ struct IdempotencyMiddleware: AsyncMiddleware {
         else {
             return try await next.respond(to: request)
         }
+        // Opt-in is attached to the matched route, never inferred from a URL
+        // prefix or a successful response. Unmarked new routes fail closed
+        // before principal lookup, replay lookup, body decoding or the handler.
+        guard request.route?.isIdempotencySupported == true else {
+            throw Abort(.badRequest, reason: "Idempotency-Key is not supported for this route")
+        }
         guard !key.isEmpty else {
             throw Abort(.badRequest, reason: "Idempotency-Key must not be empty")
         }
@@ -64,7 +70,7 @@ struct IdempotencyMiddleware: AsyncMiddleware {
         }
     }
 
-    private static func isMutation(_ method: HTTPMethod) -> Bool {
+    static func isMutation(_ method: HTTPMethod) -> Bool {
         method == .POST || method == .PUT || method == .PATCH || method == .DELETE
     }
 

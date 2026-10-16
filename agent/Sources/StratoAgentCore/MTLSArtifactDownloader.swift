@@ -312,6 +312,8 @@ public struct MTLSArtifactDownloader: Sendable {
         _ client: HTTPClient, url: URL, ifNoneMatch: String?, maximumBodyBytes: Int
     ) async throws -> DesiredStatePollResponse {
         var request = HTTPClientRequest(url: url.absoluteString)
+        request.headers.add(
+            name: AgentUpdateBridgeResponse.wireVersionHeader, value: String(WireProtocol.currentVersion))
         if let ifNoneMatch {
             request.headers.add(name: "If-None-Match", value: ifNoneMatch)
         }
@@ -325,7 +327,9 @@ public struct MTLSArtifactDownloader: Sendable {
         }
 
         let etag = response.headers.first(name: "ETag")
-        guard response.status == .ok || response.status == .notModified else {
+        guard
+            response.status == .ok || response.status == .notModified
+        else {
             let transient =
                 response.status.code >= 500 || response.status.code == 408 || response.status.code == 429
             throw DownloadFailure(

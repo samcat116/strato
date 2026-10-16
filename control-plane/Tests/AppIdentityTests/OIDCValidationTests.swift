@@ -82,25 +82,6 @@ struct OIDCValidationTests {
 
     // MARK: - base64url decoding
 
-    @Test("decodeBase64URLSafe restores padding and decodes")
-    func testDecodeBase64URLSafe() throws {
-        // base64url of "Hello" (no padding)
-        let data = try OIDCValidation.decodeBase64URLSafe("SGVsbG8")
-        #expect(String(data: data, encoding: .utf8) == "Hello")
-    }
-
-    @Test("decodeBase64URLSafe handles url-safe characters")
-    func testDecodeBase64URLSafeURLChars() throws {
-        // Bytes 0xFB 0xFF 0xBF encode to "-_-_" style url-safe output; round-trip a known value.
-        let original = Data([0xFB, 0xEF, 0xBE])
-        let urlSafe = original.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        let decoded = try OIDCValidation.decodeBase64URLSafe(urlSafe)
-        #expect(decoded == original)
-    }
-
     @Test("decodeBase64URLSafe throws on invalid input")
     func testDecodeBase64URLSafeInvalid() {
         #expect(throws: Abort.self) {

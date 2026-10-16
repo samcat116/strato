@@ -85,9 +85,11 @@ into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
   the ordering guarantees the reconciler relies on.
 
   Most fetches carry `If-None-Match` so the control plane can park them and
-  answer `304`; that is a bandwidth optimization. Every
-  `desired_state_full_refetch_seconds` (default 300) the loop omits the
-  validator entirely and the control plane must answer with a full payload —
+  answer `304`; that is a bandwidth optimization. The loop samples its next
+  full-refetch threshold at 80–100% of `desired_state_full_refetch_seconds`
+  (default and maximum 300, minimum 1) after each successful unconditional
+  payload. Once due, the next attempt omits the validator entirely and the
+  control plane must answer with a full payload —
   the correctness invariant, and deliberately a rule rather than a tuning knob.
   Making *every* request conditional is the natural way to write an HTTP client
   and is exactly the bug: a wrong server-side "unchanged" would then strand the
@@ -96,8 +98,9 @@ into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
   Every unhappy path is paced (STR-291). A fetch that throws and a fetch that
   completes but returns something unusable — an undecodable payload, a wrong
   message type, a `304` answering an unconditional request, an unexpected
-  status — share one 1s → 30s doubling backoff, reset only by a response the
-  loop could actually use (a delivered `200`, or a conditional `304`). The
+  status — share one 1s → 30s doubling backoff with each delay sampled at 80–100%
+  of that capped ceiling, reset only by a response the loop could actually use
+  (a delivered `200`, or a conditional `304`). The
   unusable cases are the ones that matter: they drop the ETag, so every retry
   is an unconditional request the control plane must answer with a freshly
   assembled full payload, and their trigger is usually a property of the
@@ -1666,7 +1669,10 @@ Southbound load-balancer health connects lazily on observation, with a separate
 failure. A Southbound startup failure does not permanently disable health.
 
 Console relays preserve order and allow at most 4 MiB or 1,024 chunks, including
-the write currently waiting on the client. Exceeding either budget closes that
+the write currently waiting on the client. Socket reads are demand-driven: one
+read is requested after the preceding chunk has reached the control-plane
+transport. This applies backpressure instead of filling the chunk budget with
+tiny serial reads during a short output burst. Exceeding either budget closes that
 console session; the client must reconnect. The relay never drops bytes and
 continues the same stream.
 
@@ -1721,5 +1727,5 @@ The Linux guest uses a single serialized diff/apply/read-back engine, a shared
 180-second pass budget, 120-second package commands, and a durable metadata-only
 journal. Failed/interrupted generations survive restarts; successful replays
 measure current facts rather than trusting the journal as installed state.
-See [guest configuration details](../../sandbox-guest/README.md#managed-vm-guest-configuration-str-90--str-91)
+See [guest configuration details](https://github.com/samcat116/strato/blob/main/sandbox-guest/README.md#managed-vm-guest-configuration-str-90--str-91)
 for supported managers, observations, withdrawal semantics, and failure recovery.

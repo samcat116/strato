@@ -63,20 +63,27 @@ extension Agent {
             if await connectNetworkService() {
                 networkServiceConnected = true
                 logger.info("Network service connected after retry")
-                if assignedAgentID != nil {
-                    do {
-                        try await registerWithControlPlane()
-                        logger.info("Re-registered with control plane to advertise recovered networking capability")
-                    } catch {
-                        logger.warning(
-                            "Could not refresh registration after network recovery; capability updates on next reconnect: \(error)"
-                        )
-                    }
-                }
+                await refreshRegistrationAfterNetworkRecovery()
                 return
             }
 
             delaySeconds = min(delaySeconds * 2, maxDelaySeconds)
+        }
+    }
+
+    /// A capability refresh can fail independently of the healthy workload
+    /// connection. Keep that session alive until a verified bridge says skew.
+    func refreshRegistrationAfterNetworkRecovery(
+        fetchBridge: (@Sendable () async throws -> AgentUpdateBridgeResponse?)? = nil
+    ) async {
+        guard assignedAgentID != nil else { return }
+        do {
+            try await prepareForWorkloadRegistration(fetchBridge: fetchBridge)
+            try await registerWithControlPlane()
+            logger.info("Re-registered with control plane to advertise recovered networking capability")
+        } catch {
+            logger.warning(
+                "Could not refresh registration after network recovery; capability updates on next reconnect: \(error)")
         }
     }
 }

@@ -3,21 +3,24 @@ import Foundation
 /// The exact control-plane to agent wire contract and its canonical JSON coders.
 ///
 /// Registration is the single version handshake. Both peers require
-/// `protocolVersion == currentVersion` before any state is exchanged; envelopes
-/// carry only message routing and payload data. Strato therefore deploys matching
+/// `protocolVersion == currentVersion` before workload state is exchanged; envelopes
+/// carry only message routing and payload data. The separate frozen update-only
+/// bridge can repair supported skew without decoding workload DTOs.
+/// Strato therefore deploys matching
 /// control-plane and agent builds as one coordinated change.
 ///
 /// All wire values use `makeEncoder()` and `makeDecoder()` so both processes share
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
+    /// Version 70 realizes guest configuration before acknowledging VM generations
+    /// and carries generation-scoped guest configuration observations (STR-91).
     /// Version 69 adds ordered sandbox idle evidence and automatic-fence provenance.
     /// Version 68 adds generation-bound sandbox suspension and storage admission.
     /// The only wire/schema version this build accepts. Version 67 carries
     /// resource-class snapshots, fractional CPU capacity, and enforcement observations.
     /// Version 66 carries host memory accounting and backend allowances (STR-265).
-    /// Version 65 carries host density observations. GuestConfig remains staged
-    /// vocabulary; guest realization must ship its own subsequent exact version.
+    /// Version 65 carries host density observations and staged GuestConfig vocabulary.
     /// Version 63 requires first-boot Strato guest-agent installation and carries
     /// the bootstrap release and independent guest-agent reachability observation.
     /// Version 62 carries the
@@ -43,7 +46,7 @@ public enum WireProtocol {
     /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
     /// contract (STR-237), and v46's authoritative native-OVN load-balancer
     /// state and observations (STR-28).
-    public static let currentVersion = 69
+    public static let currentVersion = 70
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

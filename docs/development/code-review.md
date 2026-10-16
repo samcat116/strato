@@ -103,7 +103,8 @@ catches. Check the parts it can't:
   - `docs/adr/` when a decision is made that a future reader would otherwise
     relitigate. If the diff contradicts an existing ADR, say so in review
     rather than letting it land silently.
-  - `CLAUDE.md` when a build/test/deploy workflow changes.
+  - `AGENTS.md` and the relevant development or deployment guide when a
+    build/test/deploy workflow changes (`CLAUDE.md` is a compatibility pointer).
 - **Dead code and TODOs** — a TODO without an issue number is a comment that
   will never be actioned. Either file it or delete it.
 

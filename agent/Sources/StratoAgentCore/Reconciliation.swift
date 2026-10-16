@@ -461,7 +461,11 @@ public actor Reconciler {
             // superseded case (a reboot the control plane has since stopped
             // wanting), and leaving the nonce unrecorded is what would fire it
             // weeks later.
-            if item.steps.isEmpty {
+            // A newer no-step intent must still wait for an older pass on the
+            // lane, or that pass can republish retired guest facts and regress
+            // the generation after this withdrawal has been acknowledged.
+            if item.steps.isEmpty, inFlight[ref] == nil {
+                await actuator.retireGuestConfigObservation(item)
                 await actuator.resourceEnforcementWillConverge(item)
                 lastApplied[ref] = item.generation
                 failures.removeValue(forKey: ref)
@@ -712,6 +716,7 @@ public actor Reconciler {
 
     private func execute(_ item: ReconcileWorkItem) async {
         let ref = WorkloadRef(item)
+        await actuator.retireGuestConfigObservation(item)
         await actuator.resourceEnforcementWillConverge(item)
         do {
             var steps = item.steps

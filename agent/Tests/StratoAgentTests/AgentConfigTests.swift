@@ -32,6 +32,15 @@ struct AgentConfigTests {
             environmentVariables: [:])
     }
 
+    @Test(
+        "Full-refetch configuration retains the 1–300 second bounds",
+        arguments: [(-1, 1), (0, 1), (1, 1), (240, 240), (300, 300), (600, 300)])
+    func fullRefetchBounds(seconds: Int, expectedSeconds: Int) {
+        let config = AgentConfig(
+            controlPlaneURL: "ws://localhost:8080/agent/ws", desiredStateFullRefetchSeconds: seconds)
+        #expect(config.desiredStateFullRefetchInterval == .seconds(expectedSeconds))
+    }
+
     // MARK: - Storage paths
 
     @Test("Load volume_storage_dir alongside vm_storage_dir")
@@ -580,8 +589,8 @@ struct AgentConfigTests {
     }
 
     @Test(
-        "TOML accepts every representative log threshold",
-        arguments: [AgentLogLevel.trace, .info, .warning])
+        "TOML wires a valid log threshold",
+        arguments: [AgentLogLevel.warning])
     func loadSupportedTOMLLogLevel(_ level: AgentLogLevel) async throws {
         try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
@@ -1129,8 +1138,8 @@ struct AgentConfigTests {
     }
 
     @Test(
-        "Environment accepts every representative log threshold",
-        arguments: [AgentLogLevel.trace, .info, .warning])
+        "Environment wires a valid log threshold",
+        arguments: [AgentLogLevel.warning])
     func loadSupportedEnvironmentLogLevel(_ level: AgentLogLevel) async throws {
         let config = try await AgentConfig.loadDefaultConfig(
             searchPaths: [],

@@ -79,7 +79,7 @@ struct LibvirtGuestSeedRefusalTests {
                 cpus: requestedSpec.cpus, memoryBytes: requestedSpec.memoryBytes,
                 boot: requestedSpec.boot, volumes: requestedSpec.volumes)
             var provisioner = CloudInitProvisioner(logger: Logger(label: "absent-seed"))
-            provisioner.runISO = { _, _ in
+            provisioner.runISO = { _, _, _ in
                 Issue.record("A VM with no seed intent invoked ISO generation")
                 throw CocoaError(.fileWriteUnknown)
             }
@@ -99,7 +99,7 @@ struct LibvirtGuestSeedRefusalTests {
             let iso = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
             try DurableFileWriter().write(Data("previous ISO".utf8), to: iso)
             var provisioner = CloudInitProvisioner(logger: Logger(label: "failed-seed"))
-            provisioner.runISO = { _, _ in
+            provisioner.runISO = { _, _, _ in
                 ProcessResult(terminationStatus: 1, standardOutput: Data(), standardError: Data())
             }
             let service = LibvirtService(

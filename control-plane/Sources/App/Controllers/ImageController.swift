@@ -341,7 +341,8 @@ struct ImageController: RouteCollection {
                 req: req,
                 into: store,
                 fileFieldName: "file",
-                maxBytes: Self.maxUploadBytes
+                maxBytes: Self.maxUploadBytes,
+                validate: { header, _ in try ImageValidationService.validateImport(headerBytes: header) }
             ) { uploadedFilename, _ in
                 let validated = try ImageValidationService.validateFilename(uploadedFilename)
                 return ImageObjectKey.artifact(
@@ -521,7 +522,13 @@ struct ImageController: RouteCollection {
             req: req,
             into: store,
             fileFieldName: "file",
-            maxBytes: Self.maxUploadBytes
+            maxBytes: Self.maxUploadBytes,
+            validate: { header, fields in
+                let kind = queryKind ?? fields["kind"]
+                if kind == ArtifactKind.diskImage.rawValue || kind == ArtifactKind.rootfs.rawValue {
+                    try ImageValidationService.validateImport(headerBytes: header)
+                }
+            }
         ) { uploadedFilename, fields in
             guard let kindString = queryKind ?? fields["kind"] else {
                 throw Abort(
