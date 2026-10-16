@@ -1,0 +1,50 @@
+docs/architecture/agent.md
+  s_c353912d75372b::t_8572831562c05e 1718-1722
+.github/workflows/sandbox-guest.yaml
+  s_c353912d75372b::t_83d4d619412dd5 301-302
+shared/Sources/StratoShared/GuestAgentBootstrap.swift
+  s_c353912d75372b::t_83d4d619412dd5 6-8,60
+  s_c353912d75372b::t_74558b7d9a512a 58-59
+docs/architecture/wire-protocol.md
+  s_c353912d75372b::t_8572831562c05e 695-702
+  s_c353912d75372b::t_0045da8b4ef9fc 69-72
+sandbox-guest/init/src/linux/vsock.rs
+  s_c353912d75372b::t_83d4d619412dd5 358
+scripts/test-guest-agent-bootstrap.py
+  s_c353912d75372b::t_74558b7d9a512a 19,36-39
+  s_c353912d75372b::t_83d4d619412dd5 30-32,62,74
+sandbox-guest/init/src/protocol.rs
+  s_c353912d75372b::t_83d4d619412dd5 72,290-291,784-795,802
+sandbox-guest/README.md
+  s_c353912d75372b::t_8572831562c05e 306-320,344-347
+agent/Sources/StratoAgentCore/GuestConfigClient.swift
+  s_c353912d75372b::t_83d4d619412dd5 30-32,52-54,56-58,97,114-117,122-125
+sandbox-guest/init/src/convergence_linux.rs
+  s_c353912d75372b::t_83d4d619412dd5 10-42,121-122,128-129,135,202-231,286,333-347
+  s_c353912d75372b::t_dbb8668695586e 348
+sandbox-guest/init/src/guest_agent/vsock.rs
+  s_c353912d75372b::t_83d4d619412dd5 11,260,284
+  s_c353912d75372b::t_ebce22bd14f443 471
+agent/Tests/StratoAgentTests/GuestAgentBootstrapTests.swift
+  s_c353912d75372b::t_ebd56a267fa5bf 83
+shared/Tests/StratoSharedTests/GuestAgentBootstrapTests.swift
+  s_c353912d75372b::t_b3687f6beb7943 7-12
+agent/Tests/StratoAgentTests/GuestConfigClientTests.swift
+  s_c353912d75372b::t_fd716f95c8bf9c 13-18,52-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ba2a6d85e4c60d05c7896a6ff0b2abfd32becd1",
+  "prompts": {},
+  "sessions": {
+    "s_c353912d75372b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14682-7857-7951-95c8-43f48c308c4a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
