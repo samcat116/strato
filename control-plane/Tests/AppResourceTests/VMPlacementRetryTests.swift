@@ -353,6 +353,55 @@ struct VMPlacementRetryTests {
         }
     }
 
+    @Test(
+        "Placement failures settle metadata edits but fence superseding work",
+        arguments: ["metadata", "new-attempt", "delete", "placed"])
+    func failureAfterSnapshot(change: String) async throws {
+        try await withProjectApp(prefix: "failureaftersnapshot") { app, builder, fixture in
+            app.logger.logLevel = .warning
+            let (vm, _, _) = try await failedVM(app, builder, fixture)
+            let id = try vm.requireID()
+            let gate = DispatchFailureGate()
+            let mutation = ResourceMutation(agentDispatch: FakeAgentDispatch(), logger: app.logger)
+            _ = try await mutation.accept(
+                .create, on: vm, actor: .user(try fixture.user.requireID()),
+                dispatch: .placement { db in
+                    // Capture the same snapshot and attempt deadline as the
+                    // endpoint before a suspended planning query fails.
+                    let snapshot = try #require(try await VM.find(id, on: db))
+                    let deadline = try #require(snapshot.convergenceDeadline)
+                    await gate.wait()
+                    throw ResourceMutation.PlacementFailure(deadline: deadline, reason: "No eligible agent")
+                }, on: app.db, app: app
+            ) { _ in }
+            await gate.waitUntilEntered()
+            let changed = try #require(try await VM.find(id, on: app.db))
+            changed.generation += 1
+            changed.tags = ["purpose": "post-snapshot-edit"]
+            if change == "new-attempt" {
+                changed.convergenceDeadline = changed.convergenceDeadline?.addingTimeInterval(60)
+            } else if change == "delete" {
+                changed.setFixtureDesiredStatus(.absent)
+            } else if change == "placed" {
+                changed.hypervisorId = UUID().uuidString
+            }
+            try await changed.save(on: app.db)
+            await gate.release()
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            let current = try #require(try await VM.find(id, on: app.db))
+            #expect(current.generation == changed.generation)
+            if change == "metadata" {
+                #expect(current.failedGeneration == 3)
+                #expect(current.convergenceDeadline == nil)
+                #expect(current.tags == ["purpose": "post-snapshot-edit"])
+                #expect(try await retry(app, vmID: id, token: fixture.token).0 == .accepted)
+            } else {
+                #expect(current.failedGeneration == 1)
+                #expect(current.convergenceDeadline == changed.convergenceDeadline)
+            }
+        }
+    }
+
     @Test("Committed placement survives session-lock cleanup failure", arguments: [false, true], [false, true])
     func committedPlacementSurvivesCleanupFailure(connectionCloses: Bool, productionTimeouts: Bool) async throws {
         try await withProjectApp(prefix: "placementcleanup") { app, builder, fixture in

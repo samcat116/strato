@@ -302,6 +302,11 @@ Placement preserves a completed result if session-lock cleanup fails after the
 commit. Cleanup logs and counts the failure and discards the unhealthy database
 connection; the committed placement still rings its desired-state doorbell.
 
+A failed placement retry locks and refreshes the unplaced VM before recording
+its terminal result. The accepted convergence deadline identifies the attempt:
+metadata edits may advance generation, while a later deadline, deletion, or
+committed placement fences the old worker out of failure recording.
+
 
 VM create is asynchronous: the controller answers **202 Accepted** with the VM
 and the generation it is converging on before placement runs, and scheduling
