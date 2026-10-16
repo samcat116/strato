@@ -150,7 +150,7 @@ extension ObservedStateApplier {
             bootVolumePhase = nil
         }
         let guestPhase =
-            vm.guestConfig?.isEmpty == false && vm.desiredStatus == .running
+            vm.guestConfig?.isEmpty == false && vm.desiredStatus == .running && observed.status == .running
                 && !(effectiveError != nil && effectiveFailedGeneration == vm.generation)
                 && !VMGuestConfigPresentation.converged(vm)
             ? "waiting for current guest configuration read-back" : nil

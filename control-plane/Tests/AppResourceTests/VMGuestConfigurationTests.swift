@@ -269,11 +269,14 @@ struct VMGuestConfigurationTests {
             GuestConfigObservation.self, from: JSONSerialization.data(withJSONObject: payload))
     }
 
-    private func apply(_ report: GuestConfigObservation?, vm: VM, app: Application, by agent: String? = nil)
+    private func apply(
+        _ report: GuestConfigObservation?, vm: VM, app: Application, status: VMStatus = .running,
+        by agent: String? = nil
+    )
         async throws
     {
         let observed = ObservedVMState(
-            vmId: try vm.requireID(), status: .running, observedGeneration: vm.generation,
+            vmId: try vm.requireID(), status: status, observedGeneration: vm.generation,
             lastError: report?.error, failedGeneration: report?.status == .failed ? report?.generation : nil,
             guestConfigObservation: report)
         let instant = try await ClusterClock.read(on: app.db)
@@ -325,6 +328,38 @@ struct VMGuestConfigurationTests {
                 conditions: vm.conditions, terminal: nil,
                 guestConfiguration: .init(generation: 3, managed: false, converged: false))
             #expect(OperationFacade.verdict(for: event, in: cleared).status == .succeeded)
+        }
+    }
+
+    @Test(
+        "A guest read-back wait does not mask settled non-running host observations",
+        arguments: [VMStatus.shutdown, .paused, .unknown])
+    func nonRunningHostObservationIsNotGuestWait(status: VMStatus) async throws {
+        try await withFixture { app, _, vm, _ in
+            vm.hypervisorId = "config-node"
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 3
+            vm.observedGeneration = 3
+            vm.guestConfig = GuestConfig(packages: [.init(name: "curl", state: .present)])
+            try await vm.save(on: app.db)
+            try await apply(observation(["packages": [["name": "curl", "version": "1"]]]), vm: vm, app: app)
+            #expect(vm.isConverged)
+            // The host deliberately accepts unknown only for a transitional VM.
+            // Exercise that policy without changing it for stable running VMs.
+            if status == .unknown {
+                vm.setStatus(.starting)
+                try await vm.save(on: app.db)
+            }
+            try await apply(nil, vm: vm, app: app, status: status)
+            let reloaded = try #require(try await VM.find(vm.id!, on: app.db))
+            #expect(reloaded.status == status)
+            #expect(reloaded.desiredStatus == .running)
+            #expect(reloaded.convergencePhase == nil)
+            #expect(!reloaded.isConverged)
+            #expect(reloaded.guestConfigEvidence?.available == false)
+            #expect(reloaded.guestConfigFailedGeneration == nil)
+            #expect(reloaded.lastError == nil)
         }
     }
 
