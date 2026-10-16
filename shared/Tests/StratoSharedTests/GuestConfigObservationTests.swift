@@ -4,6 +4,30 @@ import Testing
 
 @Suite("Guest config observation boundary")
 struct GuestConfigObservationTests {
+    @Test func terminalGuestFailureRoundTripsWithoutInventingReadBack() throws {
+        let id = UUID()
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let observed = ObservedVMState(
+            vmId: id, status: .running, observedGeneration: 6,
+            lastError: "channel unavailable", failedGeneration: 7, failureClassification: .permanent,
+            guestConfigFailedGeneration: 7)
+        let report = try decoder.decode(ObservedVMState.self, from: encoder.encode(observed))
+        #expect(report.guestConfigFailedGeneration == 7)
+        #expect(report.guestConfigObservation == nil)
+        let desired = DesiredVMState(
+            vmId: id, hypervisorType: .qemu,
+            spec: VMSpec(cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil)),
+            desiredStatus: .running, generation: 7, guestConfigFailedGeneration: 7)
+        let data = try encoder.encode(desired)
+        #expect(try decoder.decode(DesiredVMState.self, from: data).guestConfigFailedGeneration == 7)
+        var stored = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        stored.removeValue(forKey: "guestConfigFailedGeneration")
+        #expect(
+            try decoder.decode(DesiredVMState.self, from: JSONSerialization.data(withJSONObject: stored))
+                .guestConfigFailedGeneration == nil)
+    }
+
     private func decode(_ facts: String, status: String = "converged", error: String = "null") throws
         -> GuestConfigObservation
     {

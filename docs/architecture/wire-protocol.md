@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 70). The required registration fields
+currently 71). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -670,7 +670,7 @@ capability checks, generation guarding, and content-free observations. STR-92
 owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
-remain decodable; realization-capable live peers use the current exact wire v70
+remain decodable; realization-capable live peers use the current exact wire v71
 registration.
 
 STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
@@ -721,3 +721,17 @@ and an already authorized update artifact. It neither registers a workload
 session nor relaxes exact workload equality. Bridge desired-state polls carry
 `Strato-Workload-Wire-Version`; mismatches are rejected before assembly.
 See [staging and bootstrap limits](./agent-updates.md#stable-bridge-exchange-str-340).
+
+### Guest configuration terminal retry fence (STR-92, wire v71)
+
+`ObservedVMState.guestConfigFailedGeneration` attributes a terminal failure to
+`convergeGuestConfig`, including loss of the channel before read-back. Host
+resize, networking, boot, and edge failures carry no guest failure attribution;
+the control plane preserves their host diagnostic and does not invent a guest
+operation outcome. Dependency waits remain retryable and do not stamp this field.
+
+The persisted verdict returns as `DesiredVMState.guestConfigFailedGeneration`.
+A restarted agent may adopt the VM and perform preceding host steps, but refuses
+the guest step at that generation before invoking its transport. Only a newer VM
+generation permits another attempt. The control plane and agent must both use
+wire v71; the independent guest-control protocol remains v4.

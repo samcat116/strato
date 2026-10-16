@@ -82,6 +82,26 @@ final class DesiredStateAssemblerTests {
         return vm
     }
 
+    @Test("Guest terminal failure is projected from durable state into a restarted agent's sync")
+    func terminalGuestFailureIsProjected() async throws {
+        try await withAssemblerApp { app, _, project in
+            let agentID = try await self.registerAgent(app: app, named: "guest-retry-fence")
+            let vm = try await self.placeVM(app: app, project: project, named: "guest-config", onAgent: agentID)
+            vm.guestConfig = GuestConfig(packages: [.init(name: "curl", state: .present)])
+            vm.generation = 7
+            try await vm.save(on: app.db)
+            let initial = try await DesiredStateAssembler(app: app).assemble(agentId: agentID)
+            #expect(initial.vms.first?.guestConfig == vm.guestConfig)
+            #expect(initial.vms.first?.guestConfigFailedGeneration == nil)
+            vm.guestConfigFailedGeneration = 7
+            try await vm.save(on: app.db)
+            // Assembly reads the persisted verdict, without a shared process-local cache.
+            let restored = try await DesiredStateAssembler(app: app).assemble(agentId: agentID)
+            #expect(restored.vms.first?.generation == 7)
+            #expect(restored.vms.first?.guestConfigFailedGeneration == 7)
+        }
+    }
+
     private func attachNIC(
         app: Application,
         vm: VM,

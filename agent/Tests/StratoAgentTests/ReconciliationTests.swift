@@ -350,7 +350,8 @@ struct ReconciliationTests {
         await reconciler.apply(intent(7))
         _ = await actuator.waitForReports(1)
         #expect(await reconciler.observedGeneration(for: id.uuidString) == 0)
-        #expect(await reconciler.lastError(for: id.uuidString) == "package budget exhausted")
+        #expect(await reconciler.lastError(for: id.uuidString) == GuestConfigurationFailure.safeReason(nil))
+        #expect(await reconciler.facts(for: id.uuidString).guestConfigFailedGeneration == 7)
         #expect(await reconciler.failureClassification(for: id.uuidString) == .permanent)
         let attempts = await actuator.performed.count
         await actuator.setFailure(nil)
@@ -377,6 +378,63 @@ struct ReconciliationTests {
         _ = await actuator.waitForReports(1)
         #expect(await actuator.performed.last?.step == .convergeGuestConfig)
         #expect(await reconciler.observedGeneration(for: id.uuidString) == 7)
+    }
+
+    @Test("A fresh reconciler adopts the VM but cannot replay a terminal guest-channel failure")
+    func terminalGuestFailureSurvivesAgentRestart() async {
+        let id = UUID()
+        let config = GuestConfig(packages: [.init(name: "curl", state: .present)])
+        func intent(_ generation: Int64, failed: Int64? = nil) -> DesiredStateMessage {
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
+                    generation: generation, guestConfig: config, guestConfigFailedGeneration: failed)
+            ])
+        }
+        let original = MockActuator(presence: [id.uuidString: .managed(.running)])
+        await original.setFailure(NSError(domain: "channel closed before read-back", code: 1))
+        let first = makeReconciler(original)
+        await first.apply(intent(7))
+        #expect(await original.waitForReports(1) == 1)
+        let failure = await first.facts(for: id.uuidString)
+        #expect(failure.guestConfigFailedGeneration == 7)
+        #expect(failure.failureClassification == .permanent)
+        // A new actor has neither lastApplied nor the process-local failures map.
+        // Its first desired sync carries the control plane's persisted verdict.
+        let restored = MockActuator(presence: [id.uuidString: .orphaned])
+        let restarted = makeReconciler(restored)
+        await restarted.apply(intent(7, failed: failure.guestConfigFailedGeneration))
+        #expect(await restored.waitForReports(1) == 1)
+        #expect(await restored.performed.map(\.step) == [.adopt])
+        #expect(await restarted.facts(for: id.uuidString).guestConfigFailedGeneration == 7)
+        #expect(await restarted.observedGeneration(for: id.uuidString) == 0)
+        await restarted.apply(intent(7, failed: 7))
+        #expect(await restored.performed.map(\.step) == [.adopt])
+        // A newer explicit retry can realize the same intent.
+        await restarted.apply(intent(8, failed: 7))
+        #expect(await restored.waitForReports(2) == 2)
+        #expect(await restored.performed.map(\.step) == [.adopt, .convergeGuestConfig])
+        #expect(await restarted.observedGeneration(for: id.uuidString) == 8)
+        #expect(await restarted.facts(for: id.uuidString).guestConfigFailedGeneration == nil)
+    }
+
+    @Test("A host failure before guest convergence carries no guest failure attribution")
+    func hostFailureDoesNotFailGuestStep() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .managed(.shutdown)])
+        await actuator.setFailure(ConvergenceError.unsupported("boot failed"))
+        let reconciler = makeReconciler(actuator)
+        await reconciler.apply(
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
+                    generation: 7, guestConfig: GuestConfig(packages: [.init(name: "curl", state: .present)]))
+            ]))
+        #expect(await actuator.waitForReports(1) == 1)
+        let facts = await reconciler.facts(for: id.uuidString)
+        #expect(facts.guestConfigFailedGeneration == nil)
+        #expect(facts.lastError == "boot failed")
+        #expect(facts.failedGeneration == 7)
     }
 
     // MARK: - Pure diff engine

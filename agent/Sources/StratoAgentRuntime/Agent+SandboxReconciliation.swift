@@ -624,6 +624,7 @@ extension Agent {
                     guestConfigObservation: guestConfigObservation(
                         for: vmId, status: status, observedGeneration: facts.observedGeneration,
                         failedGeneration: facts.failedGeneration),
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration,
                     memoryStats: memoryStatsCache[vmId],
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
@@ -649,6 +650,7 @@ extension Agent {
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
                     failureClassification: facts.failureClassification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration,
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
                         in: entry.spec.networks)
@@ -675,7 +677,8 @@ extension Agent {
                     convergencePhase: facts.phase,
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
-                    failureClassification: facts.failureClassification
+                    failureClassification: facts.failureClassification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration
                 ))
             reported.insert(vmId)
         }
@@ -694,7 +697,8 @@ extension Agent {
                     convergencePhase: facts.phase ?? "converging",
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
-                    failureClassification: facts.failureClassification
+                    failureClassification: facts.failureClassification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration
                 ))
             reported.insert(vmId)
         }
@@ -714,7 +718,8 @@ extension Agent {
                     convergencePhase: nil,
                     lastError: failure.error,
                     failedGeneration: failure.generation,
-                    failureClassification: failure.classification
+                    failureClassification: failure.classification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration
                 ))
         }
 

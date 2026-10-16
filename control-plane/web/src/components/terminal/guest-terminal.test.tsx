@@ -9,6 +9,8 @@ interface TestTerminal {
 import { act, fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/components/vms/vm-guest-configuration-card", () => ({ VMGuestConfigurationCard: () => null }));
+
 const mocks = vi.hoisted(() => ({
   vmExec: vi.fn(), sandboxExec: vi.fn(), terminals: [] as TestTerminal[],
   vm: { id: "vm-1", name: "Test VM", status: "Running", guestAgentEnabled: true, conditions: {}, createdAt: "2026-01-01", updatedAt: "2026-01-01" },

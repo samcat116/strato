@@ -75,6 +75,7 @@ const kindToAction: Record<OperationKind, SandboxAction | null> = {
   attach: null,
   detach: null,
   throttle: null,
+  guest_config: null,
   run: null,
 };
 

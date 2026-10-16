@@ -1724,7 +1724,11 @@ dependency wait until an
 explicit guest upgrade. The first-boot pin is v0.1.3, whose compatible artifacts
 and capability-bearing manifest must be published before rollout; existing VMs
 are not automatically updated. A guest-side busy pass is also a dependency wait;
-a reported guest failure is permanent for that generation. Fixed host log
+a reported guest failure or terminal guest-channel error is permanent for that generation.
+The control plane returns its durable terminal guest generation with desired state
+(wire v71); a restarted agent adopts the VM but refuses that guest step before
+opening the channel. A newer generation permits retry. Host step failures carry
+no guest failure attribution. Fixed host log
 categories prevent guest-controlled diagnostic text from entering node logs.
 The full report includes `guestConfigObservation` alongside the existing VM
 failure fields. STR-92 owns detailed observation persistence/API projection.
