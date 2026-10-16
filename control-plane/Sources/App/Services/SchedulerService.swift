@@ -217,7 +217,8 @@ struct VMPlacementRequirements: Sendable, Equatable {
     /// metadata service. Independent from the overlay-networking requirement.
     let requiresMetadataService: Bool
     /// Site the VM must place into, when one of its networks is pinned to a
-    /// site (a pinned network only exists in that site's OVN deployment).
+    /// site. Linux workloads also need that site's OVN fabric; native Apple
+    /// NAT uses the site as a locality constraint without overlay guarantees.
     /// Hard constraint; nil means unconstrained.
     let siteID: UUID?
     /// Whether the workload is a sandbox, which only agents advertising the
@@ -593,13 +594,14 @@ final class SchedulerService: Sendable {
             throw SchedulerError.noAvailableAgents
         }
 
-        // A network pinned to a site exists only in that site's OVN
-        // deployment. User-mode agents in the site are still ineligible
-        // because they never attach to its OVN fabric.
+        // Linux workloads need the pinned site's OVN fabric. Native Apple
+        // workloads use NAT instead, but must still remain in the pinned site.
+        // Explicit overlay requirements are enforced independently below.
         let siteMatched: [SchedulableAgent]
         if let requiredSiteID = requirements.siteID {
             siteMatched = online.filter {
-                $0.siteID == requiredSiteID && $0.supportsInterVMNetworking
+                $0.siteID == requiredSiteID
+                    && (requirements.hypervisorType == .appleVirtualization || $0.supportsInterVMNetworking)
             }
             guard !siteMatched.isEmpty else {
                 throw SchedulerError.siteUnsatisfied(requiredSiteID: requiredSiteID)

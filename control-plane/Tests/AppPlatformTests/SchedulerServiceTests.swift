@@ -114,6 +114,40 @@ struct SchedulerServiceTests {
         #expect(try scheduler.selectAgent(for: vm, from: [reserved]) == "compatible")
     }
 
+    @Test("Site-pinned Apple placement permits NAT while retaining site and overlay constraints")
+    func appleSitePlacement() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "apple-site"))
+        let siteID = UUID()
+        let support = HypervisorSupport(
+            type: .appleVirtualization, available: true, accelerated: true,
+            minimumMemoryBytes: 512 << 20, maximumMemoryBytes: 2048 << 20)
+        let sameSite = createTestAgent(
+            id: "same-site", supportedHypervisors: [.appleVirtualization],
+            hypervisors: [support], siteID: siteID)
+        let otherSite = createTestAgent(
+            id: "other-site", supportedHypervisors: [.appleVirtualization],
+            hypervisors: [support], siteID: UUID())
+        func requirements(backend: HypervisorType = .appleVirtualization, overlay: Bool = false)
+            -> VMPlacementRequirements
+        {
+            VMPlacementRequirements(
+                cpu: 1, memory: 1 << 30, disk: 1,
+                hypervisorType: backend, requiresInterVMNetworking: overlay, siteID: siteID)
+        }
+        #expect(
+            try scheduler.selectAgent(requirements: requirements(), from: [otherSite, sameSite]) == "same-site")
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(requirements: requirements(), from: [otherSite])
+        }
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(requirements: requirements(overlay: true), from: [sameSite])
+        }
+        let linuxNAT = createTestAgent(id: "linux-nat", siteID: siteID)
+        #expect(throws: SchedulerError.self) {
+            try scheduler.selectAgent(requirements: requirements(backend: .qemu), from: [linuxNAT])
+        }
+    }
+
     // MARK: - Resource Utilization Tests
 
     @Test("SchedulableAgent calculates CPU utilization correctly")

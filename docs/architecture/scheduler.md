@@ -173,12 +173,12 @@ specific error rather than landing on an agent that would silently run it
 differently than requested:
 
 - **Site pinning**: When one of the VM's networks is pinned to a site, the VM
-  only places on that site's agents — a pinned network exists only in that
-  site's OVN deployment, so agents elsewhere (or site-less) can never satisfy
-  it, regardless of capacity. This is the *first* categorical filter in
-  `filterEligibleAgents`, and it additionally excludes site members that
-  registered below the site-authority wire protocol or without overlay
-  networking (user-mode/SLIRP hosts never attach to the site's OVN fabric).
+  only places on that site's agents, regardless of capacity elsewhere. Linux
+  workloads additionally require the site's OVN fabric; user-mode/SLIRP hosts
+  never attach to it. Native Apple workloads retain the same-site constraint
+  but use NAT without overlay guarantees. An explicit inter-VM networking
+  requirement still excludes NAT-only Apple hosts. This is the first
+  categorical filter in `filterEligibleAgents`.
 - **Hypervisor support**: The agent must support the VM's hypervisor backend
   (from the capabilities it advertised at registration). A Firecracker VM is
   never placed on a QEMU-only agent (e.g. a macOS host).
