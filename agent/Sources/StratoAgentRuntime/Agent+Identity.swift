@@ -643,7 +643,10 @@ extension Agent {
                 type: type,
                 available: true,
                 accelerated: true,
-                supportsVsock: type == .qemu ? true : nil
+                supportsVsock: type == .qemu ? true : nil,
+                // The mock has no framework bounds; host capacity still limits placement.
+                minimumMemoryBytes: type == .appleVirtualization ? 1 << 20 : nil,
+                maximumMemoryBytes: type == .appleVirtualization ? Int64.max : nil
             )
         }
     }

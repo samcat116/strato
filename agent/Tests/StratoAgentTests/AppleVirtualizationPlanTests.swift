@@ -96,6 +96,43 @@ struct AppleVirtualizationPlanTests {
         #expect(plan.items.map(\.steps) == [[.resize]])
     }
 
+    @Test("A coalesced stopped Apple resize precedes boot", arguments: [VMStatus.created, .shutdown])
+    func stoppedResizeBeforeBoot(status: VMStatus) {
+        let id = UUID()
+        let desired = DesiredVMState(
+            vmId: id, hypervisorType: .appleVirtualization,
+            spec: VMSpec(cpus: 2, memoryBytes: 1 << 30, boot: .disk(firmware: nil)),
+            desiredStatus: .running, generation: 3)
+        let plan = Reconciler.plan(
+            desired: [desired], present: [id.uuidString: .managed(status)], lastApplied: [id.uuidString: 1],
+            presentSizing: [id.uuidString: VMSizing(cpus: 1, memoryBytes: 512 << 20)])
+        #expect(plan.items.map(\.steps) == [[.resize, .boot]])
+    }
+
+    @Test("Apple network drift waits for cold boot without unsupported hot-plug")
+    func networkDriftDoesNotBlockLifecycle() {
+        let id = UUID()
+        let networkID = UUID()
+        let oldNIC = NetworkSpec(network: "nat", networkId: networkID, macAddress: "02:00:00:00:00:01")
+        let newNIC = NetworkSpec(
+            network: "nat", networkId: networkID, macAddress: "02:00:00:00:00:01", dnsServers: ["192.0.2.53"])
+        func plan(observed: VMStatus, desired: DesiredVMStatus) -> ReconcilePlan {
+            Reconciler.plan(
+                desired: [
+                    DesiredVMState(
+                        vmId: id, hypervisorType: .appleVirtualization,
+                        spec: VMSpec(cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil), networks: [newNIC]),
+                        desiredStatus: desired, generation: 2)
+                ],
+                present: [id.uuidString: .managed(observed)], lastApplied: [id.uuidString: 1],
+                appliedEdges: [id.uuidString: AppliedEdgeNonces()],
+                presentNetworks: [id.uuidString: [oldNIC]])
+        }
+        #expect(plan(observed: .running, desired: .running).items.flatMap(\.steps).isEmpty)
+        #expect(plan(observed: .shutdown, desired: .running).items.map(\.steps) == [[.boot]])
+        #expect(plan(observed: .running, desired: .shutdown).items.map(\.steps) == [[.shutdown]])
+    }
+
     @Test("Duplicate disk sources cannot be attached twice")
     func duplicateDisks() {
         #expect(throws: HypervisorServiceError.self) {

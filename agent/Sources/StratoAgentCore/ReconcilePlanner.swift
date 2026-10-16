@@ -49,7 +49,11 @@ extension Reconciler {
 
             let needsReconfiguration: Bool
             switch entry.hypervisorType {
-            case .qemu, .appleVirtualization:
+            case .appleVirtualization:
+                // Native NAT has no network hot-plug. Existing Apple VMs rebuild
+                // their configuration and seed from desired state before cold boot.
+                continue
+            case .qemu:
                 needsReconfiguration = observed != entry.spec.networks
             case .firecracker:
                 // Firecracker cannot change MMDS's interface allow-list after
@@ -186,7 +190,7 @@ extension Reconciler {
                 var steps = items[index].steps
                 if steps.isEmpty {
                     steps = [.resize]
-                } else if stoppedVCPUShrink, let boot = steps.firstIndex(of: .boot) {
+                } else if stoppedVCPUShrink || stoppedAppleResize, let boot = steps.firstIndex(of: .boot) {
                     steps.insert(.resize, at: boot)
                 } else {
                     continue
