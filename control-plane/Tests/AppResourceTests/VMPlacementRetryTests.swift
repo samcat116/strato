@@ -2,6 +2,7 @@ import AppTestSupport
 import Fluent
 import FluentPostgresDriver
 import NIOPosix
+import NIOConcurrencyHelpers
 import PostgresNIO
 import SQLKit
 import StratoShared
@@ -350,6 +351,68 @@ struct VMPlacementRetryTests {
             let current = try #require(try await Volume.find(boot.id, on: app.db))
             #expect(current.convergenceDeadline == renewed.convergenceDeadline)
             #expect(current.failedGeneration == renewed.failedGeneration)
+        }
+    }
+
+    @Test(
+        "A retry deadline fences stale placement before and after planning",
+        arguments: ["expired", "swept", "new-attempt"])
+    func stalePlacementCannotCommit(change: String) async throws {
+        try await withProjectApp(prefix: "staleplacement") { app, builder, fixture in
+            app.logger.logLevel = .warning
+            let (vm, boot, _) = try await failedVM(app, builder, fixture)
+            let id = try vm.requireID()
+            let gate = DispatchFailureGate()
+            let calls = NIOLockedValueBox(0)
+            let store = CoordinationFixtureStore(beforeReserve: {
+                let first = calls.withLockedValue { count in
+                    count += 1
+                    return count == 1
+                }
+                if first && change != "expired" { await gate.wait() }
+            })
+            app.coordination = CoordinationService(store: store, logger: app.logger)
+            let host = try await agent(app, builder)
+            vm.generation = 2
+            vm.convergenceDeadline = Date().addingTimeInterval(change == "expired" ? -1 : 600)
+            try await vm.save(on: app.db)
+            let deadline = try #require(try await VM.find(id, on: app.db)?.convergenceDeadline)
+            let worker = Task {
+                try await app.workloadPlacement.createVM(vm: vm, db: app.db, attemptDeadline: deadline)
+            }
+            if change != "expired" {
+                await gate.waitUntilEntered()
+                let current = try #require(try await VM.find(id, on: app.db))
+                let outcome = try await ResourceConvergence.recordExpiredDeadline(
+                    current, mutation: .create, at: .testing(deadline.addingTimeInterval(1)),
+                    timeoutReason: "Retry expired during planning", on: app.db)
+                #expect(outcome == .recorded)
+                let failed = try #require(try await VM.find(id, on: app.db))
+                #expect(failed.generation == 2)
+                #expect(failed.failedGeneration == 2)
+                if change == "new-attempt" {
+                    let next = try await retry(app, vmID: id, token: fixture.token)
+                    #expect(next.0 == .accepted)
+                }
+                await gate.release()
+            }
+            await #expect(throws: Abort.self) { try await worker.value }
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            let current = try #require(try await VM.find(id, on: app.db))
+            let replicas = try await VolumeReplica.query(on: app.db)
+                .filter(\.$volume.$id == boot.requireID()).all()
+            let reservations = await app.coordination.activeReservations(agentIds: [host])
+            if change == "new-attempt" {
+                #expect(current.hypervisorId == host)
+                #expect(replicas.count == 1)
+                let renewed = try #require(try await Volume.find(boot.id, on: app.db))
+                #expect(replicas.first?.generation == renewed.generation)
+                #expect(reservations[host]?.cpuMicroUnits == Int64(vm.cpu) * 1_000_000)
+            } else {
+                #expect(current.hypervisorId == nil)
+                #expect(replicas.isEmpty)
+                #expect((reservations[host]?.cpuMicroUnits ?? 0) == 0)
+            }
         }
     }
 

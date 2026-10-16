@@ -23,7 +23,8 @@ actor WorkloadPlacementService {
         vm: VM,
         db: Database,
         strategy: SchedulingStrategy? = nil,
-        image: Image? = nil
+        image: Image? = nil,
+        attemptDeadline: Date? = nil
     ) async throws {
         let agentID = try await AdvisoryLock.withSessionLock(
             .object(.vmPlacement, id: vm.requireID()), on: db,
@@ -33,7 +34,7 @@ actor WorkloadPlacementService {
             let database = try PlacementTransactionConnection(connection)
             return try await placeVM(
                 vm: vm, db: database, strategy: strategy, image: image,
-                attemptsRemaining: 3)
+                attemptDeadline: attemptDeadline, attemptsRemaining: 3)
         }
         // Doorbell delivery queries app.db. Release the pinned placement lease
         // first, including on deployments with one connection per event loop.
@@ -42,7 +43,7 @@ actor WorkloadPlacementService {
 
     private func placeVM(
         vm: VM, db: Database, strategy: SchedulingStrategy?, image: Image?,
-        attemptsRemaining: Int
+        attemptDeadline: Date?, attemptsRemaining: Int
     ) async throws -> String? {
         let schedulableAgents = await schedulableAgentsFromDatabase(on: db)
         let vmId = try vm.requireID().uuidString
@@ -61,6 +62,11 @@ actor WorkloadPlacementService {
             // sizing edits accepted while this work was queued. Deletion is
             // the intent that cancels it; the transaction rechecks it below.
             if plannedVM.desiredStatus == .absent { return nil }
+            if let attemptDeadline {
+                guard plannedVM.convergenceDeadline == attemptDeadline,
+                    attemptDeadline > (try await ClusterClock.read(on: db)).date
+                else { throw Abort(.conflict, reason: "Placement retry expired or was superseded") }
+            }
             if let placedAgent = plannedVM.hypervisorId {
                 vm.hypervisorId = placedAgent
                 return nil
@@ -164,6 +170,14 @@ actor WorkloadPlacementService {
                 guard currentVM.desiredStatus != .absent else {
                     throw Abort(.conflict, reason: "VM was deleted during placement")
                 }
+                // A timeout can leave generation unchanged for a shutdown VM.
+                // Fence this exact retry under the row lock, including expiry
+                // before the sweep has recorded its terminal verdict.
+                if let attemptDeadline {
+                    guard currentVM.convergenceDeadline == attemptDeadline,
+                        attemptDeadline > (try await ClusterClock.read(on: tx)).date
+                    else { throw Abort(.conflict, reason: "Placement retry expired or was superseded") }
+                }
                 if currentVM.hypervisorId != nil { throw PlacementInputsChanged() }
                 if let snapshot = currentVM.resourceClass {
                     currentVM.resourceClass = try await WorkloadResourceClassService.currentPolicy(snapshot, on: tx)
@@ -244,6 +258,11 @@ actor WorkloadPlacementService {
                 case .replicated:
                     throw Abort(.conflict, reason: "Replicated boot pools are not executable")
                 }
+                if let attemptDeadline {
+                    guard attemptDeadline > (try await ClusterClock.read(on: tx)).date else {
+                        throw Abort(.conflict, reason: "Placement retry expired before commit")
+                    }
+                }
                 return selectedAgentId
             }
         } catch {
@@ -258,7 +277,7 @@ actor WorkloadPlacementService {
                 // abort or an ambiguous commit; generic DB retries are separate.
                 return try await placeVM(
                     vm: vm, db: db, strategy: strategy, image: image,
-                    attemptsRemaining: attemptsRemaining - 1)
+                    attemptDeadline: attemptDeadline, attemptsRemaining: attemptsRemaining - 1)
             }
             throw error
         }

@@ -306,6 +306,10 @@ A failed placement retry locks and refreshes the unplaced VM before recording
 its terminal result. The accepted convergence deadline identifies the attempt:
 metadata edits may advance generation, while a later deadline, deletion, or
 committed placement fences the old worker out of failure recording.
+The placement transaction also rechecks the accepted deadline and its expiry,
+including before commit, so a worker cannot provision after a terminal timeout
+or take over a newer retry. Any stale reservation is released under the same
+per-VM placement lock.
 The operations API and UI attribute a newer failure to an older accepted target
 only while that target remains unobserved; an already observed older target
 retains its successful verdict.

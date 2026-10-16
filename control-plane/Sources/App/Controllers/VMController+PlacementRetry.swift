@@ -16,7 +16,8 @@ extension VMController {
                 let placementDeadline = vm.convergenceDeadline
                 do {
                     let image = try await vm.$sourceImage.get(on: db)
-                    try await app.workloadPlacement.createVM(vm: vm, db: db, image: image)
+                    try await app.workloadPlacement.createVM(
+                        vm: vm, db: db, image: image, attemptDeadline: placementDeadline)
                 } catch {
                     guard let placementDeadline else { throw error }
                     throw ResourceMutation.PlacementFailure(
