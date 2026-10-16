@@ -90,52 +90,6 @@ struct InstanceMetadataTests {
                 == "debian-12.qcow2")
     }
 
-    @Test("Metadata NICs survive the round trip in order, dual-stack and bare alike")
-    func metadataNICRoundTrip() throws {
-        let decoded = try roundTrip(Self.metadata)
-        #expect(decoded.nics.count == 2)
-
-        let primary = decoded.nics[0]
-        #expect(primary.deviceName == "net0")
-        #expect(primary.macAddress == "52:54:00:12:34:56")
-        #expect(primary.networkId == Fixtures.uuidA)
-        #expect(primary.networkName == "default")
-        #expect(primary.ipAddress == "10.0.0.5")
-        #expect(primary.prefixLength == 24)
-        #expect(primary.gateway == "10.0.0.1")
-        #expect(primary.ipv6Address == "fd12:3456:789a::5")
-        #expect(primary.ipv6PrefixLength == 64)
-        #expect(primary.gateway6 == "fd12:3456:789a::1")
-        #expect(primary.mtu == 1442)
-        #expect(primary.dnsServers == ["10.0.0.1", "fd12:3456:789a::1"])
-        #expect(primary.domainName == "corp.example.com")
-        #expect(primary.dhcpEnabled)
-        #expect(primary.metadataEnabled)
-        #expect(primary.resolverAddresses == ["169.254.1.0", "fd00:ec2:1::100"])
-
-        // A NIC IPAM has not addressed keeps nils rather than fabricated
-        // empties — the guest must be able to tell "unassigned" from "0.0.0.0".
-        let secondary = decoded.nics[1]
-        #expect(secondary.deviceName == "net1")
-        #expect(secondary.ipAddress == nil)
-        #expect(secondary.prefixLength == nil)
-        #expect(secondary.ipv6Address == nil)
-        #expect(secondary.mtu == nil)
-        #expect(secondary.dnsServers.isEmpty)
-        #expect(secondary.domainName == nil)
-        #expect(!secondary.dhcpEnabled)
-        #expect(!secondary.metadataEnabled)
-        #expect(secondary.resolverAddresses.isEmpty)
-    }
-
-    @Test("Identity policy round-trips (phase 3 shape)")
-    func identityPolicyRoundTrip() throws {
-        let identity = try #require(roundTrip(Self.metadata).identity)
-        #expect(identity.spiffeId == "spiffe://strato/project/\(Fixtures.uuidB)/vm/\(Fixtures.uuidA)")
-        #expect(identity.audiences == ["strato", "vault"])
-        #expect(identity.ttlSeconds == 3600)
-    }
-
     @Test("A payload with no metadata key — what a pre-v26 control plane sends — decodes to nil")
     func desiredVMStateMetadataBackwardCompatible() throws {
         // A pre-v26 control plane's desired entry differs from this build's

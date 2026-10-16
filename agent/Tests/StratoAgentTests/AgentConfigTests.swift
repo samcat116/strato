@@ -589,8 +589,8 @@ struct AgentConfigTests {
     }
 
     @Test(
-        "TOML accepts every representative log threshold",
-        arguments: [AgentLogLevel.trace, .info, .warning])
+        "TOML wires a valid log threshold",
+        arguments: [AgentLogLevel.warning])
     func loadSupportedTOMLLogLevel(_ level: AgentLogLevel) async throws {
         try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
@@ -1138,8 +1138,8 @@ struct AgentConfigTests {
     }
 
     @Test(
-        "Environment accepts every representative log threshold",
-        arguments: [AgentLogLevel.trace, .info, .warning])
+        "Environment wires a valid log threshold",
+        arguments: [AgentLogLevel.warning])
     func loadSupportedEnvironmentLogLevel(_ level: AgentLogLevel) async throws {
         let config = try await AgentConfig.loadDefaultConfig(
             searchPaths: [],

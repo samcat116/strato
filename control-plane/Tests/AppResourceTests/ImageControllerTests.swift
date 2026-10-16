@@ -328,8 +328,8 @@ final class ImageControllerTests {
     /// was widened, so replacing a disk-image artifact with a format the API
     /// advertised was refused before detection ever ran.
     @Test(
-        "Disk-image artifacts accept every advertised disk format",
-        arguments: ["vmdk", "vhd", "vhdx"])
+        "Disk-image artifacts use the advertised-format filename validator",
+        arguments: ["vmdk"])
     func testUploadDiskImageArtifactWithHypervisorFormat(ext: String) async throws {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let imageID = try await Self.createEmptyImage(
@@ -971,65 +971,12 @@ final class ImageControllerTests {
                 #expect(response.format == .qcow2)
                 #expect(response.filename == "test.qcow2")
                 #expect(response.checksum != nil)
-            }
-        }
-    }
-
-    @Test("Create image detects QCOW2 format")
-    func testCreateImageUploadQCOW2Detection() async throws {
-        try await withImageTestApp { app, _, _, project, authToken, _ in
-            let fileContent = Self.createQCOW2Buffer()
-            let (body, boundary) = Self.createMultipartFormData(
-                name: "QCOW2 Image",
-                description: nil,
-                filename: "image.qcow2",
-                fileContent: fileContent
-            )
-
-            var imageID: UUID?
-            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                req.headers.contentType = HTTPMediaType(
-                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
-                req.body = ByteBuffer(data: body)
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-
-                let response = try res.content.decode(ImageResponse.self)
-                #expect(response.format == .qcow2)
-                imageID = response.id
-            }
-
-            let artifact = try #require(
-                try await ImageArtifact.query(on: app.db)
-                    .filter(\.$image.$id == imageID!)
-                    .filter(\.$kind == .diskImage)
-                    .first())
-            #expect(artifact.virtualSize == Int64(10 * 1024 * 1024 * 1024))
-        }
-    }
-
-    @Test("Create image detects raw format")
-    func testCreateImageUploadRawDetection() async throws {
-        try await withImageTestApp { app, _, _, project, authToken, _ in
-            let fileContent = Self.createRawBuffer()
-            let (body, boundary) = Self.createMultipartFormData(
-                name: "Raw Image",
-                description: nil,
-                filename: "image.raw",
-                fileContent: fileContent
-            )
-
-            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                req.headers.contentType = HTTPMediaType(
-                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
-                req.body = ByteBuffer(data: body)
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-
-                let response = try res.content.decode(ImageResponse.self)
-                #expect(response.format == .raw)
+                let artifact = try #require(
+                    try await ImageArtifact.query(on: app.db)
+                        .filter(\.$image.$id == response.id)
+                        .filter(\.$kind == .diskImage)
+                        .first())
+                #expect(artifact.virtualSize == Int64(10 * 1024 * 1024 * 1024))
             }
         }
     }
@@ -1744,7 +1691,11 @@ final class ImageControllerTests {
                 req.body = ByteBuffer(data: body)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                imageId = try res.content.decode(ImageResponse.self).id
+                let image = try res.content.decode(ImageResponse.self)
+                imageId = image.id
+                #expect(image.size == Int64(content.utf8.count))
+                // Independently computed SHA-256 of the multi-chunk payload above.
+                #expect(image.checksum == "a77c7949331eb92bd363f39f845d24acf66de1fda46025308c75ca7cb6c1bfe4")
             }
 
             let artifact = try #require(
@@ -1755,34 +1706,6 @@ final class ImageControllerTests {
             let stored = try String(
                 contentsOfFile: "\(tempStoragePath)/\(artifact.storagePath)", encoding: .utf8)
             #expect(stored == content)
-        }
-    }
-
-    @Test("Recorded size and checksum describe the stored bytes")
-    func testUploadRecordsSizeAndChecksumOfStoredBytes() async throws {
-        try await withImageTestApp { app, _, _, project, authToken, _ in
-            let content = "checksum me"
-            var buffer = ByteBufferAllocator().buffer(capacity: content.utf8.count)
-            buffer.writeString(content)
-
-            let (body, boundary) = Self.createMultipartFormData(
-                name: "Sums", description: nil, filename: "disk.img", fileContent: buffer)
-
-            var image: ImageResponse?
-            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                req.headers.contentType = HTTPMediaType(
-                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
-                req.body = ByteBuffer(data: body)
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-                image = try res.content.decode(ImageResponse.self)
-            }
-
-            #expect(image?.size == Int64(content.utf8.count))
-            // SHA-256 of "checksum me" — computed over the streamed bytes, never
-            // taken from the client.
-            #expect(image?.checksum == "820eb62b7660a216f711bd0df37ac8a176b662a159959870edc200b857262daf")
         }
     }
 

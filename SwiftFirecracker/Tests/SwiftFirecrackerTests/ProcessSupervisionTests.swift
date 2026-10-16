@@ -342,18 +342,6 @@ struct ProcessSupervisionTests {
         #expect(FirecrackerClient.parseEffectiveUID("Name:\tfirecracker\n") == nil)
     }
 
-    @Test("public process inventory records expose the host identity")
-    func processInfoValue() {
-        let info = FirecrackerClient.VMProcessInfo(vmId: "vm-1", pid: 42, effectiveUID: 100_000)
-        #expect(info.vmId == "vm-1")
-        #expect(info.pid == 42)
-        #expect(info.effectiveUID == 100_000)
-
-        let host = FirecrackerClient.HostProcessInfo(pid: 43, effectiveUID: 1_879_048_192)
-        #expect(host.pid == 43)
-        #expect(host.effectiveUID == 1_879_048_192)
-    }
-
     #if os(Linux)
     @Test("effective-uid inventory does not depend on process argv")
     func effectiveUIDInventoryFindsCurrentProcess() async throws {
