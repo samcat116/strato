@@ -298,6 +298,11 @@ The scheduler throws specific errors for different failure scenarios:
 
 ### How placement failures surface
 
+Placement preserves a completed result if session-lock cleanup fails after the
+commit. Cleanup logs and counts the failure and discards the unhealthy database
+connection; the committed placement still rings its desired-state doorbell.
+
+
 VM create is asynchronous: the controller answers **202 Accepted** with the VM
 and the generation it is converging on before placement runs, and scheduling
 happens in the background dispatch. A `SchedulerError` there is wrapped so its

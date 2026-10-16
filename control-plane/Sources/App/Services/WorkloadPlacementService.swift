@@ -27,7 +27,8 @@ actor WorkloadPlacementService {
     ) async throws {
         let agentID = try await AdvisoryLock.withSessionLock(
             .object(.vmPlacement, id: vm.requireID()), on: db,
-            timeout: .seconds(30), pollInterval: .milliseconds(25), logger: app.logger
+            timeout: .seconds(30), pollInterval: .milliseconds(25), logger: app.logger,
+            preserveCompletedValueOnReleaseFailure: true
         ) { [self] connection in
             let database = try PlacementTransactionConnection(connection)
             return try await placeVM(

@@ -2,6 +2,7 @@ import AppTestSupport
 import Fluent
 import FluentPostgresDriver
 import NIOPosix
+import PostgresNIO
 import SQLKit
 import StratoShared
 import Testing
@@ -349,6 +350,64 @@ struct VMPlacementRetryTests {
             let current = try #require(try await Volume.find(boot.id, on: app.db))
             #expect(current.convergenceDeadline == renewed.convergenceDeadline)
             #expect(current.failedGeneration == renewed.failedGeneration)
+        }
+    }
+
+    @Test("Committed placement survives session-lock cleanup failure", arguments: [false, true], [false, true])
+    func committedPlacementSurvivesCleanupFailure(connectionCloses: Bool, productionTimeouts: Bool) async throws {
+        try await withProjectApp(prefix: "placementcleanup") { app, builder, fixture in
+            app.logger.logLevel = .warning
+            let (vm, boot, _) = try await failedVM(app, builder, fixture)
+            let host = try await agent(app, builder)
+            let id = try vm.requireID()
+            let key = AdvisoryLockKey.object(.vmPlacement, id: id)
+            let placementDB: any Database
+            if productionTimeouts {
+                let database = try #require(app.storage[TestDatabaseNameKey.self])
+                let databaseID = DatabaseID(string: "cleanup-production")
+                app.databases.use(
+                    try DatabaseStatementTimeout(milliseconds: 5_000).applying(
+                        to: .postgres(
+                            configuration: PostgresTestDatabases.configuration(database: database),
+                            maxConnectionsPerEventLoop: 1)), as: databaseID, isDefault: false)
+                placementDB = app.db(databaseID)
+            } else {
+                placementDB = app.db
+            }
+            let dispatch = FakeAgentDispatch()
+            let mutation = ResourceMutation(agentDispatch: dispatch, logger: app.logger)
+            _ = try await mutation.accept(
+                .create, on: vm, actor: .user(try fixture.user.requireID()),
+                dispatch: .placement { _ in
+                    let placed = try await AdvisoryLock.withSessionLock(
+                        key, on: placementDB, timeout: .seconds(3), pollInterval: .milliseconds(10),
+                        logger: app.logger, preserveCompletedValueOnReleaseFailure: true
+                    ) { connection in
+                        // The nested service lock is reentrant on this session.
+                        // Commit real placement before injecting cleanup failure.
+                        try await app.workloadPlacement.createVM(vm: vm, db: connection)
+                        if connectionCloses {
+                            let postgres = try #require(connection as? any PostgresDatabase)
+                            try await postgres.withConnection { $0.close() }.get()
+                        } else {
+                            #expect(try await AdvisoryLock.releaseSessionLockForTesting(key, on: connection))
+                        }
+                        return host
+                    }
+                    await dispatch.syncDesiredState(agentId: placed)
+                }, on: app.db, app: app
+            ) { _ in vm.setDesiredStatus(.running) }
+            let delivered: String = try await pollUntil {
+                await dispatch.syncedAgentIds.first
+            }
+            #expect(delivered == host)
+            let current = try #require(try await VM.find(id, on: app.db))
+            #expect(current.hypervisorId == host)
+            #expect(current.desiredStatus == .running)
+            #expect(current.failedGeneration != current.generation)
+            #expect(current.convergenceDeadline != nil)
+            #expect(try await Volume.find(boot.id, on: app.db)?.attachedAgentId == host)
+            #expect(try await VolumeReplica.query(on: app.db).filter(\.$volume.$id == boot.requireID()).count() == 1)
         }
     }
 
