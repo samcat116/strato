@@ -97,6 +97,12 @@ actor ConsoleSocketManager {
 
         // Connect to Unix socket
         let bootstrap = ClientBootstrap(group: eventLoopGroup)
+            // Serial devices can produce one-byte reads. Eager reading can fill
+            // the relay's chunk budget with only a few KiB while its sink is
+            // waiting on the control plane. Request the next read only after
+            // forwarding the previous one, applying backpressure to the socket.
+            .channelOption(ChannelOptions.autoRead, value: false)
+            .channelOption(ChannelOptions.maxMessagesPerRead, value: 1)
             .channelInitializer { channel in
                 channel.pipeline.addHandler(handler)
             }
@@ -119,6 +125,10 @@ actor ConsoleSocketManager {
                 vmSessions[vmId] = []
             }
             vmSessions[vmId]?.insert(sessionId)
+
+            // Start reading after registration so a fast first delivery can
+            // always find the channel when it requests the following read.
+            channel.read()
 
             logger.info(
                 "Console socket connected",
@@ -253,6 +263,7 @@ actor ConsoleSocketManager {
         if let callback = onConsoleData {
             await callback(vmId, sessionId, data)
         }
+        connections[sessionId]?.channel.read()
     }
 
     private func handleConnectionClosed(sessionId: String) async {
