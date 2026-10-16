@@ -19,10 +19,11 @@ struct InventoryPresenceConnectionTests {
         // rather than occasionally borrowing the other loop's connection.
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let app = try await Application.make(.testing, .shared(group))
+        let configuration: DatabaseConfigurationFactory = .postgres(
+            configuration: PostgresTestDatabases.configuration(database: database),
+            maxConnectionsPerEventLoop: 1, connectionPoolTimeout: .milliseconds(250))
         app.databases.use(
-            .postgres(
-                configuration: PostgresTestDatabases.configuration(database: database),
-                maxConnectionsPerEventLoop: 1, connectionPoolTimeout: .milliseconds(250)),
+            try DatabaseStatementTimeout(milliseconds: 5_000).applying(to: configuration),
             as: .psql)
         app.storage[TestDatabaseNameKey.self] = database
         do {
@@ -62,6 +63,23 @@ struct InventoryPresenceConnectionTests {
                 connection in
                 let session = try await InventorySessionFence.current(agentID: agentID, on: connection)
                 #expect(session != nil)
+                // Inventory reports apply security-group memberships before
+                // VM/volume observations. Their transaction lock must work
+                // through the production timeout wrapper on this same lease.
+                try await connection.transaction { transaction in
+                    try await AdvisoryLock.acquireTransactionLock(
+                        .object(.securityGroupMembership, id: agentID), on: transaction)
+                    try await transaction.transaction { nested in
+                        try await AdvisoryLock.acquireTransactionLock(
+                            .object(.securityGroupMembership, id: agentID), on: nested)
+                    }
+                }
+                // Committing the report must restore autocommit, so another
+                // transaction on the lease can begin normally.
+                try await connection.transaction { transaction in
+                    try await AdvisoryLock.acquireTransactionLock(
+                        .object(.securityGroupMembership, id: agentID), on: transaction)
+                }
             }
         } catch {
             try? await app.shutdownForTesting()
