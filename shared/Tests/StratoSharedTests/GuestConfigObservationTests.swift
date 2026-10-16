@@ -36,6 +36,36 @@ struct GuestConfigObservationTests {
         #expect(throws: GuestConfigObservationError.self) { try successError.validate(for: config, generation: 7) }
     }
 
+    @Test func successfulFilesRequireMatchingLocallyComputedDigests() throws {
+        let config = GuestConfig(files: [GuestFile(path: "/etc/example", content: "hello\n", mode: "0644")])
+        let expected = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        for digest in [expected, String(repeating: "0", count: 64)] {
+            let json = """
+                {"generation":7,"status":"converged","packages":[],"files":[{"path":"/etc/example","sha256":"\(digest)","mode":"0644"}],"services":[],"sysctls":[]}
+                """
+            let observation = try JSONDecoder().decode(GuestConfigObservation.self, from: Data(json.utf8))
+            #expect(throws: GuestConfigObservationError.self) {
+                try observation.validate(for: config, generation: 7)
+            }
+            if digest == expected {
+                try observation.validate(for: config, generation: 7, expectedFileSHA256: ["/etc/example": expected])
+            } else {
+                #expect(throws: GuestConfigObservationError.self) {
+                    try observation.validate(for: config, generation: 7, expectedFileSHA256: ["/etc/example": expected])
+                }
+            }
+        }
+    }
+
+    @Test func failedFileObservationsCanRetainTheMismatchedDigest() throws {
+        let config = GuestConfig(files: [GuestFile(path: "/etc/example", content: "hello\n", mode: "0644")])
+        let json = """
+            {"generation":7,"status":"failed","error":"file read-back differs from desired state","packages":[],"files":[{"path":"/etc/example","sha256":"\(String(repeating: "0", count: 64))","mode":"0644"}],"services":[],"sysctls":[]}
+            """
+        let observation = try JSONDecoder().decode(GuestConfigObservation.self, from: Data(json.utf8))
+        try observation.validate(for: config, generation: 7)
+    }
+
     @Test func itemFailureIdentifiesOnlyAManagedRowAndMatchesTheFailureReason() throws {
         let config = GuestConfig(packages: [GuestPackage(name: "curl", state: .present)])
         for identity in ["curl", "foreign"] {

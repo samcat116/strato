@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import Logging
 import StratoShared
@@ -80,7 +81,11 @@ public struct GuestConfigClient: Sendable {
             guard response.type == "guest_config_state", response.nonce == nonce,
                 let observation = response.observation
             else { throw GuestConfigurationFailure.invalidResponse }
-            try observation.validate(for: config, generation: generation)
+            let expectedFileSHA256 = Dictionary(
+                uniqueKeysWithValues: config.files.map { file in
+                    (file.path, SHA256.hash(data: Data(file.content.utf8)).map { String(format: "%02x", $0) }.joined())
+                })
+            try observation.validate(for: config, generation: generation, expectedFileSHA256: expectedFileSHA256)
             guard await placementIsCurrent() else { throw VMExecBridgeError.vmNotPlaced(placement.vmId) }
             await connection.close()
             return observation

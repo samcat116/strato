@@ -706,10 +706,12 @@ The create dialog and `strato vm create --guest-agent` disclose that this instal
 an exec-capable **root** systemd daemon. The setting changes vsock PCI topology;
 existing VMs require recreation, including changing it while stopped.
 
-First boot downloads `guest-agent-manifest.json` from the pinned published
-`v0.1.2` release, selects `x86_64` or `aarch64` from the guest, and verifies the
-native tarball's SHA-256 before publishing either file. It installs the packaged
-binary and unit, then enables/starts `strato-guest-agent.service`. The installer
+First boot downloads `guest-agent-manifest.json` from the pinned `v0.1.3`
+release, requires its `guest_config_convergence` capability, selects `x86_64` or
+`aarch64` from the guest, and verifies the native tarball's SHA-256 before
+publishing either file. The installer places the packaged binary and unit, then
+enables/starts `strato-guest-agent.service`. Publish the compatible v0.1.3
+artifacts and manifest before deploying the wire-v70 control plane/agent. The installer
 requires cloud-init, Python 3, systemd and HTTPS egress to GitHub. Download,
 manifest, architecture, checksum and startup errors fail the cloud-init script;
 an image without cloud-init cannot execute it at all. Opt-in does not prove
@@ -1715,8 +1717,10 @@ realization until desired running state.
 
 `GuestConfigClient` checks placement before connection/request and after the
 reply, verifies the ping/reply boot nonce, and bounds and validates the hostile
-observation before retaining it. Before sending intent, the ping must advertise
-`guest_config_convergence`; older guests remain a dependency wait until an
+observation before retaining it, including matching each converged file digest
+to the locally computed SHA-256 of its desired UTF-8 bytes. Before sending intent,
+the ping must advertise `guest_config_convergence`; older guests remain a
+dependency wait until an
 explicit guest upgrade. The first-boot pin is v0.1.3, whose compatible artifacts
 and capability-bearing manifest must be published before rollout; existing VMs
 are not automatically updated. A guest-side busy pass is also a dependency wait;

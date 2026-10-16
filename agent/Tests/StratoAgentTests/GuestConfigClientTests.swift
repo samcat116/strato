@@ -23,10 +23,11 @@ struct GuestConfigClientTests {
     }
     private let placement = VMGuestExecPlacement(vmId: "vm", vsockCID: 42)
     private func response(
-        nonce: String = "boot", generation: Int = 7, status: String = "converged", error: String = "null"
+        nonce: String = "boot", generation: Int = 7, status: String = "converged", error: String = "null",
+        files: String = "[]"
     ) -> String {
         """
-        {"type":"guest_config_state","nonce":"\(nonce)","observation":{"generation":\(generation),"status":"\(status)","error":\(error),"packages":[],"files":[],"services":[],"sysctls":[]}}
+        {"type":"guest_config_state","nonce":"\(nonce)","observation":{"generation":\(generation),"status":"\(status)","error":\(error),"packages":[],"files":\(files),"services":[],"sysctls":[]}}
         """
     }
     private func client(_ connection: Connection) -> GuestConfigClient {
@@ -64,6 +65,35 @@ struct GuestConfigClientTests {
             #expect(failure?.errorDescription?.contains(GuestAgentBootstrap.defaultRelease) == true)
             #expect(await connection.writes.count == 1)
             #expect(await connection.closed)
+        }
+    }
+
+    @Test func fileConvergenceRequiresTheHashOfExactDesiredUTF8Bytes() async throws {
+        let fixtures = [
+            ("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            ("hello\n", "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"),
+            ("caf\u{e9}\n", "7b49b9e063bd91a4f9252b413261f5557b9c570aa61516989499f64a62dbcdd6"),
+        ]
+        for (content, expected) in fixtures {
+            let config = GuestConfig(files: [GuestFile(path: "/etc/example", content: content, mode: "0644")])
+            for digest in [expected, String(repeating: "0", count: 64)] {
+                let connection = Connection(
+                    response(
+                        files: """
+                            [{"path":"/etc/example","sha256":"\(digest)","mode":"0644"}]
+                            """))
+                if digest == expected {
+                    let observation = try await client(connection).converge(
+                        placement: placement, config: config, generation: 7, placementIsCurrent: { true })
+                    #expect(observation.files.first?.sha256 == expected)
+                } else {
+                    await #expect(throws: GuestConfigObservationError.self) {
+                        try await client(connection).converge(
+                            placement: placement, config: config, generation: 7, placementIsCurrent: { true })
+                    }
+                }
+                #expect(await connection.closed)
+            }
         }
     }
 
