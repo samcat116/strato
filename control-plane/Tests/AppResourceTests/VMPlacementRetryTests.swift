@@ -354,6 +354,51 @@ struct VMPlacementRetryTests {
         }
     }
 
+    @Test("The acceptance lock preserves metadata but fences a newly failed attempt", arguments: [false, true])
+    func changesBeforeAcceptanceLock(newFailure: Bool) async throws {
+        try await withProjectApp(prefix: "prelockretry") { app, builder, fixture in
+            app.logger.logLevel = .warning
+            let (vm, boot, _) = try await failedVM(app, builder, fixture)
+            let host = try await agent(app, builder)
+            let id = try vm.requireID()
+            let request = try await app.db.transaction { tx in
+                #expect(try await vm.lockAndRefresh(on: tx))
+                let request = Task { try await retry(app, vmID: id, token: fixture.token) }
+                let sql = try #require(app.db as? any SQLDatabase)
+                let _: Bool = try await pollUntil(attempts: 100) {
+                    let blocked = try await sql.raw(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM pg_stat_activity
+                            WHERE datname = current_database() AND pid <> pg_backend_pid()
+                              AND wait_event_type = 'Lock' AND query ILIKE '%vms%'
+                        ) AS blocked
+                        """
+                    ).first(decodingColumn: "blocked", as: Bool.self)
+                    return blocked == true ? true : nil
+                }
+                vm.generation += 1
+                vm.tags = ["purpose": "before-acceptance-lock"]
+                if newFailure { vm.failedGeneration = vm.generation }
+                try await vm.save(on: tx)
+                return request
+            }
+            let response = try await request.value
+            if newFailure {
+                #expect(response.0 == .conflict)
+                #expect(try await ResourceEvent.query(on: app.db).filter(\.$resourceID == id).count() == 0)
+                #expect(
+                    try await VolumeReplica.query(on: app.db).filter(\.$volume.$id == boot.requireID()).count() == 0)
+            } else {
+                #expect(response.0 == .accepted)
+                #expect(response.1?.targetGeneration == 3)
+                let placed: String = try await pollUntil { try await VM.find(id, on: app.db)?.hypervisorId }
+                #expect(placed == host)
+            }
+            #expect(try await VM.find(id, on: app.db)?.tags == ["purpose": "before-acceptance-lock"])
+        }
+    }
+
     @Test(
         "A retry deadline fences stale placement before and after planning",
         arguments: ["expired", "swept", "new-attempt"])

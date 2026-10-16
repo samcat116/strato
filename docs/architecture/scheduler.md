@@ -302,6 +302,10 @@ Placement preserves a completed result if session-lock cleanup fails after the
 commit. Cleanup logs and counts the failure and discards the unhealthy database
 connection; the committed placement still rings its desired-state doorbell.
 
+Retry acceptance fences the original failed generation rather than a pre-lock
+metadata generation. A metadata-only change is preserved, while a newer failed
+attempt invalidates a stale request.
+
 A failed placement retry locks and refreshes the unplaced VM before recording
 its terminal result. The accepted convergence deadline identifies the attempt:
 metadata edits may advance generation, while a later deadline, deletion, or
