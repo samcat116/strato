@@ -1,0 +1,34 @@
+agent/Sources/StratoAgentCore/GuestConfigClient.swift
+  s_c353912d75372b::t_d90c4cc6304b56 1,84-88
+docs/architecture/agent.md
+  s_c353912d75372b::t_d90c4cc6304b56 709-711,1720-1722
+  s_c353912d75372b::t_b9cc2cbbb76fa7 712-714,1723
+agent/Tests/StratoAgentTests/GuestConfigClientTests.swift
+  s_c353912d75372b::t_d90c4cc6304b56 26-27,30,71-96
+  s_c353912d75372b::t_d16b94cf0bad02 97-99
+shared/Sources/StratoShared/GuestConfigObservation.swift
+  s_c353912d75372b::t_d90c4cc6304b56 45-49,94-97
+shared/Tests/StratoSharedTests/GuestConfigObservationTests.swift
+  s_c353912d75372b::t_d90c4cc6304b56 39-59,61,67
+  s_c353912d75372b::t_477aed491ea72f 60,62-66,68
+docs/architecture/burstable-runtime.md
+  s_c353912d75372b::t_d90c4cc6304b56 104
+docs/architecture/resource-classes-contract.md
+  s_c353912d75372b::t_d90c4cc6304b56 9-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4fbab440257a2dd47f43f3549465c4a20647e7bf",
+  "prompts": {},
+  "sessions": {
+    "s_c353912d75372b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14682-7857-7951-95c8-43f48c308c4a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
