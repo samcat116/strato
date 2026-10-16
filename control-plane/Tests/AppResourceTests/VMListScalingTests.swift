@@ -64,13 +64,13 @@ final class VMListScalingTests {
             /// request each time, so no memo carries between measurements.
             func queriesToList(expecting expected: Int) async throws -> Int {
                 let req = Request(
-                    application: app, method: .GET, url: URI(path: "/api/vms"),
+                    application: app, method: .GET, url: "/api/vms?limit=500",
                     on: app.eventLoopGroup.next())
                 req.auth.login(user)
                 req.fluent.history.start()
-                let vms = try await VMController().visibleVMs(req: req)
+                let page = try await VMController().index(req: req)
                 req.fluent.history.stop()
-                #expect(vms.count == expected)
+                #expect(page.items.count == expected)
                 return req.fluent.history.queries.count
             }
 

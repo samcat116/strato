@@ -24,7 +24,8 @@ semantics; the route declaration adds no replay or resource abstraction.
 ## Audited supported inventory
 
 This inventory was audited against main `7cb24c7b` for STR-359 / #1429.
-The 32 operations below correspond to OpenAPI `IdempotencyKey` parameters.
+Placement retry was added in #1478. The 33 operations below correspond to
+OpenAPI `IdempotencyKey` parameters.
 
 | Method | Route | Claim path |
 | --- | --- | --- |
@@ -32,6 +33,7 @@ The 32 operations below correspond to OpenAPI `IdempotencyKey` parameters.
 | PUT | `/api/vms/{vmID}` | Controller reservation / ResourceMutation |
 | DELETE | `/api/vms/{vmID}` | ResourceMutation.accept |
 | POST | `/api/vms/{vmID}/start` | ResourceMutation.accept |
+| POST | `/api/vms/{vmID}/retry-placement` | ResourceMutation.accept |
 | POST | `/api/vms/{vmID}/interfaces` | ResourceMutation.accept |
 | DELETE | `/api/vms/{vmID}/interfaces/{interfaceID}` | ResourceMutation.accept |
 | POST | `/api/vms/{vmID}/interfaces/{interfaceID}/retry` | ResourceMutation.accept |

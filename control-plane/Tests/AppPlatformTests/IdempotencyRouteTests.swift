@@ -63,7 +63,7 @@ struct IdempotencyRouteTests {
                     guard cells.count == 3, ["POST", "PUT", "PATCH", "DELETE"].contains(cells[0]) else { return nil }
                     return "\(cells[0]) \(normalized(cells[1].replacingOccurrences(of: "`", with: "")))"
                 })
-            #expect(declared.count == 32)
+            #expect(declared.count == 33)
             #expect(declared == documented)
             #expect(declared == audited)
             #expect(

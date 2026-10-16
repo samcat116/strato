@@ -42,12 +42,6 @@ struct VolumeController: RouteCollection {
     @Sendable
     func listVolumes(req: Request) async throws -> PagedResponse<VolumeResponse> {
         let paging = try ListPaging.decode(from: req)
-        let volumes = try await visibleVolumes(req: req)
-        return paging.page(volumes)
-    }
-
-    /// Every volume the caller may read, newest first, ready for slicing.
-    func visibleVolumes(req: Request) async throws -> [VolumeResponse] {
         _ = try req.auth.require(User.self)
 
         // Build query
@@ -70,7 +64,9 @@ struct VolumeController: RouteCollection {
             // Narrow to the projects the caller could reach, then let the
             // evaluator decide the ones that carry rows (`ProjectVisibility`).
             let resolved = try await ProjectVisibility.resolve(on: req)
-            guard !resolved.reachesNoProject else { return [] }
+            guard !resolved.reachesNoProject else {
+                return PagedResponse(items: [], total: 0, limit: paging.limit, offset: paging.offset)
+            }
             if let candidates = resolved.candidateProjectIDs {
                 query = query.filter(\.$project.$id ~~ candidates)
             }
@@ -91,17 +87,28 @@ struct VolumeController: RouteCollection {
             query = query.filter(\.$volumeType == volumeType)
         }
 
-        var volumes =
-            try await query
-            .sort(\.$createdAt, .descending)
-            .sort(\.$id, .descending)
-            .all()
-
+        // Project decisions depend only on project IDs, not volume details.
+        // Select the readable projects first, then let PostgreSQL count and
+        // slice volumes before replica hydration and response construction.
         if let visibility {
-            volumes = try await visibility.readableRows(volumes, projectID: { $0.$project.id }, on: req)
+            let projectIDs = try await query.copy().unique().all(\.$project.$id)
+            let readable = try await visibility.readableProjects(among: projectIDs, on: req)
+            guard !readable.isEmpty else {
+                return PagedResponse(items: [], total: 0, limit: paging.limit, offset: paging.offset)
+            }
+            query = query.filter(\.$project.$id ~~ Array(readable))
         }
-
-        return try await VolumeService.responses(for: volumes, on: req.db)
+        let total = try await query.copy().count()
+        guard paging.offset < total else {
+            return PagedResponse(items: [], total: total, limit: paging.limit, offset: paging.offset)
+        }
+        let volumes =
+            try await query
+            .sort(\.$createdAt, .descending).sort(\.$id, .descending)
+            .range(paging.offset..<(paging.offset + min(paging.limit, total - paging.offset)))
+            .all()
+        let items = try await VolumeService.responses(for: volumes, on: req.db)
+        return PagedResponse(items: items, total: total, limit: paging.limit, offset: paging.offset)
     }
 
     // MARK: - Create Volume
