@@ -6,7 +6,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Volume Snapshot List Tests", .serialized)
+@Suite("Volume Snapshot List Tests", .serialized, .postgresFixture)
 struct VolumeSnapshotListTests {
     @Test("Project snapshot collection is scoped and paged")
     func projectCollectionIsScopedAndPaged() async throws {

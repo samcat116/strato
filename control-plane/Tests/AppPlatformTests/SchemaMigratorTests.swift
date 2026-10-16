@@ -16,7 +16,7 @@ import Vapor
 /// genuinely unmigrated database. `createBareDatabaseForTest()` mints one, and
 /// `Application.makeForTesting(database:owningDatabase:)` points more than one
 /// application at it.
-@Suite("Schema Migrator", .serialized)
+@Suite("Schema Migrator", .serialized, .postgresFixture)
 struct SchemaMigratorTests {
 
     // MARK: - Half 1: serialization
@@ -271,6 +271,133 @@ struct SchemaMigratorTests {
         try await second.shutdownForTesting()
     }
 
+    // MARK: - Applied catalog compatibility (STR-323)
+
+    @Test("Both startup paths preserve a known retired data-only migration", arguments: [true, false])
+    func retiredDataCatalogStarts(runMigrations: Bool) async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            let historical = MigrationLog(name: "App.BackfillNetworkQuotaAccounting", batch: 9999)
+            try await historical.save(on: app.db)
+            let historicalID = try historical.requireID()
+            let org = try await TestDataBuilder(db: app.db).createOrganization(name: "Retired data history")
+            let quota = ResourceQuota(
+                name: "Do not replay cache refresh", organizationID: try org.requireID(),
+                maxVCPUs: 100, maxMemory: 1 << 30, maxStorage: 1 << 30, maxVMs: 100)
+            quota.networkCount = 37
+            quota.reservedVCPUs = 41
+            try await quota.save(on: app.db)
+
+            try await configure(app, environmentVariables: [SchemaMigrator.runMigrationsKey: String(runMigrations)])
+            #expect(app.readiness.migrationsComplete)
+            let logs = try await MigrationLog.query(on: app.db).filter(\.$name == historical.name).all()
+            #expect(logs.count == 1)
+            #expect(logs.first?.id == historicalID)
+            #expect(logs.first?.batch == 9999)
+            let unchanged = try #require(try await ResourceQuota.find(quota.requireID(), on: app.db))
+            #expect(unchanged.networkCount == 37)
+            #expect(unchanged.reservedVCPUs == 41)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("Both startup paths accept a supported applied catalog", arguments: [true, false])
+    func supportedCatalogStarts(runMigrations: Bool) async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            // Fluent batches are boot attempts, not a schema-version ceiling.
+            try await MigrationLog.query(on: app.db).set(\.$batch, to: 9999).update()
+            try await configure(
+                app,
+                environmentVariables: [
+                    SchemaMigrator.runMigrationsKey: String(runMigrations)
+                ])
+            #expect(app.readiness.migrationsComplete)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    @Test("A supported catalog advances through a known migration and verifies afterwards")
+    func supportedCatalogAdvances() async throws {
+        try await withTestApp { app in
+            try await MigrationLog(name: "App.BackfillNetworkQuotaAccounting", batch: 9998).save(on: app.db)
+            let pending = CreatesProbeTable()
+            app.migrations.add(pending)
+            await #expect(throws: SchemaMigrationError.self) {
+                try await SchemaMigrator.run(on: app, options: .init(runMigrations: false))
+            }
+            try await SchemaMigrator.run(on: app, options: .init())
+            try await SchemaMigrator.run(on: app, options: .init(runMigrations: false))
+            #expect(try await MigrationLog.query(on: app.db).filter(\.$name == pending.name).count() == 1)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let present = try await sql.raw(
+                "SELECT to_regclass('public.schema_migrator_probe') IS NOT NULL AS present"
+            ).first(decodingColumn: "present", as: Bool.self)
+            #expect(present == true)
+        }
+    }
+
+    @Test(
+        "Both startup paths reject a newer applied catalog before readiness", arguments: [true, false],
+        ["SchemaMigratorTests.NewerUnsupportedMigration", "App.BackfillNetworkQuotaAccountingV2"])
+    func unsupportedCatalogStopsStartup(runMigrations: Bool, migrationName: String) async throws {
+        let app = try await Application.makeForTesting()
+        let newerMigration = CreatesNewerCatalog(name: migrationName)
+        let pending = CreatesProbeTable()
+        // Give the old binary a known pending migration too: unsupported history
+        // must take precedence and normal startup must not run its pending DDL.
+        app.migrations.add(pending)
+        do {
+            try await MigrationLog(name: "App.BackfillNetworkQuotaAccounting", batch: 9998).save(on: app.db)
+            // Model a newer build having committed additive DDL and its log
+            // atomically; the older binary deliberately never registers it.
+            try await app.db.withConnection { connection in
+                try await SchemaMigrator.applyBatch(
+                    [newerMigration], batch: 9999, on: connection, logger: app.logger)
+            }
+            var thrown: (any Error)?
+            do {
+                try await configure(
+                    app,
+                    environmentVariables: [
+                        SchemaMigrator.runMigrationsKey: String(runMigrations)
+                    ])
+            } catch {
+                thrown = error
+            }
+
+            let error = try #require(thrown as? SchemaMigrationError)
+            guard case .unsupportedAppliedCatalog(let names) = error else {
+                Issue.record("Expected unsupported-catalog diagnostic, got \(error)")
+                try await app.shutdownForTesting()
+                return
+            }
+            #expect(names == [newerMigration.name])
+            #expect(error.description.contains(newerMigration.name))
+            #expect(error.description.contains("newer build"))
+            #expect(error.description.contains("compatible database backup"))
+            #expect(!error.description.contains("unapplied"))
+            #expect(!app.readiness.migrationsComplete)
+            let sql = try #require(app.db as? any SQLDatabase)
+            let present = try await sql.raw(
+                "SELECT to_regclass('public.schema_migrator_probe') IS NOT NULL AS present"
+            ).first(decodingColumn: "present", as: Bool.self)
+            #expect(present == false)
+            #expect(try await MigrationLog.query(on: app.db).filter(\.$name == pending.name).count() == 0)
+            #expect(try await MigrationLog.query(on: app.db).filter(\.$name == newerMigration.name).count() == 1)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     // MARK: - STRATO_RUN_MIGRATIONS
 
     @Test("A process that does not migrate refuses to boot against a schema that is behind")
@@ -281,19 +408,11 @@ struct SchemaMigratorTests {
 
             // One migration this database has never seen.
             let pending = CreatesProbeTable()
-            let migrations = Migrations()
-            migrations.add(pending)
+            app.migrations.add(pending)
 
             var thrown: (any Error)?
             do {
-                try await app.db.withConnection { connection in
-                    let migrator = Migrator(
-                        databaseFactory: { _ in connection },
-                        migrations: migrations,
-                        on: connection.eventLoop
-                    )
-                    try await SchemaMigrator.verifyNothingPending(migrator: migrator, logger: app.logger)
-                }
+                try await SchemaMigrator.run(on: app, options: .init(runMigrations: false))
             } catch {
                 thrown = error
             }
@@ -301,6 +420,11 @@ struct SchemaMigratorTests {
             let error = try #require(thrown as? SchemaMigrationError)
             #expect(error.description.contains(pending.name))
             #expect(error.description.contains(SchemaMigrator.runMigrationsKey))
+            guard case .migrationsPendingButDisabled(let names) = error else {
+                Issue.record("Expected pending-known-migration diagnostic, got \(error)")
+                return
+            }
+            #expect(names == [pending.name])
 
             // Verification is read-only: it must not have applied anything.
             let sql = try #require(app.db as? any SQLDatabase)
@@ -389,5 +513,21 @@ private struct CreatesInvalidTableDefinition: AsyncMigration {
     func revert(on database: any Database) async throws {
         guard let sql = database as? any SQLDatabase else { return }
         try await sql.raw("DROP TABLE IF EXISTS schema_migrator_probe").run()
+    }
+}
+
+/// An additive migration from a future binary. An extra table does not prove
+/// the older binary understands the newer schema's complete contract.
+private struct CreatesNewerCatalog: AsyncMigration {
+    let name: String
+
+    func prepare(on database: any Database) async throws {
+        let sql = try #require(database as? any SQLDatabase)
+        try await sql.raw("CREATE TABLE schema_migrator_newer_probe (id uuid PRIMARY KEY)").run()
+    }
+
+    func revert(on database: any Database) async throws {
+        let sql = try #require(database as? any SQLDatabase)
+        try await sql.raw("DROP TABLE IF EXISTS schema_migrator_newer_probe").run()
     }
 }

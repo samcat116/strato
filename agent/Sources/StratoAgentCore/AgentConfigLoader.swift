@@ -22,6 +22,7 @@ extension AgentConfig {
         ["ovn_northbound_tls", "server_hostname"],
         ["enable_kvm"],
         ["qemu_memory_overhead_mb"],
+        ["host_memory_reserve_mb"],
         ["vm_storage_dir"],
         ["volume_storage_dir"],
         ["image_cache_dir"],
@@ -42,6 +43,11 @@ extension AgentConfig {
         ["sandbox_jailer_chroot_dir"],
         ["sandbox_jailer_uid_base"],
         ["sandbox_warm_start"],
+        ["sandbox_suspension_restore_timeout_seconds"],
+        ["sandbox_idle_suspend_enabled"],
+        ["sandbox_idle_seconds"],
+        ["sandbox_minimum_residency_seconds"],
+        ["sandbox_idle_excluded_sandbox_ids"],
         ["sandbox_warm_cache_max_size_gb"],
         ["hypervisor_type"],
         ["spiffe", "enabled"],
@@ -180,6 +186,10 @@ extension AgentConfig {
             ovnNorthboundTLS = nil
         }
         let enableKVM = try await values.bool("enable_kvm")
+        let hostMemoryReserveMB = try await values.int("host_memory_reserve_mb")
+        if let reserve = hostMemoryReserveMB, reserve < 0 || Int64(reserve) > Int64.max / (1024 * 1024) {
+            throw AgentConfigError.invalidConfiguration("host_memory_reserve_mb must be nonnegative and fit in bytes")
+        }
         let qemuMemoryOverheadMB = try await values.int("qemu_memory_overhead_mb")
         if let qemuMemoryOverheadMB, !Self.qemuMemoryOverheadRange.contains(qemuMemoryOverheadMB) {
             throw AgentConfigError.invalidConfiguration(
@@ -247,6 +257,19 @@ extension AgentConfig {
         }
 
         // Warm start (issue #426).
+        let sandboxSuspensionRestoreTimeoutSeconds = try await values.int("sandbox_suspension_restore_timeout_seconds")
+        if let seconds = sandboxSuspensionRestoreTimeoutSeconds, !(5...1200).contains(seconds) {
+            throw AgentConfigError.invalidConfiguration(
+                "sandbox_suspension_restore_timeout_seconds must be between 5 and 1200")
+        }
+        let sandboxIdleSuspendEnabled = try await values.bool("sandbox_idle_suspend_enabled")
+        let sandboxIdleSeconds = try await Self.positiveInt(values, key: "sandbox_idle_seconds")
+        let sandboxMinimumResidencySeconds = try await Self.positiveInt(
+            values, key: "sandbox_minimum_residency_seconds")
+        let sandboxIdleExcludedSandboxIDs = try await values.stringArray("sandbox_idle_excluded_sandbox_ids")
+        if let ids = sandboxIdleExcludedSandboxIDs, ids.contains(where: { UUID(uuidString: $0) == nil }) {
+            throw AgentConfigError.invalidConfiguration("sandbox_idle_excluded_sandbox_ids must contain UUIDs")
+        }
         let sandboxWarmStart = try await values.bool("sandbox_warm_start")
         let sandboxWarmCacheMaxSizeGB = try await Self.positiveInt(
             values, key: "sandbox_warm_cache_max_size_gb")
@@ -504,6 +527,7 @@ extension AgentConfig {
             ovnNorthboundTLS: ovnNorthboundTLS,
             enableKVM: enableKVM,
             qemuMemoryOverheadMB: qemuMemoryOverheadMB,
+            hostMemoryReserveMB: hostMemoryReserveMB,
             vmStoragePath: vmStoragePath,
             volumeStoragePath: volumeStoragePath,
             imageCacheDir: imageCacheDir,
@@ -525,6 +549,11 @@ extension AgentConfig {
             sandboxJailerChrootDir: sandboxJailerChrootDir,
             sandboxJailerUidBase: sandboxJailerUidBase,
             sandboxWarmStart: sandboxWarmStart,
+            sandboxSuspensionRestoreTimeoutSeconds: sandboxSuspensionRestoreTimeoutSeconds,
+            sandboxIdleSuspendEnabled: sandboxIdleSuspendEnabled,
+            sandboxIdleSeconds: sandboxIdleSeconds,
+            sandboxMinimumResidencySeconds: sandboxMinimumResidencySeconds,
+            sandboxIdleExcludedSandboxIDs: sandboxIdleExcludedSandboxIDs,
             sandboxWarmCacheMaxSizeGB: sandboxWarmCacheMaxSizeGB,
             hypervisorType: hypervisorType,
             ovnUplink: ovnUplink,

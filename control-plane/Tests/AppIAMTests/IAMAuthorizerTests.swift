@@ -12,7 +12,7 @@ import AppTestSupport
 /// The authoritative Cedar evaluator and the canonical decision log it writes.
 /// These checks exercise real trees, bindings, and the real engine, then
 /// assert on both the enforced verdict and the recorded row.
-@Suite("IAM Authorizer Tests", .serialized)
+@Suite("IAM Authorizer Tests", .serialized, .postgresFixture)
 final class IAMAuthorizerTests {
 
     private final class FlakyIAMDecisionBackend: IAMDecisionBackend, Sendable {
@@ -496,7 +496,7 @@ final class IAMAuthorizerTests {
 /// The fail-loud backstops themselves, and the truncated-chain fail-closed
 /// rule the review called out: nets are only nets if a regression in them
 /// fails a test.
-@Suite("IAM Authorizer Backstop Tests", .serialized)
+@Suite("IAM Authorizer Backstop Tests", .serialized, .postgresFixture)
 final class IAMAuthorizerBackstopTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

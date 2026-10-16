@@ -487,13 +487,18 @@ struct VMSpecTests {
     /// An unknown boot-source case from a newer peer must fail loudly (there
     /// is no tolerant fallback for BootSource) — pin that so a change here is
     /// a deliberate decision, not an accident.
-    @Test func unknownBootSourceCaseThrows() {
-        let json = """
-            {"cpus":1,"maxCpus":1,"memoryBytes":1,"sharedMemory":false,"hugepages":false,
-             "boot":{"pxe":{}},"volumes":[],"networks":[]}
-            """
-        #expect(throws: DecodingError.self) {
-            try decodeJSON(VMSpec.self, from: json)
+    @Test func unknownBootSourceCaseThrows() throws {
+        let spec = VMSpec(cpus: 1, memoryBytes: 1, boot: .disk(firmware: nil))
+        var object = try #require(JSONSerialization.jsonObject(with: encodeJSON(spec)) as? [String: Any])
+        object["boot"] = ["pxe": [String: String]()]
+        let invalid = try JSONSerialization.data(withJSONObject: object)
+        do {
+            _ = try decodeJSON(VMSpec.self, from: invalid)
+            Issue.record("An unknown boot source must fail decoding")
+        } catch DecodingError.typeMismatch(_, let context) {
+            #expect(context.codingPath.map(\.stringValue) == ["boot"])
+        } catch DecodingError.dataCorrupted(let context) {
+            #expect(context.codingPath.map(\.stringValue) == ["boot"])
         }
     }
 }

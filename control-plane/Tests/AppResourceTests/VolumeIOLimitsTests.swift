@@ -18,7 +18,7 @@ import AppTestSupport
 /// * the **echo rule** — an agent that says nothing about applied limits must
 ///   not have its silence recorded as "the caps were removed", which is the one
 ///   misreading this feature's lack of a wire capability gate makes possible.
-@Suite("Volume I/O Limits Tests", .serialized)
+@Suite("Volume I/O Limits Tests", .serialized, .postgresFixture)
 final class VolumeIOLimitsTests {
 
     private func withVolumeApp(

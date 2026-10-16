@@ -74,6 +74,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             // nothing: the path 404s either way.
             actionVerbs: [
                 "start": "vm:start", "stop": "vm:stop", "restart": "vm:restart",
+                "retry-placement": "vm:start",
                 "pause": "vm:pause", "resume": "vm:resume", "exec": "vm:exec",
                 "run": "vm:runCommand",
             ]
@@ -102,6 +103,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // says `me`, so there is no other user's record to reach — and matched
         // before the `/api/users` handler-checked prefix below.
         "/api/users/me",
+        "/api/vm-fleet-runs",  // initiator and exact credential scoped; per-VM checks at confirmation
         "/api/operations",  // initiator-may-read fallback; non-initiators 404
         "/api/oauth",  // the caller's own device approvals and CLI sessions
         "/api/authorization",  // can-i / who-can gate per queried resource internally
@@ -161,7 +163,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // `hasPrefix`, so listing it there would silently make a future
         // `/agent/desired-state-history` public too.
         let exactPublic: Set<String> = [
-            "/api/docs", "/api/openapi.yaml", "/agent/desired-state",
+            "/api/docs", "/api/openapi.yaml", "/agent/desired-state", "/agent/update/v1",
             // The wrapper has no secret; the bootstrap exchange authenticates
             // its own short-lived `enroll_v1_` bearer in the handler.
             "/api/agent-enrollments/install", "/api/agent-enrollments/bootstrap",
@@ -185,6 +187,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // client certificate in-handler, then performs its own placement and
         // audience-policy checks. A user session is neither accepted nor a
         // substitute for that SVID-mTLS identity.
+        let isAgentIdleAdmission = path.hasPrefix("/agent/sandboxes/") && path.hasSuffix("/idle-admission")
         let isAgentGuestIdentityMint =
             path.hasPrefix("/agent/vms/") && path.hasSuffix("/jwt-svid")
         // Snapshot artifact transfer (issue #428): agents stream exported
@@ -208,7 +211,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             path.hasPrefix(pair.prefix) && path.contains(pair.infix)
         }
         if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) })
-            || isAgentDownload || isAgentGuestIdentityMint || isAgentSnapshotArtifact
+            || isAgentDownload || isAgentGuestIdentityMint || isAgentSnapshotArtifact || isAgentIdleAdmission
             || isPublicPrefixInfix
         {
             return .isPublic
@@ -362,6 +365,9 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // sandbox* to delete one of its snapshots. Both guarded prefixes nest
         // snapshots at the same depth, so one rule covers them.
         let isSnapshotSubresource = pathComponents.count >= 4 && pathComponents[3] == "snapshots"
+        if resource.nodeType == .virtualMachine, pathComponents.count >= 4, pathComponents[3] == "exec-sessions" {
+            return method == .GET ? "vm:read" : (method == .POST ? "vm:exec" : nil)
+        }
 
         // The verb this path names, if any — read once and consulted by both
         // GET and POST (issue #804).

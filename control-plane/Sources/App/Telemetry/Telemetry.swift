@@ -13,6 +13,48 @@ import StratoShared
 ///
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
+    static func coordinationStoreUnavailable(_ unavailable: Bool, factory: (any MetricsFactory)? = nil) {
+        recordGauge(label: "strato_coordination_store_unavailable", value: unavailable ? 1 : 0, factory: factory)
+    }
+
+    static func coordinationFailOpen(operation: String, factory: (any MetricsFactory)? = nil) {
+        incrementCounter(
+            label: "strato_coordination_fail_open_total", dimensions: [("operation", operation)], count: 1,
+            factory: factory
+        )
+    }
+
+    /// Replica-local workload log pressure. Dimensions are resource kind and
+    /// bounded loss cause only; no workload/agent IDs or backend URLs.
+    static func recordWorkloadLogQueue(kind: String, count: Int, bytes: Int, factory: (any MetricsFactory)? = nil) {
+        let dimensions = [("kind", kind)]
+        recordGauge(
+            label: "strato_workload_log_queue_depth", dimensions: dimensions, value: Double(count), factory: factory)
+        recordGauge(
+            label: "strato_workload_log_queue_bytes", dimensions: dimensions, value: Double(bytes), factory: factory)
+    }
+
+    static func workloadLogsDropped(kind: String, reason: String, count: Int, factory: (any MetricsFactory)? = nil) {
+        incrementCounter(
+            label: "strato_workload_log_dropped_total", dimensions: [("kind", kind), ("reason", reason)],
+            count: count, factory: factory)
+    }
+
+    static func workloadLogPushFailed(kind: String, factory: (any MetricsFactory)? = nil) {
+        incrementCounter(
+            label: "strato_workload_log_push_failures_total", dimensions: [("kind", kind)], count: 1, factory: factory)
+    }
+
+    static func workloadLogBatchCompleted(kind: String, elapsed: Duration, factory: (any MetricsFactory)? = nil) {
+        let timer =
+            if let factory {
+                Timer(
+                    label: "strato_workload_log_batch_duration_seconds", dimensions: [("kind", kind)], factory: factory)
+            } else {
+                Timer(label: "strato_workload_log_batch_duration_seconds", dimensions: [("kind", kind)])
+            }
+        timer.recordSeconds(elapsed.asSeconds)
+    }
 
     enum SecurityRecordStream: String, CaseIterable, Sendable {
         case audit
@@ -752,6 +794,20 @@ enum Telemetry {
     /// here because monotonicity belongs to the agent/host and may reset when
     /// either restarts. `agent_id` is a control-plane-issued UUID; signal,
     /// resource, stall, and event are closed vocabularies.
+    static func recordHostMemoryAccounting(
+        agentID: String, accounting: HostMemoryAccounting, factory: (any MetricsFactory)? = nil
+    ) {
+        for (operand, bytes) in [
+            ("physical", accounting.physicalBytes),
+            ("host_reserved", accounting.hostReservedBytes), ("workload_effective", accounting.workloadEffectiveBytes),
+            ("remaining_allocatable", accounting.remainingAllocatableBytes),
+        ] {
+            recordGauge(
+                label: "strato_agent_memory_\(operand)_bytes", dimensions: [("agent_id", agentID)],
+                value: Double(bytes), factory: factory)
+        }
+    }
+
     static func recordHostResourceTelemetry(
         agentID: String,
         telemetry: HostResourceTelemetry,
@@ -793,6 +849,56 @@ enum Telemetry {
             recordRemoteValue(
                 prefix: "strato_agent", base: base, signal: signal,
                 label: label, value: value, factory: factory)
+        }
+        for (signal, label, value) in [
+            ("swap_in_pages_total", "strato_agent_swap_in_pages_total", telemetry.swapInPagesTotal),
+            ("swap_out_pages_total", "strato_agent_swap_out_pages_total", telemetry.swapOutPagesTotal),
+            ("zram_original_bytes", "strato_agent_zram_original_bytes", telemetry.zramOriginalBytes),
+        ] {
+            recordRemoteValue(
+                prefix: "strato_agent", base: base, signal: signal,
+                label: label, value: value ?? .unavailable, factory: factory)
+        }
+        for (signal, label, value) in [
+            ("swap_in_pages_per_second", "strato_agent_swap_in_pages_per_second", telemetry.swapInPagesPerSecond),
+            ("swap_out_pages_per_second", "strato_agent_swap_out_pages_per_second", telemetry.swapOutPagesPerSecond),
+        ] {
+            recordGauge(
+                label: "strato_agent_resource_signal_available", dimensions: base + [("signal", signal)],
+                value: value == nil ? 0 : 1, factory: factory)
+            if let value { recordGauge(label: label, dimensions: base, value: value, factory: factory) }
+        }
+        for (tier, original, compressed) in [
+            ("zswap", telemetry.zswapStoredBytes.value, telemetry.zswapPoolBytes.value),
+            ("zram", telemetry.zramOriginalBytes?.value, telemetry.zramUsedBytes.value),
+        ] {
+            if let original, let compressed, compressed > 0 {
+                recordGauge(
+                    label: "strato_agent_memory_compression_ratio",
+                    dimensions: base + [("tier", tier)], value: Double(original) / Double(compressed), factory: factory)
+            }
+        }
+        for warning in ["swap_thrashing", "oom_kill"] {
+            recordGauge(
+                label: "strato_agent_memory_warning", dimensions: base + [("warning", warning)],
+                value: telemetry.memoryWarnings?.contains(warning) == true ? 1 : 0, factory: factory)
+        }
+        recordGauge(
+            label: "strato_agent_memory_profile_enabled", dimensions: base,
+            value: telemetry.memoryProfile == nil ? 0 : 1, factory: factory)
+        for tier in HostMemoryProfileConfiguration.Tier.allCases {
+            let dimensions = base + [("tier", tier.rawValue)]
+            recordGauge(
+                label: "strato_agent_memory_profile_configured_tier", dimensions: dimensions,
+                value: telemetry.memoryProfile?.configured?.tier == tier ? 1 : 0, factory: factory)
+            recordGauge(
+                label: "strato_agent_memory_profile_effective_tier", dimensions: dimensions,
+                value: telemetry.memoryProfile?.effectiveTier == tier ? 1 : 0, factory: factory)
+        }
+        if let profile = telemetry.memoryProfile {
+            recordGauge(
+                label: "strato_agent_memory_profile_healthy", dimensions: base,
+                value: profile.reason == nil ? 1 : 0, factory: factory)
         }
         let mglru = telemetry.mglruEnabled
         recordRemoteValue(

@@ -8,6 +8,7 @@ func routes(_ app: Application) throws {
     // Self-service passkey management for the signed-in user
     try app.register(collection: PasskeyController())
     try app.register(collection: VMController())
+    try app.register(collection: VMFleetRunController())
     // Sandboxes: OCI-image Firecracker microVMs (issue #413)
     try app.register(collection: SandboxController())
     try app.register(collection: OperationController())
@@ -27,6 +28,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
     try app.register(collection: AgentDesiredStateController())
+    try app.register(collection: AgentUpdateBridgeController())
+    try app.register(collection: AgentSandboxIdleFenceController())
     try app.register(collection: AgentGuestIdentityController())
 
     // Hierarchical IAM controllers

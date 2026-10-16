@@ -10,7 +10,7 @@ struct SchedulerServiceTests {
 
     func createTestVM(
         cpu: Int = 2,
-        memory: Int64 = 2048,
+        memory: Int64 = 2048 * 1024 * 1024,
         disk: Int64 = 20000,
         hypervisorType: HypervisorType = .qemu
     ) -> VM {
@@ -32,8 +32,8 @@ struct SchedulerServiceTests {
         name: String = "test-agent",
         totalCPU: Int = 8,
         availableCPU: Int = 6,
-        totalMemory: Int64 = 16000,
-        availableMemory: Int64 = 12000,
+        totalMemory: Int64 = 16000 * 1024 * 1024,
+        availableMemory: Int64 = 12000 * 1024 * 1024,
         totalDisk: Int64 = 100000,
         availableDisk: Int64 = 80000,
         physicalFreeDisk: Int64? = nil,
@@ -76,7 +76,7 @@ struct SchedulerServiceTests {
     /// Placement requirements for a sandbox workload: Firecracker plus the
     /// explicit sandbox-runtime capability, no disk.
     func sandboxRequirements(
-        cpu: Int = 1, memory: Int64 = 1000, requiresSandboxNetworking: Bool = false
+        cpu: Int = 1, memory: Int64 = 1000 * 1024 * 1024, requiresSandboxNetworking: Bool = false
     ) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: cpu,
@@ -104,10 +104,10 @@ struct SchedulerServiceTests {
 
     @Test("SchedulableAgent calculates memory utilization correctly")
     func testMemoryUtilization() throws {
-        let agent = createTestAgent(totalMemory: 16000, availableMemory: 12000)
+        let agent = createTestAgent(totalMemory: 16000 * 1024 * 1024, availableMemory: 12000 * 1024 * 1024)
         #expect(agent.memoryUtilization == 0.25)  // (16000-12000)/16000 = 0.25
 
-        let fullyUtilized = createTestAgent(totalMemory: 16000, availableMemory: 0)
+        let fullyUtilized = createTestAgent(totalMemory: 16000 * 1024 * 1024, availableMemory: 0 * 1024 * 1024)
         #expect(fullyUtilized.memoryUtilization == 1.0)
     }
 
@@ -124,7 +124,7 @@ struct SchedulerServiceTests {
     func testOverallUtilization() throws {
         let agent = createTestAgent(
             totalCPU: 8, availableCPU: 6,  // 25% utilization
-            totalMemory: 16000, availableMemory: 12000,  // 25% utilization
+            totalMemory: 16000 * 1024 * 1024, availableMemory: 12000 * 1024 * 1024,  // 25% utilization
             totalDisk: 100000, availableDisk: 80000  // 20% utilization
         )
         // Overall = (0.25 * 0.4) + (0.25 * 0.4) + (0.2 * 0.2) = 0.1 + 0.1 + 0.04 = 0.24
@@ -145,7 +145,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent3", name: "agent3", availableCPU: 4),  // 50% CPU util
         ]
 
-        let vm = createTestVM(cpu: 2, memory: 2000, disk: 10000)
+        let vm = createTestVM(cpu: 2, memory: 2000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent2")
@@ -157,11 +157,15 @@ struct SchedulerServiceTests {
         let scheduler = SchedulerService(logger: logger)  // defaults to leastLoaded
 
         let agents = [
-            createTestAgent(id: "agent1", name: "agent1", totalMemory: 16000, availableMemory: 4000),  // 75% mem
-            createTestAgent(id: "agent2", name: "agent2", totalMemory: 16000, availableMemory: 14000),  // 12.5% mem
+            // 75% memory utilization.
+            createTestAgent(
+                id: "agent1", name: "agent1", totalMemory: 16000 * 1024 * 1024, availableMemory: 4000 * 1024 * 1024),
+            // 12.5% memory utilization.
+            createTestAgent(
+                id: "agent2", name: "agent2", totalMemory: 16000 * 1024 * 1024, availableMemory: 14000 * 1024 * 1024),
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 2000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 2000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent2")
@@ -176,13 +180,18 @@ struct SchedulerServiceTests {
 
         let agents = [
             createTestAgent(
-                id: "agent1", name: "agent1", availableCPU: 6, availableMemory: 12000, availableDisk: 80000),
+                id: "agent1", name: "agent1", availableCPU: 6, availableMemory: 12000 * 1024 * 1024,
+                availableDisk: 80000),
             // Least capacity - should be selected
-            createTestAgent(id: "agent2", name: "agent2", availableCPU: 2, availableMemory: 4000, availableDisk: 20000),
-            createTestAgent(id: "agent3", name: "agent3", availableCPU: 4, availableMemory: 8000, availableDisk: 50000),
+            createTestAgent(
+                id: "agent2", name: "agent2", availableCPU: 2, availableMemory: 4000 * 1024 * 1024, availableDisk: 20000
+            ),
+            createTestAgent(
+                id: "agent3", name: "agent3", availableCPU: 4, availableMemory: 8000 * 1024 * 1024, availableDisk: 50000
+            ),
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 2000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 2000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents, strategy: .bestFit)
 
         #expect(selectedId == "agent2")
@@ -201,7 +210,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent3", name: "agent3"),
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000)
 
         // Should cycle through agents
         let first = try scheduler.selectAgent(for: vm, from: agents)
@@ -227,7 +236,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent2", name: "agent2"),
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents, strategy: .random)
 
         // Should select one of the agents
@@ -246,7 +255,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent2", name: "agent2", status: .online),
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent2")
@@ -262,7 +271,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent2", name: "agent2", availableCPU: 4),  // Enough
         ]
 
-        let vm = createTestVM(cpu: 2, memory: 1000, disk: 10000)
+        let vm = createTestVM(cpu: 2, memory: 1000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent2")
@@ -274,11 +283,11 @@ struct SchedulerServiceTests {
         let scheduler = SchedulerService(logger: logger)
 
         let agents = [
-            createTestAgent(id: "agent1", name: "agent1", availableMemory: 1000),  // Not enough
-            createTestAgent(id: "agent2", name: "agent2", availableMemory: 10000),  // Enough
+            createTestAgent(id: "agent1", name: "agent1", availableMemory: 1000 * 1024 * 1024),  // Not enough
+            createTestAgent(id: "agent2", name: "agent2", availableMemory: 10000 * 1024 * 1024),  // Enough
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 5000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 5000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent2")
@@ -294,7 +303,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent2", name: "agent2", availableDisk: 50000),  // Enough
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 1000, disk: 20000)
+        let vm = createTestVM(cpu: 1, memory: 1000 * 1024 * 1024, disk: 20000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent2")
@@ -321,10 +330,11 @@ struct SchedulerServiceTests {
         let scheduler = SchedulerService(logger: logger)
 
         let agents = [
-            createTestAgent(id: "agent1", name: "agent1", availableCPU: 1, availableMemory: 500, availableDisk: 5000)
+            createTestAgent(
+                id: "agent1", name: "agent1", availableCPU: 1, availableMemory: 500 * 1024 * 1024, availableDisk: 5000)
         ]
 
-        let vm = createTestVM(cpu: 4, memory: 8000, disk: 50000)  // Requires more than available
+        let vm = createTestVM(cpu: 4, memory: 8000 * 1024 * 1024, disk: 50000)  // Requires more than available
 
         #expect(throws: SchedulerError.self) {
             try scheduler.selectAgent(for: vm, from: agents)
@@ -360,7 +370,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent2", name: "agent2", availableCPU: 6),  // Lower utilization
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000)
 
         // Default strategy (least loaded) should select agent2
         let defaultSelection = try scheduler.selectAgent(for: vm, from: agents)
@@ -383,7 +393,7 @@ struct SchedulerServiceTests {
             createTestAgent(id: "agent2", name: "agent2", totalCPU: 8, availableCPU: 6),
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000)
+        let vm = createTestVM(cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         // Should select agent2 since agent1 has no resources
@@ -396,10 +406,12 @@ struct SchedulerServiceTests {
         let scheduler = SchedulerService(logger: logger)
 
         let agents = [
-            createTestAgent(id: "agent1", name: "agent1", availableCPU: 2, availableMemory: 2048, availableDisk: 20000)
+            createTestAgent(
+                id: "agent1", name: "agent1", availableCPU: 2, availableMemory: 2560 * 1024 * 1024, availableDisk: 20000
+            )
         ]
 
-        let vm = createTestVM(cpu: 2, memory: 2048, disk: 20000)
+        let vm = createTestVM(cpu: 2, memory: 2048 * 1024 * 1024, disk: 20000)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "agent1")
@@ -419,7 +431,7 @@ struct SchedulerServiceTests {
                 id: "linux-agent", name: "linux-agent", availableCPU: 2, supportedHypervisors: [.qemu, .firecracker]),
         ]
 
-        let vm = createTestVM(cpu: 1, memory: 1000, disk: 10000, hypervisorType: .firecracker)
+        let vm = createTestVM(cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000, hypervisorType: .firecracker)
         let selectedId = try scheduler.selectAgent(for: vm, from: agents)
 
         #expect(selectedId == "linux-agent")
@@ -514,7 +526,8 @@ struct SchedulerServiceTests {
             createTestAgent(id: "arm", name: "arm", availableCPU: 2, architecture: .arm64),
         ]
 
-        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, architecture: .arm64)
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000, architecture: .arm64)
         let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
 
         #expect(selectedId == "arm")
@@ -530,7 +543,8 @@ struct SchedulerServiceTests {
             createTestAgent(id: "unknown-arch", name: "unknown-arch", architecture: nil),
         ]
 
-        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, architecture: .arm64)
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000, architecture: .arm64)
 
         do {
             _ = try scheduler.selectAgent(requirements: requirements, from: agents)
@@ -554,7 +568,8 @@ struct SchedulerServiceTests {
             createTestAgent(id: "ovn", name: "ovn", availableCPU: 2, supportsInterVMNetworking: true),
         ]
 
-        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, requiresInterVMNetworking: true)
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000, requiresInterVMNetworking: true)
         let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
 
         #expect(selectedId == "ovn")
@@ -622,7 +637,8 @@ struct SchedulerServiceTests {
             createTestAgent(id: "slirp", name: "slirp", supportsInterVMNetworking: false)
         ]
 
-        let requirements = VMPlacementRequirements(cpu: 1, memory: 1000, disk: 10000, requiresInterVMNetworking: true)
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1000 * 1024 * 1024, disk: 10000, requiresInterVMNetworking: true)
 
         do {
             _ = try scheduler.selectAgent(requirements: requirements, from: agents)
@@ -812,7 +828,7 @@ struct SchedulerServiceTests {
 
     /// Requirements for a Windows-shaped VM: firmware boot with Secure Boot
     /// and a TPM 2.0.
-    private func windowsRequirements(cpu: Int = 2, memory: Int64 = 1000) -> VMPlacementRequirements {
+    private func windowsRequirements(cpu: Int = 2, memory: Int64 = 1000 * 1024 * 1024) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: cpu,
             memory: memory,
@@ -887,7 +903,7 @@ struct SchedulerServiceTests {
     func testGuestAgentPlacementPrefersVsockCapableAgent() throws {
         let scheduler = SchedulerService(logger: Logger(label: "test"))
         let requirements = VMPlacementRequirements(
-            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu, requiresVsock: true)
+            cpu: 2, memory: 1000 * 1024 * 1024, disk: 0, hypervisorType: .qemu, requiresVsock: true)
         let agents = [
             // More attractive to least-loaded placement, but it cannot start
             // a QEMU domain containing the guest agent's vsock device.
@@ -906,7 +922,7 @@ struct SchedulerServiceTests {
     func testGuestAgentVsockConstraintFails() throws {
         let scheduler = SchedulerService(logger: Logger(label: "test"))
         let requirements = VMPlacementRequirements(
-            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu, requiresVsock: true)
+            cpu: 2, memory: 1000 * 1024 * 1024, disk: 0, hypervisorType: .qemu, requiresVsock: true)
         let agents = [
             createTestAgent(id: "a1", name: "a1"),
             createTestAgent(id: "a2", name: "a2"),
@@ -936,4 +952,65 @@ struct SchedulerServiceTests {
         #expect(SchedulerService.placementRequirements(for: managed).requiresVsock)
     }
 
+}
+
+@Suite("effective memory placement")
+struct EffectiveMemoryPlacementTests {
+    private let mib: Int64 = 1024 * 1024
+
+    private func agent(available: Int64, overhead: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes)
+        -> SchedulableAgent
+    {
+        SchedulableAgent(
+            id: "host", name: "host", totalCPU: 4, availableCPU: 4,
+            totalMemory: 4096 * mib, availableMemory: available, totalDisk: 1024, availableDisk: 1024,
+            qemuOverheadBytes: overhead, status: .online, runningVMCount: 0,
+            supportedHypervisors: [.qemu, .firecracker], architecture: .arm64, siteID: UUID(),
+            supportsSandboxWorkloads: true)
+    }
+
+    @Test(arguments: ["qemu", "firecracker", "sandbox"])
+    func effectiveBoundary(backend: String) throws {
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1024 * mib, disk: 0,
+            hypervisorType: backend == "qemu" ? .qemu : .firecracker, architecture: .arm64,
+            requiresSandboxRuntime: backend == "sandbox")
+        let effective = requirements.effectiveMemory(on: agent(available: 0))
+        let scheduler = SchedulerService(logger: Logger(label: "memory-placement-test"))
+        for delta in [Int64(-1), 0, 1] {
+            let candidate = agent(available: effective + delta)
+            if delta < 0 {
+                #expect(throws: SchedulerError.self) {
+                    try scheduler.selectAgent(requirements: requirements, from: [candidate])
+                }
+            } else {
+                #expect(try scheduler.selectAgent(requirements: requirements, from: [candidate]) == "host")
+            }
+        }
+    }
+
+    @Test func configuredAllowanceAndAlignedHotplug() async throws {
+        let requirements = VMPlacementRequirements(
+            cpu: 1, memory: 1024 * mib, maxMemory: 1792 * mib,
+            disk: 0, architecture: .arm64)
+        let host = agent(available: 1792 * mib, overhead: 256 * mib)
+        #expect(requirements.effectiveMemory(on: host) == 1792 * mib)
+        let scheduler = SchedulerService(logger: Logger(label: "memory-placement-test"))
+        let coordination = CoordinationService(
+            store: InMemoryCoordinationStore(), logger: Logger(label: "memory-placement-test"))
+        #expect(
+            try await scheduler.selectAndReserveAgent(
+                requirements: requirements, vmId: "vm",
+                from: [host], coordination: coordination) == "host")
+        let claims = await coordination.activeReservations(agentIds: ["host"])
+        #expect(claims["host"]?.memory == 1792 * mib)
+        // Reported availability is already net of host reserve. Coordination
+        // holds effective bytes only, so no operand is subtracted a second time.
+        #expect(host.subtractingReservations(try #require(claims["host"])).availableMemory == 0)
+        await #expect(throws: SchedulerError.self) {
+            try await scheduler.selectAndReserveAgent(
+                requirements: requirements, vmId: "second",
+                from: [host], coordination: coordination)
+        }
+    }
 }

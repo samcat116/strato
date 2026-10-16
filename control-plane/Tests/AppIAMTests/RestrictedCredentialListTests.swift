@@ -22,7 +22,7 @@ import AppTestSupport
 ///
 /// These drive the real production routes with real bearer keys, because the
 /// defect was in the route table's own gate and nothing below it.
-@Suite("Restricted Credential Lists", .serialized)
+@Suite("Restricted Credential Lists", .serialized, .postgresFixture)
 final class RestrictedCredentialListTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

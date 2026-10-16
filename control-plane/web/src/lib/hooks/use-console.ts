@@ -16,14 +16,17 @@ interface UseConsoleReturn {
   error: Error | null;
 }
 
+type ConsoleSocket = WebSocket & {
+  _termDisposable?: { dispose: () => void };
+};
+
 export function useConsole({
   vmId,
   onConnected,
   onDisconnected,
   onError,
 }: UseConsoleOptions): UseConsoleReturn {
-  const wsRef = useRef<WebSocket | null>(null);
-  const termRef = useRef<Terminal | null>(null);
+  const wsRef = useRef<ConsoleSocket | null>(null);
   const isReadyRef = useRef(false); // Track if console is ready for input
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -42,34 +45,50 @@ export function useConsole({
     onErrorRef.current = onError;
   }, [onConnected, onDisconnected, onError]);
 
+  const teardownSocket = useCallback(() => {
+    const ws = wsRef.current;
+    wsRef.current = null;
+    isReadyRef.current = false;
+    if (!ws) return;
+    ws._termDisposable?.dispose();
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.close();
+  }, []);
+
   const connect = useCallback(
     (terminal: Terminal) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
+      if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING)) {
         return;
       }
 
-      termRef.current = terminal;
-      isReadyRef.current = false; // Reset ready state
+      teardownSocket();
       setIsConnecting(true);
+      setIsConnected(false);
       setError(null);
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(
         `${protocol}//${window.location.host}/api/vms/${vmId}/console`
-      );
+      ) as ConsoleSocket;
 
       ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) return;
         // Don't mark as fully connected yet - wait for "ready" message from server
         // The server will send "ready" after the agent confirms console socket connection
         terminal.write("\r\n\x1b[33mWaiting for console...\x1b[0m");
       };
 
       ws.onmessage = (event) => {
+        if (wsRef.current !== ws) return;
         if (event.data instanceof ArrayBuffer) {
-          const text = new TextDecoder().decode(event.data);
-          terminal.write(text);
+          // xterm retains UTF-8 decoder state across binary frames.
+          terminal.write(new Uint8Array(event.data));
         } else if (typeof event.data === "string") {
           // Handle text messages
           if (event.data === "ready") {
@@ -90,7 +109,8 @@ export function useConsole({
       };
 
       ws.onclose = (event) => {
-        isReadyRef.current = false;
+        if (wsRef.current !== ws) return;
+        teardownSocket();
         setIsConnected(false);
         setIsConnecting(false);
         terminal.write("\r\n\x1b[33mDisconnected from VM console\x1b[0m\r\n");
@@ -98,9 +118,11 @@ export function useConsole({
       };
 
       ws.onerror = () => {
+        if (wsRef.current !== ws) return;
         const err = new Error("WebSocket connection failed");
-        isReadyRef.current = false;
+        teardownSocket();
         setError(err);
+        setIsConnected(false);
         setIsConnecting(false);
         terminal.write(
           "\r\n\x1b[31mFailed to connect to VM console\x1b[0m\r\n"
@@ -113,7 +135,7 @@ export function useConsole({
       // Set up terminal input handler
       const disposable = terminal.onData((data) => {
         // Only send input if console is ready and WebSocket is open
-        if (isReadyRef.current && ws.readyState === WebSocket.OPEN) {
+        if (wsRef.current === ws && isReadyRef.current && ws.readyState === WebSocket.OPEN) {
           // Send data as binary
           const encoder = new TextEncoder();
           ws.send(encoder.encode(data));
@@ -121,33 +143,19 @@ export function useConsole({
       });
 
       // Store disposable for cleanup
-      (ws as WebSocket & { _termDisposable?: { dispose: () => void } })._termDisposable = disposable;
+      ws._termDisposable = disposable;
     },
-    [vmId]
+    [vmId, teardownSocket]
   );
 
   const disconnect = useCallback(() => {
-    if (wsRef.current) {
-      // Clean up terminal disposable
-      const ws = wsRef.current as WebSocket & { _termDisposable?: { dispose: () => void } };
-      ws._termDisposable?.dispose();
-
-      isReadyRef.current = false;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-  }, []);
+    teardownSocket();
+    setIsConnected(false);
+    setIsConnecting(false);
+  }, [teardownSocket]);
 
   // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (wsRef.current) {
-        const ws = wsRef.current as WebSocket & { _termDisposable?: { dispose: () => void } };
-        ws._termDisposable?.dispose();
-        wsRef.current.close();
-      }
-    };
-  }, []);
+  useEffect(() => teardownSocket, [vmId, teardownSocket]);
 
   return { connect, disconnect, isConnected, isConnecting, error };
 }

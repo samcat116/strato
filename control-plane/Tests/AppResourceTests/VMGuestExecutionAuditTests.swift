@@ -6,7 +6,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("VM guest execution audit", .serialized)
+@Suite("VM guest execution audit", .serialized, .postgresFixture)
 struct VMGuestExecutionAuditTests {
     private func events(
         _ type: AuditEventType,

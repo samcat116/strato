@@ -1,3 +1,4 @@
+import Crypto
 import Fluent
 import Foundation
 import StratoShared
@@ -103,7 +104,10 @@ struct OIDCIdentityService {
         // the IdP asserts the email is verified. Linking on an unverified email
         // would let a user who can set an arbitrary `email` claim take over a
         // victim's existing account by matching their address.
-        if let email = userInfo.email, userInfo.emailVerified {
+        let claimedEmail = try userInfo.email.map { try UserController.validateEmail($0) }
+        if let email = claimedEmail, userInfo.emailVerified,
+            !email.lowercased().hasSuffix("@identity.invalid")
+        {
             let usersWithEmail = try await User.query(on: db)
                 .filter(\.$email == email)
                 .with(\.$organizations)
@@ -126,9 +130,31 @@ struct OIDCIdentityService {
         // rows land in one transaction, so a failure re-runs provisioning
         // cleanly on the next login instead of early-returning a user that
         // authenticates but fails every permission check.
-        let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
-        let displayName = userInfo.name ?? username
-        let email = userInfo.email ?? ""
+        // A full provider/subject digest avoids both prefix collisions and the
+        // unique empty-email slot. Reserved .invalid addresses are never used
+        // for verified-email account linking above.
+        let identity = SHA256.hash(data: Data("\(providerID.uuidString):\(userInfo.subject)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let rawUsername =
+            userInfo.preferredUsername
+            ?? claimedEmail.map { String($0.split(separator: "@")[0]) }
+            ?? "oidc_\(identity.prefix(59))"
+        let username: String
+        do {
+            let candidate: String
+            if rawUsername.contains("@") {
+                let address = try UserController.validateEmail(rawUsername)
+                candidate = String(address.split(separator: "@")[0])
+            } else {
+                candidate = rawUsername
+            }
+            username = try UserController.validateUsername(candidate)
+        } catch {
+            throw Abort(
+                .forbidden, reason: "The identity provider supplied an invalid username. Contact an administrator.")
+        }
+        let displayName = try UserController.validateDisplayName(userInfo.name ?? username)
+        let email = claimedEmail ?? "oidc-\(identity)@identity.invalid"
         // The claim-driven canonical role id, or bare membership.
         let resolvedRole = await resolveDesiredOrgRole(
             provider: provider, organizationID: organizationID, groupValues: groupValues)
@@ -138,11 +164,15 @@ struct OIDCIdentityService {
         // email, or the matching user isn't a member of this org. `users.email` is
         // unique, so JIT-provisioning would fail the constraint; deny with a clear
         // reason instead of surfacing a 500, and never auto-adopt the address.
-        if !email.isEmpty {
-            let emailTaken = try await User.query(on: db).filter(\.$email == email).first() != nil
-            if emailTaken {
+        do {
+            let identifierTaken =
+                try await User.query(on: db).group(.or) { group in
+                    group.filter(\.$email == email)
+                    group.filter(\.$username == username)
+                }.first() != nil
+            if identifierTaken {
                 logger.warning(
-                    "Refusing to JIT-provision an OIDC user whose email is already in use",
+                    "Refusing to JIT-provision an OIDC user whose username or email is already in use",
                     metadata: [
                         "provider_id": .string(providerID.uuidString),
                         "subject": .string(userInfo.subject),
@@ -150,7 +180,7 @@ struct OIDCIdentityService {
                 throw Abort(
                     .conflict,
                     reason:
-                        "This email is already associated with an account and could not be automatically linked. Contact an administrator."
+                        "This username or email is already associated with an account and could not be automatically linked. Contact an administrator."
                 )
             }
         }

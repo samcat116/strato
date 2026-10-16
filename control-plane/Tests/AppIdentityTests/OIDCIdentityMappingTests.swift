@@ -13,7 +13,7 @@ import AppTestSupport
 /// convergence. Drives `OIDCIdentityService` directly (no fake IdP needed —
 /// the service starts after ID-token validation) and asserts on the DB state:
 /// organization membership rows, group pivot rows, and `role_bindings`.
-@Suite("OIDC Identity Mapping Tests", .serialized)
+@Suite("OIDC Identity Mapping Tests", .serialized, .postgresFixture)
 final class OIDCIdentityMappingTests {
 
     // MARK: - Claim extraction (pure)
@@ -64,6 +64,61 @@ final class OIDCIdentityMappingTests {
     func extractMalformed() {
         #expect(throws: Abort.self) {
             _ = try OIDCIdentityService.extractGroupClaimValues(idToken: "not-a-jwt", claim: "groups")
+        }
+    }
+
+    @Test("OIDC normalizes an email-shaped username claim and rejects invalid identity text")
+    func jitIdentityGrammar() async throws {
+        try await withIdentityTestApp { app, org, provider, service in
+            let user = try await service.resolveUser(
+                userInfo: OIDCUserInfo(
+                    subject: "normal", email: " alice@example.com ", emailVerified: false,
+                    name: " Alice ", preferredUsername: " alice@example.com "),
+                provider: provider, organization: org, groupValues: [])
+            #expect(user.username == "alice")
+            #expect(user.email == "alice@example.com")
+            #expect(user.displayName == "Alice")
+            for claim in [
+                "bad/name", "other@", "another@@example.com", "oversized@" + String(repeating: "a", count: 3000),
+            ] {
+                await #expect(throws: Abort.self) {
+                    _ = try await service.resolveUser(
+                        userInfo: OIDCUserInfo(
+                            subject: claim, email: nil, emailVerified: false,
+                            name: "Invalid", preferredUsername: claim),
+                        provider: provider, organization: org, groupValues: [])
+                }
+            }
+            #expect(try await User.query(on: app.db).count() == 1)
+        }
+    }
+
+    @Test("Two email-less OIDC users get distinct bounded identities")
+    func emailLessUsers() async throws {
+        try await withIdentityTestApp { app, org, provider, service in
+            let first = try await service.resolveUser(
+                userInfo: OIDCUserInfo(
+                    subject: "same-prefix-first", email: nil, emailVerified: false, name: nil, preferredUsername: nil),
+                provider: provider, organization: org, groupValues: [])
+            let second = try await service.resolveUser(
+                userInfo: OIDCUserInfo(
+                    subject: "same-prefix-second", email: nil, emailVerified: false, name: nil, preferredUsername: nil),
+                provider: provider, organization: org, groupValues: [])
+            #expect(first.id != second.id)
+            #expect(first.email != second.email)
+            #expect(first.username != second.username)
+            #expect(first.email.hasSuffix("@identity.invalid"))
+            await #expect(throws: Abort.self) {
+                _ = try await service.resolveUser(
+                    userInfo: OIDCUserInfo(
+                        subject: "spoofed", email: first.email, emailVerified: true,
+                        name: "Spoofed", preferredUsername: "spoofed"),
+                    provider: provider, organization: org, groupValues: [])
+            }
+            let reloaded = try #require(try await User.find(first.id, on: app.db))
+            #expect(reloaded.oidcSubject == "same-prefix-first")
+            #expect(first.currentOrganizationId == org.id)
+            #expect(try UserController.validateUsername(first.username) == first.username)
         }
     }
 

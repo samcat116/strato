@@ -6,7 +6,7 @@ import Testing
 import AppTestSupport
 @testable import App
 
-@Suite("Cluster clock", .serialized)
+@Suite("Cluster clock", .serialized, .postgresFixture)
 struct ClusterClockTests {
     @Test("reads advance inside an existing transaction")
     func readsAdvanceInsideTransaction() async throws {

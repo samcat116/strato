@@ -10,8 +10,8 @@ hero:
       text: Get Started
       link: /guide/getting-started
     - theme: alt
-      text: View on GitHub
-      link: https://github.com/samcat116/strato
+      text: Documentation map
+      link: /documentation
   image:
     src: /logo.svg
     alt: Strato
@@ -37,6 +37,20 @@ features:
     details: Single-host Docker Compose or a Kubernetes Helm chart, both secure by default with a comprehensive API and modern web UI
 ---
 
+## Choose your path
+
+- **New installation:** [Getting started](/guide/getting-started) covers
+  deployment, first login, agent enrollment, and the prerequisites for a VM.
+- **Using an existing installation:** [User guide](/guide/user-guide) starts
+  with projects, images, networks, and workload access.
+- **Operating Strato:** [Deployment and operations](/deployment/overview)
+  covers configuration, identity, health, logs, and upgrades.
+- **Developing Strato:** [Developer guide](/development/overview) maps the
+  packages, local checks, and architecture references.
+
+The [documentation map](/documentation) also indexes specialized runbooks
+and proposals.
+
 ## Quick Start
 
 ```bash
@@ -56,7 +70,9 @@ Strato uses a distributed **Control Plane** and **Agent** architecture:
 
 - **Control Plane**: Vapor-based application owning the API, database, scheduler, and IAM
 - **Agents**: Swift daemons on hypervisor nodes, managing VMs (QEMU) and sandboxes (Firecracker)
-- **Communication**: WebSocket-based declarative state sync between components
+- **Communication**: Agents pull authoritative desired state over long-poll;
+  the authenticated WebSocket carries observed state and interactive traffic.
+  See the [protocol contract](/architecture/wire-protocol).
 
 ## Platform Support
 
@@ -65,7 +81,7 @@ Strato uses a distributed **Control Plane** and **Agent** architecture:
 | VM Management | ✅ Full | ❌ No hypervisor driver |
 | Hardware Acceleration | ✅ KVM | ❌ Not available |
 | Networking | ✅ OVN/OVS | ⚠️ Development tooling only |
-| Production Ready | ✅ Yes | ❌ No |
+| Hypervisor deployment | Linux hosts meeting backend prerequisites | Development only |
 
 ## Learn More
 

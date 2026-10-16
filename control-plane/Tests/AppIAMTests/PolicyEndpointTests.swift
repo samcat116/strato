@@ -15,7 +15,7 @@ import AppTestSupport
 /// promise, and a rejection this suite asserts on is the rejection production
 /// makes. Decision recording is on so the authorizer tests can read back the
 /// tier an authored policy produces.
-@Suite("Policy Endpoint Tests", .serialized)
+@Suite("Policy Endpoint Tests", .serialized, .postgresFixture)
 final class PolicyEndpointTests {
 
     private struct Fixture {

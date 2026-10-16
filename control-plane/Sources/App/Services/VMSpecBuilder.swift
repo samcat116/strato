@@ -279,7 +279,9 @@ struct VMSpecBuilder {
             console: ConsoleSpec(graphics: vm.graphicsConsole ? .vnc : nil),
             sshAuthorizedKeys: vm.effectiveSSHAuthorizedKeys,
             userData: vm.userData,
-            metadataSource: vm.metadataSource
+            metadataSource: vm.metadataSource,
+            resourceClass: vm.resourceClass,
+            admittedReservation: vm.admittedReservation
         )
     }
 

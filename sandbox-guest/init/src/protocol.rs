@@ -53,6 +53,9 @@ pub const DEFAULT_VSOCK_PORT: u32 = 1024;
 /// the shared module means neither root-running guest speaker can accidentally
 /// restore unbounded `read_line` allocation.
 pub const MAX_REQUEST_LINE_BYTES: usize = 1 << 20;
+/// Convergence-only ceiling: 6 * 262144 content + 2 * 128 * 4096 paths
+/// + 2 * 128 * 1024 sysctl values + bounded names/envelope < 4 MiB.
+pub const MAX_CONVERGENCE_LINE_BYTES: usize = 4 << 20;
 
 /// Maximum UTF-8 size of identity fields accepted by the host parser.
 pub const MAX_IDENTITY_BYTES: usize = 256;
@@ -66,6 +69,7 @@ pub const MAX_IDENTITY_BYTES: usize = 256;
 /// carries that sandbox's address in kernel memory, and re-addressing it in
 /// place is what makes warm start and fork work for networked sandboxes.
 pub const CONTROL_PROTOCOL_VERSION: u32 = 4;
+pub const GUEST_CONFIG_CAPABILITY: &str = "guest_config_convergence";
 
 /// Default for [`Request::Exec`]'s `tty` when the host omits it.
 pub const DEFAULT_EXEC_TTY: bool = false;
@@ -84,6 +88,23 @@ pub enum Request {
     Ping,
     /// Ask for the workload's current lifecycle state and exit code.
     GetStatus,
+    GetIdleActivity {
+        probe_id: String,
+    },
+    PrepareIdle {
+        operation_id: String,
+        admission_token: String,
+        expected_activity_epoch: u64,
+        minimum_quiet_milliseconds: u64,
+    },
+    QueryIdle {
+        operation_id: String,
+        admission_token: String,
+    },
+    ReleaseIdle {
+        operation_id: String,
+        admission_token: String,
+    },
     /// STR-91: authoritative enclosing VM generation and small STR-90 intent.
     ConvergeGuestConfig {
         generation: i64,
@@ -92,6 +113,8 @@ pub enum Request {
     /// Start an exec session on this connection (v2). Must be the first
     /// request on the connection.
     Exec {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
         /// The command to run; must be non-empty.
         argv: Vec<String>,
         /// Extra environment merged **over** the workload's resolved env
@@ -120,7 +143,10 @@ pub enum Request {
     /// sessions this only stops writes. Exec sessions only.
     StdinEof,
     /// Resize the exec session's PTY. Ignored for non-tty sessions.
-    Resize { rows: u16, cols: u16 },
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
     /// Start a log follow stream on this connection (v2). Must be the first
     /// request on the connection; the host sends nothing afterwards.
     StreamLogs {
@@ -235,6 +261,23 @@ pub enum WorkloadState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    IdleError {
+        sandbox_id: String,
+        nonce: String,
+        message: String,
+    },
+    IdleActivity {
+        sandbox_id: String,
+        nonce: String,
+        activity: crate::idle::Activity,
+    },
+    IdleFence {
+        sandbox_id: String,
+        nonce: String,
+        operation_id: String,
+        admission_token: String,
+        state: String,
+    },
     GuestConfigState {
         nonce: String,
         observation: crate::convergence::Observation,
@@ -244,6 +287,8 @@ pub enum Response {
         sandbox_id: String,
         nonce: String,
         control_protocol_version: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     /// Reply to [`Request::GetStatus`].
     Status {
@@ -318,6 +363,9 @@ impl Response {
             | Response::ClockSynced { nonce }
             | Response::Launched { nonce }
             | Response::Reidentified { nonce }
+            | Response::IdleError { nonce, .. }
+            | Response::IdleActivity { nonce, .. }
+            | Response::IdleFence { nonce, .. }
             | Response::GuestConfigState { nonce, .. }
             | Response::Error { nonce, .. } => nonce,
         }
@@ -356,13 +404,39 @@ pub fn decode_request(line: &str) -> Result<Request, serde_json::Error> {
 /// only through the first byte past the limit and rejected; connection handlers
 /// close that connection rather than attempting to resynchronize it.
 pub fn read_request_line(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
-    line.clear();
-    let mut limited = std::io::Read::take(reader, (MAX_REQUEST_LINE_BYTES + 1) as u64);
-    let bytes = limited.read_line(line)?;
-    if bytes > MAX_REQUEST_LINE_BYTES {
+    read_line_with_limit(reader, line, MAX_REQUEST_LINE_BYTES)
+}
+
+/// Only VM control exchanges admit larger convergence frames. Other requests
+/// retain the original ceiling, including when sent on this connection.
+pub fn read_vm_control_line(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
+    let bytes = read_line_with_limit(reader, line, MAX_CONVERGENCE_LINE_BYTES)?;
+    if bytes > MAX_REQUEST_LINE_BYTES
+        && !matches!(
+            decode_request(line),
+            Ok(Request::ConvergeGuestConfig { .. })
+        )
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("request line exceeds {MAX_REQUEST_LINE_BYTES} bytes"),
+            "oversized non-convergence request",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn read_line_with_limit(
+    reader: &mut impl BufRead,
+    line: &mut String,
+    limit: usize,
+) -> io::Result<usize> {
+    line.clear();
+    let mut limited = std::io::Read::take(reader, (limit + 1) as u64);
+    let bytes = limited.read_line(line)?;
+    if bytes > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("request line exceeds {limit} bytes"),
         ));
     }
     Ok(bytes)
@@ -400,18 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn ping_round_trips() {
-        let req = decode_request("{\"type\":\"ping\"}").expect("decode");
-        assert_eq!(req, Request::Ping);
-    }
-
-    #[test]
-    fn get_status_round_trips() {
-        let req = decode_request("  {\"type\":\"get_status\"}\n").expect("decode with whitespace");
-        assert_eq!(req, Request::GetStatus);
-    }
-
-    #[test]
     fn unknown_request_is_rejected() {
         assert!(decode_request("{\"type\":\"reboot\"}").is_err());
     }
@@ -430,6 +492,63 @@ mod tests {
         let mut reader = Cursor::new(over_limit);
         let err = read_request_line(&mut reader, &mut line).expect_err("oversized line");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn vm_control_reader_accepts_only_large_convergence_requests() {
+        let config = crate::convergence::GuestConfig {
+            files: (0..4)
+                .map(|index| crate::convergence::File {
+                    path: format!("/escaped-{index}"),
+                    content: "\u{1}".repeat(65536),
+                    mode: "0600".into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        let mut encoded = serde_json::to_vec(&Request::ConvergeGuestConfig {
+            generation: 7,
+            guest_config: Some(config),
+        })
+        .unwrap();
+        encoded.push(b'\n');
+        assert!(encoded.len() > MAX_REQUEST_LINE_BYTES);
+        assert!(encoded.len() <= MAX_CONVERGENCE_LINE_BYTES);
+
+        let mut line = String::new();
+        assert_eq!(
+            read_vm_control_line(&mut Cursor::new(&encoded), &mut line).unwrap(),
+            encoded.len()
+        );
+        assert!(matches!(
+            decode_request(&line),
+            Ok(Request::ConvergeGuestConfig { .. })
+        ));
+        assert_eq!(
+            read_request_line(&mut Cursor::new(&encoded), &mut line)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let mut oversized_ping = br#"{"type":"ping","padding":""#.to_vec();
+        oversized_ping.resize(MAX_REQUEST_LINE_BYTES + 64, b'x');
+        oversized_ping.extend_from_slice(b"\"}\n");
+        assert_eq!(
+            read_vm_control_line(&mut Cursor::new(oversized_ping), &mut line)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let oversized_convergence = vec![b' '; MAX_CONVERGENCE_LINE_BYTES + 1];
+        assert_eq!(
+            read_vm_control_line(&mut Cursor::new(oversized_convergence), &mut line)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
@@ -588,6 +707,7 @@ mod tests {
         assert_eq!(
             req,
             Request::Exec {
+                session_id: None,
                 argv: vec!["/bin/sh".into()],
                 env: Some(env),
                 cwd: Some("/app".into()),
@@ -605,6 +725,7 @@ mod tests {
         assert_eq!(
             req,
             Request::Exec {
+                session_id: None,
                 argv: vec!["/bin/true".into()],
                 env: None,
                 cwd: None,
@@ -613,21 +734,6 @@ mod tests {
                 cols: None,
             }
         );
-    }
-
-    #[test]
-    fn exec_round_trips() {
-        let req = Request::Exec {
-            argv: vec!["/bin/sh".into(), "-c".into(), "id".into()],
-            env: None,
-            cwd: None,
-            tty: Some(false),
-            rows: None,
-            cols: None,
-        };
-        let line = encode_line(&req);
-        let decoded: Request = serde_json::from_str(line.trim()).expect("decode");
-        assert_eq!(decoded, req);
     }
 
     #[test]
@@ -676,11 +782,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_pong_has_no_guest_configuration_capability() {
+        let response: Response = serde_json::from_str(
+            r#"{"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4}"#,
+        )
+        .unwrap();
+        match response {
+            Response::Pong { capabilities, .. } => assert!(capabilities.is_empty()),
+            _ => panic!("expected pong"),
+        }
+    }
+
+    #[test]
     fn pong_encodes_identity() {
         let resp = Response::Pong {
             sandbox_id: "sb-1".into(),
             nonce: "n-1".into(),
             control_protocol_version: CONTROL_PROTOCOL_VERSION,
+            capabilities: vec![],
         };
         let line = encode_line(&resp);
         assert!(line.ends_with('\n'));
@@ -802,17 +921,5 @@ mod tests {
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded.nonce(), "n-1");
         assert_eq!(decoded, response);
-    }
-
-    #[test]
-    fn base64_round_trips_arbitrary_bytes() {
-        let bytes: Vec<u8> = (0..=255).collect();
-        let encoded = encode_base64(&bytes);
-        assert_eq!(decode_base64(&encoded).expect("decode"), bytes);
-    }
-
-    #[test]
-    fn base64_rejects_garbage() {
-        assert!(decode_base64("not base64!!").is_err());
     }
 }

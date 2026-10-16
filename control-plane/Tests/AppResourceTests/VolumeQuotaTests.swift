@@ -14,7 +14,7 @@ import AppTestSupport
 /// create directly, repeatedly, at up to 256 TiB a time was the only one nobody
 /// counted. These tests pin both halves: what the aggregate *measures*, and what
 /// the write paths *admit*.
-@Suite("Volume Quota Tests", .serialized)
+@Suite("Volume Quota Tests", .serialized, .postgresFixture)
 final class VolumeQuotaTests {
 
     private func gb(_ value: Int) -> Int64 { Int64(value) * 1024 * 1024 * 1024 }

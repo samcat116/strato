@@ -10,7 +10,7 @@ import StratoShared
 /// for surfacing a VM's network interfaces in the API response. The NIC row is
 /// written inside the create transaction before the 202 is returned, so the
 /// tests can assert on `VMNetworkInterface` rows immediately after the response.
-@Suite("VM Network Selection Tests", .serialized)
+@Suite("VM Network Selection Tests", .serialized, .postgresFixture)
 final class VMNetworkSelectionTests {
 
     @Test("metadataSource defaults to IMDS only for x86 QEMU")

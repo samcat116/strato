@@ -8,7 +8,7 @@ import AppTestSupport
 
 /// Self-service passkey management (`/api/users/me/passkeys`) and the profile
 /// fields it sits next to.
-@Suite("Passkey Management Tests", .serialized)
+@Suite("Passkey Management Tests", .serialized, .postgresFixture)
 final class PasskeyManagementTests: BaseTestCase {
 
     // MARK: - Helpers

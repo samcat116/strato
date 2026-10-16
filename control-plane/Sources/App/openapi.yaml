@@ -69,8 +69,12 @@ info:
     issue `stop` while a `pause` is in flight, both are recorded and the stop's
     `targetGeneration` is the higher one.
 
-    Send an `Idempotency-Key` of at most 255 characters with a mutation when
-    the caller may retry it. The key is scoped to the authenticated principal
+    Send an `Idempotency-Key` of at most 255 characters only on operations
+    that declare the `IdempotencyKey` header parameter below. Other POST, PUT,
+    PATCH, and DELETE routes reject the header with `400 Bad Request` and
+    `{"error":true,"reason":"Idempotency-Key is not supported for this route"}`
+    before the handler executes. Omitting the header preserves normal behavior.
+    On supported operations the key is scoped to the authenticated principal
     and retained for 24 hours. Repeating the same request replays its original
     resource identity, target generation, and mutation id; reusing the key for
     a different method, path, or JSON body answers `422`.
@@ -100,10 +104,24 @@ info:
     an upgrade. Both are documented here as prose:
 
     - `GET /agent/ws` — agent reconciliation channel (SPIFFE mTLS).
+    - `GET /agent/update/v1` — frozen update-only exchange for bridge-capable
+      agents (SPIFFE mTLS), independent of the exact workload wire version.
+      Returns only exchange/workload versions and an existing authorized
+      artifact assignment; no workload DTOs. Agents pin the configured
+      control-plane SPIFFE ID and its peer-domain roots before accepting the
+      response, including a legacy-fallback `404`. HTTPS only, no redirects,
+      64 KiB body and 15-second request limits. See
+      `docs/architecture/agent-updates.md` for staged bridge installation and
+      older binaries requiring out-of-band installation. As a read it does
+      not participate in mutation replay; `Idempotency-Key` is ignored.
     - `GET /agent/desired-state` — the desired-state long-poll (SPIFFE mTLS).
       Returns `200` with a `MessageEnvelope` wrapping a `DesiredStateMessage`
       and an `ETag`, or `304` when the agent's `If-None-Match` still matches
       after the server's hold window. See `docs/architecture/wire-protocol.md`.
+    - `POST /agent/sandboxes/{sandboxID}/idle-admission` — validates an exact,
+      generation-bound automatic-suspension token for the hosting agent (SPIFFE
+      mTLS). Returns `204` only while durable ownership remains valid; it never
+      contacts the guest, which may be paused for checkpoint validation.
     - `POST /agent/vms/{vmID}/jwt-svid` — placement-checked guest JWT-SVID
       issuance for the hosting agent (SPIFFE mTLS).
     - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).
@@ -579,6 +597,32 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/retry-placement:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: retryVMPlacement
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      summary: Retry placement of a failed, unplaced virtual machine
+      description: >-
+        Requires vm:start. Retries a failed create only when the VM has no
+        assigned host and exactly one existing boot volume with no physical
+        placement and no active convergence deadline. Metadata-only generation
+        advances before or during queued placement do not cancel it. Reuses its
+        NICs, addresses, identity and boot volume, and preserves its desired
+        power state. The existing boot volume receives a new
+        generation and provisioning budget. A pending or already placed VM is
+        refused with 409. Completion is reported through the new generation's
+        conditions; a VM whose desired state is shutdown can then be started.
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}/interfaces:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -792,7 +836,142 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: VM concurrent exec session limit reached. }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /api/vm-fleet-runs:
+    post:
+      operationId: prepareVMFleetRun
+      summary: Resolve a fleet command without dispatch
+      tags: [Virtual Machines]
+      description: >-
+        Initiator and credential scoped. Requires vm:runCommand per VM. Preview
+        expires after ten minutes. Confirmation rechecks authorization and eligibility
+        and binds the exact resolved IDs. Repeated confirmation never replays commands.
+        At most eight children are active per fleet. Poll until complete; failures
+        and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VMFleetPrepareRequest" }
+      responses:
+        "200":
+          description: The saved fleet run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VMFleetRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vm-fleet-runs/{runID}:
+    parameters:
+      - name: runID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getVMFleetRun
+      summary: Read collected fleet results
+      tags: [Virtual Machines]
+      description: >-
+        Initiator and credential scoped. Requires vm:runCommand per VM. Preview
+        expires after ten minutes. Confirmation rechecks authorization and eligibility
+        and binds the exact resolved IDs. Repeated confirmation never replays commands.
+        At most eight children are active per fleet. Poll until complete; failures
+        and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
+      responses:
+        "200":
+          description: The saved fleet run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VMFleetRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vm-fleet-runs/{runID}/confirm:
+    parameters:
+      - name: runID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: confirmVMFleetRun
+      summary: Confirm the exact fleet target list
+      tags: [Virtual Machines]
+      description: >-
+        Initiator and credential scoped. Requires vm:runCommand per VM. Preview
+        expires after ten minutes. Confirmation rechecks authorization and eligibility
+        and binds the exact resolved IDs. Repeated confirmation never replays commands.
+        At most eight children are active per fleet. Poll until complete; failures
+        and skipped VMs are normal outcomes. Accepted commands continue after client disconnect.
+        Per-VM session caps and per-project accepted-command rate limits apply at confirmation.
+        Refused children are skipped without consuming rate budget. Queued children reserve
+        VM capacity; dispatch and repeated confirmation do not charge admission again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VMFleetConfirmRequest" }
+      responses:
+        "202":
+          description: The saved fleet run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VMFleetRun" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/exec-sessions:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: listLiveVMExecSessions
+      summary: List attached interactive sessions on a VM
+      description: Requires vm:read. Presence is shared across replicas and expires within 60 seconds after an owner crash. Pending reservations are excluded.
+      tags: [VMs]
+      responses:
+        "200":
+          description: Live interactive sessions, bounded by the per-VM cap.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 4
+                items:
+                  $ref: "#/components/schemas/LiveVMExecSession"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/vms/{vmID}/exec-sessions/{sessionID}/terminate:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - name: sessionID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: terminateVMExecSession
+      summary: Request termination of an attached interactive session
+      description: Requires vm:exec on this VM. The socket owner closes the guest process and browser on its next maintenance tick. Repeating while termination is pending returns 202; an ended or foreign session returns 404.
+      tags: [VMs]
+      responses:
+        "202": { description: Termination requested. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/vms/{vmID}/actions/run:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -826,6 +1005,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: VM session cap or project command rate limit reached. }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/vms/{vmID}/snapshots:
     parameters:
@@ -1056,6 +1236,18 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       summary: Stop a sandbox
+      description: >-
+        Empty requests preserve pause behavior. With suspend=true, reserves
+        internal checkpoint storage and converges to Suspended only after a
+        verified durable checkpoint and VMM destruction. Start readmits compute.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                suspend: { type: boolean, default: false }
       tags: [Sandboxes]
       responses:
         "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
@@ -1087,6 +1279,8 @@ paths:
       operationId: createSandboxExecSession
       summary: Create a sandbox exec session
       description: >-
+        Suspended sandboxes first return 202 with a quota-admitted wake mutation.
+        Retry exec after that generation converges. No session exists during wake.
         Mints a short-lived, single-use session. Attach the authenticated
         WebSocket at `websocketPath` before `expiresAt` to start the command.
       tags: [Sandboxes]
@@ -1097,6 +1291,7 @@ paths:
             schema:
               $ref: "#/components/schemas/GuestExecRequest"
       responses:
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "201":
           description: The pending exec session.
           content:
@@ -5871,7 +6066,8 @@ paths:
         "503":
           description: >-
             SPIRE entries for this agent cannot be revoked because the SPIRE
-            server API is not configured.
+            server API is not configured, or the durable deregistration completed
+            but the owning replica did not acknowledge socket teardown.
           content:
             application/json:
               schema:
@@ -5883,10 +6079,34 @@ paths:
       operationId: forceAgentOffline
       summary: Force an agent offline
       description: >-
-        Drops the agent from the in-memory registry and marks it `offline` in
-        the database. Requires `manage` on the agent, and falls back to
+        Persists an administrative offline hold and closes the owning agent socket
+        across replicas. Heartbeats and reconnects cannot clear the hold; use the
+        resume action to release it. Requires `manage` on the agent, and falls back to
         system-admin only while the agent hosts another organization's
         workloads.
+      tags: [Agents]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: The offline hold is durable but socket teardown was not acknowledged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/agents/{agentId}/actions/resume:
+    parameters:
+      - $ref: "#/components/parameters/AgentID"
+    post:
+      operationId: resumeAgent
+      summary: Release an agent's administrative offline hold
+      description: >-
+        Allows authenticated reconnect and registration again. Does not mark the
+        agent online until it reports in. Requires manage on the agent, with the
+        same system-admin requirement for foreign workloads as force-offline.
       tags: [Agents]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -8892,7 +9112,9 @@ components:
       in: header
       required: false
       description: >-
-        Opaque caller-generated token for replay-safe mutation retries. Scoped
+        Opaque caller-generated token for replay-safe mutation retries on this
+        explicitly participating operation only. Unsupported mutation routes
+        reject this header with `400` before handler side effects. Scoped
         to the authenticated principal and retained for 24 hours. Reuse with a
         different method, path, or JSON body is rejected with `422`.
       schema:
@@ -9972,6 +10194,57 @@ components:
         result:
           $ref: "#/components/schemas/VMCommandResult"
 
+    VMFleetPrepareRequest:
+      type: object
+      required: [selector, command]
+      properties:
+        selector:
+          type: string
+          maxLength: 8192
+          description: "Intersect project=<uuid>,environment=<name>,tag:<key>=<value>; or ids=<uuid;uuid>. Environment/tag filters require a project. At most 100 targets."
+        command:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: { type: string, maxLength: 4096 }
+    VMFleetConfirmRequest:
+      type: object
+      required: [vmIDs]
+      properties:
+        vmIDs:
+          type: array
+          maxItems: 100
+          items: { type: string, format: uuid }
+    VMFleetEntry:
+      type: object
+      required: [vmID, state]
+      properties:
+        vmID: { type: string, format: uuid }
+        name: { type: string }
+        state:
+          type: string
+          enum: [ready, skipped, queued, dispatched]
+        reason: { type: string }
+        operationID: { type: string, format: uuid }
+    VMFleetRun:
+      type: object
+      required: [id, command, confirmed, deadline, entries, operations, complete]
+      properties:
+        id: { type: string, format: uuid }
+        command:
+          type: array
+          items: { type: string }
+        confirmed: { type: boolean }
+        deadline: { type: string, format: date-time }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/VMFleetEntry" }
+        operations:
+          description: Per-child results with at most 4 KiB from each output stream. Fetch an individual operation for full captured output.
+          type: array
+          items: { $ref: "#/components/schemas/ResourceOperation" }
+        complete: { type: boolean }
+
     VMRunCommandRequest:
       type: object
       required: [command]
@@ -10161,6 +10434,7 @@ components:
       required: [guestConfig]
       properties:
         guestConfig:
+          type: object
           allOf:
             - $ref: '#/components/schemas/GuestConfig'
           nullable: true
@@ -10179,6 +10453,7 @@ components:
           type: integer
           format: int64
         guestConfig:
+          type: object
           allOf:
             - $ref: '#/components/schemas/GuestConfig'
           nullable: true
@@ -10233,6 +10508,8 @@ components:
       type: object
       required: [name, projectId]
       properties:
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassReference"
         name:
           type: string
         hostname:
@@ -10496,6 +10773,20 @@ components:
         - networkInterfaces
         - conditions
       properties:
+        admittedReservation:
+          $ref: "#/components/schemas/WorkloadAdmittedReservation"
+        effectiveMemoryReservationBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Durable physical memory commitment; absent for historical guaranteed accounting.
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        resourceClassKind:
+          type: string
+          enum: [guaranteed, burstable]
+          description: Missing historical references resolve to guaranteed.
         id:
           type: string
           format: uuid
@@ -10869,6 +11160,8 @@ components:
       type: object
       required: [name, projectId]
       properties:
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassReference"
         name:
           type: string
         image:
@@ -10912,6 +11205,8 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
         networkId:
           type: string
           format: uuid
@@ -10941,6 +11236,16 @@ components:
         Browser-facing output framing. Raw sends agent output bytes unchanged.
         Multiplexed prefixes each binary frame with 0x01 for stdout or 0x02 for
         stderr. Omission selects raw for compatibility with browser terminals.
+    LiveVMExecSession:
+      type: object
+      required: [sessionId, userId, attachedAt, lastActivityAt, terminationRequested]
+      properties:
+        sessionId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        username: { type: string }
+        attachedAt: { type: string, format: date-time }
+        lastActivityAt: { type: string, format: date-time }
+        terminationRequested: { type: boolean }
     GuestExecRequest:
       type: object
       required: [command]
@@ -10987,6 +11292,8 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
     SandboxDetail:
       type: object
       required:
@@ -10999,6 +11306,20 @@ components:
         - status
         - conditions
       properties:
+        admittedReservation:
+          $ref: "#/components/schemas/WorkloadAdmittedReservation"
+        effectiveMemoryReservationBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Durable physical memory commitment; absent for historical guaranteed accounting.
+        resourceClass:
+          $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        resourceClassKind:
+          type: string
+          enum: [guaranteed, burstable]
+          description: Missing historical references resolve to guaranteed.
         id:
           type: string
           format: uuid
@@ -11034,9 +11355,16 @@ components:
           type: string
         ttlSeconds:
           type: integer
+          minimum: 1
+          description: Idle budget in seconds since the last admitted activity.
         expiresAt:
           type: string
           format: date-time
+          description: Earliest idle deadline. Active or unknown activity prevents deletion beyond this time.
+        lastActiveAt:
+          type: string
+          format: date-time
+          description: Last admitted activity, initially creation; monotonically advances.
         hypervisorId:
           type: string
         restoredFromSnapshotId:
@@ -11078,6 +11406,8 @@ components:
             to judge — not a claim that they are unenforced. False today for
             every networked sandbox: sandbox guest networking is not yet
             enabled, so no OVN port exists to join the groups' port groups.
+        suspension:
+          $ref: "#/components/schemas/SandboxSuspensionEvidence"
         conditions:
           $ref: "#/components/schemas/ResourceConditions"
         createdAt:
@@ -11139,9 +11469,19 @@ components:
         securityGroupLastErrorAt:
           type: string
           format: date-time
+    SandboxSuspensionEvidence:
+      type: object
+      required: [checkpointId, generation, storageBytes, vmmDestroyed, verified]
+      properties:
+        checkpointId: { type: string, format: uuid }
+        generation: { type: integer, format: int64 }
+        storageBytes: { type: integer, format: int64 }
+        vmmDestroyed: { type: boolean }
+        verified: { type: boolean }
+        restoreDurationMilliseconds: { type: integer, format: int64 }
     SandboxStatus:
       type: string
-      enum: [Stopped, Running, Exited, Starting, Stopping, Error, Unknown]
+      enum: [Stopped, Suspended, Running, Exited, Starting, Stopping, Error, Unknown]
 
     CreateSandboxSnapshotRequest:
       type: object
@@ -11151,6 +11491,9 @@ components:
         stop:
           type: boolean
           description: When true, checkpoint and stop; defaults to false.
+        suspend:
+          type: boolean
+          description: Requires stop=true; opt into durable suspension after the user snapshot is recorded.
         ttlSeconds:
           type: integer
           description: >-
@@ -13052,10 +13395,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
 
     AdminCreateUserRequest:
       type: object
@@ -13064,10 +13410,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
         isSystemAdmin:
           type: boolean
           default: false
@@ -13106,10 +13455,13 @@ components:
       properties:
         username:
           type: string
+          description: Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens.
         displayName:
           type: string
+          description: Trimmed non-empty display name; at most 128 Unicode scalars.
         email:
           type: string
+          description: Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls.
 
     SessionResponse:
       type: object
@@ -15450,7 +15802,7 @@ components:
       properties:
         id:
           type: string
-          enum: [spire, libvirt, ovn_ovs, frr, ceph_client, ceph_cluster]
+          enum: [spire, libvirt, ovn_ovs, frr, ceph_client, ceph_cluster, host_memory_profile]
         role:
           type: string
           enum: [identity, compute, networking, routing, storage]
@@ -15614,6 +15966,7 @@ components:
         - hostname
         - version
         - status
+        - administrativelyOffline
         - resources
         - hypervisors
         - sandboxCapable
@@ -15640,6 +15993,9 @@ components:
           description: The agent build currently running on the node.
         status:
           $ref: "#/components/schemas/AgentStatus"
+        administrativelyOffline:
+          type: boolean
+          description: Operator hold that only the resume action clears.
         resources:
           $ref: "#/components/schemas/AgentResources"
         architecture:
@@ -15693,6 +16049,8 @@ components:
           description: >-
             Control-plane time when the latest dependency snapshot arrived.
             Placement freshness uses this value instead of the agent's clock.
+        memoryAccounting:
+          $ref: "#/components/schemas/HostMemoryAccounting"
         resourceTelemetry:
           $ref: "#/components/schemas/HostResourceTelemetry"
         resourceTelemetryReceivedAt:
@@ -15890,6 +16248,11 @@ components:
         - availableDisk
         - physicalFreeDisk
       properties:
+        availableCPUMicroUnits:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Physical CPU capacity after inventory and provisional commitments; one CPU is 1000000 units.
         totalCPU:
           type: integer
           description: Total vCPUs on the host.
@@ -15914,6 +16277,29 @@ components:
           type: integer
           format: int64
           description: Bytes physically free on the local volume filesystem.
+        memoryAccounting:
+          $ref: "#/components/schemas/HostMemoryAccounting"
+
+    HostMemoryAccounting:
+      type: object
+      required: [physicalBytes, hostReservedBytes, workloadEffectiveBytes, remainingAllocatableBytes, qemuOverheadBytes]
+      properties:
+        physicalBytes:
+          type: integer
+          format: int64
+        hostReservedBytes:
+          type: integer
+          format: int64
+        workloadEffectiveBytes:
+          type: integer
+          format: int64
+        remainingAllocatableBytes:
+          type: integer
+          format: int64
+          description: Clamped remaining bytes; host and workload reserves are already subtracted.
+        qemuOverheadBytes:
+          type: integer
+          format: int64
 
     ResourceTelemetryAvailability:
       type: string
@@ -16031,6 +16417,45 @@ components:
           $ref: "#/components/schemas/ResourceTelemetryValue"
         mglruEnabled:
           $ref: "#/components/schemas/ResourceTelemetryFlag"
+        memoryProfile:
+          $ref: "#/components/schemas/HostMemoryProfileObservation"
+        swapInPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        swapOutPagesTotal:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        zramOriginalBytes:
+          $ref: "#/components/schemas/ResourceTelemetryValue"
+        swapInPagesPerSecond: { type: number, nullable: true }
+        swapOutPagesPerSecond: { type: number, nullable: true }
+        memoryWarnings:
+          type: array
+          items: { type: string, enum: [swap_thrashing, oom_kill] }
+
+    HostMemoryProfileConfiguration:
+      type: object
+      additionalProperties: false
+      required: [tier, tenant_class, nvme_swap]
+      properties:
+        tier: { type: string, enum: [zswap, zram] }
+        tenant_class: { type: string, enum: [single, multi] }
+        zram_bytes: { type: integer, format: int64, minimum: 1048576, maximum: 1099511627776 }
+        zswap_pool_percent: { type: integer, minimum: 1, maximum: 50 }
+        nvme_swap: { type: string }
+        ksm: { type: boolean }
+        require_mglru: { type: boolean }
+        ksm_pages_to_scan: { type: integer, minimum: 1, maximum: 1000 }
+        ksm_sleep_millisecs: { type: integer, minimum: 50, maximum: 60000 }
+
+    HostMemoryProfileObservation:
+      type: object
+      additionalProperties: false
+      properties:
+        configured:
+          $ref: "#/components/schemas/HostMemoryProfileConfiguration"
+        effectiveTier: { type: string, enum: [zswap, zram], nullable: true }
+        thpPolicy: { type: string, nullable: true }
+        ksmRunning: { type: boolean, nullable: true }
+        reason: { type: string, nullable: true }
 
     WorkloadMemoryEventsTelemetry:
       type: object
@@ -16114,7 +16539,7 @@ components:
     AgentHypervisorSupport:
       type: object
       description: One hypervisor on an agent host, as probed at agent startup.
-      required: [type, available, accelerated, capabilities]
+      required: [type, available, accelerated, supportsSnapshots]
       properties:
         type:
           $ref: "#/components/schemas/AgentHypervisorType"
@@ -16127,8 +16552,9 @@ components:
         unavailabilityReason:
           type: string
           nullable: true
-        capabilities:
-          $ref: "#/components/schemas/AgentHypervisorCapabilities"
+        supportsSnapshots:
+          type: boolean
+          description: Whether this backend can create and restore snapshots.
         supportsVsock:
           type: boolean
           nullable: true
@@ -16153,36 +16579,6 @@ components:
           description: >-
             The hypervisor binary's probed version; null for agents predating
             version probing or when the probe failed.
-
-    AgentHypervisorCapabilities:
-      type: object
-      description: Feature support of one hypervisor backend.
-      required:
-        - type
-        - supportsPause
-        - supportsLiveMigration
-        - supportsSnapshots
-        - requiresDirectKernelBoot
-        - maxVCPUs
-        - maxMemory
-      properties:
-        type:
-          $ref: "#/components/schemas/AgentHypervisorType"
-        supportsPause:
-          type: boolean
-        supportsLiveMigration:
-          type: boolean
-        supportsSnapshots:
-          type: boolean
-        requiresDirectKernelBoot:
-          type: boolean
-          description: Whether booting requires an explicit kernel + rootfs.
-        maxVCPUs:
-          type: integer
-        maxMemory:
-          type: integer
-          format: int64
-          description: Bytes.
 
     AgentHostInfo:
       type: object
@@ -16701,6 +17097,14 @@ components:
         logical network pinned to the site can span its nodes.
       required: [id, name, status, labels]
       properties:
+        resourceClasses:
+          type: array
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/WorkloadResourceClassSnapshot"
+        burstableAdmissionAvailable:
+          type: boolean
+          description: False until verified STR272 runtime enforcement is available.
         id:
           type: string
           format: uuid
@@ -16837,6 +17241,8 @@ components:
         it (labels omitted → empty map). `status` is the exception — an omitted
         status leaves the current lifecycle unchanged.
       properties:
+        burstableResourcePolicy:
+          $ref: "#/components/schemas/WorkloadResourceClassPolicy"
         description:
           type: string
           maxLength: 4096
@@ -19457,3 +19863,55 @@ components:
           description: The Loki stream labels attached to this entry.
           additionalProperties:
             type: string
+
+    WorkloadResourceClassReference:
+      type: object
+      description: Site-scoped class selection. Omission preserves guaranteed placement; burstable assignment currently fails closed.
+      required: [siteID, classID]
+      properties:
+        siteID: { type: string, format: uuid }
+        classID: { type: string, format: uuid }
+
+    WorkloadResourceClassPolicy:
+      type: object
+      description: >-
+        Configuration ceilings are policy bounds, not recommendations for safe
+        overcommit. Guaranteed is immutable at 1:1; burstable is explicit and
+        requires verified runtime enforcement. Catalog changes affect new
+        placement and growth only, never existing grants or generations.
+      required: [kind, cpuAllocationRatio, memoryAllocationRatio, cpuWeight, memoryHighPercent, hardLimitPolicy, maxCPUPressure10, maxMemoryPressure10, maxTelemetryAgeSeconds]
+      properties:
+        kind: { type: string, enum: [guaranteed, burstable] }
+        cpuAllocationRatio: { type: number, format: double, minimum: 1, maximum: 64 }
+        memoryAllocationRatio: { type: number, format: double, minimum: 1, maximum: 16 }
+        cpuWeight: { type: integer, minimum: 1, maximum: 10000 }
+        memoryHighPercent:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Guaranteed requires 100; burstable requires 1 through 99. Denominator is current guest grant, before backend overhead.
+        hardLimitPolicy: { type: string, enum: [guestAndBackend] }
+        maxCPUPressure10: { type: number, format: double, minimum: 0, maximum: 100 }
+        maxMemoryPressure10: { type: number, format: double, minimum: 0, maximum: 100 }
+        maxTelemetryAgeSeconds: { type: integer, minimum: 15, maximum: 300 }
+
+    WorkloadResourceClassSnapshot:
+      allOf:
+        - $ref: "#/components/schemas/WorkloadResourceClassPolicy"
+        - type: object
+          required: [classID, siteID, revision]
+          properties:
+            classID: { type: string, format: uuid }
+            siteID: { type: string, format: uuid }
+            revision: { type: integer, format: int64, minimum: 1 }
+
+    WorkloadAdmittedReservation:
+      type: object
+      description: Durable admitted physical commitment; growth preserves previous pricing.
+      required: [grantedCPUs, guestCommitmentBytes, cpuMicroUnits, discountedGuestBytes, backendOverheadBytes]
+      properties:
+        grantedCPUs: { type: integer, minimum: 0 }
+        guestCommitmentBytes: { type: integer, format: int64, minimum: 0 }
+        cpuMicroUnits: { type: integer, format: int64, minimum: 0 }
+        discountedGuestBytes: { type: integer, format: int64, minimum: 0 }
+        backendOverheadBytes: { type: integer, format: int64, minimum: 0 }

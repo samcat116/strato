@@ -25,3 +25,5 @@ pub mod identity;
 pub mod logbuf;
 pub mod net;
 pub mod protocol;
+
+pub mod idle;

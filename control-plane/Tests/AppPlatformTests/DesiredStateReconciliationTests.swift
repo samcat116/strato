@@ -1,6 +1,7 @@
 import Testing
 import Vapor
 import Fluent
+import FluentPostgresDriver
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -12,7 +13,7 @@ import AppTestSupport
 /// update status/generation and complete operations, deletions are confirmed
 /// by absence, and registration requires a state-sync protocol version (the
 /// imperative path is gone).
-@Suite("Desired State Reconciliation Tests", .serialized)
+@Suite("Desired State Reconciliation Tests", .serialized, .postgresFixture)
 final class DesiredStateReconciliationTests {
 
     private static func healthyOverlayObservation(at checkedAt: Date = Date())
@@ -57,9 +58,24 @@ final class DesiredStateReconciliationTests {
     /// Same harness as `VMOperationTests`: full middleware stack, API-key
     /// auth, one VM.
     private func withVMTestApp(
+        productionTimeouts: Bool = false,
         _ test: (Application, User, VM, String) async throws -> Void
     ) async throws {
-        try await withProjectApp(prefix: "recon") { app, builder, fixture in
+        try await withProjectApp(
+            prefix: "recon",
+            configureApp: { app in
+                if productionTimeouts {
+                    let database = try #require(app.storage[TestDatabaseNameKey.self])
+                    app.databases.use(
+                        try DatabaseStatementTimeout(milliseconds: 5_000).applying(
+                            to: .postgres(
+                                configuration: PostgresTestDatabases.configuration(database: database),
+                                maxConnectionsPerEventLoop: 1)),
+                        as: .psql)
+                }
+                try await configure(app)
+            }
+        ) { app, builder, fixture in
             let vm = try await builder.createVM(name: "recon-vm", project: fixture.project)
             try await test(app, fixture.user, vm, fixture.token)
         }
@@ -491,9 +507,9 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("Fabric failures become degraded conditions and membership errors")
-    func fabricFailuresArePersisted() async throws {
-        try await withVMTestApp { app, _, vm, _ in
+    @Test("Fabric failures become degraded conditions and membership errors", arguments: [false, true])
+    func fabricFailuresArePersisted(productionTimeouts: Bool) async throws {
+        try await withVMTestApp(productionTimeouts: productionTimeouts) { app, _, vm, _ in
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let network = try await self.network(app: app, vm: vm, named: "observed-fabric")

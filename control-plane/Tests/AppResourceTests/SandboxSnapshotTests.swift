@@ -10,7 +10,7 @@ import AppTestSupport
 /// Tests for the sandbox snapshot / checkpoint-resume surface (issue #426):
 /// desired snapshot artifacts, quota admission, observed-state completion,
 /// restore compatibility, export storage, and deletion guards.
-@Suite("Sandbox Snapshot Tests", .serialized)
+@Suite("Sandbox Snapshot Tests", .serialized, .postgresFixture)
 final class SandboxSnapshotTests {
 
     private func withSnapshotTestApp(
@@ -760,7 +760,9 @@ final class SandboxSnapshotTests {
 
     @Test("Agent mTLS artifact upload records integrity and download streams the bytes back")
     func artifactUploadAndDownloadRoundTripOverAgentMTLS() async throws {
-        try await withSnapshotTestApp { app, user, _, sandbox, _ in
+        try await withSnapshotTestApp { app, user, project, sandbox, _ in
+            _ = try await TestDataBuilder(db: app.db).createAgent(
+                named: "transfer-agent", organizationScope: .organization(try #require(project.$organization.id)))
             let storeRoot = NSTemporaryDirectory() + "snapshot-transfer-\(UUID().uuidString)"
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
             defer { try? FileManager.default.removeItem(atPath: storeRoot) }
@@ -1097,7 +1099,9 @@ final class SandboxSnapshotTests {
 
     @Test("Re-uploading an artifact leaves an existing export record intact")
     func reExportDoesNotClearPriorExport() async throws {
-        try await withSnapshotTestApp { app, user, _, sandbox, _ in
+        try await withSnapshotTestApp { app, user, project, sandbox, _ in
+            _ = try await TestDataBuilder(db: app.db).createAgent(
+                named: "reexport-agent", organizationScope: .organization(try #require(project.$organization.id)))
             let storeRoot = NSTemporaryDirectory() + "snapshot-reexport-\(UUID().uuidString)"
             app.imageObjectStore = FilesystemImageObjectStore(rootPath: storeRoot)
             defer { try? FileManager.default.removeItem(atPath: storeRoot) }

@@ -26,7 +26,111 @@ extension Agent {
         return sandboxRuntime
     }
 
+    /// STR-312/313 entry point. The runtime guard owns lifecycle serialization;
+    /// this wrapper owns host admission, including the paused validation VMM
+    /// and durable checkpoint bytes. Policy must never call the driver directly.
+    func sandboxReconcileSuspend(
+        _ item: ReconcileWorkItem, automatic: Bool = false,
+        fence: SandboxAutomaticSuspensionFence? = nil
+    ) async throws {
+        guard let desired = item.desiredSandbox,
+            var entry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
+        else { throw SandboxSuspensionGuard.GateError.unknownIntent }
+        guard automatic == (fence != nil) else {
+            throw SandboxRuntimeError.notSnapshottable("automatic suspension requires a journaled guest fence")
+        }
+        if let fence {
+            guard fence.generation == desired.generation, desired.desiredStatus == .suspended,
+                desired.spec.network == nil, fence.guestProtocolVersion == 5
+            else {
+                throw SandboxSuspensionGuard.GateError.stale
+            }
+        }
+        if let snapshotId = desired.suspensionAfterSnapshotId {
+            guard !snapshotInventoryUnreadable, let snapshot = snapshotRecords[snapshotId],
+                snapshot.kind == .sandboxSnapshot, snapshot.parentId == UUID(uuidString: item.id)
+            else { throw ConvergenceError.sourceNotReady("user checkpoint must be durably captured before suspension") }
+        }
+        let runtime = try requireSandboxRuntime()
+        if let record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase == .suspended {
+            if let fence {
+                guard record.guestFence?.request == fence else { throw SandboxSuspensionGuard.GateError.stale }
+            }
+            entry.sandboxSuspension = record
+            managedSandboxes[item.id] = entry
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist suspended sandbox reservations")
+            }
+            guard await observeSuspensionValidationReservations(runtime) != nil else {
+                throw ConvergenceError.sourceNotReady("suspension validation inventory is unknown")
+            }
+            if let retained = retainedSuspensionClaims.removeValue(forKey: item.id) {
+                capacityAdmissionLedger.release(retained)
+            }
+            return
+        }
+        let estimate = try await runtime.suspensionStorageEstimate(sandboxId: item.id)
+        let previousBytes = entry.sandboxSuspension?.checkpointBytes ?? 0
+        let (requiredBytes, overflow) = estimate.addingReportingOverflow(previousBytes)
+        guard !overflow, let budget = desired.suspensionStorageBudgetBytes, budget >= requiredBytes else {
+            throw ConvergenceError.sourceNotReady("internal checkpoint storage has not been admitted")
+        }
+        let current = SandboxHostReservation.forManifestEntry(entry)
+        let spec = entry.sandboxSpec ?? desired.spec
+        let (stagingBytes, stagingOverflow) = estimate.multipliedReportingOverflow(by: 2)
+        guard !stagingOverflow else { throw ConvergenceError.sourceNotReady("checkpoint staging size overflow") }
+        let extra = HostReservation(
+            cpus: spec.cpus,
+            memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: spec.memoryBytes).effectiveBytes,
+            diskBytes: stagingBytes)
+        let raw = await rawHostCapacitySnapshot()
+        let claim =
+            try retainedSuspensionClaims[item.id]
+            ?? capacityAdmissionLedger.claim(
+                extra, desiredWorkloadReservation: current.addingSaturating(extra),
+                snapshot: raw, agentName: initialAgentID, workloadID: item.id)
+        var mayReleaseClaim = false
+        defer {
+            if mayReleaseClaim {
+                retainedSuspensionClaims.removeValue(forKey: item.id)
+                capacityAdmissionLedger.release(claim)
+            } else {
+                retainedSuspensionClaims[item.id] = claim
+            }
+        }
+        do {
+            if let fence {
+                try await runtime.suspendSandbox(sandboxId: item.id, fence: fence)
+            } else {
+                try await runtime.suspendSandbox(sandboxId: item.id, generation: desired.generation, automatic: false)
+            }
+        } catch {
+            entry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            managedSandboxes[item.id] = entry
+            if persistManifest() {
+                mayReleaseClaim = await observeSuspensionValidationReservations(runtime) != nil
+            }
+            // Durable shadow reservations take over only after their inventory
+            // is known. Otherwise retain the provisional claim in this agent
+            // life rather than lending those bytes to another VM.
+            throw error
+        }
+        entry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+        managedSandboxes[item.id] = entry
+        guard persistManifest() else {
+            throw SandboxRuntimeError.snapshotIOFailed("could not persist suspended sandbox reservations")
+        }
+        guard await observeSuspensionValidationReservations(runtime) != nil else {
+            throw ConvergenceError.sourceNotReady("suspension validation inventory is unknown")
+        }
+        mayReleaseClaim = true
+    }
+
     func performSandbox(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        if step != .shutdown && step != .delete, item.desiredSandbox?.spec.resourceClass?.policy.kind == .burstable {
+            throw HypervisorServiceError.invalidConfiguration(
+                "Burstable workloads require verified STR272 runtime enforcement")
+        }
         switch step {
         case .adopt:
             // Adoption flows through adoptSandbox (the reconciler needs the
@@ -37,7 +141,16 @@ extension Agent {
         case .boot:
             try await sandboxReconcileBoot(item)
         case .shutdown:
-            try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
+            if item.desiredSandbox?.desiredStatus == .suspended {
+                if item.desiredSandbox?.automaticSuspensionFence != nil {
+                    let verdict = try await sandboxReconcileIdleSuspend(item, dependenciesReady: true)
+                    guard verdict == .eligible else { throw SandboxSuspensionGuard.GateError.stale }
+                } else {
+                    try await sandboxReconcileSuspend(item)
+                }
+            } else {
+                try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
+            }
         case .delete:
             try await sandboxReconcileDelete(item)
         case .restore:
@@ -65,7 +178,7 @@ extension Agent {
     /// resolved fresh at sync assembly, so an entry that sat in the desired
     /// state for a while still carries usable locators.
     func sandboxReconcileRestore(_ item: ReconcileWorkItem) async throws {
-        guard let restore = item.desiredSandbox?.restore else {
+        guard let desired = item.desiredSandbox, let restore = desired.restore else {
             throw SandboxRuntimeError.unsupportedStep("restore work item without a restore nonce")
         }
         // A restore loads the checkpoint resumed, and a resumed guest starts
@@ -84,9 +197,35 @@ extension Agent {
                 sandboxId: item.id, jailUID: jailUID, existingJail: true)
         let attachments = try await networkOrchestrator.prepareAttachments(
             vmId: item.id, networks: networks, placement: placement)
-        try await requireSandboxRuntime().restoreSandbox(
+        let runtime = try requireSandboxRuntime()
+        var entry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
+        var claim: HostCapacityClaim?
+        if var record = try await runtime.suspensionRecord(sandboxId: item.id), let existing = entry {
+            let current = SandboxHostReservation.forManifestEntry(existing)
+            let target = SandboxHostReservation.forSpec(record.spec).addingSaturating(
+                HostReservation(diskBytes: max(current.diskBytes, SandboxHostReservation.restorationDiskBytes(record))))
+            claim = try capacityAdmissionLedger.claim(
+                .positiveDelta(from: current, to: target), desiredWorkloadReservation: target,
+                snapshot: await rawHostCapacitySnapshot(), agentName: initialAgentID)
+            record.phase = .restoring
+            entry?.sandboxSuspension = record
+            if let entry { managedSandboxes[item.id] = entry }
+            guard persistManifest() else {
+                if let claim { capacityAdmissionLedger.release(claim) }
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist explicit restore reservations")
+            }
+        }
+        defer { if let claim { capacityAdmissionLedger.release(claim) } }
+        try await runtime.restoreSandbox(
             sandboxId: item.id, snapshotId: restore.snapshotId.uuidString,
-            artifacts: restore.artifacts, networkAttachments: attachments)
+            artifacts: restore.artifacts, networkAttachments: attachments, expectedGeneration: desired.generation)
+        if entry?.sandboxSuspension != nil {
+            entry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            if let entry { managedSandboxes[item.id] = entry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist explicit restore completion")
+            }
+        }
     }
 
     /// Where this host realizes a sandbox's NIC (issue STR-100).
@@ -142,6 +281,10 @@ extension Agent {
         guard let desired = item.desiredSandbox else {
             throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
         }
+        guard desired.suspensionCheckpointId == nil else {
+            throw ConvergenceError.sourceNotReady(
+                "durable suspension checkpoint is unavailable on this host; cold recreation is refused")
+        }
         let runtime = try requireSandboxRuntime()
 
         if let blockedReason = sandboxJailCreationBlockedReason {
@@ -156,7 +299,7 @@ extension Agent {
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
             desiredWorkloadReservation: desiredReservation,
-            snapshot: raw, agentName: initialAgentID)
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         defer { capacityAdmissionLedger.release(claim) }
 
         // A jailed Firecracker runtime returns a lease. Direct Firecracker and
@@ -320,18 +463,62 @@ extension Agent {
         let runtime = try requireSandboxRuntime()
 
         let raw = await rawHostCapacitySnapshot()
-        let growth = HostReservation.positiveDelta(
-            from: SandboxHostReservation.forSpec(currentSpec),
-            to: SandboxHostReservation.forSpec(desired.spec))
+        var manifestEntry = managedSandboxes[item.id] ?? orphanedSandboxes[item.id]
+        let currentReservation =
+            manifestEntry.map(SandboxHostReservation.forManifestEntry)
+            ?? SandboxHostReservation.forSpec(currentSpec)
+        let targetReservation = SandboxHostReservation.forSpec(desired.spec).addingSaturating(
+            HostReservation(
+                diskBytes: max(
+                    currentReservation.diskBytes,
+                    manifestEntry?.sandboxSuspension.map(SandboxHostReservation.restorationDiskBytes) ?? 0)))
+        let growth = HostReservation.positiveDelta(from: currentReservation, to: targetReservation)
         try capacityAdmissionLedger.validateExistingReservation(
-            SandboxHostReservation.forSpec(currentSpec),
+            currentReservation,
             snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
-            growth, desiredWorkloadReservation: SandboxHostReservation.forSpec(desired.spec),
-            snapshot: raw, agentName: initialAgentID)
+            growth, desiredWorkloadReservation: targetReservation,
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
         defer { capacityAdmissionLedger.release(claim) }
 
-        try await runtime.bootSandbox(sandboxId: item.id)
+        if let record = try await runtime.suspensionRecord(sandboxId: item.id),
+            record.phase == .capturing || record.requiresOriginalGuestRollback
+        {
+            // Recover the original guest after an interrupted capture or fence
+            // release. Neither a running VMM nor a resumed checkpoint proves
+            // that guest admission was durably reopened.
+            try await runtime.bootSandbox(sandboxId: item.id)
+            manifestEntry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            if let manifestEntry { managedSandboxes[item.id] = manifestEntry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist capture rollback reservations")
+            }
+        } else if var record = try await runtime.suspensionRecord(sandboxId: item.id), record.phase != .resumed {
+            // Reacquire the durable reservation before any restore side effect.
+            record.phase = .restoring
+            manifestEntry?.sandboxSuspension = record
+            if let manifestEntry { managedSandboxes[item.id] = manifestEntry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist restore reservations")
+            }
+            let networks = currentSpec.network.map { [$0] } ?? []
+            let placement =
+                networks.isEmpty
+                ? NICPlacement.hostNamespace
+                : try sandboxNICPlacement(
+                    sandboxId: item.id, jailUID: manifestEntry?.jailUID, existingJail: true)
+            let attachments = try await networkOrchestrator.prepareAttachments(
+                vmId: item.id, networks: networks, placement: placement)
+            try await runtime.resumeSuspension(
+                sandboxId: item.id, networkAttachments: attachments, expectedGeneration: desired.generation)
+            manifestEntry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+            if let manifestEntry { managedSandboxes[item.id] = manifestEntry }
+            guard persistManifest() else {
+                throw SandboxRuntimeError.snapshotIOFailed("could not persist resumed sandbox reservations")
+            }
+        } else {
+            try await runtime.bootSandbox(sandboxId: item.id)
+        }
     }
 
     func sandboxReconcileDelete(_ item: ReconcileWorkItem) async throws {
@@ -434,10 +621,10 @@ extension Agent {
                     guestInfo: guestInfoCache[vmId],
                     guestAgentObservation: status == .running && entry.spec.guestAgentEnabled
                         ? guestAgentObservationCache[vmId] : nil,
-                    guestConfigObservation: status == .running
-                        && guestConfigObservationCache[vmId]?.generation
-                            == max(facts.observedGeneration, facts.failedGeneration ?? 0)
-                        ? guestConfigObservationCache[vmId] : nil,
+                    guestConfigObservation: guestConfigObservation(
+                        for: vmId, status: status, observedGeneration: facts.observedGeneration,
+                        failedGeneration: facts.failedGeneration),
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration,
                     memoryStats: memoryStatsCache[vmId],
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
@@ -463,6 +650,7 @@ extension Agent {
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
                     failureClassification: facts.failureClassification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration,
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
                         in: entry.spec.networks)
@@ -489,7 +677,8 @@ extension Agent {
                     convergencePhase: facts.phase,
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
-                    failureClassification: facts.failureClassification
+                    failureClassification: facts.failureClassification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration
                 ))
             reported.insert(vmId)
         }
@@ -508,7 +697,8 @@ extension Agent {
                     convergencePhase: facts.phase ?? "converging",
                     lastError: facts.lastError,
                     failedGeneration: facts.failedGeneration,
-                    failureClassification: facts.failureClassification
+                    failureClassification: facts.failureClassification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration
                 ))
             reported.insert(vmId)
         }
@@ -528,22 +718,32 @@ extension Agent {
                     convergencePhase: nil,
                     lastError: failure.error,
                     failedGeneration: failure.generation,
-                    failureClassification: failure.classification
+                    failureClassification: failure.classification,
+                    guestConfigFailedGeneration: facts.guestConfigFailedGeneration
                 ))
         }
 
+        let sandboxes = await observedSandboxStates(reconciler: reconciler)
+        let unrecognized = await reconciler.unrecognizedWorkloads()
+        let teardownRefusal = await reconciler.lastTeardownRefusal()
+        let volumes = await observedVolumeStates(reconciler: reconciler)
+        let snapshots = await observedSnapshotStates(reconciler: reconciler)
+        let loadBalancers = await networkService?.observedLoadBalancers()
+        let storageDevices = await storageDeviceInventory.snapshot()
+        let resourceCapture = await captureResourceEnforcement(observedVMs: observed, observedSandboxes: sandboxes)
         let report = ObservedStateReport(
             agentId: effectiveAgentID,
             vms: observed,
-            sandboxes: await observedSandboxStates(reconciler: reconciler),
-            resources: await getAgentResources(),
+            sandboxes: sandboxes,
+            resources: resourceCapture.resources,
+            resourceEnforcement: resourceCapture.enforcement,
             hostResourceTelemetry: hostResourceTelemetry,
             agentUpdateStatus: autoUpdateStatus,
             // Workloads this host holds that no sync accounted for (STR-98).
             // They also appear above — the agent is genuinely running them —
             // and stay there until the control plane decides what they are.
-            unrecognized: await reconciler.unrecognizedWorkloads(),
-            teardownRefusal: await reconciler.lastTeardownRefusal(),
+            unrecognized: unrecognized,
+            teardownRefusal: teardownRefusal,
             // What the agent's own memory of this host was able to tell it
             // (STR-138). When the manifest is unreadable this also declares
             // the lists above to be no inventory at all, so the control plane
@@ -554,17 +754,17 @@ extension Agent {
             // needs to confirm deletions — and nil when it cannot enumerate the
             // store at all, which the control plane reads as "no opinion"
             // rather than as an inventory (STR-148).
-            volumes: await observedVolumeStates(reconciler: reconciler),
+            volumes: volumes,
             // Same list-or-nil contract as `volumes`, one step more expensive
             // to get wrong: an empty list the control plane believed would reap
             // every checkpoint row it holds for this agent, and a checkpoint is
             // a point in time nothing can recreate (STR-150).
-            snapshots: await observedSnapshotStates(reconciler: reconciler),
-            loadBalancers: await networkService?.observedLoadBalancers(),
+            snapshots: snapshots,
+            loadBalancers: loadBalancers,
             networks: observedNetworkFabric.networks,
             securityGroups: observedNetworkFabric.securityGroups,
             portMemberships: observedNetworkFabric.portMemberships,
-            storageDevices: await storageDeviceInventory.snapshot()
+            storageDevices: storageDevices
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was
@@ -648,6 +848,16 @@ extension Agent {
                     exitCode = await runtime.exitCode(sandboxId: sandboxId)
                 }
             }
+            let record = managedSandboxes[sandboxId]?.sandboxSuspension
+            let evidence = record.flatMap { record -> SandboxSuspensionEvidence? in
+                guard record.checkpoint?.hasValidShape == true else { return nil }
+                return SandboxSuspensionEvidence(
+                    checkpointId: record.snapshotId, generation: record.generation,
+                    storageBytes: max(record.checkpointBytes, record.storageReservationBytes ?? 0),
+                    vmmDestroyed: record.phase == .suspended, verified: true,
+                    restoreDurationMilliseconds: record.lastRestoreMillis)
+            }
+            let estimate = try? await sandboxRuntime?.suspensionStorageEstimate(sandboxId: sandboxId)
             let facts = await reconciler.facts(for: sandboxId, kind: .sandbox)
             observed.append(
                 ObservedSandboxState(
@@ -659,7 +869,13 @@ extension Agent {
                     failedGeneration: facts.failedGeneration,
                     failureClassification: facts.failureClassification,
                     exitCode: exitCode,
-                    resourceTelemetry: workloadResourceTelemetry[sandboxId]
+                    resourceTelemetry: workloadResourceTelemetry[sandboxId],
+                    idleActivity: await sandboxRuntime?.sampleSandboxIdleActivity(sandboxId: sandboxId),
+                    suspension: evidence,
+                    suspensionStorageReservedBytes: record.map {
+                        max($0.checkpointBytes, $0.storageReservationBytes ?? 0)
+                    } ?? 0,
+                    suspensionStorageEstimateBytes: estimate
                 ))
             reported.insert(sandboxId)
         }

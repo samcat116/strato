@@ -12,7 +12,7 @@ import AppTestSupport
 /// The security property is exercised through a real loopback server: XFCC is
 /// accepted only from the pod-local sidecar address, which Vapor's in-memory
 /// test client cannot provide.
-@Suite("Guest JWT-SVID minting", .serialized)
+@Suite("Guest JWT-SVID minting", .serialized, .postgresFixture)
 struct GuestJWTSVIDMintTests {
     private static let audience = "spiffe://strato.local/example-relying-party"
 

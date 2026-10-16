@@ -5,7 +5,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Hierarchy Integration Tests", .serialized)
+@Suite("Hierarchy Integration Tests", .serialized, .postgresFixture)
 final class HierarchyIntegrationTests {
 
     // Helper to run tests with fresh app and test data
@@ -15,6 +15,7 @@ final class HierarchyIntegrationTests {
         let app = try await Application.makeForTesting()
 
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
 
             let builder = TestDataBuilder(db: app.db)
@@ -28,8 +29,10 @@ final class HierarchyIntegrationTests {
 
             let authToken = try await testUser.generateAPIKey(on: app.db)
 
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app, builder, testUser, testOrganization, authToken)
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }
@@ -105,107 +108,6 @@ final class HierarchyIntegrationTests {
         }
     }
 
-    @Test("Test resource quota inheritance")
-    func testResourceQuotaInheritance() async throws {
-        try await withHierarchyTestApp { app, builder, testUser, testOrganization, authToken in
-            // Create hierarchy
-            let engineering = try await builder.createOU(
-                name: "Engineering",
-                description: "Engineering department",
-                organization: testOrganization
-            )
-
-            let project = try await builder.createProject(
-                name: "Test Project",
-                description: "Project for quota testing",
-                ou: engineering
-            )
-
-            // Create quotas at different levels
-            _ = try await builder.createResourceQuota(
-                name: "Org Quota",
-                maxVCPUs: 100,
-                maxMemoryGB: 200.0,
-                maxStorageGB: 1000.0,
-                maxVMs: 50,
-                organization: testOrganization
-            )
-
-            _ = try await builder.createResourceQuota(
-                name: "OU Quota",
-                maxVCPUs: 50,
-                maxMemoryGB: 100.0,
-                maxStorageGB: 500.0,
-                maxVMs: 25,
-                ou: engineering
-            )
-
-            _ = try await builder.createResourceQuota(
-                name: "Project Quota",
-                maxVCPUs: 20,
-                maxMemoryGB: 40.0,
-                maxStorageGB: 200.0,
-                maxVMs: 10,
-                project: project
-            )
-
-            // Test that quotas were created
-            let savedQuota = try await ResourceQuota.query(on: app.db)
-                .filter(\.$project.$id == project.id)
-                .first()
-            #expect(savedQuota != nil)
-            #expect(savedQuota?.maxVCPUs == 20)
-        }
-    }
-
-    @Test("Test group-based project access")
-    func testGroupBasedProjectAccess() async throws {
-        try await withHierarchyTestApp { app, builder, testUser, testOrganization, authToken in
-            // Create project
-            _ = try await builder.createProject(
-                name: "Group Access Project",
-                description: "Test project for group access",
-                organization: testOrganization
-            )
-
-            // Create group
-            let developerGroup = try await builder.createGroup(
-                name: "Developers",
-                description: "Developer group",
-                organization: testOrganization
-            )
-
-            // Create users
-            let developer = try await builder.createUser(
-                username: "developer",
-                email: "developer@example.com",
-                displayName: "Developer"
-            )
-            try await builder.addUserToOrganization(user: developer, organization: testOrganization)
-
-            let nonMember = try await builder.createUser(
-                username: "nonmember",
-                email: "nonmember@example.com",
-                displayName: "Non-member"
-            )
-            try await builder.addUserToOrganization(user: nonMember, organization: testOrganization)
-
-            // Add developer to group
-            try await developerGroup.addMember(developer.id!, on: app.db)
-
-            // In a full authorization test against the Cedar evaluator:
-            // - Add group to project with member role
-            // - Verify developer has access through group membership
-            // - Verify non-member doesn't have access
-
-            let memberships = try await UserGroup.query(on: app.db)
-                .filter(\.$group.$id == developerGroup.requireID())
-                .all()
-            #expect(memberships.map(\.$user.id) == [try developer.requireID()])
-            #expect(!memberships.map(\.$user.id).contains(try nonMember.requireID()))
-        }
-    }
-
     // MARK: - Search and Filter Tests
 
     @Test("Search entities across hierarchy")
@@ -278,70 +180,7 @@ final class HierarchyIntegrationTests {
 
     // MARK: - VM Creation with Hierarchy Tests
 
-    @Test("Create VM with proper hierarchy context")
-    func testCreateVMWithHierarchy() async throws {
-        try await withHierarchyTestApp { app, builder, testUser, testOrganization, authToken in
-            // Create project
-            let project = try await builder.createProject(
-                name: "VM Test Project",
-                description: "Project for VM testing",
-                organization: testOrganization,
-                environments: ["dev", "prod"],
-                defaultEnvironment: "dev"
-            )
-
-            // Create VM request would normally go through VMController
-            // This tests the model relationships
-            let vm = try await builder.createVM(
-                name: "Test VM",
-                project: project,
-                environment: "dev"
-            )
-
-            #expect(vm.$project.id == project.id)
-            #expect(vm.environment == "dev")
-
-            // Verify project has the VM
-            try await project.$vms.load(on: app.db)
-            #expect(project.vms.count == 1)
-            #expect(project.vms.first?.name == "Test VM")
-        }
-    }
-
     // MARK: - Permission Inheritance Tests
-
-    @Test("Test permission inheritance through hierarchy")
-    func testPermissionInheritance() async throws {
-        try await withHierarchyTestApp { app, builder, testUser, testOrganization, authToken in
-            // Create hierarchy
-            let parentOU = try await builder.createOU(
-                name: "Parent OU",
-                description: "Parent organizational unit",
-                organization: testOrganization
-            )
-
-            let childOU = try await builder.createOU(
-                name: "Child OU",
-                description: "Child organizational unit",
-                organization: testOrganization,
-                parentOU: parentOU
-            )
-
-            let project = try await builder.createProject(
-                name: "Child Project",
-                description: "Project in child OU",
-                ou: childOU
-            )
-
-            // Under the Cedar evaluator's hierarchy semantics:
-            // - User with admin on parentOU should have admin on childOU and project
-            // - User with member on organization should have view on all
-
-            // Test path-based hierarchy
-            #expect(childOU.path.contains(parentOU.id!.uuidString))
-            #expect(project.path.contains(childOU.id!.uuidString))
-        }
-    }
 
     // MARK: - Bulk Operations Tests
 

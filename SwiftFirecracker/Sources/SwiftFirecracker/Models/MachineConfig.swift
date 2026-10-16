@@ -4,9 +4,9 @@ import Foundation
 /// Maps to PUT /machine-config API endpoint
 public struct MachineConfig: Codable, Sendable {
     /// Number of vCPUs (1-32)
-    let vcpuCount: Int
+    public let vcpuCount: Int
 
-    let memSizeMib: Int
+    public let memSizeMib: Int
 
     /// CPU template: "C3" or "T2" for Intel, "T2A" for AMD, "V1N1" for ARM
     let cpuTemplate: String?

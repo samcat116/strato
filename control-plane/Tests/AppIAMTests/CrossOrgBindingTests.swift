@@ -13,7 +13,7 @@ import AppTestSupport
 /// both directions: leaving an org revokes everything inside that org's
 /// subtree (and nothing outside it), while deleting a principal sweeps its
 /// bindings across all orgs.
-@Suite("Cross-Org Binding Tests", .serialized)
+@Suite("Cross-Org Binding Tests", .serialized, .postgresFixture)
 final class CrossOrgBindingTests {
 
     struct Fixture {

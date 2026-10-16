@@ -18,7 +18,7 @@ import AppTestSupport
 /// misreading a field with no wire capability gate makes possible: an agent
 /// that reports *no* size must not have its silence recorded as "this volume
 /// has no size".
-@Suite("Volume Observed Size Tests", .serialized)
+@Suite("Volume Observed Size Tests", .serialized, .postgresFixture)
 final class VolumeObservedSizeTests {
 
     private func withVolumeApp(

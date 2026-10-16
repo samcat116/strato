@@ -42,7 +42,11 @@ public struct GuestConfigObservation: Codable, Equatable, Sendable {
     /// Validate hostile guest facts before retaining or forwarding them. A
     /// failed attempt may have only partial observations, but never foreign
     /// identities or duplicate entries. Successful reports must be complete.
-    public func validate(for config: GuestConfig, generation: Int64) throws {
+    /// The caller computes file hashes from desired UTF-8 bytes with its crypto
+    /// implementation; missing expected hashes fail closed for successful files.
+    public func validate(
+        for config: GuestConfig, generation: Int64, expectedFileSHA256: [String: String] = [:]
+    ) throws {
         guard self.generation == generation, generation >= 0,
             (status == .failed) == (error != nil),
             error.map({ !$0.isEmpty && $0.utf8.count <= 4096 }) ?? true
@@ -87,8 +91,10 @@ public struct GuestConfigObservation: Codable, Equatable, Sendable {
                     } == true
                 }),
                 config.files.allSatisfy({ desired in
-                    files.first(where: { $0.path == desired.path }).map { $0.sha256 != nil && $0.mode == desired.mode }
-                        == true
+                    guard let expected = expectedFileSHA256[desired.path] else { return false }
+                    return files.first(where: { $0.path == desired.path }).map {
+                        $0.sha256 == expected && $0.mode == desired.mode
+                    } == true
                 }),
                 config.services.allSatisfy({ desired in
                     services.first(where: { $0.name == desired.name })?.enabled == desired.enabled

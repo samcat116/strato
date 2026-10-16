@@ -5,7 +5,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("UUID route parameters")
+@Suite("UUID route parameters", .postgresFixture)
 struct RequireUUIDParameterTests {
     @Test("Valid UUIDs parse and missing or malformed values retain the caller's 400 reason")
     func routeParameters() async throws {

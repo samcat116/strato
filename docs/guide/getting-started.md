@@ -1,9 +1,12 @@
 # Getting Started
 
 This guide takes you from nothing to a running Strato install with a
-hypervisor enrolled and your first VM booted. Both deployment paths are
-secure by default: strong secrets are generated automatically on first run —
-there is nothing to change before going to production except your hostname.
+hypervisor enrolled and your first VM booted. Both deployment paths generate
+secrets on first install. A working browser
+login is the first checkpoint; running workloads also requires a Linux agent,
+compatible images, and networking. For production, follow the deployment
+guide for TLS, durable storage, identity endpoints, and upgrades; the commands
+below are an initial setup, not a production acceptance test.
 
 (For hacking on Strato itself, see
 [Local Development](/development/local-development) instead.)
@@ -78,13 +81,22 @@ anything other than `localhost`. See the
 git clone https://github.com/samcat116/strato.git
 cd strato/helm/strato-control-plane
 helm dependency build
-helm install strato .
+helm install strato . \
+  --set image.repository=ghcr.io/samcat116/strato-control-plane \
+  --set frontend.image.repository=ghcr.io/samcat116/strato-frontend \
+  --set image.tag=main --set frontend.image.tag=main
 
 # In another terminal (the UI is served by the frontend service):
 kubectl port-forward service/strato-strato-control-plane-frontend 8080:3000
 ```
 
-Visit `http://localhost:8080`. Credentials are auto-generated into the
+The chart defaults to local image names; the overrides above select published
+images. Pin matching immutable tags for reproducible deployments. The frontend
+port-forward provides browser access only: external agents still need the
+separate mTLS and SPIRE routes described in the Kubernetes guide.
+
+Visit `http://localhost:8080` (use this exact hostname and port for the default
+WebAuthn origin). Credentials are auto-generated into the
 `strato-strato-credentials` secret and reused across upgrades. For production
 values (Gateway exposure, TLS, WebAuthn hostname), see the
 [Kubernetes guide](/deployment/kubernetes).
@@ -182,11 +194,37 @@ running the agent in Docker.
 
 ## Create your first VM
 
-1. Navigate to the VMs page and click **Create VM**
-2. Configure the name, CPU cores, memory, disk size, and OS image
-3. Optionally paste an SSH public key and **cloud-init user data**
-4. Click **Create** — the VM is scheduled onto an available agent
-5. Click **Start**, then use the web console to connect
+Before opening the form, check these prerequisites:
+
+- Confirm the **project** in the header switcher. Organization onboarding
+  creates a **Default Project**, which the UI selects when there is no saved
+  selection. Switch to another project or create one if needed.
+- In **Images**, import or upload an image and wait for **ready** status.
+  Its architecture and hypervisor artifacts must match an online agent;
+  see [images and storage](/architecture/storage).
+- Confirm the agent is online, has sufficient capacity, and advertises the
+  required backend. Installation of OVN chassis packages alone does not set
+  up a site network; follow [agent networking](/deployment/agents) and the
+  [networking architecture](/architecture/networking).
+- Create a network in the selected project if it has none, then choose a
+  project network for each VM interface. Projects do not receive an automatic
+  network; reachability also depends on the host/site configuration.
+
+Then:
+
+1. Navigate to the VMs page and click **Create VM**.
+2. Select the ready image and configure name, CPU, memory, disk, and network
+   interfaces. Keep the default resource class for initial setup.
+3. Optionally paste an SSH public key and **cloud-init user data**.
+4. Click **Create** and wait for the UI to finish tracking convergence.
+   Acceptance by the API does not yet mean the workload is ready.
+5. Use **Start** if the VM is stopped and wait for running status. Open the
+   serial console; a graphics console must be enabled at creation and needs
+   a compatible guest image.
+
+If an image is absent from the selector, check its ready status and project
+visibility. If placement or boot fails, inspect the displayed error and agent
+logs before retrying; use the [user guide](/guide/user-guide) for the next checks.
 
 ### Cloud-init user data
 

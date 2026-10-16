@@ -10,7 +10,7 @@ import AppTestSupport
 /// store, the dual-writes at controller mutation sites, and the
 /// relational-mirror backfill. The bindings are what the Cedar evaluator
 /// authorizes from; these tests assert they are written correctly.
-@Suite("IAM Role Binding Tests", .serialized)
+@Suite("IAM Role Binding Tests", .serialized, .postgresFixture)
 final class IAMRoleBindingTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

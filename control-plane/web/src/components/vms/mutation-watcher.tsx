@@ -11,7 +11,8 @@ import {
   useMutationsStore,
   type WatchedMutation,
 } from "@/lib/stores/mutations-store";
-import type { OperationKind, ResourceConditions } from "@/types/api";
+import type { OperationKind } from "@/types/api";
+import { mutationOutcome as outcome, type MutationOutcome as Outcome } from "@/lib/mutation-outcome";
 
 const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = {
   create: { succeeded: "Created", infinitive: "create" },
@@ -57,33 +58,6 @@ const POLL_INTERVAL_MS = 2000;
 
 /** How many polls in a row may fail before a mutation is given up on. */
 const MAX_CONSECUTIVE_FAILURES = 5;
-
-type Outcome = { done: true; error?: string } | { done: false };
-
-/**
- * Reads one refetched resource's conditions against the generation this
- * mutation is waiting on.
- *
- * `degraded` is compared by generation, not merely by presence: a failure can
- * stand against an older generation while a newer mutation is still in flight,
- * and reporting that as *this* mutation's failure would be wrong. Convergence
- * is `>=` for the same reason — a later mutation may already have moved the
- * target past ours, which still means ours was reached.
- */
-function outcome(
-  conditions: ResourceConditions,
-  targetGeneration: number
-): Outcome {
-  if (conditions.degraded?.sinceGeneration === targetGeneration) {
-    return { done: true, error: conditions.degraded.reason };
-  }
-  if (conditions.observedGeneration >= targetGeneration) {
-    if (conditions.converged || conditions.targetGeneration > targetGeneration) {
-      return { done: true };
-    }
-  }
-  return { done: false };
-}
 
 /**
  * Follows every watched mutation to a terminal state, then toasts the outcome

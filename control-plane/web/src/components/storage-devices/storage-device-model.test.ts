@@ -4,7 +4,6 @@ import {
   formatDeviceSize,
   formatDeviceUses,
   groupStorageDevices,
-  osdSelectionWarning,
   storageDeviceStatus,
 } from "./storage-device-model";
 
@@ -58,9 +57,4 @@ describe("storage device view model", () => {
     expect(storageDeviceStatus(device({ state: "inUse" }))).toBe("In use");
   });
 
-  it("uses the approved warning for future OSD selection", () => {
-    expect(osdSelectionWarning).toBe(
-      "Future Ceph OSD provisioning may erase all data on this disk. This selection does not format or modify the disk now.",
-    );
-  });
 });

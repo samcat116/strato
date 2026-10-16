@@ -10,7 +10,7 @@ import AppTestSupport
 /// frontend uses to gate UI. Since cutover (#482) the caller-scoped form is
 /// answered by the authoritative Cedar evaluator, so verdicts come from real
 /// bindings — not a mock.
-@Suite("Authorization Check Endpoint Tests", .serialized)
+@Suite("Authorization Check Endpoint Tests", .serialized, .postgresFixture)
 final class AuthorizationCheckTests {
 
     private func withApp(

@@ -5,7 +5,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Add image artifact virtual size migration", .serialized)
+@Suite("Add image artifact virtual size migration", .serialized, .postgresFixture)
 struct AddImageArtifactVirtualSizeTests {
     @Test("Existing raw images are backfilled while sparse image sizes remain unknown")
     func backfillsOnlyAuthoritativeLegacySizes() async throws {

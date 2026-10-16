@@ -12,6 +12,7 @@ enum VMCreationWorkflow {
         let user = try req.requireActingUser("Creating a VM")
 
         struct CreateVMRequest: Content, ValidatedRequestBody {
+            let resourceClass: WorkloadResourceClassReference?
             var name: String
             /// The VM's DNS label (issue #770). Defaults to a slugified
             /// `name`, disambiguated against whatever already registers into
@@ -152,6 +153,8 @@ enum VMCreationWorkflow {
             resourceKind: "VMs"
         )
         let projectId = try project.requireID()
+        let resourceClass = try await WorkloadResourceClassService.resolve(
+            createRequest.resourceClass, project: project, req: req)
         let bootPool = try await StoragePool.resolveForCreate(
             requestedPoolID: createRequest.poolId, projectID: projectId, on: req.db)
         let bootPoolID = try bootPool.requireID()
@@ -309,6 +312,7 @@ enum VMCreationWorkflow {
             metadataEnabled: metadataEnabled,
             metadataSource: metadataSource
         )
+        vm.resourceClass = resourceClass
         vm.cmdline = cmdlineValue
         // Link VM to source image
         vm.$sourceImage.id = image.id
@@ -382,16 +386,16 @@ enum VMCreationWorkflow {
             // transaction (not the insert): the loser re-reads the used set
             // and allocates the next free address.
             let initialGeneration = vm.generation
-            accepted = try await VMController.retryingOnConstraintFailure {
+            accepted = try await DatabaseTransactionRetry.retrying(
+                on: req.db, uniqueConstraints: DatabaseTransactionRetry.workloadCreateConstraints
+            ) {
                 // A retried attempt reuses this model after its insert was
                 // rolled back: Fluent recorded the generated id and marked the
                 // model as existing, so saving again would UPDATE a row that no
                 // longer exists (and the failed attempt's SQL writer refreshed
                 // its in-memory generation). Reset both so every attempt starts
                 // as a fresh insert.
-                vm.id = nil
-                vm.$id.exists = false
-                vm.generation = initialGeneration
+                DatabaseTransactionRetry.resetNewResource(vm, generation: initialGeneration)
                 return try await req.db.transaction { db in
                     try await IdempotencyService.reserve(
                         req.idempotencyContext, actor: .user(userID), on: db)

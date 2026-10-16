@@ -51,6 +51,8 @@ public enum SandboxCPUTemplate {
 /// only what it can legitimately know; rootfs materialization, kernel choice,
 /// and vsock wiring are agent-side concerns.
 public struct SandboxSpec: Codable, Sendable {
+    public private(set) var admittedReservation: WorkloadAdmittedReservation?
+    public let resourceClass: WorkloadResourceClassSnapshot?
     /// OCI image reference as provided by the user, e.g.
     /// `ghcr.io/acme/worker:v3`. Kept verbatim for guest identity and logging;
     /// agents converge on `imageDigest` when present.
@@ -100,8 +102,12 @@ public struct SandboxSpec: Codable, Sendable {
         workingDir: String? = nil,
         network: NetworkSpec? = nil,
         restoreFrom: SandboxSnapshotRef? = nil,
-        cpuTemplate: String? = nil
+        cpuTemplate: String? = nil,
+        resourceClass: WorkloadResourceClassSnapshot? = nil,
+        admittedReservation: WorkloadAdmittedReservation? = nil
     ) {
+        self.admittedReservation = admittedReservation
+        self.resourceClass = resourceClass
         self.image = image
         self.imageDigest = imageDigest
         self.cpus = cpus
@@ -160,6 +166,8 @@ public struct RegistryCredential: Codable, Sendable {
 public enum SandboxStatus: String, Codable, CaseIterable, Sendable {
     /// Exists agent-side (rootfs materialized) but not running.
     case stopped = "Stopped"
+    /// Durable, verified checkpoint exists and the original VMM is gone.
+    case suspended = "Suspended"
     case running = "Running"
     /// The workload ran and ended on its own; `ObservedSandboxState.exitCode`
     /// carries the result. Terminal: distinct from `.stopped` (a control-plane
@@ -180,7 +188,7 @@ public enum SandboxStatus: String, Codable, CaseIterable, Sendable {
         switch self {
         case .starting, .stopping:
             return true
-        case .stopped, .running, .exited, .error, .unknown:
+        case .stopped, .suspended, .running, .exited, .error, .unknown:
             return false
         }
     }
@@ -205,6 +213,8 @@ public enum SandboxStatus: String, Codable, CaseIterable, Sendable {
 public enum DesiredSandboxStatus: String, Codable, CaseIterable, Sendable {
     case running = "Running"
     case stopped = "Stopped"
+    /// Durable, verified checkpoint exists and the original VMM is gone.
+    case suspended = "Suspended"
     /// The sandbox should not exist on the agent at all (deletion in
     /// progress). Rows are removed from the control-plane database only after
     /// an agent confirms absence, exactly like VM deletes.
@@ -222,6 +232,8 @@ public enum DesiredSandboxStatus: String, Codable, CaseIterable, Sendable {
             return observed == .running || observed == .exited
         case .stopped:
             return observed == .stopped || observed == .exited
+        case .suspended:
+            return observed == .suspended
         case .absent:
             return false  // absence is confirmed by omission from the observed set, never by a status
         }

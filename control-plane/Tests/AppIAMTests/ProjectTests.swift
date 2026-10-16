@@ -12,7 +12,7 @@ private struct AtomicProjectUpdateRequest: Content {
     let organizationalUnitId: UUID
 }
 
-@Suite("Project API Tests", .serialized)
+@Suite("Project API Tests", .serialized, .postgresFixture)
 final class ProjectTests {
 
     func withProjectTestApp(_ test: (Application, User, Organization, OrganizationalUnit, String) async throws -> Void)
@@ -21,6 +21,7 @@ final class ProjectTests {
         let app = try await Application.makeForTesting()
 
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
 
             // Create test user and organization
@@ -67,64 +68,15 @@ final class ProjectTests {
 
             let authToken = try await testUser.generateAPIKey(on: app.db)
 
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app, testUser, testOrganization, testOU, authToken)
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }
 
         try await app.shutdownForTesting()
-    }
-
-    @Test("Create project in organization")
-    func testCreateProjectInOrganization() async throws {
-        try await withProjectTestApp { app, _, testOrganization, _, authToken in
-            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/projects") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(
-                    CreateProjectRequest(
-                        name: "Web Application",
-                        description: "Main web application project",
-                        organizationalUnitId: nil,
-                        defaultEnvironment: "development",
-                        environments: ["development", "staging", "production"]
-                    ))
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-
-                let response = try res.content.decode(ProjectResponse.self)
-                #expect(response.name == "Web Application")
-                #expect(response.organizationId == testOrganization.id)
-                #expect(response.organizationalUnitId == nil)
-                #expect(response.environments.count == 3)
-                #expect(response.defaultEnvironment == "development")
-            }
-        }
-    }
-
-    @Test("Create project in OU")
-    func testCreateProjectInOU() async throws {
-        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
-            try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/ous/\(testOU.id!)/projects") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
-                try req.content.encode(
-                    CreateProjectRequest(
-                        name: "Backend API",
-                        description: "Backend API project",
-                        organizationalUnitId: nil,
-                        defaultEnvironment: "dev",
-                        environments: ["dev", "prod"]
-                    ))
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-
-                let response = try res.content.decode(ProjectResponse.self)
-                #expect(response.name == "Backend API")
-                #expect(response.organizationId == nil)
-                #expect(response.organizationalUnitId == testOU.id)
-                #expect(response.environments.count == 2)
-            }
-        }
     }
 
     @Test("Create project in organization persists org parentage and grants the creator admin")
@@ -139,11 +91,17 @@ final class ProjectTests {
                         description: "Project that should get an org tuple",
                         organizationalUnitId: nil,
                         defaultEnvironment: "development",
-                        environments: ["development"]
+                        environments: ["development", "staging", "production"]
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                createdProjectId = try res.content.decode(ProjectResponse.self).id
+                let response = try res.content.decode(ProjectResponse.self)
+                createdProjectId = response.id
+                #expect(response.name == "Perms Project")
+                #expect(response.organizationId == testOrganization.id)
+                #expect(response.organizationalUnitId == nil)
+                #expect(response.environments.count == 3)
+                #expect(response.defaultEnvironment == "development")
             }
 
             // Parentage must reference the *persisted* project id (issue #267):
@@ -178,12 +136,18 @@ final class ProjectTests {
                         name: "OU Perms Project",
                         description: "OU project that should get an OU parent tuple",
                         organizationalUnitId: nil,
-                        defaultEnvironment: "development",
-                        environments: ["development"]
+                        defaultEnvironment: "dev",
+                        environments: ["dev", "prod"]
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                createdProjectId = try res.content.decode(ProjectResponse.self).id
+                let response = try res.content.decode(ProjectResponse.self)
+                createdProjectId = response.id
+                #expect(response.name == "OU Perms Project")
+                #expect(response.organizationId == nil)
+                #expect(response.organizationalUnitId == testOU.id)
+                #expect(response.environments == ["dev", "prod"])
+                #expect(response.defaultEnvironment == "dev")
             }
 
             let projectId = try #require(createdProjectId)

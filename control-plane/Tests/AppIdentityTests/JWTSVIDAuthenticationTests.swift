@@ -24,7 +24,7 @@ import AppTestSupport
 ///    workload registry and nothing more, so an unregistered identity
 ///    authenticates as nobody and a registered one gets exactly the access its
 ///    role bindings give it.
-@Suite("JWT-SVID Authentication", .serialized)
+@Suite("JWT-SVID Authentication", .serialized, .postgresFixture)
 struct JWTSVIDAuthenticationTests {
 
     private static let trustDomain = "strato.local"

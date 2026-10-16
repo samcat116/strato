@@ -3,6 +3,7 @@ import Foundation
 import NIOCore
 import SQLKit
 import StratoShared
+import Synchronization
 import Testing
 import Vapor
 
@@ -17,7 +18,7 @@ import AppTestSupport
 /// from a loopback peer, and Vapor's in-memory `test()` harness has no remote
 /// address at all, so neither the accept nor the reject path can be reached
 /// through it.
-@Suite("Desired-state long-poll", .serialized)
+@Suite("Desired-state long-poll", .serialized, .postgresFixture)
 struct DesiredStatePollTests {
 
     private static let path = "/agent/desired-state"
@@ -73,6 +74,8 @@ struct DesiredStatePollTests {
         let header = xfccHeader(identity: identity)
         return try await app.client.get(URI(string: "http://127.0.0.1:\(port)\(Self.path)")) { req in
             req.headers.add(name: header.name, value: header.value)
+            req.headers.add(
+                name: AgentUpdateBridgeResponse.wireVersionHeader, value: String(WireProtocol.currentVersion))
             if let ifNoneMatch {
                 req.headers.add(name: "If-None-Match", value: ifNoneMatch)
             }
@@ -85,6 +88,65 @@ struct DesiredStatePollTests {
             MessageEnvelope.self, from: Data(body.readableBytesView))
         #expect(envelope.type == .desiredState)
         return try envelope.decode(as: DesiredStateMessage.self)
+    }
+
+    @Test("Wire-skewed bridge receives only its staged artifact and cannot fetch workloads")
+    func bridgeSkew() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            let agent = try await self.registerAgentRow(app: app, name: "poll-agent")
+            agent.version = "old"
+            agent.updateDesiredVersion = "new"
+            agent.updateArtifactOverride = ResolvedAgentArtifact(
+                url: "https://example.test/agent", sha256: String(repeating: "ab", count: 32),
+                kind: .binary, tarballMember: "")
+            try await agent.save(on: app.db)
+            let skew = String(WireProtocol.currentVersion + 1)
+            let headers: HTTPHeaders = [
+                "X-Forwarded-Client-Cert": "URI=spiffe://strato.local/agent/poll-agent",
+                AgentUpdateBridgeResponse.wireVersionHeader: skew,
+            ]
+            let bridge = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path), headers: headers)
+            #expect(bridge.status == .ok)
+            let body = try #require(bridge.body)
+            let response = try JSONDecoder().decode(AgentUpdateBridgeResponse.self, from: Data(body.readableBytesView))
+            #expect(response.update?.targetVersion == "new")
+            #expect(response.update?.sha256 == String(repeating: "ab", count: 32))
+            let refused = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + Self.path), headers: headers)
+            #expect(refused.status == .conflict)
+            agent.administrativelyOffline = true
+            try await agent.save(on: app.db)
+            let revoked = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path), headers: headers)
+            #expect(revoked.status == .forbidden)
+            let anonymous = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path))
+            #expect(anonymous.status == .unauthorized)
+        }
+    }
+
+    @Test("Legacy matching-version polls and unassigned bridge fetches retain ordinary behavior")
+    func matchingLegacyAndUnassignedBridge() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            _ = try await self.registerAgentRow(app: app, name: "poll-agent")
+            let headers: HTTPHeaders = ["X-Forwarded-Client-Cert": "URI=spiffe://strato.local/agent/poll-agent"]
+            let ordinary = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + Self.path), headers: headers)
+            #expect(ordinary.status == .ok)
+            _ = try self.decodeSync(ordinary)
+            let bridge = try await app.client.get(
+                URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path), headers: headers)
+            let body = try #require(bridge.body)
+            let response = try JSONDecoder().decode(AgentUpdateBridgeResponse.self, from: Data(body.readableBytesView))
+            #expect(response.update == nil)
+            #expect(response.workloadWireVersion == WireProtocol.currentVersion)
+            let keys = try #require(
+                try JSONSerialization.jsonObject(with: Data(body.readableBytesView)) as? [String: Any])
+            #expect(Set(keys.keys) == ["exchangeVersion", "workloadWireVersion"])
+        }
     }
 
     // MARK: Payload
@@ -203,14 +265,39 @@ struct DesiredStatePollTests {
         }
     }
 
+    @Test("Hold jitter uses the injected source and retains the production ceiling")
+    func boundedHoldJitter() async throws {
+        try await withTestApp { app in
+            app.desiredStatePollHoldWindow = .seconds(60)
+            let samples = Mutex<[Double]>([0, 0.5, 1, -1, 2, .nan])
+            app.desiredStatePollRandomUnit = { samples.withLock { $0.removeFirst() } }
+            let windows = (0..<6).map { _ in app.nextDesiredStatePollHoldWindow() }
+            #expect(
+                windows == [
+                    .seconds(36), .milliseconds(40_500), .seconds(45),
+                    .seconds(36), .seconds(45), .seconds(45),
+                ])
+            #expect(samples.withLock { $0.isEmpty })
+            app.desiredStatePollHoldWindow = .milliseconds(200)
+            app.desiredStatePollRandomUnit = { 0 }
+            #expect(app.nextDesiredStatePollHoldWindow() == .milliseconds(160))
+            app.desiredStatePollHoldWindow = .seconds(-1)
+            #expect(app.nextDesiredStatePollHoldWindow() == .zero)
+        }
+    }
+
     // MARK: Conditional requests
 
-    @Test("A matching If-None-Match parks and answers 304 with the same ETag")
-    func matchingValidatorParksThen304() async throws {
+    @Test("A matching If-None-Match parks and answers 304 with the same ETag", arguments: [0.0, 1.0])
+    func matchingValidatorParksThen304(unit: Double) async throws {
         try await withRunningPollApp { app, port in
             self.enableSPIRE(on: app)
             _ = try await self.registerAgentRow(app: app, name: "poll-agent")
             app.desiredStatePollHoldWindow = .milliseconds(200)
+            let samples = Mutex(0)
+            app.desiredStatePollRandomUnit = {
+                samples.withLock { $0 += 1 }; return unit
+            }
 
             let first = try await self.poll(app: app, port: port)
             let etag = try #require(first.headers.first(name: .eTag))
@@ -223,7 +310,8 @@ struct DesiredStatePollTests {
             #expect(second.headers.first(name: .eTag) == etag)
             // It parked rather than answering immediately, which is the whole
             // point: an instant 304 would make the agent spin.
-            #expect(elapsed >= .milliseconds(150))
+            #expect(elapsed >= .milliseconds(unit == 0 ? 110 : 150))
+            #expect(samples.withLock { $0 } == 2)
         }
     }
 
@@ -466,6 +554,7 @@ struct DesiredStatePollTests {
 /// demands a loopback remote address).
 private func withRunningPollApp(_ test: (Application, Int) async throws -> Void) async throws {
     try await withTestApp { app in
+        app.desiredStatePollRandomUnit = { 1 }
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
 
         // `defer` cannot hold an `await`, so the outcome is captured and

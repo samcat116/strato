@@ -86,6 +86,8 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
     private let logger: Logger
     private let fullRefetchInterval: Duration
     private let clock: PollClock
+    private let randomUnit: @Sendable () -> Double
+    private var currentFullRefetchInterval: Duration
 
     /// Backoff bounds for a failing poll, matching the WebSocket reconnect
     /// loop's shape so a control plane that is down produces one recognizable
@@ -120,12 +122,16 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
         deliver: @escaping Deliver,
         logger: Logger,
         fullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval,
-        clock: PollClock = ContinuousClock()
+        clock: PollClock = ContinuousClock(),
+        randomUnit: @escaping @Sendable () -> Double = { Double.random(in: 0...1) }
     ) {
         self.fetch = fetch
         self.deliver = deliver
         self.logger = logger
-        self.fullRefetchInterval = fullRefetchInterval
+        let interval = min(max(.seconds(1), fullRefetchInterval), Self.defaultFullRefetchInterval)
+        self.fullRefetchInterval = interval
+        self.currentFullRefetchInterval = interval
+        self.randomUnit = randomUnit
         self.clock = clock
         self.backoff = Self.initialBackoff
     }
@@ -162,7 +168,7 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
         // no ETag worth trusting anyway, and starting from a full payload means
         // the loop's first act is always to establish ground truth.
         let fullRefetchDue =
-            lastSuccessfulFullRefetchAt.map { $0.duration(to: attemptStart) >= fullRefetchInterval } ?? true
+            lastSuccessfulFullRefetchAt.map { $0.duration(to: attemptStart) >= currentFullRefetchInterval } ?? true
         // A failed decode drops the ETag. Even before the interval elapses the
         // next request is therefore unconditional, and a valid response to it
         // must advance the full-refetch clock.
@@ -193,7 +199,12 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
                 // Recorded only after validating the full payload, so a
                 // transport failure, unexpected status, malformed body, or
                 // wrong message type cannot consume the interval.
-                if unconditional { lastSuccessfulFullRefetchAt = clock.now }
+                if unconditional {
+                    lastSuccessfulFullRefetchAt = clock.now
+                    // Sample once per successful full fetch. Failures and conditional
+                    // responses must not move a due unconditional request into the future.
+                    currentFullRefetchInterval = max(.seconds(1), jittered(fullRefetchInterval))
+                }
                 noteUsableResponse()
             }
         case 304 where unconditional:
@@ -259,13 +270,14 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
     /// Both failure shapes share the one schedule so a failing control plane
     /// produces a single recognizable cadence rather than two.
     private func backOff(after failure: PollFailure) async {
+        let delay = jittered(backoff)
         switch failure {
         case .transport(let error):
             logger.warning(
                 "Desired-state poll failed; retrying",
                 metadata: [
                     "error": .string("\(error)"),
-                    "retryIn": .stringConvertible(backoff.components.seconds),
+                    "retryIn": .stringConvertible(delay),
                 ])
         case .unusable(let reason):
             unusableResponses += 1
@@ -281,11 +293,20 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
                 metadata: [
                     "reason": .string(reason),
                     "consecutive": .stringConvertible(consecutiveUnusableResponses),
-                    "retryIn": .stringConvertible(backoff.components.seconds),
+                    "retryIn": .stringConvertible(delay),
                 ])
         }
-        try? await clock.sleep(until: clock.now.advanced(by: backoff), tolerance: nil)
+        try? await clock.sleep(until: clock.now.advanced(by: delay), tolerance: nil)
         backoff = min(backoff * 2, Self.maximumBackoff)
+    }
+
+    /// Downward-only 20% jitter preserves the retry ceiling and refetch backstop.
+    /// The injected source is clamped so even a faulty source cannot widen bounds.
+    private func jittered(_ ceiling: Duration) -> Duration {
+        let sample = randomUnit()
+        let unit = sample.isFinite ? min(1, max(0, sample)) : 1
+        let floor = ceiling - ceiling / 5
+        return min(ceiling, max(floor, floor + (ceiling - floor) * unit))
     }
 
     /// A usable response — a delivered `200`, or a `304` answering a

@@ -230,6 +230,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/retry-placement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry placement of a failed, unplaced virtual machine
+         * @description Requires vm:start. Retries a failed create only when the VM has no assigned host and exactly one existing boot volume with no physical placement and no active convergence deadline. Metadata-only generation advances before or during queued placement do not cancel it. Reuses its NICs, addresses, identity and boot volume, and preserves its desired power state. The existing boot volume receives a new generation and provisioning budget. A pending or already placed VM is refused with 409. Completion is reported through the new generation's conditions; a VM whose desired state is shutdown can then be started.
+         */
+        post: operations["retryVMPlacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/interfaces": {
         parameters: {
             query?: never;
@@ -456,6 +479,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vm-fleet-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a fleet command without dispatch
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
+         */
+        post: operations["prepareVMFleetRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vm-fleet-runs/{runID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read collected fleet results
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
+         */
+        get: operations["getVMFleetRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vm-fleet-runs/{runID}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the exact fleet target list
+         * @description Initiator and credential scoped. Requires vm:runCommand per VM. Preview expires after ten minutes. Confirmation rechecks authorization and eligibility and binds the exact resolved IDs. Repeated confirmation never replays commands. At most eight children are active per fleet. Poll until complete; failures and skipped VMs are normal outcomes. Accepted commands continue after client disconnect. Per-VM session caps and per-project accepted-command rate limits apply at confirmation. Refused children are skipped without consuming rate budget. Queued children reserve VM capacity; dispatch and repeated confirmation do not charge admission again.
+         */
+        post: operations["confirmVMFleetRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/exec-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List attached interactive sessions on a VM
+         * @description Requires vm:read. Presence is shared across replicas and expires within 60 seconds after an owner crash. Pending reservations are excluded.
+         */
+        get: operations["listLiveVMExecSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/exec-sessions/{sessionID}/terminate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request termination of an attached interactive session
+         * @description Requires vm:exec on this VM. The socket owner closes the guest process and browser on its next maintenance tick. Repeating while termination is pending returns 202; an ended or foreign session returns 404.
+         */
+        post: operations["terminateVMExecSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/actions/run": {
         parameters: {
             query?: never;
@@ -654,7 +788,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Stop a sandbox */
+        /**
+         * Stop a sandbox
+         * @description Empty requests preserve pause behavior. With suspend=true, reserves internal checkpoint storage and converges to Suspended only after a verified durable checkpoint and VMM destruction. Start readmits compute.
+         */
         post: operations["stopSandbox"];
         delete?: never;
         options?: never;
@@ -696,7 +833,7 @@ export interface paths {
         put?: never;
         /**
          * Create a sandbox exec session
-         * @description Mints a short-lived, single-use session. Attach the authenticated WebSocket at `websocketPath` before `expiresAt` to start the command.
+         * @description Suspended sandboxes first return 202 with a quota-admitted wake mutation. Retry exec after that generation converges. No session exists during wake. Mints a short-lived, single-use session. Attach the authenticated WebSocket at `websocketPath` before `expiresAt` to start the command.
          */
         post: operations["createSandboxExecSession"];
         delete?: never;
@@ -4027,9 +4164,32 @@ export interface paths {
         put?: never;
         /**
          * Force an agent offline
-         * @description Drops the agent from the in-memory registry and marks it `offline` in the database. Requires `manage` on the agent, and falls back to system-admin only while the agent hosts another organization's workloads.
+         * @description Persists an administrative offline hold and closes the owning agent socket across replicas. Heartbeats and reconnects cannot clear the hold; use the resume action to release it. Requires `manage` on the agent, and falls back to system-admin only while the agent hosts another organization's workloads.
          */
         post: operations["forceAgentOffline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agentId}/actions/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release an agent's administrative offline hold
+         * @description Allows authenticated reconnect and registration again. Does not mark the agent online until it reports in. Requires manage on the agent, with the same system-admin requirement for foreign workloads as force-offline.
+         */
+        post: operations["resumeAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5818,6 +5978,36 @@ export interface components {
             completedAt?: string;
             result?: components["schemas"]["VMCommandResult"];
         };
+        VMFleetPrepareRequest: {
+            /** @description Intersect project=<uuid>,environment=<name>,tag:<key>=<value>; or ids=<uuid;uuid>. Environment/tag filters require a project. At most 100 targets. */
+            selector: string;
+            command: string[];
+        };
+        VMFleetConfirmRequest: {
+            vmIDs: string[];
+        };
+        VMFleetEntry: {
+            /** Format: uuid */
+            vmID: string;
+            name?: string;
+            /** @enum {string} */
+            state: "ready" | "skipped" | "queued" | "dispatched";
+            reason?: string;
+            /** Format: uuid */
+            operationID?: string;
+        };
+        VMFleetRun: {
+            /** Format: uuid */
+            id: string;
+            command: string[];
+            confirmed: boolean;
+            /** Format: date-time */
+            deadline: string;
+            entries: components["schemas"]["VMFleetEntry"][];
+            /** @description Per-child results with at most 4 KiB from each output stream. Fetch an individual operation for full captured output. */
+            operations: components["schemas"]["ResourceOperation"][];
+            complete: boolean;
+        };
         VMRunCommandRequest: {
             command: string[];
             env?: {
@@ -5926,6 +6116,7 @@ export interface components {
             error?: string | null;
         };
         CreateVMRequest: {
+            resourceClass?: components["schemas"]["WorkloadResourceClassReference"];
             name: string;
             /** @description The VM's DNS label. Defaults to a slugified `name`, disambiguated with a numeric suffix against whatever already registers into the target network's primary zone. An explicit value is instead held to strict uniqueness and answers `409` on a collision. */
             hostname?: string;
@@ -6041,6 +6232,18 @@ export interface components {
             sshAuthorizedKeys?: string[];
         };
         VMDetail: {
+            admittedReservation?: components["schemas"]["WorkloadAdmittedReservation"];
+            /**
+             * Format: int64
+             * @description Durable physical memory commitment; absent for historical guaranteed accounting.
+             */
+            effectiveMemoryReservationBytes?: number | null;
+            resourceClass?: components["schemas"]["WorkloadResourceClassSnapshot"];
+            /**
+             * @description Missing historical references resolve to guaranteed.
+             * @enum {string}
+             */
+            resourceClassKind?: "guaranteed" | "burstable";
             /** Format: uuid */
             id?: string;
             name: string;
@@ -6243,6 +6446,7 @@ export interface components {
             prefixLength?: number;
         };
         CreateSandboxRequest: {
+            resourceClass?: components["schemas"]["WorkloadResourceClassReference"];
             name: string;
             /** @description OCI image reference. */
             image?: string;
@@ -6266,6 +6470,7 @@ export interface components {
                 [key: string]: string;
             };
             workingDir?: string;
+            /** @description Idle budget in seconds since the last admitted activity. */
             ttlSeconds?: number;
             /**
              * Format: uuid
@@ -6281,6 +6486,18 @@ export interface components {
          * @enum {string}
          */
         GuestExecOutputMode: "raw" | "multiplexed";
+        LiveVMExecSession: {
+            /** Format: uuid */
+            sessionId: string;
+            /** Format: uuid */
+            userId: string;
+            username?: string;
+            /** Format: date-time */
+            attachedAt: string;
+            /** Format: date-time */
+            lastActivityAt: string;
+            terminationRequested: boolean;
+        };
         GuestExecRequest: {
             command: string[];
             env?: {
@@ -6302,9 +6519,22 @@ export interface components {
         };
         UpdateSandboxRequest: {
             name?: string;
+            /** @description Idle budget in seconds since the last admitted activity. */
             ttlSeconds?: number;
         };
         SandboxDetail: {
+            admittedReservation?: components["schemas"]["WorkloadAdmittedReservation"];
+            /**
+             * Format: int64
+             * @description Durable physical memory commitment; absent for historical guaranteed accounting.
+             */
+            effectiveMemoryReservationBytes?: number | null;
+            resourceClass?: components["schemas"]["WorkloadResourceClassSnapshot"];
+            /**
+             * @description Missing historical references resolve to guaranteed.
+             * @enum {string}
+             */
+            resourceClassKind?: "guaranteed" | "burstable";
             /** Format: uuid */
             id?: string;
             name: string;
@@ -6322,9 +6552,18 @@ export interface components {
                 [key: string]: string;
             };
             workingDir?: string;
+            /** @description Idle budget in seconds since the last admitted activity. */
             ttlSeconds?: number;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Earliest idle deadline. Active or unknown activity prevents deletion beyond this time.
+             */
             expiresAt?: string;
+            /**
+             * Format: date-time
+             * @description Last admitted activity, initially creation; monotonically advances.
+             */
+            lastActiveAt?: string;
             hypervisorId?: string;
             /** Format: uuid */
             restoredFromSnapshotId?: string;
@@ -6342,6 +6581,7 @@ export interface components {
             networkInterfaces?: components["schemas"]["SandboxNetworkInterface"][];
             /** @description Whether this sandbox's attached security groups are actually being enforced. Absent means the sandbox has no NIC, so there is nothing to judge — not a claim that they are unenforced. False today for every networked sandbox: sandbox guest networking is not yet enabled, so no OVN port exists to join the groups' port groups. */
             securityGroupsEnforced?: boolean;
+            suspension?: components["schemas"]["SandboxSuspensionEvidence"];
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -6376,12 +6616,26 @@ export interface components {
             /** Format: date-time */
             securityGroupLastErrorAt?: string;
         };
+        SandboxSuspensionEvidence: {
+            /** Format: uuid */
+            checkpointId: string;
+            /** Format: int64 */
+            generation: number;
+            /** Format: int64 */
+            storageBytes: number;
+            vmmDestroyed: boolean;
+            verified: boolean;
+            /** Format: int64 */
+            restoreDurationMilliseconds?: number;
+        };
         /** @enum {string} */
-        SandboxStatus: "Stopped" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
+        SandboxStatus: "Stopped" | "Suspended" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
         CreateSandboxSnapshotRequest: {
             name?: string;
             /** @description When true, checkpoint and stop; defaults to false. */
             stop?: boolean;
+            /** @description Requires stop=true; opt into durable suspension after the user snapshot is recorded. */
+            suspend?: boolean;
             /** @description How long to keep the snapshot. Omitted uses the fleet default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it until someone deletes it, overriding that default. Resolved to an absolute `expiresAt` at creation. */
             ttlSeconds?: number;
         };
@@ -7387,14 +7641,20 @@ export interface components {
         UserSource: "local" | "scim" | "oidc";
         /** @description Self-registration payload for `POST /api/users/register`. */
         SelfRegisterUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName: string;
         };
         /** @description Admin invitation payload. `role` only applies when `organizationId` is set. */
         AdminCreateUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName: string;
             /** @default false */
             isSystemAdmin: boolean;
@@ -7419,8 +7679,11 @@ export interface components {
         };
         /** @description Partial update; omitted fields are left unchanged. */
         UpdateUserRequest: {
+            /** @description Trimmed; 3–64 ASCII letters, numbers, dots, underscores, or hyphens. */
             username?: string;
+            /** @description Trimmed non-empty display name; at most 128 Unicode scalars. */
             displayName?: string;
+            /** @description Trimmed structural email address; at most 254 Unicode scalars; no whitespace or controls. */
             email?: string;
         };
         /** @description The user behind the current session. */
@@ -8606,7 +8869,7 @@ export interface components {
         };
         NodeDependencyObservation: {
             /** @enum {string} */
-            id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster";
+            id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster" | "host_memory_profile";
             /** @enum {string} */
             role: "identity" | "compute" | "networking" | "routing" | "storage";
             /** @enum {string} */
@@ -8683,6 +8946,8 @@ export interface components {
             /** @description The agent build currently running on the node. */
             version: string;
             status: components["schemas"]["AgentStatus"];
+            /** @description Operator hold that only the resume action clears. */
+            administrativelyOffline: boolean;
             resources: components["schemas"]["AgentResources"];
             architecture?: components["schemas"]["AgentCPUArchitecture"];
             operatingSystem?: components["schemas"]["AgentOperatingSystem"];
@@ -8704,6 +8969,7 @@ export interface components {
              * @description Control-plane time when the latest dependency snapshot arrived. Placement freshness uses this value instead of the agent's clock.
              */
             dependencyObservationsReceivedAt?: string;
+            memoryAccounting?: components["schemas"]["HostMemoryAccounting"];
             resourceTelemetry?: components["schemas"]["HostResourceTelemetry"];
             /**
              * Format: date-time
@@ -8796,6 +9062,11 @@ export interface components {
         AgentStatus: "online" | "offline" | "connecting" | "error";
         /** @description Capacity reported by the agent host. */
         AgentResources: {
+            /**
+             * Format: int64
+             * @description Physical CPU capacity after inventory and provisional commitments; one CPU is 1000000 units.
+             */
+            availableCPUMicroUnits?: number;
             /** @description Total vCPUs on the host. */
             totalCPU: number;
             availableCPU: number;
@@ -8821,6 +9092,22 @@ export interface components {
              * @description Bytes physically free on the local volume filesystem.
              */
             physicalFreeDisk: number;
+            memoryAccounting?: components["schemas"]["HostMemoryAccounting"];
+        };
+        HostMemoryAccounting: {
+            /** Format: int64 */
+            physicalBytes: number;
+            /** Format: int64 */
+            hostReservedBytes: number;
+            /** Format: int64 */
+            workloadEffectiveBytes: number;
+            /**
+             * Format: int64
+             * @description Clamped remaining bytes; host and workload reserves are already subtracted.
+             */
+            remainingAllocatableBytes: number;
+            /** Format: int64 */
+            qemuOverheadBytes: number;
         };
         /**
          * @description Whether the latest sampling pass measured the signal. Unavailable is distinct from an available signal whose value is zero.
@@ -8873,6 +9160,35 @@ export interface components {
             reclaimReclaimedPagesTotal: components["schemas"]["ResourceTelemetryValue"];
             oomKillsTotal: components["schemas"]["ResourceTelemetryValue"];
             mglruEnabled: components["schemas"]["ResourceTelemetryFlag"];
+            memoryProfile?: components["schemas"]["HostMemoryProfileObservation"];
+            swapInPagesTotal?: components["schemas"]["ResourceTelemetryValue"];
+            swapOutPagesTotal?: components["schemas"]["ResourceTelemetryValue"];
+            zramOriginalBytes?: components["schemas"]["ResourceTelemetryValue"];
+            swapInPagesPerSecond?: number | null;
+            swapOutPagesPerSecond?: number | null;
+            memoryWarnings?: ("swap_thrashing" | "oom_kill")[];
+        };
+        HostMemoryProfileConfiguration: {
+            /** @enum {string} */
+            tier: "zswap" | "zram";
+            /** @enum {string} */
+            tenant_class: "single" | "multi";
+            /** Format: int64 */
+            zram_bytes?: number;
+            zswap_pool_percent?: number;
+            nvme_swap: string;
+            ksm?: boolean;
+            require_mglru?: boolean;
+            ksm_pages_to_scan?: number;
+            ksm_sleep_millisecs?: number;
+        };
+        HostMemoryProfileObservation: {
+            configured?: components["schemas"]["HostMemoryProfileConfiguration"];
+            /** @enum {string|null} */
+            effectiveTier?: "zswap" | "zram" | null;
+            thpPolicy?: string | null;
+            ksmRunning?: boolean | null;
+            reason?: string | null;
         };
         WorkloadMemoryEventsTelemetry: {
             availability: components["schemas"]["ResourceTelemetryAvailability"];
@@ -8932,7 +9248,8 @@ export interface components {
             /** @description Whether hardware acceleration (KVM/HVF) backs this hypervisor. */
             accelerated: boolean;
             unavailabilityReason?: string | null;
-            capabilities: components["schemas"]["AgentHypervisorCapabilities"];
+            /** @description Whether this backend can create and restore snapshots. */
+            supportsSnapshots: boolean;
             /** @description Whether this host can attach a virtio-vsock device for this hypervisor; null for agents that predate vsock probing. */
             supportsVsock?: boolean | null;
             /** @description Whether this agent can bridge guest-exec sessions to VMs using this hypervisor; null for agents that predate VM guest exec. */
@@ -8941,21 +9258,6 @@ export interface components {
             supportsVolumeIOLimits?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
-        };
-        /** @description Feature support of one hypervisor backend. */
-        AgentHypervisorCapabilities: {
-            type: components["schemas"]["AgentHypervisorType"];
-            supportsPause: boolean;
-            supportsLiveMigration: boolean;
-            supportsSnapshots: boolean;
-            /** @description Whether booting requires an explicit kernel + rootfs. */
-            requiresDirectKernelBoot: boolean;
-            maxVCPUs: number;
-            /**
-             * Format: int64
-             * @description Bytes.
-             */
-            maxMemory: number;
         };
         /** @description Descriptive hardware/platform details for operator display. Purely informational, best-effort, and every field may be absent. */
         AgentHostInfo: {
@@ -9177,6 +9479,9 @@ export interface components {
         StoragePoolMode: "local" | "replicated" | "ceph";
         /** @description An availability zone: the agents that share one OVN deployment, so a logical network pinned to the site can span its nodes. */
         SiteDetail: {
+            resourceClasses?: components["schemas"]["WorkloadResourceClassSnapshot"][];
+            /** @description False until verified STR272 runtime enforcement is available. */
+            burstableAdmissionAvailable?: boolean;
             /** Format: uuid */
             id: string;
             name: string;
@@ -9245,6 +9550,7 @@ export interface components {
         };
         /** @description Full-replace (PUT) semantics for descriptive fields: omitting one clears it (labels omitted → empty map). `status` is the exception — an omitted status leaves the current lifecycle unchanged. */
         UpdateSiteRequest: {
+            burstableResourcePolicy?: components["schemas"]["WorkloadResourceClassPolicy"];
             description?: string | null;
             /** Format: uuid */
             networkControllerAgentId?: string | null;
@@ -10523,6 +10829,52 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** @description Site-scoped class selection. Omission preserves guaranteed placement; burstable assignment currently fails closed. */
+        WorkloadResourceClassReference: {
+            /** Format: uuid */
+            siteID: string;
+            /** Format: uuid */
+            classID: string;
+        };
+        /** @description Configuration ceilings are policy bounds, not recommendations for safe overcommit. Guaranteed is immutable at 1:1; burstable is explicit and requires verified runtime enforcement. Catalog changes affect new placement and growth only, never existing grants or generations. */
+        WorkloadResourceClassPolicy: {
+            /** @enum {string} */
+            kind: "guaranteed" | "burstable";
+            /** Format: double */
+            cpuAllocationRatio: number;
+            /** Format: double */
+            memoryAllocationRatio: number;
+            cpuWeight: number;
+            /** @description Guaranteed requires 100; burstable requires 1 through 99. Denominator is current guest grant, before backend overhead. */
+            memoryHighPercent: number;
+            /** @enum {string} */
+            hardLimitPolicy: "guestAndBackend";
+            /** Format: double */
+            maxCPUPressure10: number;
+            /** Format: double */
+            maxMemoryPressure10: number;
+            maxTelemetryAgeSeconds: number;
+        };
+        WorkloadResourceClassSnapshot: components["schemas"]["WorkloadResourceClassPolicy"] & {
+            /** Format: uuid */
+            classID: string;
+            /** Format: uuid */
+            siteID: string;
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @description Durable admitted physical commitment; growth preserves previous pricing. */
+        WorkloadAdmittedReservation: {
+            grantedCPUs: number;
+            /** Format: int64 */
+            guestCommitmentBytes: number;
+            /** Format: int64 */
+            cpuMicroUnits: number;
+            /** Format: int64 */
+            discountedGuestBytes: number;
+            /** Format: int64 */
+            backendOverheadBytes: number;
+        };
     };
     responses: {
         /** @description Success with no response body. */
@@ -10660,7 +11012,7 @@ export interface components {
         };
     };
     parameters: {
-        /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+        /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
         IdempotencyKey: string;
         /** @description The virtual machine's id. */
         VMID: string;
@@ -11001,7 +11353,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -11052,7 +11404,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11095,7 +11447,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11253,7 +11605,30 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["AcceptedVMMutation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    retryVMPlacement: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11302,7 +11677,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11329,7 +11704,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11353,7 +11728,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11377,7 +11752,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11400,7 +11775,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11423,7 +11798,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11446,7 +11821,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11552,7 +11927,153 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description VM concurrent exec session limit reached. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    prepareVMFleetRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VMFleetPrepareRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved fleet run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMFleetRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getVMFleetRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved fleet run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMFleetRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    confirmVMFleetRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VMFleetConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved fleet run. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMFleetRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listLiveVMExecSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live interactive sessions, bounded by the per-VM cap. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveVMExecSession"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    terminateVMExecSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Termination requested. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     runVMCommand: {
@@ -11585,6 +12106,13 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            /** @description VM session cap or project command rate limit reached. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             503: components["responses"]["ServiceUnavailable"];
         };
     };
@@ -11624,7 +12152,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11651,7 +12179,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11676,7 +12204,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11756,7 +12284,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -11837,7 +12365,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11860,7 +12388,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11883,7 +12411,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11892,7 +12420,14 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default false */
+                    suspend?: boolean;
+                };
+            };
+        };
         responses: {
             202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
@@ -11906,7 +12441,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -11950,6 +12485,7 @@ export interface operations {
                     "application/json": components["schemas"]["GuestExecSession"];
                 };
             };
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -12051,7 +12587,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12078,7 +12614,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12103,7 +12639,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12128,7 +12664,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12580,7 +13116,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -12687,7 +13223,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12710,7 +13246,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12737,7 +13273,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12760,7 +13296,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12787,7 +13323,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12814,7 +13350,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12841,7 +13377,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -12900,7 +13436,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opaque caller-generated token for replay-safe mutation retries. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -17816,7 +18352,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured. */
+            /** @description SPIRE entries for this agent cannot be revoked because the SPIRE server API is not configured, or the durable deregistration completed but the owning replica did not acknowledge socket teardown. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -17859,6 +18395,34 @@ export interface operations {
         };
     };
     forceAgentOffline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The agent's id. */
+                agentId: components["parameters"]["AgentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: components["responses"]["NoContent"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description The offline hold is durable but socket teardown was not acknowledged. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    resumeAgent: {
         parameters: {
             query?: never;
             header?: never;

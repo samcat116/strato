@@ -101,6 +101,65 @@ struct KRBDDiskRealizerTests {
         }
     }
 
+    @Test(
+        "Uncertain map completion refuses another map across retries and restart",
+        arguments: ["timeout", "output"])
+    func uncertainMapRefusesDuplicate(failure: String) async throws {
+        let recorder = KRBDCommandRecorder()
+        let state = temporaryMappingStatePath()
+        defer { try? FileManager.default.removeItem(at: state.directory) }
+        let runner: SubprocessRunner = { executable, arguments, _ in
+            let result = await recorder.run(executable, arguments)
+            if arguments.contains("map") {
+                if failure == "timeout" { throw ProcessTimedOutError(executable: "rbd", timeout: .seconds(120)) }
+                throw ProcessRunnerError.outputLimitExceeded(limit: 1 << 20)
+            }
+            return result
+        }
+        let first = KRBDDiskRealizer(
+            rbdPath: "/fake/rbd", mappingStatePath: state.path,
+            deviceExists: { _ in true }, readTextFile: textReader(), runSubprocess: runner)
+        await #expect(throws: (any Error).self) { try await first.realize(attachment, readOnly: false) }
+        guard
+            case .rbd(let pool, let image, let namespace, let user, let monitors, let cluster, _, let config) =
+                attachment
+        else { Issue.record("RBD fixture required"); return }
+        let otherCredential = DiskAttachment.rbd(
+            pool: pool, image: image, namespace: namespace, user: user, monEndpoints: monitors, clusterId: cluster,
+            credentialId: UUID(), configPath: config)
+        for (candidate, readOnly) in [(attachment, false), (attachment, true), (otherCredential, false)] {
+            let restarted = KRBDDiskRealizer(
+                rbdPath: "/fake/rbd", mappingStatePath: state.path,
+                deviceExists: { _ in true }, readTextFile: textReader(), runSubprocess: runner)
+            do {
+                _ = try await restarted.realize(candidate, readOnly: readOnly)
+                Issue.record("An uncertain mapping allowed a duplicate map")
+            } catch {
+                #expect((error as? any ClassifiableError)?.failureClassification == .blocked)
+                #expect(error.localizedDescription.contains("rbd device list"))
+            }
+        }
+        #expect(await recorder.invocations.filter { $0.arguments.contains("map") }.count == 1)
+        let marker = try #require(
+            FileManager.default.contentsOfDirectory(atPath: state.directory.path).first {
+                $0.hasPrefix("mappings.json.building-")
+            })
+        // Simulate explicit recovery after confirming the uncertain operation
+        // stopped and unmapping its actual device. Age or process exit alone
+        // never authorizes dropping the refusal.
+        _ = await recorder.run(URL(fileURLWithPath: "/fake/rbd"), ["unmap", "/dev/rbd0"])
+        try FileManager.default.removeItem(at: state.directory.appendingPathComponent(marker))
+        let recovered = KRBDDiskRealizer(
+            rbdPath: "/fake/rbd", mappingStatePath: state.path, deviceExists: { _ in true },
+            readTextFile: textReader(),
+            runSubprocess: { executable, arguments, _ in
+                await recorder.run(executable, arguments)
+            })
+        let disk = try await recovered.realize(attachment, readOnly: false)
+        #expect(disk.realized == .blockDevice(path: "/dev/rbd1"))
+        #expect(await recorder.invocations.filter { $0.arguments.contains("map") }.count == 2)
+    }
+
     @Test("Mapping enforces secure messenger mode and unmaps after the last reference")
     func mapsAndUnmaps() async throws {
         let recorder = KRBDCommandRecorder()
@@ -111,7 +170,7 @@ struct KRBDDiskRealizerTests {
             mappingStatePath: state.path,
             deviceExists: { _ in true },
             readTextFile: textReader(),
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorder.run(executable, arguments)
             })
 
@@ -146,7 +205,7 @@ struct KRBDDiskRealizerTests {
             mappingStatePath: state.path,
             deviceExists: { _ in true },
             readTextFile: textReader(readOnlyDevices: ["rbd0"]),
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorder.run(executable, arguments)
             })
 
@@ -165,7 +224,7 @@ struct KRBDDiskRealizerTests {
         let recorder = KRBDCommandRecorder()
         let state = temporaryMappingStatePath()
         defer { try? FileManager.default.removeItem(at: state.directory) }
-        let runner: SubprocessRunner = { executable, arguments in
+        let runner: SubprocessRunner = { executable, arguments, _ in
             await recorder.run(executable, arguments)
         }
 
@@ -203,7 +262,7 @@ struct KRBDDiskRealizerTests {
         let recorder = KRBDCommandRecorder()
         let state = temporaryMappingStatePath()
         defer { try? FileManager.default.removeItem(at: state.directory) }
-        let runner: SubprocessRunner = { executable, arguments in
+        let runner: SubprocessRunner = { executable, arguments, _ in
             await recorder.run(executable, arguments)
         }
         let original = KRBDDiskRealizer(
@@ -237,7 +296,7 @@ struct KRBDDiskRealizerTests {
         let realizer = KRBDDiskRealizer(
             rbdPath: "/fake/rbd", mappingStatePath: state.path,
             deviceExists: { _ in true }, readTextFile: textReader(),
-            runSubprocess: { executable, arguments in
+            runSubprocess: { executable, arguments, _ in
                 await recorder.run(executable, arguments)
             })
         let disk = try await realizer.realize(attachment, readOnly: false)

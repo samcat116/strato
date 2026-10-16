@@ -9,7 +9,8 @@ struct VMCommand: AsyncParsableCommand {
         abstract: "Manage virtual machines.",
         subcommands: [
             List.self, Get.self, Create.self, Delete.self,
-            GuestConfiguration.self, Start.self, Stop.self, Reboot.self, Pause.self, Resume.self, Exec.self,
+            GuestConfiguration.self, Start.self, Stop.self, Reboot.self, Pause.self, Resume.self, Exec.self, Run.self,
+            RunResults.self,
         ],
         defaultSubcommand: List.self
     )
@@ -111,6 +112,13 @@ struct VMCommand: AsyncParsableCommand {
         @Option(name: .long, help: "vCPU count.")
         var cpu: Int?
 
+        @Option(
+            name: .long, help: "Resource class site UUID; use with --resource-class-id. Omission selects guaranteed.")
+        var resourceClassSite: String?
+
+        @Option(name: .long, help: "Site-scoped class UUID. Burstable requires verified runtime enforcement.")
+        var resourceClassId: String?
+
         @Option(name: .long, help: "Memory in bytes.")
         var memory: Int64?
 
@@ -170,6 +178,8 @@ struct VMCommand: AsyncParsableCommand {
                 let accepted = try await client.createVM(
                     body: .json(
                         .init(
+                            resourceClass: try parseResourceClassReference(
+                                site: resourceClassSite, classID: resourceClassId),
                             name: name, description: description, imageId: image,
                             projectId: try resolveProject(project, environment: env),
                             blockMode: requestedBlockMode,

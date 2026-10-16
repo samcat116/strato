@@ -12,7 +12,7 @@ import AppTestSupport
 /// write load tracked request rate and a single busy key serialized on its own
 /// row (issue #696). The writes are now debounced to one per window, touch only
 /// the two columns, and run through the background-task registry.
-@Suite("Credential last-used tracking", .serialized)
+@Suite("Credential last-used tracking", .serialized, .postgresFixture)
 struct LastUsedTrackingTests {
 
     // MARK: - Helpers

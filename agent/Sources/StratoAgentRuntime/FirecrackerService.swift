@@ -80,6 +80,7 @@ actor FirecrackerService: HypervisorService {
         // transport is a UDS, so it never consumes this host-global lease.
         vsockCID: UInt32? = nil
     ) async throws {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         let bootArtifacts = try await resolveBootArtifacts(spec: spec, imageInfo: imageInfo)
         // A failed re-adoption can leave a provisional reference to a durable
         // mapping while proving that the old VMM is gone. Keep it alive until
@@ -446,9 +447,12 @@ actor FirecrackerService: HypervisorService {
     }
 
     func reservationInventory() -> HypervisorReservationInventory? {
-        let reserved = vmSpecs.values.reservedResources
+        let workloads = vmSpecs.mapValues {
+            VMHostReservation.forSpec($0, hypervisorType: .firecracker, architecture: .current)
+        }
         return HypervisorReservationInventory(
-            reservation: HostReservation(cpus: reserved.vcpus, memoryBytes: reserved.memoryBytes))
+            reservation: workloads.values.reduce(HostReservation()) { $0.addingSaturating($1) },
+            workloadReservations: workloads)
     }
 
     // MARK: - Orphan Re-adoption (issue #433)
@@ -465,6 +469,7 @@ actor FirecrackerService: HypervisorService {
     /// the VM predates deterministic sockets — or cannot be connected because
     /// the process is gone.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
         if vmManagers[vmId] != nil {
             // Already managed (e.g. a replayed sync raced re-adoption): adoption
             // is satisfied, just report the current status.

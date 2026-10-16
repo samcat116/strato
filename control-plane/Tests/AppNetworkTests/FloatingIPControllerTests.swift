@@ -11,7 +11,7 @@ import AppTestSupport
 /// validation, lowest-free allocation, and the attach/detach lifecycle with
 /// its guards (egress network required, project match, one per NIC, detach
 /// before release).
-@Suite("Floating IP Controller Tests", .serialized)
+@Suite("Floating IP Controller Tests", .serialized, .postgresFixture)
 final class FloatingIPControllerTests {
 
     fileprivate static let fixtureSiteID = UUID(uuidString: "00000000-0000-4000-8000-000000000344")!

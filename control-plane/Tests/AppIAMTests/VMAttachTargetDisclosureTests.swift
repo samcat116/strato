@@ -33,7 +33,7 @@ import AppTestSupport
 ///
 /// The sibling refusal, "the two resources you named live in different
 /// projects", is pinned in `CrossProjectContainmentTests`.
-@Suite("VM Attach Target Disclosure Tests", .serialized)
+@Suite("VM Attach Target Disclosure Tests", .serialized, .postgresFixture)
 struct VMAttachTargetDisclosureTests {
 
     /// The attachable resource, by id — one per endpoint under test.

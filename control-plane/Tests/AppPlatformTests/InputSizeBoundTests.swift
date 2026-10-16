@@ -21,7 +21,7 @@ import AppTestSupport
 /// These tests pin all three layers — the helper's arithmetic, the request
 /// boundary at-limit and one-past-limit, and the database constraint that
 /// backstops both.
-@Suite("Input Size Bound Tests", .serialized)
+@Suite("Input Size Bound Tests", .serialized, .postgresFixture)
 final class InputSizeBoundTests {
 
     /// A valid `ssh-ed25519` authorized_keys line: the algorithm name appears

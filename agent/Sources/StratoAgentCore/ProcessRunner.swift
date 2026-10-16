@@ -43,8 +43,8 @@ public enum ProcessRunnerError: Error, CustomStringConvertible {
 }
 
 /// Thrown when a `run(executableURL:arguments:timeout:)` budget expires. The
-/// child has been sent SIGTERM by the time this surfaces, so the call returns
-/// promptly instead of leaking a subprocess.
+/// watchdog escalates from SIGTERM to SIGKILL and bounds exit observation.
+/// This error does not prove that descendants stopped using staging files.
 public struct ProcessTimedOutError: Error, CustomStringConvertible, Sendable {
     public let executable: String
     public let timeout: Duration
@@ -81,9 +81,9 @@ public enum ProcessRunner {
     /// deliberately ignores cancellation, so without it a child that never
     /// exits parks this call forever — and callers on the agent's registration
     /// path have no other escape (issue #428 review). On expiry the child is
-    /// sent SIGTERM, which closes its pipes so both drains hit EOF and the
-    /// termination handler fires; the normal path below then completes and
-    /// `ProcessTimedOutError` is thrown. Nil means wait indefinitely, the
+    /// sent SIGTERM and then SIGKILL. Pipe draining and exit observation have
+    /// their own finite grace periods, since descendants can delay both;
+    /// `ProcessTimedOutError` does not authorize reclaiming their staging. Nil means wait indefinitely, the
     /// behaviour every existing caller already relies on.
     ///
     /// `environment` replaces the child's entire environment when given; nil
@@ -151,6 +151,7 @@ public enum ProcessRunner {
         // after the kernel may have recycled it. SIGKILL follows SIGTERM so a
         // child that ignores the polite signal still can't park `waitForExit`,
         // which is not cancellation-aware.
+        let exitDeadline = timeout.map { ContinuousClock.now + $0 + signalEscalationGrace + .seconds(3) }
         let expired = TimeoutFlag()
         let watchdog = timeout.map { budget -> Task<Void, Never> in
             let pid = process.processIdentifier
@@ -172,16 +173,20 @@ public enum ProcessRunner {
         // this, `/bin/sh script-that-runs-sleep-60` returns only when the
         // orphaned `sleep` exits — the timeout would appear to do nothing.
         let drainDeadline = timeout.map {
-            Date().addingTimeInterval(Double($0.components.seconds) + drainGrace)
+            Date().addingTimeInterval(
+                Double($0.components.seconds) + Double($0.components.attoseconds) / 1e18 + drainGrace)
         }
         let outputBudget = maxOutputBytes.map(OutputBudget.init(limit:))
+        let drainExpired = TimeoutFlag()
         let pid = process.processIdentifier
         let stdoutFD = stdoutHandle.fileDescriptor
         let stderrFD = stderrHandle.fileDescriptor
         async let stdoutData = drain(
-            fd: stdoutFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid)
+            fd: stdoutFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid,
+            processIsRunning: { !exited.isSignaled }, deadlineExceeded: drainExpired)
         async let stderrData = drain(
-            fd: stderrFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid)
+            fd: stderrFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid,
+            processIsRunning: { !exited.isSignaled }, deadlineExceeded: drainExpired)
 
         let (out, err) = await (stdoutData, stderrData)
 
@@ -198,13 +203,24 @@ public enum ProcessRunner {
         // fires only when the orphaned sleep ends). This path throws without
         // ever reading `terminationStatus`, so it does not need the handler;
         // the bounded wait just keeps bookkeeping tidy when the kill worked.
-        if expired.isTripped, let timeout {
+        if expired.isTripped || drainExpired.isTripped, let timeout {
+            await watchdog?.value
             _ = await exited.wait(upTo: exitObservationGrace)
             throw ProcessTimedOutError(
                 executable: executableURL.lastPathComponent, timeout: timeout)
         }
 
-        await waitForExit(exited)
+        if let timeout, let exitDeadline {
+            // Even EOF is not proof of exit: the child may close its streams,
+            // and Foundation's exit handler can be delayed by descendants.
+            let observed = await exited.wait(upTo: max(.zero, exitDeadline - ContinuousClock.now))
+            if !observed {
+                await watchdog?.value
+                throw ProcessTimedOutError(executable: executableURL.lastPathComponent, timeout: timeout)
+            }
+        } else {
+            await waitForExit(exited)
+        }
 
         if expired.isTripped, let timeout {
             throw ProcessTimedOutError(
@@ -478,7 +494,9 @@ public enum ProcessRunner {
         fd: Int32,
         deadline: Date? = nil,
         outputBudget: OutputBudget? = nil,
-        processID: Int32? = nil
+        processID: Int32? = nil,
+        processIsRunning: (@Sendable () -> Bool)? = nil,
+        deadlineExceeded: TimeoutFlag? = nil
     ) async -> Data {
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
@@ -486,14 +504,18 @@ public enum ProcessRunner {
                 let bufferSize = 4096
                 var buffer = [UInt8](repeating: 0, count: bufferSize)
                 while true {
-                    if let deadline {
+                    if outputBudget?.isExceeded == true { break }
+                    if deadline != nil || outputBudget != nil {
                         // Poll in slices so an expired deadline is noticed even
                         // while a grandchild holds the write end open and no
                         // bytes are arriving.
-                        let remaining = deadline.timeIntervalSinceNow
-                        if remaining <= 0 { break }
+                        let remaining = deadline?.timeIntervalSinceNow ?? 1
+                        if remaining <= 0 {
+                            deadlineExceeded?.trip()
+                            break
+                        }
                         var pollFD = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-                        let slice = Int32(min(remaining, 1) * 1000)
+                        let slice = Int32(min(remaining, outputBudget == nil ? 1 : 0.1) * 1000)
                         let ready = poll(&pollFD, 1, slice)
                         if ready < 0 {
                             if errno == EINTR { continue }
@@ -510,7 +532,7 @@ public enum ProcessRunner {
                     }
                     if count == 0 { break }
                     if let outputBudget, !outputBudget.accept(count) {
-                        if let processID { kill(processID, SIGKILL) }
+                        if let processID, processIsRunning?() != false { kill(processID, SIGKILL) }
                         break
                     }
                     data.append(contentsOf: buffer.prefix(count))

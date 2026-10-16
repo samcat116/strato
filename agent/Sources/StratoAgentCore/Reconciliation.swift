@@ -40,6 +40,7 @@ public struct ConvergenceFacts: Equatable, Sendable {
     public let lastError: String?
     public let failedGeneration: Int64?
     public let failureClassification: ObservedFailureClassification?
+    public let guestConfigFailedGeneration: Int64?
 }
 
 public actor Reconciler {
@@ -80,6 +81,7 @@ public actor Reconciler {
         var lastError: String
         var classification: FailureClassification
         var retryNotBefore: Date?
+        var guestConfigFailed = false
         /// Whether the warning and process-local counter for a terminal
         /// permanent failure have already been emitted for this generation.
         var terminalSuppressionReported = false
@@ -163,7 +165,8 @@ public actor Reconciler {
             phase: currentPhase[ref],
             lastError: failure?.lastError,
             failedGeneration: failure?.generation,
-            failureClassification: classification)
+            failureClassification: classification,
+            guestConfigFailedGeneration: failure?.guestConfigFailed == true ? failure?.generation : nil)
     }
 
     public func observedGeneration(for id: String, kind: WorkloadKind = .vm) -> Int64 {
@@ -398,8 +401,15 @@ public actor Reconciler {
             $0.laneKeys.count == 1 || $0.steps.contains(.create)
                 || ($0.steps.contains(.resize) && bootVolumeIDs.contains($0.id))
         }
+        let captureBeforeSuspension = Set(
+            message.sandboxes.compactMap {
+                $0.desiredStatus == .suspended ? $0.suspensionAfterSnapshotId?.uuidString : nil
+            })
+        let (requiredCaptures, remainingSnapshots) = snapshotPlan.items.partitioned {
+            captureBeforeSuspension.contains($0.id) && $0.steps.contains(.create)
+        }
         plan.items =
-            volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items + snapshotPlan.items
+            volumeData + vmPlan.items + volumeAttachment + requiredCaptures + sandboxPlan.items + remainingSnapshots
 
         // Wholesale replacement, including the sandbox half's absence when the
         // control plane doesn't speak sandbox sync: the report must describe
@@ -454,10 +464,16 @@ public actor Reconciler {
             // superseded case (a reboot the control plane has since stopped
             // wanting), and leaving the nonce unrecorded is what would fire it
             // weeks later.
-            if item.steps.isEmpty {
+            // A newer no-step intent must still wait for an older pass on the
+            // lane, or that pass can republish retired guest facts and regress
+            // the generation after this withdrawal has been acknowledged.
+            if item.steps.isEmpty, inFlight[ref] == nil {
+                await actuator.retireGuestConfigObservation(item)
+                await actuator.resourceEnforcementWillConverge(item)
                 lastApplied[ref] = item.generation
                 failures.removeValue(forKey: ref)
                 if let edges = item.appliedEdges { await actuator.recordAppliedEdges(item, edges) }
+                await actuator.resourceEnforcementDidConverge(item)
                 advancedWithoutWork = true
                 continue
             }
@@ -703,11 +719,15 @@ public actor Reconciler {
 
     private func execute(_ item: ReconcileWorkItem) async {
         let ref = WorkloadRef(item)
+        await actuator.retireGuestConfigObservation(item)
+        await actuator.resourceEnforcementWillConverge(item)
+        var executingStep: ReconcileStep?
         do {
             var steps = item.steps
             var index = 0
             while index < steps.count {
                 let step = steps[index]
+                executingStep = step
                 let phase = phaseDescription(step, kind: item.kind)
                 currentPhase[ref] = phase
                 if step == .adopt {
@@ -717,6 +737,13 @@ public actor Reconciler {
                             try await self.adoptAndReplan(item)
                         })
                 } else {
+                    // The durable verdict travels with desired state, including the first sync
+                    // after restart. Adoption and host repair may run, but guest work cannot replay.
+                    if step == .convergeGuestConfig,
+                        item.desired?.guestConfigFailedGeneration == item.generation
+                    {
+                        throw GuestConfigurationFailure.failed(reason: GuestConfigurationFailure.safeReason(nil))
+                    }
                     try await watched(phase, item) {
                         try await self.actuator.perform(step, item: item)
                     }
@@ -748,6 +775,7 @@ public actor Reconciler {
             // only after the whole item succeeded, so a failed reboot retries
             // on the next sync instead of being silently swallowed.
             if let edges = item.appliedEdges { await actuator.recordAppliedEdges(item, edges) }
+            await actuator.resourceEnforcementDidConverge(item)
             logger.info(
                 "Workload converged to desired state",
                 metadata: [
@@ -756,7 +784,11 @@ public actor Reconciler {
                     "generation": .stringConvertible(item.generation),
                 ])
         } catch {
-            let classification = (error as? ClassifiableError)?.failureClassification ?? .transient
+            let category = (error as? ClassifiableError)?.failureClassification ?? .transient
+            let guestFailed =
+                executingStep == .convergeGuestConfig && category != .waitingOnDependency
+                && category != .blocked
+            let classification: FailureClassification = guestFailed ? .permanent : category
 
             // Waiting on another component (e.g. the site network controller
             // hasn't realized this workload's switch in the shared NB yet) is
@@ -810,6 +842,7 @@ public actor Reconciler {
                 failure.attempts += 1
             }
             failure.classification = classification
+            failure.guestConfigFailed = guestFailed
             failure.terminalSuppressionReported = false
             if classification == .transient {
                 failure.retryNotBefore = now().addingTimeInterval(
@@ -817,7 +850,7 @@ public actor Reconciler {
             } else {
                 failure.retryNotBefore = nil
             }
-            let reason = error.localizedDescription
+            let reason = guestFailed ? GuestConfigurationFailure.safeReason(nil) : error.localizedDescription
             // A blocked item is re-driven on every sync for as long as the
             // block holds, so an error line per sync would bury the failures
             // that are actually new. It logs on the transition and then every

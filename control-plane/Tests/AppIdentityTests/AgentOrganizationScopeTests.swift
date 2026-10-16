@@ -14,7 +14,7 @@ import AppTestSupport
 /// registration (and its refusal/durability rules), the persisted
 /// agent/site parentage the Cedar hierarchy is built from, the org-delegated
 /// enrollment API, and the system-admin reassignment endpoint.
-@Suite("Agent Organization Scope Tests", .serialized)
+@Suite("Agent Organization Scope Tests", .serialized, .postgresFixture)
 final class AgentOrganizationScopeTests {
 
     private func withScopedApp(
@@ -506,6 +506,8 @@ final class AgentOrganizationScopeTests {
 
             // Once the foreign workloads are gone, the delegated admin may act.
             try await foreignVolume.delete(on: app.db)
+            let registered = try #require(try await Agent.find(agentUUID, on: app.db))
+            await app.replicaBridge.recordRoute(agentKey: registered.identity.key)
             try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)
             } afterResponse: { res in
@@ -531,6 +533,8 @@ final class AgentOrganizationScopeTests {
                 organizationScope: .organization(org.id!))
             try await enrollment.save(on: app.db)
             let agentUUID = try await self.registerAgent(on: app, agentName: "retiring-agent")
+            let registered = try #require(try await Agent.find(agentUUID, on: app.db))
+            await app.replicaBridge.recordRoute(agentKey: registered.identity.key)
 
             try await app.test(.DELETE, "/api/agents/\(agentUUID.uuidString)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)

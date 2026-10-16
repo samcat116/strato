@@ -17,11 +17,20 @@ extension FirecrackerSandboxRuntime {
         request: SandboxExecRequest,
         events: @escaping @Sendable (SandboxExecEvent) -> Void
     ) async throws {
+        noteIdleActivity(sandboxId: sandboxId)
+        let activity = suspensionGuards[sandboxId, default: SandboxSuspensionGuard()].beginActivity()
+        defer {
+            suspensionGuards[sandboxId]?.endActivity(activity)
+            noteIdleActivity(sandboxId: sandboxId)
+        }
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
-        guard !checkpointing.contains(sandboxId) else {
+        guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
+        }
+        guard try loadSuspensionRecord(sandboxId: sandboxId)?.guestFence?.blocksWorkloadAdmission != true else {
+            throw SandboxSuspensionGuard.GateError.busy
         }
         guard execSessions[sessionId] == nil else {
             // Session ids are minted per attach by the control plane; a
@@ -54,8 +63,14 @@ extension FirecrackerSandboxRuntime {
         // confirmation, so early output is picked up by the reader below
         // without having to be handed across explicitly.
         do {
+            let original = request.guestRequest
+            let guestRequest = GuestControlProtocol.ExecRequest(
+                argv: original.argv, env: original.env,
+                cwd: original.cwd, tty: original.tty, rows: original.rows, cols: original.cols,
+                sessionId: managed.guestControlProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion
+                    ? UUID(uuidString: sessionId) : nil)
             try await Self.awaitExecStarted(
-                .exec(request.guestRequest), on: connection, timeout: Self.execConnectTimeout)
+                .exec(guestRequest), on: connection, timeout: Self.execConnectTimeout)
         } catch {
             await connection.close()
             throw error
@@ -108,6 +123,7 @@ extension FirecrackerSandboxRuntime {
 
     func closeExec(sessionId: String) async {
         guard let session = execSessions.removeValue(forKey: sessionId) else { return }
+        noteIdleActivity(sandboxId: session.sandboxId)
         logger.info(
             "Closing sandbox exec session",
             metadata: [
@@ -129,6 +145,7 @@ extension FirecrackerSandboxRuntime {
         sandboxes[sandboxId]?.execSweepEpoch += 1
         for (sessionId, session) in execSessions where session.sandboxId == sandboxId {
             execSessions.removeValue(forKey: sessionId)
+            noteIdleActivity(sandboxId: sandboxId)
             await session.connection.close()
             session.reader?.cancel()
             session.events(.closed(reason: reason))
@@ -140,6 +157,7 @@ extension FirecrackerSandboxRuntime {
     /// sandbox teardown, which speak for themselves).
     func execSessionEnded(sessionId: String, terminal: SandboxExecEvent) async {
         guard let session = execSessions.removeValue(forKey: sessionId) else { return }
+        noteIdleActivity(sandboxId: session.sandboxId)
         await session.connection.close()
         logger.info(
             "Sandbox exec session ended",
@@ -228,6 +246,12 @@ extension FirecrackerSandboxRuntime {
     // MARK: - Control-plane connectivity (issue #423)
 
     func controlPlaneDisconnected() async {
+        idleConnectionEpoch = UUID()
+        idleSamplers.removeAll()
+        idleControlPlane.removeAll()
+        // Reconnect cannot reuse a proof of absent user streams or guest activity.
+        idleActivityObservations.removeAll()
+        idleSuspensionAdmissions.removeAll()
         // Exec sessions: their frontends are unreachable and the control plane
         // cannot send guestExecClose over the dead socket. Closing the guest
         // connections kills the exec process groups; the .closed events this

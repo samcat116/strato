@@ -18,6 +18,7 @@ import AppTestSupport
 ///      registered route (catches typos and removed routes).
 ///
 /// Adding a route without documenting it fails this suite, in either direction.
+@Suite(.postgresFixture)
 struct OpenAPISpecDriftTests {
     /// Routes deliberately **not** modeled as OpenAPI operations: WebSocket
     /// upgrades, which OpenAPI 3.0 cannot express, plus the agent control
@@ -29,7 +30,9 @@ struct OpenAPISpecDriftTests {
     private static let webSocketExceptions: Set<String> = [
         "GET /agent/ws",
         "GET /agent/desired-state",
+        "GET /agent/update/v1",
         "POST /agent/vms/{}/jwt-svid",
+        "POST /agent/sandboxes/{}/idle-admission",
         "GET /api/vms/{}/console",
         "POST /api/vms/{}/console/vnc",
         "GET /api/vms/{}/console/vnc/{}/attach",

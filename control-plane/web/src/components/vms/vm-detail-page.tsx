@@ -1,27 +1,29 @@
 "use client";
 
-import { formatDate, formatDateTime, formatTime } from "@/lib/format-time";
+import { formatDateTime } from "@/lib/format-time";
 
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
   Cpu,
   HardDrive,
   MemoryStick,
-  Clock,
+  ArrowLeft,
+  ChevronDown,
+  Network,
   Terminal,
   ScrollText,
   Monitor,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
-  DetailGrid,
-  DetailPageHeader,
   DetailPageLoading,
   DetailPageMissing,
-  DetailPageShell,
-  StatCard,
 } from "@/components/ui/detail-page-shell";
+import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
+import styles from "./vm-detail-page.module.css";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DetailQueryError } from "@/components/ui/detail-query-error";
 import {
@@ -36,6 +38,7 @@ import {
 } from "@/components/vms";
 import { useVM, useInvalidateVMs, usePermissions } from "@/lib/hooks";
 import { VMGuestConfigurationCard } from "@/components/vms/vm-guest-configuration-card";
+import { VMExecSessionsCard } from "@/components/vms/vm-exec-sessions-card";
 import { VMGuestAgentCard } from "@/components/vms/vm-guest-agent-card";
 import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
 
@@ -74,7 +77,34 @@ const GuestTerminal = dynamic(
   { ssr: false, loading: () => <p>Loading terminal...</p> }
 );
 
+function SecondarySection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group min-w-0 rounded-lg border bg-card">
+      <summary className="flex cursor-pointer list-none items-center gap-3 rounded-lg p-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">{title}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">{description}</span>
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none"
+        />
+      </summary>
+      <div className={styles.secondaryContent}>{children}</div>
+    </details>
+  );
+}
+
 export function VMDetailPage({ id }: { id: string }) {
+  const [activeTab, setActiveTab] = useState("overview");
   const { data: vm, isLoading, error, refetch } = useVM(id);
   const invalidateVMs = useInvalidateVMs();
   const { permissions } = usePermissions([
@@ -104,229 +134,264 @@ export function VMDetailPage({ id }: { id: string }) {
   }
 
   const isRunning = vm.status === "Running";
+  const memoryUsagePercent = vm.guestMemoryUsedBytes != null && vm.memory > 0
+    ? Math.min(100, Math.max(0, Math.round((vm.guestMemoryUsedBytes / vm.memory) * 100)))
+    : null;
 
   return (
-    <DetailPageShell>
-      <DetailPageHeader
-        backHref="/vms"
-        backLabel="Back to VMs"
-        title={vm.name}
-        badge={<VMStatusBadge status={vm.status} vmId={vm.id} />}
-        description={vm.description}
-        actions={<VMActions vm={vm} onActionComplete={invalidateVMs} />}
-      />
+    <div className="min-w-0 w-full space-y-4">
+      <header className="space-y-3">
+        <Link
+          href="/vms"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft aria-hidden="true" className="size-4" /> Back to VMs
+        </Link>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="break-all text-2xl font-semibold tracking-tight">
+                {vm.name}
+              </h1>
+              <VMStatusBadge status={vm.status} vmId={vm.id} />
+            </div>
+            {vm.description && (
+              <p className="break-words text-sm text-muted-foreground">{vm.description}</p>
+            )}
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="shrink-0">VM ID</span>
+              <code className="min-w-0 break-all">{vm.id}</code>
+              <CopyButton value={vm.id} label="Copy VM ID" />
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              size="sm"
+              disabled={!isRunning}
+              onClick={() => setActiveTab("console")}
+              title={!isRunning ? "Start the VM to access the console" : undefined}
+            >
+              <Terminal aria-hidden="true" className="size-4" /> Open console
+            </Button>
+            <div className="border-l pl-2">
+              <VMActions vm={vm} onActionComplete={invalidateVMs} />
+            </div>
+          </div>
+        </div>
+      </header>
 
       <ConvergenceFailureAlert conditions={vm.conditions} />
-      <VMGuestAgentCard vm={vm} />
 
-      {/* Tabs */}
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="bg-card border-border">
-          <TabsTrigger
-            value="overview"
-            className="data-[state=active]:bg-muted"
-          >
-            Overview
-          </TabsTrigger>
-          <TabsTrigger
-            value="console"
-            className="data-[state=active]:bg-muted"
-            disabled={!isRunning}
-          >
-            <Terminal className="h-4 w-4 mr-2" />
-            Console
-            {!isRunning && (
-              <span className="ml-2 text-xs text-muted-foreground">(VM not running)</span>
-            )}
-          </TabsTrigger>
-          {permissions.exec && (
-            <TabsTrigger value="exec" className="data-[state=active]:bg-muted">
-              <Terminal className="h-4 w-4 mr-2" />
-              Exec
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="min-w-0 w-full gap-0"
+      >
+        <div className="overflow-x-auto border-b pb-3">
+          <TabsList aria-label="VM views" className="h-10 bg-card border">
+            <TabsTrigger
+              value="overview"
+              className="data-[state=active]:bg-muted"
+            >
+              Overview
             </TabsTrigger>
-          )}
-          {/* The display needs both a running VM and a VM that was created
-              with one — headless is the default, and it cannot be changed
-              afterwards, so the hint says which condition failed. */}
-          <TabsTrigger
-            value="display"
-            className="data-[state=active]:bg-muted"
-            disabled={!isRunning || !vm.graphicsConsole}
-          >
-            <Monitor className="h-4 w-4 mr-2" />
-            Display
-            {!vm.graphicsConsole ? (
-              <span className="ml-2 text-xs text-muted-foreground">(no display)</span>
-            ) : !isRunning ? (
-              <span className="ml-2 text-xs text-muted-foreground">(VM not running)</span>
-            ) : null}
-          </TabsTrigger>
-          <TabsTrigger
-            value="logs"
-            className="data-[state=active]:bg-muted"
-          >
-            <ScrollText className="h-4 w-4 mr-2" />
-            Logs
-          </TabsTrigger>
-        </TabsList>
+            <TabsTrigger
+              value="console"
+              className="data-[state=active]:bg-muted"
+              disabled={!isRunning}
+            >
+              <Terminal aria-hidden="true" className="hidden size-4 sm:block" />
+              Console
+              {!isRunning && (
+                <span className="sr-only sm:not-sr-only sm:ml-1 sm:text-xs sm:text-muted-foreground">(VM not running)</span>
+              )}
+            </TabsTrigger>
+            {permissions.exec && (
+              <TabsTrigger value="exec" className="data-[state=active]:bg-muted">
+                <Terminal aria-hidden="true" className="hidden size-4 sm:block" />
+                Exec
+              </TabsTrigger>
+            )}
+            {/* The display needs both a running VM and a VM that was created
+                with one — headless is the default, and it cannot be changed
+                afterwards, so the hint says which condition failed. */}
+            <TabsTrigger
+              value="display"
+              className="data-[state=active]:bg-muted"
+              disabled={!isRunning || !vm.graphicsConsole}
+            >
+              <Monitor aria-hidden="true" className="hidden size-4 sm:block" />
+              Display
+              {!vm.graphicsConsole ? (
+                <span className="sr-only sm:not-sr-only sm:ml-1 sm:text-xs sm:text-muted-foreground">(no display)</span>
+              ) : !isRunning ? (
+                <span className="sr-only sm:not-sr-only sm:ml-1 sm:text-xs sm:text-muted-foreground">(VM not running)</span>
+              ) : null}
+            </TabsTrigger>
+            <TabsTrigger
+              value="logs"
+              className="data-[state=active]:bg-muted"
+            >
+              <ScrollText aria-hidden="true" className="hidden size-4 sm:block" />
+              Logs
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
-        <TabsContent value="overview" className="space-y-6 mt-6">
-          {/* Resources */}
-          <DetailGrid>
-            <StatCard title="CPU" icon={<Cpu className="h-4 w-4" />}>
-                <div className="text-xl font-bold text-foreground">
-                  {vm.cpu} / {vm.maxCpu}
-                </div>
-                <p className="text-sm text-muted-foreground">cores</p>
-            </StatCard>
-            <StatCard title="Memory" icon={<MemoryStick className="h-4 w-4" />}>
-                <div className="text-xl font-bold text-foreground">
-                  {vm.memoryFormatted}
-                </div>
-                {/* Guest-reported usage (virtio-balloon); absent until the
-                    guest's balloon driver reports. */}
-                {vm.guestMemoryUsedFormatted != null &&
-                  vm.guestMemoryUsedBytes != null && (
-                    <>
-                      <p className="text-sm text-muted-foreground">
-                        {vm.guestMemoryUsedFormatted} used in guest
-                      </p>
+        <TabsContent value="overview" className={`mt-4 space-y-4 ${styles.panels}`}>
+          <section
+            aria-label="Compute and connectivity"
+            className="grid min-w-0 grid-cols-2 overflow-hidden rounded-lg border bg-card xl:grid-cols-4"
+          >
+            <div className="border-b border-r p-4 xl:border-b-0">
+              <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <Cpu aria-hidden="true" className="size-4" /> CPU
+              </h2>
+              <p className="mt-2 text-xl font-semibold tabular-nums">
+                {vm.cpu}{" "}
+                <span className="text-sm font-normal text-muted-foreground">/ {vm.maxCpu} cores</span>
+              </p>
+            </div>
+            <div className="border-b p-4 xl:border-b-0 xl:border-r">
+              <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <MemoryStick aria-hidden="true" className="size-4" /> Memory
+              </h2>
+              <p className="mt-2 text-xl font-semibold tabular-nums">{vm.memoryFormatted}</p>
+              {vm.guestMemoryUsedFormatted != null && vm.guestMemoryUsedBytes != null && (
+                <>
+                  <p className="mt-1 text-xs text-muted-foreground">{vm.guestMemoryUsedFormatted} used in guest</p>
+                  {memoryUsagePercent != null && (
+                    <div
+                      className="mt-2 h-1 w-full rounded-full bg-muted"
+                      role="progressbar"
+                      aria-label="Guest memory usage"
+                      aria-valuenow={memoryUsagePercent}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                    >
                       <div
-                        className="mt-2 h-1.5 w-full rounded-full bg-muted"
-                        role="progressbar"
-                        aria-label="Guest memory usage"
-                        aria-valuenow={Math.round(
-                          (vm.guestMemoryUsedBytes / vm.memory) * 100
-                        )}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                      >
-                        <div
-                          className="h-1.5 rounded-full bg-blue-600"
-                          style={{
-                            width: `${Math.min(
-                              100,
-                              Math.round(
-                                (vm.guestMemoryUsedBytes / vm.memory) * 100
-                              )
-                            )}%`,
-                          }}
-                        />
-                      </div>
-                    </>
+                        className="h-1 rounded-full bg-blue-600"
+                        style={{ width: `${memoryUsagePercent}%` }}
+                      />
+                    </div>
                   )}
-                {/* Operator balloon target (issue #567 phase 2): what the
-                    guest is being held to, and — while the guest is still
-                    handing pages back — how far the balloon has got. */}
-                {vm.balloonTargetFormatted != null && (
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    Limited to {vm.balloonTargetFormatted}
-                    {vm.guestMemoryBalloonActualBytes != null &&
-                      vm.balloonTarget != null &&
-                      vm.guestMemoryBalloonActualBytes >
-                        vm.balloonTarget && " (reclaiming…)"}
-                  </p>
-                )}
-            </StatCard>
-            <StatCard title="Disk" icon={<HardDrive className="h-4 w-4" />}>
-                <div className="text-xl font-bold text-foreground">
-                  {vm.diskFormatted}
-                </div>
-            </StatCard>
-            <StatCard title="Created" icon={<Clock className="h-4 w-4" />}>
-                <div className="text-sm font-medium text-foreground">
-                  {formatDate(vm.createdAt)}
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  {formatTime(vm.createdAt)}
+                </>
+              )}
+              {vm.balloonTargetFormatted != null && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Limited to {vm.balloonTargetFormatted}
+                  {vm.guestMemoryBalloonActualBytes != null &&
+                    vm.balloonTarget != null &&
+                    vm.guestMemoryBalloonActualBytes > vm.balloonTarget && " (reclaiming…)"}
                 </p>
-            </StatCard>
-          </DetailGrid>
+              )}
+            </div>
+            <div className="border-r p-4">
+              <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <HardDrive aria-hidden="true" className="size-4" /> System disk
+              </h2>
+              <p className="mt-2 text-xl font-semibold tabular-nums">{vm.diskFormatted}</p>
+              <div className="mt-1 break-words text-xs text-muted-foreground">
+                {vm.imageId && vm.projectId ? (
+                  <Link
+                    href={`/images/${vm.projectId}/${vm.imageId}`}
+                    className="text-blue-600 hover:underline"
+                  >
+                    {vm.image}
+                  </Link>
+                ) : vm.image}
+              </div>
+            </div>
+            <div className="min-w-0 p-4">
+              <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <Network aria-hidden="true" className="size-4" /> Network
+              </h2>
+              <p className="mt-2 text-xl font-semibold tabular-nums">
+                {vm.networkInterfaces?.length ?? 0}{" "}
+                <span className="text-sm font-normal text-muted-foreground">
+                  {vm.networkInterfaces?.length === 1 ? "interface" : "interfaces"}
+                </span>
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Assigned and guest addresses below</p>
+            </div>
+          </section>
 
-          {/* Details */}
-          <Card className="bg-card border-border">
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold text-foreground">
-                Details
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-muted-foreground">ID</p>
-                  <p className="text-foreground font-mono">{vm.id}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Image</p>
-                  {vm.imageId && vm.projectId ? (
-                    <Link
-                      href={`/images/${vm.projectId}/${vm.imageId}`}
-                      className="text-blue-600 hover:text-blue-700 hover:underline"
-                    >
-                      {vm.image}
-                    </Link>
-                  ) : (
-                    <p className="text-foreground">{vm.image}</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Hypervisor</p>
+          <VMNetworkCard vm={vm} />
+          <VMVolumesCard vm={vm} />
+          <VMSnapshotsCard vm={vm} />
+
+          <section aria-labelledby="configuration-heading" className="rounded-lg border bg-card p-4">
+            <h2 id="configuration-heading" className="mb-3 text-sm font-semibold">Configuration</h2>
+            <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 xl:grid-cols-3">
+              <div className="min-w-0">
+                <dt className="text-xs text-muted-foreground">Hypervisor</dt>
+                <dd className="mt-1 break-all font-mono">
                   {vm.hypervisorId ? (
-                    <Link
-                      href={`/agents/${vm.hypervisorId}`}
-                      className="text-blue-600 hover:text-blue-700 hover:underline font-mono"
-                    >
+                    <Link href={`/agents/${vm.hypervisorId}`} className="text-blue-600 hover:underline">
                       {vm.hypervisorId}
                     </Link>
-                  ) : (
-                    <p className="text-foreground">Unassigned</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Firmware</p>
-                  <p className="text-foreground">
-                    {[
-                      vm.secureBoot ? "Secure Boot" : null,
-                      vm.tpmEnabled ? "TPM 2.0" : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" + ") || "Standard UEFI"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Instance metadata</p>
-                  {/* `!== false` rather than a truthy test: a control plane
-                      predating STR-185 omits the field, and "unknown" reads as
-                      on there because nothing could have switched it off. */}
-                  <p className="text-foreground">
-                    {vm.metadataEnabled !== false ? "Enabled" : "Disabled"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Last Updated</p>
-                  <p className="text-foreground">
-                    {formatDateTime(vm.updatedAt)}
-                  </p>
-                </div>
+                  ) : "Unassigned"}
+                </dd>
               </div>
-            </CardContent>
-          </Card>
+              <div>
+                <dt className="text-xs text-muted-foreground">Firmware</dt>
+                <dd className="mt-1">
+                  {[vm.secureBoot ? "Secure Boot" : null, vm.tpmEnabled ? "TPM 2.0" : null]
+                    .filter(Boolean)
+                    .join(" + ") || "Standard UEFI"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Resource class</dt>
+                <dd className="mt-1">
+                  <span className="capitalize">{vm.resourceClassKind ?? "guaranteed"}</span>
+                  <span className="text-muted-foreground">
+                    {" · "}{vm.resourceClass ? `Revision ${vm.resourceClass.revision}` : "Immutable default · 1:1"}
+                  </span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Instance metadata</dt>
+                {/* Older control planes omit this field when it cannot be switched off. */}
+                <dd className="mt-1">{vm.metadataEnabled !== false ? "Enabled" : "Disabled"}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Created</dt>
+                <dd className="mt-1">{formatDateTime(vm.createdAt)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Last updated</dt>
+                <dd className="mt-1">{formatDateTime(vm.updatedAt)}</dd>
+              </div>
+            </dl>
+          </section>
 
-          <VMIdentityCard vm={vm} />
-          <VMMetadataCard vm={vm} onUpdated={invalidateVMs} />
+          <div className="grid items-start gap-3 xl:grid-cols-3">
+            <SecondarySection title="Instance identity" description="Principal and project access">
+              <VMIdentityCard vm={vm} />
+            </SecondarySection>
+            <SecondarySection
+              title="Instance metadata"
+              description={`${Object.keys(vm.tags ?? {}).length} tags · ${vm.sshAuthorizedKeys?.length ?? 0} SSH keys`}
+            >
+              <VMMetadataCard vm={vm} onUpdated={invalidateVMs} />
+            </SecondarySection>
+            <SecondarySection
+              title="Guest agent"
+              description={vm.guestAgentEnabled === true
+                ? "Enabled · reachability and setup details"
+                : vm.guestAgentEnabled === false
+                  ? "Disabled · setup details"
+                  : "Opt-in state unavailable"}
+            >
+              <VMGuestAgentCard vm={vm} />
+            </SecondarySection>
+          </div>
           <VMGuestConfigurationCard key={vm.id} vm={vm} />
 
-          {/* Attached volumes */}
-          <VMVolumesCard vm={vm} />
-
-          {/* Network interfaces */}
-          <VMNetworkCard vm={vm} />
-
-          {/* Full-VM checkpoints (issue #564) */}
-          <VMSnapshotsCard vm={vm} />
         </TabsContent>
 
-        <TabsContent value="console" className="mt-6">
+        <TabsContent value="console" className="mt-4">
           {isRunning ? (
             <Card className="bg-background border-border">
               <CardContent className="p-0">
@@ -351,7 +416,7 @@ export function VMDetailPage({ id }: { id: string }) {
           )}
         </TabsContent>
 
-        <TabsContent value="exec" className="mt-6">
+        <TabsContent value="exec" className="mt-4">
           {permissions.exec && (
             <Card className="bg-background border-border">
               <CardContent className="p-0">
@@ -384,7 +449,7 @@ export function VMDetailPage({ id }: { id: string }) {
           )}
         </TabsContent>
 
-        <TabsContent value="display" className="mt-6">
+        <TabsContent value="display" className="mt-4">
           {vm.graphicsConsole && isRunning ? (
             <Card className="bg-background border-border">
               <CardContent className="p-0">
@@ -424,10 +489,15 @@ export function VMDetailPage({ id }: { id: string }) {
           )}
         </TabsContent>
 
-        <TabsContent value="logs" className="mt-6">
+        <TabsContent value="logs" className="mt-4">
           <LogViewer vmId={id} />
         </TabsContent>
       </Tabs>
-    </DetailPageShell>
+      {vm.guestAgentEnabled && (
+        <div className={styles.panels}>
+          <VMExecSessionsCard vmId={vm.id} />
+        </div>
+      )}
+    </div>
   );
 }

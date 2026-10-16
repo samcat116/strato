@@ -12,7 +12,7 @@ import AppTestSupport
 /// system-admin gating, the graceful "not configured" state, and the shape of
 /// the entries / node-attestation / federation projections when a SPIRE
 /// registration service is present.
-@Suite("Workload Identity Controller Tests")
+@Suite("Workload Identity Controller Tests", .postgresFixture)
 final class WorkloadIdentityControllerTests: BaseTestCase {
 
     private func makeAdmin(on db: Database) async throws -> String {

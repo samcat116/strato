@@ -21,6 +21,7 @@ struct ControlPlaneConfigurationEntry: Equatable, Sendable {
 }
 
 enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
+    case sandboxIdleSuspendEnabled = "SANDBOX_IDLE_SUSPEND_ENABLED"
     case observedInventoryAllowBulkLoss = "OBSERVED_INVENTORY_ALLOW_BULK_LOSS"
     case requestLogging = "REQUEST_LOGGING"
     case httpTLSEnabled = "HTTP_TLS_ENABLED"
@@ -60,7 +61,8 @@ enum ControlPlaneBoolKey: String, CaseIterable, Sendable {
             .auditEnabled, .otelMetricsEnabled, .otelLogsEnabled, .otelTracesEnabled,
             .spireLegacyEnrollments:
             true
-        case .observedInventoryAllowBulkLoss, .httpTLSEnabled, .auditIncludeReads, .ssfAllowUnverifiedTokens,
+        case .sandboxIdleSuspendEnabled, .observedInventoryAllowBulkLoss, .httpTLSEnabled, .auditIncludeReads,
+            .ssfAllowUnverifiedTokens,
             .imageS3VirtualHostStyle, .spireEnabled, .spireOrgTrustDomainsEnabled,
             .spiffeJWTSVIDAuthEnabled:
             false
@@ -72,8 +74,11 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
     case observedInventoryMinimumResources = "OBSERVED_INVENTORY_MINIMUM_RESOURCES"
     case observedInventoryPercentOfPlaced = "OBSERVED_INVENTORY_PERCENT_OF_PLACED"
     case databasePort = "DATABASE_PORT"
+    case databaseLockTimeoutMS = "DATABASE_LOCK_TIMEOUT_MS"
+    case databaseIdleInTransactionTimeoutMS = "DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS"
     case databaseStatementTimeoutMS = "DATABASE_STATEMENT_TIMEOUT_MS"
     case databaseMigrationStatementTimeoutMS = "DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS"
+    case coordinationStoreDeadlineMS = "COORDINATION_STORE_DEADLINE_MS"
     case valkeyPort = "VALKEY_PORT"
     case valkeyDatabase = "VALKEY_DATABASE"
     case sessionValkeyPort = "SESSION_VALKEY_PORT"
@@ -114,8 +119,11 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
         case .observedInventoryMinimumResources: 3
         case .observedInventoryPercentOfPlaced: 25
         case .databasePort: 5432
+        case .databaseLockTimeoutMS: 5_000
+        case .databaseIdleInTransactionTimeoutMS: 60_000
         case .databaseStatementTimeoutMS: DatabaseStatementTimeout.defaultMilliseconds
         case .databaseMigrationStatementTimeoutMS: normalStatementTimeout
+        case .coordinationStoreDeadlineMS: 2000
         case .valkeyPort, .sessionValkeyPort: 6379
         case .valkeyDatabase, .sessionValkeyDatabase: 0
         case .sessionTTLSeconds: ValkeySessionDriver.defaultTTL
@@ -155,7 +163,8 @@ enum ControlPlaneIntKey: String, CaseIterable, Sendable {
             1...65_535
         case .valkeyDatabase, .sessionValkeyDatabase:
             0...Int.max
-        case .databaseStatementTimeoutMS, .databaseMigrationStatementTimeoutMS:
+        case .databaseStatementTimeoutMS, .databaseMigrationStatementTimeoutMS, .coordinationStoreDeadlineMS,
+            .databaseLockTimeoutMS, .databaseIdleInTransactionTimeoutMS:
             1...DatabaseStatementTimeout.maximumMilliseconds
         case .sessionTTLSeconds:
             ValkeySessionDriver.minimumTTL...Int.max
@@ -405,6 +414,14 @@ struct ControlPlaneConfiguration: Sendable {
             let key = ControlPlaneIntKey.databaseMigrationStatementTimeoutMS
             throw ControlPlaneConfigurationError.invalidValue(
                 key: key.rawValue, raw: rawValue(key.rawValue), expected: "an integer")
+        }
+
+        let lockTimeout = integers[.databaseLockTimeoutMS] ?? DatabaseSessionTimeouts.defaults.lockMilliseconds
+        guard lockTimeout < normalStatementTimeout else {
+            throw ControlPlaneConfigurationError.invalidValue(
+                key: ControlPlaneIntKey.databaseLockTimeoutMS.rawValue,
+                raw: String(lockTimeout),
+                expected: "a positive integer shorter than DATABASE_STATEMENT_TIMEOUT_MS (\(normalStatementTimeout))")
         }
 
         var numbers: [ControlPlaneDoubleKey: Double] = [:]

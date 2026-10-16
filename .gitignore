@@ -46,7 +46,9 @@ docs/.vitepress/cache
 /vm-images/
 
 # Editor/tool working directories
-/.entire/
+/.entire/*
+!/.entire/settings.json
+!/.entire/.gitignore
 /.codex/
 
 # Sandbox guest build outputs

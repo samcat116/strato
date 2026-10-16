@@ -11,7 +11,7 @@ import AppTestSupport
 /// volume from another project's image and have `provisionVolume` sign a download
 /// URL for it. These tests pin the fix: image read is withheld while project
 /// `create_volume` is still granted, and the request must fail with 403.
-@Suite("Volume Authorization Tests", .serialized)
+@Suite("Volume Authorization Tests", .serialized, .postgresFixture)
 final class VolumeAuthorizationTests {
 
     /// Boots a configured test app with a non-admin user, org, project, and a

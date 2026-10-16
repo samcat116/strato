@@ -2,7 +2,9 @@
 
 Strato is a distributed private cloud platform. This page is the top-level
 map: the components, the core control loop, and pointers into the
-specialized documents that cover each subsystem in depth.
+specialized documents that cover each subsystem in depth. Workload class policy,
+admitted accounting, and the gated burstable rollout are described in
+[resource classes](./resource-classes-contract.md).
 
 ## Components
 

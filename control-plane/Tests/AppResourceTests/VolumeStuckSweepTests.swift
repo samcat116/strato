@@ -15,7 +15,7 @@ import AppTestSupport
 /// gone: a volume now stamps a `convergence_deadline` on every accepted
 /// mutation, and `sweepStuckConvergence` — the same lock-free, exactly-once
 /// pass VMs and sandboxes use — degrades it past that deadline.
-@Suite("Volume Stuck Sweep Tests", .serialized)
+@Suite("Volume Stuck Sweep Tests", .serialized, .postgresFixture)
 final class VolumeStuckSweepTests {
 
     private func withVolumeTestApp(

@@ -20,7 +20,7 @@ import AppTestSupport
 /// absence of code: what matters is that a guardrail binds an admin's *list*
 /// exactly as it binds their item reads, and that the agent rules still hold
 /// now that they are policy.
-@Suite("Admin Exception Path Tests", .serialized)
+@Suite("Admin Exception Path Tests", .serialized, .postgresFixture)
 final class AdminExceptionPathTests {
 
     private func withApp(_ test: (Application, TestDataBuilder) async throws -> Void) async throws {

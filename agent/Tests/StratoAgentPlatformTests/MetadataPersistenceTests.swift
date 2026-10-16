@@ -111,12 +111,11 @@ struct MetadataPersistenceTests {
         #expect(loaded.count == 1)
     }
 
-    @Test("The record file is never on disk under a wider mode, even momentarily")
+    @Test("A save publishes private metadata without adopting an unrelated temporary")
     func temporaryFileIsAlsoPrivate() throws {
-        // The mode is asserted on the *temporary* file, because that is where
-        // the window was: an atomic write puts the secrets in a file whose mode
-        // is not ours to choose and then renames it, so a post-write check
-        // cannot see the exposure it is meant to rule out.
+        // A pre-existing staging name may belong to another writer. A save
+        // must neither reuse its wider mode nor unlink a file it does not own.
+        // DurableFileWriterTests also verify private staging creation itself.
         let path = Self.temporaryPath()
         defer {
             try? FileManager.default.removeItem(atPath: path)
@@ -132,9 +131,11 @@ struct MetadataPersistenceTests {
                 vmId: PersistedMetadataRecord(generation: 1, metadata: Self.metadata(vmId), withdrawn: false)
             ]))
 
-        // The stale temporary was replaced rather than reused, and nothing is
-        // left behind holding SSH keys.
-        #expect(!FileManager.default.fileExists(atPath: path + ".tmp"))
+        // The unowned temporary is untouched; metadata is published through
+        // a fresh private inode rather than that world-readable file.
+        #expect(try String(contentsOfFile: path + ".tmp", encoding: .utf8) == "stale")
+        let staleMode = try FileManager.default.attributesOfItem(atPath: path + ".tmp")[.posixPermissions] as? NSNumber
+        #expect(staleMode?.int16Value == 0o644)
         let mode = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber
         #expect(mode?.int16Value == 0o600)
     }

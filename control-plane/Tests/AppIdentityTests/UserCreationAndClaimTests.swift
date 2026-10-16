@@ -7,7 +7,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Admin user creation & passkey claim", .serialized)
+@Suite("Admin user creation & passkey claim", .serialized, .postgresFixture)
 final class UserCreationAndClaimTests: BaseTestCase {
 
     private func makeAdminToken(on db: Database) async throws -> String {

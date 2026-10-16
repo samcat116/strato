@@ -9,7 +9,7 @@ import AppTestSupport
 /// The break-glass path back into a deployment with no reachable administrator
 /// (STR-178). These pin the two ways it can go wrong: promoting nobody, and
 /// minting an invite that takes away the sign-in it was meant to restore.
-@Suite("Grant Platform Admin Command Tests")
+@Suite("Grant Platform Admin Command Tests", .postgresFixture)
 struct GrantPlatformAdminCommandTests {
     @discardableResult
     private func run(_ app: Application, arguments: [String]) async throws -> CaptureConsole {

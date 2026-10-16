@@ -37,6 +37,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     let logger: Logger
     let client: FirecrackerClient
+    /// Supplied only by a validated backend capability owner; production defaults to unsupported.
+    let burstableEnforcement: WorkloadResourceClassEnforcement?
     let imageService: SandboxImageService
     let socketDirectory: String
     let sandboxStoragePath: String
@@ -213,6 +215,31 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// poll open a connection between the drain and the pause, which
     /// Firecracker rejects a vsock snapshot over.
     var checkpointing: Set<String> = []
+    var suspensionGuards: [String: SandboxSuspensionGuard] = [:]
+    let idlePolicy: SandboxIdlePolicy
+    let idleActivityIncarnation = UUID()
+    var idleConnectionEpoch = UUID()
+    var idleSamplers: [String: SandboxIdleSampler] = [:]
+    var idleSampling: Set<String> = []
+    var idleControlPlane: [String: DesiredSandboxState] = [:]
+    var idleActivityObservations: [String: SandboxIdleActivityObservation] = [:]
+    var idleLastActivity: [String: Date] = [:]
+    var idleResidentSince: [String: Date] = [:]
+    var idleSuspensionAdmissions: [String: SandboxIdleSuspensionAdmission] = [:]
+    var suspending: Set<String> = []
+    let automaticSuspensionTransport: (any SandboxAutomaticSuspensionTransport)?
+    var suspensionRecords: [String: SandboxSuspensionRecord] = [:]
+    var restoreAdmission = SandboxRestoreAdmission()
+    var activeValidationProofs: Set<String> = []
+    var validationProofRecoveryPending = false
+    var validationProofRecoveryTask: Task<Void, any Error>?
+    var validationProofStore: SandboxValidationProofStore {
+        SandboxValidationProofStore(directory: sandboxStoragePath + "/suspension-validation")
+    }
+    let suspensionRestoreTimeoutSeconds: Int
+    var suspensionStore: SandboxSuspensionStore {
+        SandboxSuspensionStore(directory: sandboxStoragePath + "/suspension-records")
+    }
 
     // MARK: Exec/log state (issue #423)
 
@@ -276,10 +303,30 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         jailerBlockedReason: String? = nil,
         warmStartEnabled: Bool = true,
         warmCacheBudgetBytes: Int64? = nil,
-        snapshotTransfer: SnapshotArtifactTransfer? = nil
-    ) {
+        snapshotTransfer: SnapshotArtifactTransfer? = nil,
+        burstableEnforcement: WorkloadResourceClassEnforcement? = nil,
+        suspensionRestoreLimit: Int = 2,
+        suspensionRestoreTimeoutSeconds: Int = StageBudget.checkpointSeconds,
+        idlePolicy: SandboxIdlePolicy = SandboxIdlePolicy(),
+        automaticSuspensionTransport: (any SandboxAutomaticSuspensionTransport)? = nil
+    ) throws {
+        guard (5...StageBudget.checkpointSeconds).contains(suspensionRestoreTimeoutSeconds) else {
+            throw SandboxSuspensionGuard.GateError.stale
+        }
+        self.idlePolicy = idlePolicy
+        self.suspensionRestoreTimeoutSeconds = suspensionRestoreTimeoutSeconds
+        self.automaticSuspensionTransport = automaticSuspensionTransport
+        var admission = try SandboxRestoreAdmission(limit: suspensionRestoreLimit)
+        admission.recover(
+            Set(
+                try SandboxValidationProofStore(
+                    directory: sandboxStoragePath + "/suspension-validation"
+                ).loadAll().map(\.permit)))
+        self.restoreAdmission = admission
         self.logger = logger
         self.client = client
+        self.burstableEnforcement =
+            burstableEnforcement?.backend == .jailedFirecrackerSandbox ? burstableEnforcement : nil
         self.imageService = imageService
         self.socketDirectory = socketDirectory
         self.sandboxStoragePath = sandboxStoragePath

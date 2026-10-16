@@ -106,6 +106,7 @@ export default function SitesPage() {
   const openEdit = (site: Site) => {
     setEditingSite(site);
     setForm({
+      burstablePolicy: site.resourceClasses?.find((policy) => policy.kind === "burstable") ?? EMPTY_FORM.burstablePolicy,
       name: site.name,
       description: site.description ?? "",
       status: site.status,
@@ -222,6 +223,7 @@ export default function SitesPage() {
         id: editingSite.id,
         data: {
           ...details,
+          burstableResourcePolicy: form.burstablePolicy,
           networkControllerAgentId:
             form.networkControllerAgentId || editingSite.networkControllerAgentId,
         },

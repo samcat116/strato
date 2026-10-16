@@ -1,5 +1,6 @@
 import Fluent
 import StratoShared
+import Synchronization
 import Testing
 import Vapor
 import VaporTesting
@@ -11,7 +12,7 @@ import AppTestSupport
 /// sweep, the desired-state assembly that carries the assignment, the
 /// observed-report path that lands agent-reported blockers/failures on the
 /// row, and the PATCH toggle.
-@Suite("Agent Auto-Update Rollout Tests", .serialized)
+@Suite("Agent Auto-Update Rollout Tests", .serialized, .postgresFixture)
 final class AgentAutoUpdateTests {
 
     private static let target = "1.4.0"
@@ -58,6 +59,22 @@ final class AgentAutoUpdateTests {
         try await app.shutdownForTesting()
     }
 
+    private actor SweepClock {
+        let evaluation: ClusterInstant
+        let assignment: ClusterInstant
+        var reads = 0
+
+        init(evaluation: ClusterInstant, assignment: ClusterInstant) {
+            self.evaluation = evaluation
+            self.assignment = assignment
+        }
+
+        func read() -> ClusterInstant {
+            defer { reads += 1 }
+            return reads == 0 ? evaluation : assignment
+        }
+    }
+
     /// The sweep lock's TTL outlives back-to-back test sweeps; give each
     /// sweep call a fresh in-memory coordination store so none is skipped.
     private func sweep(
@@ -66,9 +83,10 @@ final class AgentAutoUpdateTests {
         assignmentAt assignmentInstant: ClusterInstant? = nil
     ) async {
         app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
+        let clock = SweepClock(evaluation: instant, assignment: assignmentInstant ?? instant)
         await app.agentMaintenance.sweepAgentAutoUpdates(
             at: instant,
-            currentInstant: { _ in assignmentInstant ?? instant })
+            currentInstant: { _ in await clock.read() })
     }
 
     @discardableResult
@@ -105,7 +123,60 @@ final class AgentAutoUpdateTests {
         return try #require(row)
     }
 
+    /// Model the target registration plus a later clean inventory/health report.
+    private func targetHealth(_ agent: Agent, at date: Date, register: Bool = false) {
+        if register { agent.updateTargetRegisteredAt = date }
+        agent.lastHeartbeat = date
+        agent.dependencyObservationsReceivedAt = date
+        agent.updateInventoryReceivedAt = date
+    }
+
+    private func verifyTarget(_ agent: Agent, on app: Application) async throws {
+        let start = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down) + 1)
+        self.targetHealth(agent, at: start, register: true)
+        try await agent.save(on: app.db)
+        await self.sweep(app, at: .testing(start))
+        let row = try await self.reload(agent, on: app)
+        let end = start.addingTimeInterval(AgentMaintenanceLoop.autoUpdateVerificationSeconds)
+        self.targetHealth(row, at: end)
+        try await row.save(on: app.db)
+        await self.sweep(app, at: .testing(end), assignmentAt: .testing(Date()))
+    }
+
     // MARK: - Rollout sweep
+
+    @Test(
+        "assignment respects changes during artifact resolution",
+        arguments: ["manual", "withdraw", "offline", "updated", "platform", "removed"])
+    func assignmentRace(change: String) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let agent = try await self.makeAgent(app: app, org: org, name: "audit-agent")
+            let id = try agent.requireID()
+            app.agentArtifactResolver = AgentArtifactResolver { _, _, _ in
+                let current = try #require(try await Agent.find(id, on: app.db))
+                switch change {
+                case "manual":
+                    current.assignUpdate(version: "operator-target", source: .manual, at: .testing(Date()))
+                case "withdraw": current.autoUpdate = false
+                case "updated": current.version = Self.target
+                case "platform": current.operatingSystem = "macos"
+                case "removed":
+                    try await current.delete(on: app.db)
+                    return Self.stubArtifact
+                default: current.administrativelyOffline = true
+                }
+                try await current.save(on: app.db)
+                return Self.stubArtifact
+            }
+            await self.sweep(app)
+            if change == "removed" {
+                #expect(try await Agent.find(id, on: app.db) == nil)
+            } else {
+                let row = try await self.reload(agent, on: app)
+                #expect(row.updateDesiredVersion == (change == "manual" ? "operator-target" : nil))
+            }
+        }
+    }
 
     @Test("the sweep judges heartbeat freshness with the cluster clock")
     func heartbeatFreshnessUsesClusterClock() async throws {
@@ -141,6 +212,39 @@ final class AgentAutoUpdateTests {
             let stored = try await self.reload(agent, on: app)
             #expect(stored.updateDesiredVersion == Self.target)
             #expect(stored.updateAttemptedAt == assignmentInstant.date)
+        }
+    }
+
+    @Test("delayed ticks accept newer reports while genuinely future receipts fail", arguments: [false, true])
+    func delayedTickWithNewReport(futureDated: Bool) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            let reportInstant = try await ClusterClock.read(on: app.db)
+            let start = reportInstant.date.addingTimeInterval(-61)
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(start.addingTimeInterval(-1)))
+            first.version = Self.target
+            first.updateTargetRegisteredAt = start
+            first.updateVerificationStartedAt = start
+            self.targetHealth(first, at: reportInstant.date.addingTimeInterval(futureDated ? 300 : 0))
+            try await first.save(on: app.db)
+
+            // The tick predates this report, as when previous awaited sweeps
+            // delay update classification. The production clock must be read
+            // after the candidate query; no sleep or wall-clock skew is needed.
+            app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
+            await app.agentMaintenance.sweepAgentAutoUpdates(
+                at: .testing(reportInstant.date.addingTimeInterval(-20)))
+            let row = try await self.reload(first, on: app)
+            if futureDated {
+                #expect(row.updateFailureReason?.contains("stale") == true)
+                #expect(row.updateDesiredVersion == Self.target)
+                #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+            } else {
+                #expect(row.updateFailureReason == nil)
+                #expect(row.updateDesiredVersion == nil)
+                #expect(try await self.reload(second, on: app).updateDesiredVersion == Self.target)
+            }
         }
     }
 
@@ -181,7 +285,7 @@ final class AgentAutoUpdateTests {
             firstRow.version = "v\(Self.target)"
             try await firstRow.save(on: app.db)
 
-            await self.sweep(app)
+            try await self.verifyTarget(firstRow, on: app)
 
             let firstAfter = try await self.reload(first, on: app)
             let secondAfter = try await self.reload(second, on: app)
@@ -312,7 +416,7 @@ final class AgentAutoUpdateTests {
             // version clears the assignment.
             row.version = "1.9.0-rc1"
             try await row.save(on: app.db)
-            await self.sweep(app)
+            try await self.verifyTarget(row, on: app)
             let converged = try await self.reload(manual, on: app)
             #expect(converged.updateDesiredVersion == nil)
             #expect(converged.updateAssignmentSource == nil)
@@ -339,7 +443,7 @@ final class AgentAutoUpdateTests {
             let row = try await self.reload(agent, on: app)
             row.version = "1.9.0-rc1"
             try await row.save(on: app.db)
-            await self.sweep(app)
+            try await self.verifyTarget(row, on: app)
             #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
         }
     }
@@ -411,6 +515,65 @@ final class AgentAutoUpdateTests {
             await self.sweep(app)
             await self.sweep(app)
             #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test("target-version recovery withdraws the baseline through existing endpoints", arguments: [false, true])
+    func targetVersionRecovery(withdrawEnrollment: Bool) async throws {
+        try await withAutoUpdateApp { app, _, org, token in
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(Date()))
+            first.version = Self.target
+            first.recordUpdateFailure("target inventory degraded")
+            try await first.save(on: app.db)
+            #expect(try await self.reload(first, on: app).updateHealthBaseline != nil)
+
+            struct Body: Content {
+                let artifactUrl: String
+                let sha256: String
+                let targetVersion: String
+                let force: Bool
+            }
+            try await app.test(.POST, "/api/agents/\(first.id!)/actions/update") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    Body(
+                        artifactUrl: Self.stubArtifact.url, sha256: Self.validDigest,
+                        targetVersion: Self.target, force: true))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("already runs"))
+            }
+            #expect(try await self.reload(first, on: app).updateFailureReason != nil)
+            if withdrawEnrollment {
+                try await app.test(.PATCH, "/api/agents/\(first.id!)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["autoUpdate": false])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+                #expect(try await self.reload(first, on: app).updateHealthBaseline == nil)
+                try await app.test(.PATCH, "/api/agents/\(first.id!)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["autoUpdate": true])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            } else {
+                try await app.test(.DELETE, "/api/agents/\(first.id!)/actions/update") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+            let recovered = try await self.reload(first, on: app)
+            #expect(recovered.updateDesiredVersion == nil)
+            #expect(recovered.updateFailureReason == nil)
+            #expect(recovered.updateHealthBaseline == nil)
+            await self.sweep(app)
+            #expect(try await self.reload(first, on: app).updateDesiredVersion == nil)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == Self.target)
         }
     }
 
@@ -546,6 +709,305 @@ final class AgentAutoUpdateTests {
         }
     }
 
+    @Test("post-update regression halts only automatic assignments", arguments: [false, true])
+    func postUpdateRegression(manual: Bool) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            first.tpmCapable = true
+            first.assignUpdate(version: Self.target, source: manual ? .manual : .rollout, at: .testing(now))
+            try await first.save(on: app.db)
+            let row = try await self.reload(first, on: app)
+            #expect(row.updateHealthBaseline?.capabilities.contains("tpm") == true)
+            row.version = Self.target
+            row.tpmCapable = false
+            self.targetHealth(row, at: now.addingTimeInterval(1), register: true)
+            try await row.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(1)))
+            let failed = try await self.reload(first, on: app)
+            #expect(failed.updateFailureReason?.contains("tpm") == true)
+            #expect(failed.updateDesiredVersion == Self.target)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == (manual ? Self.target : nil))
+            // Target equality and recovery cannot erase a terminal failure.
+            failed.tpmCapable = true
+            try await failed.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(2)))
+            #expect(try await self.reload(first, on: app).updateFailureReason == failed.updateFailureReason)
+        }
+    }
+
+    @Test(
+        "degraded dependency health fails even when placement still allows it",
+        arguments: [NodeDependencyFunctionalState.degraded, .unhealthy])
+    func dependencyRegression(state: NodeDependencyFunctionalState) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            func sample(_ state: NodeDependencyFunctionalState) -> NodeDependencyObservation {
+                NodeDependencyObservation(
+                    id: .libvirt, role: .compute, desiredState: .required,
+                    ownership: .observeOnly, supervisorState: .active, compatibility: .compatible,
+                    functionalState: state, checkedAt: now, affectedCapabilities: [.qemuPlacement])
+            }
+            first.dependencyObservations = [sample(.healthy)]
+            first.dependencyObservationsReceivedAt = now
+            first.hypervisors = [HypervisorSupport(type: .qemu, available: true, accelerated: true)]
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            first.version = Self.target
+            first.dependencyObservations = [sample(state)]
+            self.targetHealth(first, at: now.addingTimeInterval(1), register: true)
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(1)))
+            #expect(try await self.reload(first, on: app).updateFailureReason?.contains("libvirt") == true)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test(
+        "backend subcapabilities are retained",
+        arguments: ["backend", "accelerated", "snapshots", "vsock", "guest_exec", "volume_io_limits"])
+    func backendRegression(lost: String) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            first.hypervisors = [
+                HypervisorSupport(
+                    type: .firecracker, available: true, accelerated: true,
+                    supportsSnapshots: true, supportsVsock: true, supportsGuestExec: true, supportsVolumeIOLimits: true)
+            ]
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            first.version = Self.target
+            first.hypervisors = [
+                HypervisorSupport(
+                    type: .firecracker, available: lost != "backend",
+                    accelerated: lost != "accelerated", supportsSnapshots: lost != "snapshots",
+                    supportsVsock: lost != "vsock", supportsGuestExec: lost != "guest_exec",
+                    supportsVolumeIOLimits: lost != "volume_io_limits")
+            ]
+            self.targetHealth(first, at: now.addingTimeInterval(1), register: true)
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(1)))
+            #expect(
+                try await self.reload(first, on: app).updateFailureReason?.contains("hypervisor:firecracker") == true)
+        }
+    }
+
+    @Test("registration without inventory cannot converge and eventually exhausts its budget")
+    func missingTargetEvidence() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            first.version = Self.target
+            first.updateTargetRegisteredAt = now.addingTimeInterval(1)
+            first.dependencyObservationsReceivedAt = now.addingTimeInterval(1)
+            first.lastHeartbeat = now.addingTimeInterval(1)
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(60)))
+            #expect(try await self.reload(first, on: app).updateVerificationStartedAt == nil)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(601)))
+            #expect(try await self.reload(first, on: app).updateFailureReason?.contains("verification") == true)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test("a restarted assignment clock cannot reuse an earlier health interval")
+    func retryRestartsVerification() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            first.version = Self.target
+            first.updateVerificationStartedAt = now.addingTimeInterval(1)
+            first.updateTargetRegisteredAt = now.addingTimeInterval(1)
+            first.updateAttemptedAt = now.addingTimeInterval(70)  // Restart a retained assignment's clock.
+            self.targetHealth(first, at: now.addingTimeInterval(70))
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(70)))
+            let row = try await self.reload(first, on: app)
+            #expect(row.updateDesiredVersion == Self.target)
+            #expect(row.updateVerificationStartedAt == now.addingTimeInterval(70))
+        }
+    }
+
+    @Test("legacy target assignments direct operators to review health and cancel")
+    func missingBaseline() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent", version: Self.target)
+            first.updateDesiredVersion = Self.target
+            try await first.save(on: app.db)
+            await self.sweep(app)
+            #expect(try await self.reload(first, on: app).updateFailureReason?.contains("explicitly cancel") == true)
+        }
+    }
+
+    @Test("parked assignments still require fresh target health")
+    func parkedVerification() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            agent.assignUpdate(version: Self.target, source: .rollout, at: .testing(Date()))
+            agent.updateAttemptedAt = nil
+            agent.version = Self.target
+            try await self.verifyTarget(agent, on: app)
+            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test("target registration starts evidence again without erasing failure")
+    func registrationVerification() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let agent = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            agent.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            agent.recordUpdateFailure("terminal failure")
+            agent.updateVerificationStartedAt = now
+            agent.updateInventoryReceivedAt = now
+            let registration = AgentRegisterMessage(
+                agentId: try agent.requireID().uuidString, hostname: agent.hostname, version: Self.target,
+                resources: agent.resources, architecture: .x86_64, hypervisors: [])
+            agent.apply(registration: registration, dependencyObservations: [], receivedAt: now.addingTimeInterval(1))
+            #expect(agent.updateTargetRegisteredAt == now.addingTimeInterval(1))
+            #expect(agent.updateVerificationStartedAt == nil)
+            #expect(agent.updateInventoryReceivedAt == nil)
+            #expect(agent.updateFailureReason == "terminal failure")
+        }
+    }
+
+    @Test("incomplete and unroutable inventory fail target verification", arguments: [false, true])
+    func inventoryRegression(complete: Bool) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            first.version = Self.target
+            self.targetHealth(first, at: now.addingTimeInterval(1), register: true)
+            first.manifestInventoryComplete = complete
+            first.manifestStatusReason = "unroutable workload"
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(1)))
+            #expect(try await self.reload(first, on: app).updateFailureReason?.contains("inventory") == true)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test("fresh later evidence and the full interval are required; capability gain passes")
+    func verificationInterval() async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            first.version = Self.target
+            first.tpmCapable = true  // Newly gained capability is allowed.
+            first.updateTargetRegisteredAt = now.addingTimeInterval(1)
+            first.dependencyObservationsReceivedAt = now  // Pre-update evidence cannot pass.
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(now.addingTimeInterval(1)))
+            #expect(try await self.reload(first, on: app).updateVerificationStartedAt == nil)
+            let start = now.addingTimeInterval(2)
+            self.targetHealth(first, at: start)
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(start))
+            var row = try await self.reload(first, on: app)
+            #expect(row.updateVerificationStartedAt == start)
+            let before = start.addingTimeInterval(59)
+            self.targetHealth(row, at: before)
+            try await row.save(on: app.db)
+            await self.sweep(app, at: .testing(before))
+            row = try await self.reload(first, on: app)
+            #expect(row.updateDesiredVersion == Self.target)
+            // Passage of time alone cannot replace a sample at the far boundary.
+            await self.sweep(app, at: .testing(start.addingTimeInterval(60)))
+            #expect(try await self.reload(first, on: app).updateDesiredVersion == Self.target)
+            self.targetHealth(row, at: start.addingTimeInterval(60))
+            try await row.save(on: app.db)
+            await self.sweep(app, at: .testing(start.addingTimeInterval(60)))
+            row = try await self.reload(first, on: app)
+            #expect(row.updateDesiredVersion == nil)
+            #expect(row.updateHealthBaseline == nil)
+            #expect(row.updateTargetRegisteredAt == nil)
+            #expect(row.updateVerificationStartedAt == nil)
+        }
+    }
+
+    @Test(
+        "disappearance and stale inventory or dependencies fail an active window",
+        arguments: ["heartbeat", "inventory", "dependencies"])
+    func staleVerification(signal: String) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now))
+            first.version = Self.target
+            let start = now.addingTimeInterval(1)
+            self.targetHealth(first, at: start, register: true)
+            try await first.save(on: app.db)
+            await self.sweep(app, at: .testing(start))
+            let row = try await self.reload(first, on: app)
+            let end = start.addingTimeInterval(60)
+            self.targetHealth(row, at: end)
+            switch signal {
+            case "heartbeat": row.lastHeartbeat = start
+            case "inventory": row.updateInventoryReceivedAt = start
+            default: row.dependencyObservationsReceivedAt = start
+            }
+            try await row.save(on: app.db)
+            await self.sweep(app, at: .testing(end))
+            #expect(try await self.reload(first, on: app).updateFailureReason?.contains("stale") == true)
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
+    @Test(
+        "Convergence rechecks reports and assignments committed after its snapshot",
+        arguments: ["failure", "inventory", "assignment"])
+    func convergenceRechecksCurrentAgent(change: String) async throws {
+        try await withAutoUpdateApp { app, _, org, _ in
+            let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+            let first = try await self.makeAgent(app: app, org: org, name: "aa-agent")
+            let second = try await self.makeAgent(app: app, org: org, name: "bb-agent")
+            second.lastHeartbeat = now
+            try await second.save(on: app.db)
+            first.assignUpdate(version: Self.target, source: .rollout, at: .testing(now.addingTimeInterval(-120)))
+            first.version = Self.target
+            first.updateTargetRegisteredAt = now.addingTimeInterval(-119)
+            first.updateVerificationStartedAt = now.addingTimeInterval(-60)
+            self.targetHealth(first, at: now)
+            try await first.save(on: app.db)
+            let id = try first.requireID()
+            let injected = Mutex(false)
+            app.coordination = CoordinationService(store: InMemoryCoordinationStore(), logger: app.logger)
+            await app.agentMaintenance.sweepAgentAutoUpdates(
+                at: .testing(now),
+                currentInstant: { db in
+                    // This hook runs after candidates were loaded, before convergence.
+                    let shouldInject = injected.withLock { value in
+                        guard !value else { return false }
+                        value = true
+                        return true
+                    }
+                    guard shouldInject else { return .testing(now) }
+                    let current = try #require(try await Agent.find(id, on: db))
+                    switch change {
+                    case "failure": current.recordUpdateFailure("late terminal failure")
+                    case "inventory": current.manifestStatusReason = "late inventory degradation"
+                    default: current.assignUpdate(version: "different-target", source: .manual, at: .testing(now))
+                    }
+                    try await current.save(on: db)
+                    return .testing(now)
+                })
+            let retained = try await self.reload(first, on: app)
+            #expect(retained.updateDesiredVersion == (change == "assignment" ? "different-target" : Self.target))
+            if change == "failure" { #expect(retained.updateFailureReason == "late terminal failure") }
+            if change == "inventory" { #expect(retained.manifestStatusReason == "late inventory degradation") }
+            #expect(try await self.reload(second, on: app).updateDesiredVersion == nil)
+        }
+    }
+
     // MARK: - Observed update status
 
     private func report(
@@ -587,6 +1049,7 @@ final class AgentAutoUpdateTests {
                 try self.report(from: agent, status: nil), fromAgentKey: agent.identity.key)
             row = try await self.reload(agent, on: app)
             #expect(row.updateBlockedReason == nil)
+            #expect(row.updateInventoryReceivedAt != nil)
         }
     }
 

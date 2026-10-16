@@ -17,7 +17,7 @@ import AppTestSupport
 /// checking `Task.isCancelled` / reading through `Application.liveDB` before
 /// each database access; these tests pin down the mechanism that makes that
 /// defense sound.
-@Suite("Background Task Registry")
+@Suite("Background Task Registry", .postgresFixture)
 struct BackgroundTaskRegistryTests {
 
     /// A one-shot signal usable in either direction between test and task.

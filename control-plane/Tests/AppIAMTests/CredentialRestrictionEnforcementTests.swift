@@ -11,16 +11,19 @@ import AppTestSupport
 /// STR-115 end to end: a credential's restriction intersected with its
 /// principal's bindings, by the one evaluator, over real trees and real
 /// bindings — and landing in `iam_decision_logs` like every other decision.
-@Suite("Credential Restriction Enforcement", .serialized)
+@Suite("Credential Restriction Enforcement", .serialized, .postgresFixture)
 final class CredentialRestrictionEnforcementTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
+            TestFixtureDiagnostics.shared.configuring(app)
             try await configure(app)
             app.iamDecisionLogConfig.recordDecisions = true
+            TestFixtureDiagnostics.shared.running(app)
             try await test(app)
         } catch {
+            TestFixtureDiagnostics.shared.report(error, on: app)
             try await app.shutdownForTesting()
             throw error
         }

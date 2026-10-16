@@ -8,6 +8,44 @@ import Testing
 @Suite("Telemetry support")
 struct TelemetrySupportTests {
 
+    @Test("workload log pressure metrics count losses and clear queue gauges")
+    func workloadLogMetrics() throws {
+        let metrics = TestMetrics()
+        Telemetry.recordWorkloadLogQueue(kind: "sandbox", count: 4, bytes: 1024, factory: metrics)
+        let depth = try metrics.expectGauge("strato_workload_log_queue_depth", [("kind", "sandbox")])
+        let bytes = try metrics.expectGauge("strato_workload_log_queue_bytes", [("kind", "sandbox")])
+        #expect(depth.lastValue == 4)
+        #expect(bytes.lastValue == 1024)
+        Telemetry.recordWorkloadLogQueue(kind: "sandbox", count: 0, bytes: 0, factory: metrics)
+        #expect(depth.lastValue == 0)
+        #expect(bytes.lastValue == 0)
+        Telemetry.workloadLogsDropped(kind: "sandbox", reason: "overflow", count: 7, factory: metrics)
+        #expect(
+            try metrics.expectCounter(
+                "strato_workload_log_dropped_total", [("kind", "sandbox"), ("reason", "overflow")]
+            ).totalValue == 7)
+        Telemetry.workloadLogPushFailed(kind: "sandbox", factory: metrics)
+        #expect(
+            try metrics.expectCounter("strato_workload_log_push_failures_total", [("kind", "sandbox")]).totalValue == 1)
+        Telemetry.workloadLogBatchCompleted(kind: "sandbox", elapsed: .milliseconds(25), factory: metrics)
+        #expect(
+            try metrics.expectTimer("strato_workload_log_batch_duration_seconds", [("kind", "sandbox")]).values.count
+                == 1)
+    }
+
+    @Test("Coordination gauge clears on recovery and degraded operations are counted")
+    func coordinationDegradationMetrics() throws {
+        let metrics = TestMetrics()
+        Telemetry.coordinationStoreUnavailable(true, factory: metrics)
+        let gauge = try metrics.expectGauge("strato_coordination_store_unavailable", [])
+        #expect(gauge.lastValue == 1)
+        Telemetry.coordinationStoreUnavailable(false, factory: metrics)
+        #expect(gauge.lastValue == 0)
+        Telemetry.coordinationFailOpen(operation: "rateLimit.hit", factory: metrics)
+        let counter = try metrics.expectCounter("strato_coordination_fail_open_total", [("operation", "rateLimit.hit")])
+        #expect(counter.totalValue == 1)
+    }
+
     @Test("inventory refusal gauge distinguishes server refusal and clears on recovery")
     func inventoryRefusalGauge() throws {
         let metrics = TestMetrics()
@@ -209,7 +247,12 @@ struct TelemetrySupportTests {
             reclaimScannedPagesTotal: .available(8),
             reclaimReclaimedPagesTotal: .available(4),
             oomKillsTotal: .available(0),
-            mglruEnabled: .available(false))
+            mglruEnabled: .available(false),
+            swapInPagesTotal: .available(20),
+            swapOutPagesTotal: .available(40),
+            swapInPagesPerSecond: 2,
+            swapOutPagesPerSecond: 4,
+            memoryWarnings: ["swap_thrashing"])
 
         Telemetry.recordHostResourceTelemetry(
             agentID: "agent-1", telemetry: telemetry, factory: metrics)
@@ -226,6 +269,13 @@ struct TelemetrySupportTests {
                 "strato_agent_pressure_total_seconds",
                 base + [("resource", "cpu"), ("stall", "some")]
             ).lastValue == 2.5)
+        #expect(try metrics.expectGauge("strato_agent_swap_in_pages_per_second", base).lastValue == 2)
+        #expect(try metrics.expectGauge("strato_agent_swap_out_pages_per_second", base).lastValue == 4)
+        #expect(
+            try metrics.expectGauge("strato_agent_memory_warning", base + [("warning", "swap_thrashing")]).lastValue
+                == 1)
+        #expect(try metrics.expectGauge("strato_agent_memory_warning", base + [("warning", "oom_kill")]).lastValue == 0)
+        #expect(try metrics.expectGauge("strato_agent_memory_profile_enabled", base).lastValue == 0)
         #expect(try metrics.expectGauge("strato_agent_swap_used_bytes", base).lastValue == 0)
         #expect(
             try metrics.expectGauge(
@@ -343,5 +393,22 @@ struct TelemetrySupportTests {
     func placementOutcomeError() {
         struct Unexpected: Error {}
         #expect(SchedulerService.placementOutcome(for: Unexpected()) == "error")
+    }
+}
+
+@Suite("host memory accounting metrics")
+struct HostMemoryAccountingMetricsTests {
+    @Test func reportsEveryOperandWithoutDoubleSubtraction() throws {
+        let metrics = TestMetrics()
+        let accounting = HostMemoryAccounting(
+            physicalBytes: 8192, hostReservedBytes: 1024, workloadEffectiveBytes: 2048)
+        Telemetry.recordHostMemoryAccounting(agentID: "host", accounting: accounting, factory: metrics)
+        for (operand, bytes) in [
+            ("physical", 8192), ("host_reserved", 1024), ("workload_effective", 2048), ("remaining_allocatable", 5120),
+        ] {
+            #expect(
+                try metrics.expectGauge("strato_agent_memory_\(operand)_bytes", [("agent_id", "host")]).lastValue
+                    == Double(bytes))
+        }
     }
 }

@@ -58,6 +58,7 @@ nix::ioctl_write_ptr_bad!(tiocswinsz, libc::TIOCSWINSZ, Winsize);
 /// The decoded fields of a [`Request::Exec`], handed over by the vsock
 /// connection dispatcher.
 pub struct ExecRequest {
+    pub session_id: Option<String>,
     pub argv: Vec<String>,
     pub env: Option<BTreeMap<String, String>>,
     pub cwd: Option<String>,
@@ -77,7 +78,15 @@ pub fn run_exec_session(
     nonce: String,
 ) {
     let writer = Arc::new(Mutex::new(writer));
-    if let Err(message) = session(reader, &writer, req, state, &nonce) {
+    let admission = match IdleAdmission::new(state, req.session_id.clone()) {
+        Ok(admission) => admission,
+        Err(message) => {
+            send_response(&writer, &Response::Error { nonce, message });
+            return;
+        }
+    };
+    let result = session(reader, &writer, req, state, &nonce, admission);
+    if let Err(message) = result {
         eprintln!("[sandbox-init] exec session failed: {message}");
         send_response(&writer, &Response::Error { nonce, message });
     }
@@ -92,6 +101,7 @@ fn session(
     req: ExecRequest,
     state: &GuestState,
     nonce: &str,
+    mut admission: IdleAdmission,
 ) -> Result<(), String> {
     let Some((program, args)) = req.argv.split_first() else {
         return Err("exec argv must not be empty".to_string());
@@ -159,37 +169,23 @@ fn session(
         cmd.stdin(Stdio::from(stdin_slave))
             .stdout(Stdio::from(stdout_slave))
             .stderr(Stdio::from(pty.slave));
-
-        // New session with the PTY slave as controlling terminal, then the
-        // same full credential drop the workload spawn does (see
-        // [`super::drop_credentials`] for why not Command::uid/gid). Runs in
-        // the child, pre-exec.
-        unsafe {
-            cmd.pre_exec(move || {
-                setsid().map_err(std::io::Error::from)?;
-                // SAFETY (of the ioctl): fd 0 is the PTY slave, and this
-                // fresh session has no controlling terminal yet.
-                tiocsctty(0, 0).map_err(std::io::Error::from)?;
-                super::drop_credentials(uid, gid)
-            });
-        }
     } else {
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // Own process group so an early host disconnect can SIGKILL the
-        // whole tree without touching the workload.
+        // Keep disconnect cleanup scoped to this exec's process group.
         cmd.process_group(0);
-        unsafe {
-            cmd.pre_exec(move || super::drop_credentials(uid, gid));
-        }
     }
-
+    let idle_enabled = state.idle.lock().expect("idle poisoned").supported();
+    configure_child_pre_exec(&mut cmd, tty, uid, gid, move || {
+        strato_sandbox_init::idle::join_child(idle_enabled)
+    });
     let mut child = cmd.spawn().map_err(|e| format!("spawn {program}: {e}"))?;
     // Drop the Command now: it still holds the PTY slave Stdio handles, and
     // the master would never report EIO (child gone) while they linger here.
     drop(cmd);
 
+    admission.spawned = true;
     let pid = child.id() as i32;
     // Register with the central reaper before anything else; the registry's
     // unclaimed map covers an exit racing this registration.
@@ -265,6 +261,7 @@ fn session(
         exited.clone(),
         writer.clone(),
         nonce.to_string(),
+        admission,
     );
 
     // Host-input loop: stdin/stdin_eof/resize until the host closes the
@@ -409,6 +406,7 @@ fn spawn_exit_waiter(
     exited: Arc<AtomicBool>,
     writer: Arc<Mutex<File>>,
     nonce: String,
+    mut admission: IdleAdmission,
 ) {
     let spawned = std::thread::Builder::new()
         .name("exec-wait".to_string())
@@ -420,6 +418,7 @@ fn spawn_exit_waiter(
             for pump in pumps {
                 let _ = pump.join();
             }
+            admission.finish();
             exited.store(true, Ordering::SeqCst);
             send_response(&writer, &Response::ExecExit { nonce, exit_code });
             shutdown_connection(&writer);
@@ -452,5 +451,136 @@ fn shutdown_connection(writer: &Mutex<File>) {
     // SAFETY: shutdown(2) on our own connected socket fd.
     unsafe {
         libc::shutdown(w.as_raw_fd(), libc::SHUT_RDWR);
+    }
+}
+
+/// Admission needs root-owned cgroup access; keep it and the credential drop
+/// in one callback so registration order cannot reverse them.
+/// `admit` must be async-signal-safe, like the remaining child operations.
+fn configure_child_pre_exec(
+    cmd: &mut Command,
+    tty: bool,
+    uid: u32,
+    gid: u32,
+    admit: impl Fn() -> std::io::Result<()> + Send + Sync + 'static,
+) {
+    // SAFETY: production admission, terminal setup and credential dropping
+    // use only async-signal-safe syscalls in the forked child.
+    unsafe {
+        cmd.pre_exec(move || {
+            admit()?;
+            if tty {
+                setsid().map_err(std::io::Error::from)?;
+                // fd 0 is the PTY slave in a fresh session.
+                tiocsctty(0, 0).map_err(std::io::Error::from)?;
+            }
+            super::drop_credentials(uid, gid)
+        });
+    }
+}
+
+/// An interrupted spawned exec remains unknown until terminal reaping. A
+/// failed waiter never clears the ledger merely because the stream vanished.
+pub(super) struct IdleAdmission {
+    monitor: Arc<Mutex<strato_sandbox_init::idle::Monitor>>,
+    id: Option<u64>,
+    spawned: bool,
+}
+impl IdleAdmission {
+    pub(super) fn new(state: &GuestState, session: Option<String>) -> Result<Self, String> {
+        let mut monitor = state.idle.lock().expect("idle poisoned");
+        let id = if monitor.supported() {
+            Some(monitor.begin_exec(session)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            monitor: state.idle.clone(),
+            id,
+            spawned: false,
+        })
+    }
+    fn finish(&mut self) {
+        if let Some(id) = self.id.take() {
+            self.monitor.lock().expect("idle poisoned").end_exec(id);
+        }
+    }
+}
+impl Drop for IdleAdmission {
+    fn drop(&mut self) {
+        if !self.spawned {
+            self.finish();
+        }
+    }
+}
+
+#[cfg(test)]
+mod credential_order_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    #[ignore = "requires isolated root with SETUID/SETGID capabilities"]
+    fn nonroot_exec_admission_precedes_credentials_without_pty() {
+        verify_nonroot_admission(false);
+    }
+
+    #[test]
+    #[ignore = "requires isolated root with SETUID/SETGID capabilities"]
+    fn nonroot_exec_admission_precedes_credentials_with_pty() {
+        verify_nonroot_admission(true);
+    }
+
+    fn verify_nonroot_admission(tty: bool) {
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        let path = if tty {
+            "/tmp/strato-exec-root-admission-pty"
+        } else {
+            "/tmp/strato-exec-root-admission-pipe"
+        };
+        {
+            std::fs::write(path, b"").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-c", "test $(id -u) = 65534 && test $(id -g) = 65534"]);
+            let master = if tty {
+                let pty = openpty(None, None::<&nix::sys::termios::Termios>).unwrap();
+                cmd.stdin(Stdio::from(pty.slave.try_clone().unwrap()))
+                    .stdout(Stdio::from(pty.slave.try_clone().unwrap()))
+                    .stderr(Stdio::from(pty.slave));
+                Some(pty.master)
+            } else {
+                cmd.process_group(0);
+                None
+            };
+            configure_child_pre_exec(&mut cmd, tty, 65534, 65534, move || {
+                // Surrogate for root-owned cgroup.procs, using fork-safe syscalls.
+                unsafe {
+                    let fd = libc::open(
+                        if tty {
+                            b"/tmp/strato-exec-root-admission-pty\0".as_ptr().cast()
+                        } else {
+                            b"/tmp/strato-exec-root-admission-pipe\0".as_ptr().cast()
+                        },
+                        libc::O_WRONLY,
+                    );
+                    if fd < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    let wrote = libc::write(fd, b"admitted".as_ptr().cast(), 8);
+                    let error = std::io::Error::last_os_error();
+                    libc::close(fd);
+                    if wrote != 8 {
+                        return Err(error);
+                    }
+                    Ok(())
+                }
+            });
+            let status = cmd.status().unwrap();
+            assert!(status.success(), "tty={tty}: {status}");
+            assert_eq!(std::fs::read(path).unwrap(), b"admitted");
+            drop(master);
+            std::fs::remove_file(path).unwrap();
+        }
     }
 }

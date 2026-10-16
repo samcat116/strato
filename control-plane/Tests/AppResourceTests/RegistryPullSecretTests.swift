@@ -16,7 +16,7 @@ import AppTestSupport
 /// echoed, the distribution auth flow (challenge → token → manifest) in
 /// `DistributionRegistryClient`, and sync assembly pinning digests and
 /// minting the short-lived credential carried in `DesiredSandboxState`.
-@Suite("Registry Pull Secret Tests", .serialized)
+@Suite("Registry Pull Secret Tests", .serialized, .postgresFixture)
 final class RegistryPullSecretTests {
 
     // MARK: - Harness

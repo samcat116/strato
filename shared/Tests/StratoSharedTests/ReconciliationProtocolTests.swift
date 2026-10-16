@@ -320,20 +320,6 @@ struct ReconciliationProtocolTests {
         #expect(lo.addresses.isEmpty)
     }
 
-    @Test("ObservedVMState from an older agent (no guestInfo key) decodes to nil")
-    func observedStateGuestInfoBackwardCompatible() throws {
-        // A pre-v15 agent emits no `guestInfo` key at all; the control plane
-        // must tolerate its absence rather than fail to decode the report.
-        let legacy = """
-            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2,
-             "appliedNetworkInterfaceIds":[]}
-            """
-        let decoded = try decodeJSON(ObservedVMState.self, from: legacy)
-        #expect(decoded.guestInfo == nil)
-        #expect(decoded.status == .running)
-        #expect(decoded.observedGeneration == 2)
-    }
-
     @Test("ObservedVMState carries balloon memoryStats through the envelope (issue #567)")
     func observedStateMemoryStatsRoundTrip() throws {
         let message = ObservedStateReport(
@@ -363,17 +349,6 @@ struct ReconciliationProtocolTests {
         #expect(stats.totalBytes == 8_254_390_272)
         #expect(stats.availableBytes == 6_442_450_944)
         #expect(decoded.vms[1].memoryStats == nil)
-    }
-
-    @Test("ObservedVMState from a pre-v16 agent (no memoryStats key) decodes to nil")
-    func observedStateMemoryStatsBackwardCompatible() throws {
-        let legacy = """
-            {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2,
-             "appliedNetworkInterfaceIds":[]}
-            """
-        let decoded = try decodeJSON(ObservedVMState.self, from: legacy)
-        #expect(decoded.memoryStats == nil)
-        #expect(decoded.appliedNetworkInterfaceIds == [])
     }
 
     @Test("Observed workload resource telemetry preserves zero and unavailable signals")
@@ -406,7 +381,11 @@ struct ReconciliationProtocolTests {
             {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2,
              "appliedNetworkInterfaceIds":[]}
             """
-        #expect(try decodeJSON(ObservedVMState.self, from: legacy).resourceTelemetry == nil)
+        let absent = try decodeJSON(ObservedVMState.self, from: legacy)
+        #expect(absent.resourceTelemetry == nil)
+        #expect(absent.guestInfo == nil)
+        #expect(absent.memoryStats == nil)
+        #expect(absent.appliedNetworkInterfaceIds == [])
     }
 
     @Test("ObservedVMState carries applied interface ids and preserves an authoritative empty list")

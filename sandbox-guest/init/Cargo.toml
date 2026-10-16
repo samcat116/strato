@@ -28,6 +28,11 @@ path = "src/main.rs"
 name = "strato-guest-agent"
 path = "src/guest_agent.rs"
 
+[features]
+default = []
+# Experimental sandbox-only control; never enabled in published/default artifacts.
+idle-policy-v5 = []
+
 [dependencies]
 # base64 payload encoding for exec/log stdio chunks on the vsock protocol (v2).
 base64 = "0.22"

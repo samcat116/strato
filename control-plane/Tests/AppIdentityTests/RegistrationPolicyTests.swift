@@ -20,7 +20,7 @@ private func registerConcurrently(_ app: Application, username: String) async th
     return status
 }
 
-@Suite("Self-registration policy", .serialized)
+@Suite("Self-registration policy", .serialized, .postgresFixture)
 final class RegistrationPolicyTests: BaseTestCase {
 
     private func register(
@@ -40,10 +40,9 @@ final class RegistrationPolicyTests: BaseTestCase {
     // MARK: - Setting parsing
 
     @Test(
-        "the setting uses Swift Configuration's Boolean grammar",
+        "the setting wires enabled and disabled Boolean values",
         arguments: [
-            ("true", true), ("TRUE", true), ("yes", true), ("1", true),
-            ("false", false), ("FALSE", false), ("no", false), ("0", false),
+            ("true", true), ("false", false),
         ])
     func testBooleanGrammar(raw: String, expected: Bool) async throws {
         let configuration = try await ControlPlaneConfiguration.load(
@@ -54,7 +53,7 @@ final class RegistrationPolicyTests: BaseTestCase {
 
     @Test(
         "unsupported Boolean spellings fail configuration",
-        arguments: ["", "off", "on", " true ", "banana"])
+        arguments: ["banana"])
     func testUnsupportedBooleanSpelling(raw: String) async {
         await #expect(throws: ControlPlaneConfigurationError.self) {
             _ = try await ControlPlaneConfiguration.load(

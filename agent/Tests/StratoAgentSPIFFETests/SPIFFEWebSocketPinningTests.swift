@@ -312,14 +312,14 @@ private final class CloseOnFirstReadHandler: ChannelInboundHandler {
 /// control-plane server SVID, a rogue workload SVID from the same trust
 /// domain, an agent client SVID, and a foreign-CA certificate claiming the
 /// control plane's SPIFFE ID.
-private struct PinningTestPKI {
+struct PinningTestPKI {
     let caPEM: String
     let controlPlaneSVID: X509SVID
     let rogueSVID: X509SVID
     let agentSVID: X509SVID
     let foreignControlPlaneSVID: X509SVID
 
-    init() throws {
+    init(agentTrustDomain: String = "strato.local") throws {
         let (ca, caKey, caName) = try Self.makeCA(commonName: "Test SPIRE CA")
         caPEM = try ca.serializeAsPEM().pemString
 
@@ -328,6 +328,7 @@ private struct PinningTestPKI {
         func makeSVID(
             commonName: String,
             spiffePath: String,
+            trustDomain: String = "strato.local",
             issuerName: DistinguishedName,
             issuerKey: Certificate.PrivateKey,
             trustBundlePEM: [String]
@@ -346,13 +347,13 @@ private struct PinningTestPKI {
                     Critical(BasicConstraints.notCertificateAuthority)
                     KeyUsage(digitalSignature: true)
                     SubjectAlternativeNames([
-                        .uniformResourceIdentifier("spiffe://strato.local\(spiffePath)")
+                        .uniformResourceIdentifier("spiffe://\(trustDomain)\(spiffePath)")
                     ])
                 },
                 issuerPrivateKey: issuerKey
             )
             return X509SVID(
-                spiffeID: SPIFFEIdentity(trustDomain: "strato.local", path: spiffePath),
+                spiffeID: SPIFFEIdentity(trustDomain: trustDomain, path: spiffePath),
                 certificateChain: [try leaf.serializeAsPEM().pemString],
                 privateKey: key.pemRepresentation,
                 trustBundle: trustBundlePEM,
@@ -381,6 +382,7 @@ private struct PinningTestPKI {
         agentSVID = try makeSVID(
             commonName: "test-agent",
             spiffePath: "/agent/test-agent",
+            trustDomain: agentTrustDomain,
             issuerName: caName,
             issuerKey: caKey,
             trustBundlePEM: [caPEM]

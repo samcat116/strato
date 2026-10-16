@@ -67,7 +67,7 @@ public struct UEFIVarstore: Sendable {
     public init(
         logger: Logger,
         qemuImgPath: String? = nil,
-        runSubprocess: @escaping SubprocessRunner = { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run
     ) {
         self.logger = logger
         self.qemuImgPath = qemuImgPath ?? FileSystemStorageBackend.defaultQemuImgPath
@@ -90,7 +90,6 @@ public struct UEFIVarstore: Sendable {
         // A unique sibling keeps concurrent materializations from clobbering
         // each other's qemu-img output. The completed file is atomically
         // published over any equivalent winner below.
-        try? FileManager.default.removeItem(atPath: path + ".partial")
         let stagingPath = path + ".partial." + UUID().uuidString.lowercased()
 
         do {
@@ -122,7 +121,9 @@ public struct UEFIVarstore: Sendable {
             // which is what makes the `fileExists` check above safe to trust.
             try DurableFileWriter().publish(stagingPath: stagingPath, to: path)
         } catch {
-            try? FileManager.default.removeItem(atPath: stagingPath)
+            if !SubprocessBudget.preserveStaging(after: error) {
+                try? FileManager.default.removeItem(atPath: stagingPath)
+            }
             throw error
         }
 
@@ -173,7 +174,9 @@ public struct UEFIVarstore: Sendable {
 
     private func run(_ arguments: [String]) async throws -> ProcessResult {
         do {
-            return try await runSubprocess(URL(fileURLWithPath: qemuImgPath), arguments)
+            return try await runSubprocess(URL(fileURLWithPath: qemuImgPath), arguments, .varstore)
+        } catch  where SubprocessBudget.preserveStaging(after: error) {
+            throw error
         } catch {
             throw UEFIVarstoreError.toolUnavailable(
                 "failed to launch qemu-img at \(qemuImgPath): \(error.localizedDescription). "

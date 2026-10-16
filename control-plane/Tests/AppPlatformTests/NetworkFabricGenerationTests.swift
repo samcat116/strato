@@ -4,7 +4,7 @@ import Testing
 import Vapor
 @testable import App
 
-@Suite("Network fabric mutation deadlines", .serialized)
+@Suite("Network fabric mutation deadlines", .serialized, .postgresFixture)
 struct NetworkFabricGenerationTests {
     @Test(arguments: [false, true])
     func networkMutationRenewsWithoutShorteningDeadline(guarded: Bool) async throws {

@@ -132,6 +132,7 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
     // control channel is useless but harmless: it can never launch, and the
     // host's health check fails the template boot.)
     let state = Arc::new(GuestState {
+        idle: Arc::new(Mutex::new(strato_sandbox_init::idle::from_system())),
         status: status.clone(),
         process: Mutex::new(process.clone()),
         logs: logs.clone(),
@@ -173,8 +174,14 @@ pub(crate) fn launch_workload(state: &GuestState, process: ResolvedProcess) -> R
     // Exits reaped before now belong to reparented orphans (template boot
     // scripts, snapshot-frozen leftovers); drop them so a recycled pid can
     // never mis-claim a stale exit as the workload's.
+    let _admission = exec::IdleAdmission::new(state, None)?;
     state.children.clear_unclaimed();
-    let pid = spawn_workload(&process, &state.logs).map_err(|e| e.to_string())?;
+    let pid = spawn_workload(
+        &process,
+        &state.logs,
+        state.idle.lock().expect("idle poisoned").supported(),
+    )
+    .map_err(|e| e.to_string())?;
     *state.process.lock().expect("process poisoned") = process;
     *state.workload_pid.lock().expect("workload pid poisoned") = Some(pid);
     state.children.notify_spawned();
@@ -202,6 +209,7 @@ pub(crate) fn launch_workload(state: &GuestState, process: ResolvedProcess) -> R
 fn spawn_workload(
     process: &ResolvedProcess,
     logs: &Arc<LogBuffer>,
+    idle_enabled: bool,
 ) -> Result<Pid, Box<dyn std::error::Error>> {
     let (program, args) = process.argv.split_first().ok_or("empty argv")?;
 
@@ -224,7 +232,10 @@ fn spawn_workload(
     // Full credential drop inside pre_exec; see [`drop_credentials`] for why
     // Command::uid/gid must not be used here.
     unsafe {
-        cmd.pre_exec(move || drop_credentials(uid, gid));
+        cmd.pre_exec(move || {
+            strato_sandbox_init::idle::join_child(idle_enabled)?;
+            drop_credentials(uid, gid)
+        });
     }
 
     let mut child = cmd

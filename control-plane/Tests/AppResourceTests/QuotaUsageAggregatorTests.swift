@@ -13,7 +13,7 @@ import AppTestSupport
 /// The reduce each test compares against is deliberately spelled out rather
 /// than factored away: it is the previous implementation, and it is the thing
 /// the aggregate has to stay equal to.
-@Suite("Quota Usage Aggregator Tests", .serialized)
+@Suite("Quota Usage Aggregator Tests", .serialized, .postgresFixture)
 struct QuotaUsageAggregatorTests {
 
     /// An organization with a folder subtree, projects at both levels, and

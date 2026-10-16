@@ -7,7 +7,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Create load balancer backend migration", .serialized)
+@Suite("Create load balancer backend migration", .serialized, .postgresFixture)
 struct CreateLoadBalancerBackendMigrationTests {
     @Test("Creates both composite unique constraints with distinct short names")
     func createsCompositeUniqueConstraints() async throws {
@@ -18,6 +18,7 @@ struct CreateLoadBalancerBackendMigrationTests {
             .shared(PostgresTestDatabases.appEventLoopGroup)
         )
         let databaseName = Environment.get("DATABASE_NAME") ?? "strato_test"
+        await (try PostgresFixtureScope.requireCurrent()).register(app)
         app.databases.use(
             .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
             as: .psql

@@ -11,6 +11,7 @@ enum SandboxCreationWorkflow {
         let user = try req.requireActingUser("Creating a sandbox")
 
         struct CreateSandboxRequest: Content, ValidatedRequestBody {
+            let resourceClass: WorkloadResourceClassReference?
             var name: String
             /// OCI image reference, e.g. `ghcr.io/acme/worker:v3`.
             let image: String?
@@ -166,8 +167,7 @@ enum SandboxCreationWorkflow {
                     reason: "Snapshot was not captured in a fork-compatible jailed layout")
             }
             guard
-                snapshot.guestControlProtocolVersion
-                    == SandboxGuestControlProtocol.currentVersion
+                snapshot.guestControlProtocolVersion.map(SandboxGuestControlProtocol.supports) == true
             else {
                 throw Abort(
                     .conflict,
@@ -237,6 +237,8 @@ enum SandboxCreationWorkflow {
             resourceKind: "sandboxes"
         )
         let projectId = try project.requireID()
+        let resourceClass = try await WorkloadResourceClassService.resolve(
+            createRequest.resourceClass, project: project, req: req)
 
         // The network the fork inherits when it named none (STR-104). Only
         // within the source's own project: networks are project-scoped, so a
@@ -348,6 +350,7 @@ enum SandboxCreationWorkflow {
             restoredFromSnapshotId: restoreSnapshot?.id,
             cpuTemplate: cpuTemplate
         )
+        sandbox.resourceClass = resourceClass
         sandbox.imageDigest = restoreSource?.imageDigest
 
         let userID = try user.requireID()
@@ -371,13 +374,13 @@ enum SandboxCreationWorkflow {
         let accepted: ResourceMutation.Accepted
         do {
             let initialGeneration = sandbox.generation
-            accepted = try await VMController.retryingOnConstraintFailure {
+            accepted = try await DatabaseTransactionRetry.retrying(
+                on: req.db, uniqueConstraints: DatabaseTransactionRetry.workloadCreateConstraints
+            ) {
                 // A retried attempt reuses this model after its insert was
                 // rolled back: reset the id/exists/generation so every attempt
                 // starts as a fresh insert (see the VM create path).
-                sandbox.id = nil
-                sandbox.$id.exists = false
-                sandbox.generation = initialGeneration
+                DatabaseTransactionRetry.resetNewResource(sandbox, generation: initialGeneration)
                 return try await req.db.transaction { db -> ResourceMutation.Accepted in
                     try await IdempotencyService.reserve(
                         req.idempotencyContext, actor: .user(userID), on: db)

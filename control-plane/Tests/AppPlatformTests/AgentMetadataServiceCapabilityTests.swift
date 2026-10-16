@@ -8,7 +8,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Agent metadata-service capability", .serialized)
+@Suite("Agent metadata-service capability", .serialized, .postgresFixture)
 struct AgentMetadataServiceCapabilityTests {
     private let resources = AgentResources(
         totalCPU: 4, availableCPU: 4,

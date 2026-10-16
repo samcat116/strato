@@ -22,7 +22,7 @@ extension CedarRoleGrants {
 /// policies over the raw slice, for a whole grid of principals × actions ×
 /// nodes: a slice edge the loader dropped would surface as the two
 /// disagreeing.
-@Suite("Entity Slice Loader Tests", .serialized)
+@Suite("Entity Slice Loader Tests", .serialized, .postgresFixture)
 final class EntitySliceLoaderTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

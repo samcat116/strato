@@ -17,7 +17,7 @@ import AppTestSupport
 /// runs inside observed-report handling, so a constraint violation throws and
 /// *nothing* in that agent's report is applied — and the stray artifact is
 /// still there on the next report, so the agent stops converging permanently.
-@Suite("Agent workload claim enum constraint", .serialized)
+@Suite("Agent workload claim enum constraint", .serialized, .postgresFixture)
 struct AgentWorkloadClaimEnumConstraintTests {
 
     @Test("A claim can be recorded for every workload kind an agent can report")

@@ -5,7 +5,7 @@ import Fluent
 import AppTestSupport
 @testable import App
 
-@Suite("APIKeyAuthenticator Tests", .serialized)
+@Suite("APIKeyAuthenticator Tests", .serialized, .postgresFixture)
 struct APIKeyAuthenticatorTests {
 
     // MARK: - Test Helpers
@@ -46,41 +46,6 @@ struct APIKeyAuthenticatorTests {
     }
 
     // MARK: - Basic Authentication Tests
-
-    @Test("APIKeyAuthenticator authenticates valid API key")
-    func testValidAPIKey() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
-
-        // Create a test route that requires authentication
-        app.routes.all.removeAll()
-        // Ad-hoc routes outside the production classification; declare them so
-        // the default-deny middleware treats them as login-gated (#482).
-        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
-        protected.get("test") { req -> String in
-            guard let authUser = req.auth.get(User.self) else {
-                throw Abort(.unauthorized)
-            }
-            return authUser.username
-        }
-
-        try await app.test(
-            .GET, "/test",
-            beforeRequest: { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-            }
-        ) { res async in
-            #expect(res.status == .ok)
-            #expect(res.body.string == "testuser")
-        }
-
-        try await app.shutdownForTesting()
-    }
 
     @Test("APIKeyAuthenticator rejects invalid API key")
     func testInvalidAPIKey() async throws {
@@ -319,41 +284,6 @@ struct APIKeyAuthenticatorTests {
 
     // MARK: - User Association Tests
 
-    @Test("APIKeyAuthenticator loads associated user")
-    func testUserAssociation() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
-
-        // Create a test route that checks user details
-        app.routes.all.removeAll()
-        // Ad-hoc routes outside the production classification; declare them so
-        // the default-deny middleware treats them as login-gated (#482).
-        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
-        protected.get("test") { req -> String in
-            guard let authUser = req.auth.get(User.self) else {
-                throw Abort(.unauthorized)
-            }
-            return "\(authUser.username):\(authUser.email)"
-        }
-
-        try await app.test(
-            .GET, "/test",
-            beforeRequest: { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-            }
-        ) { res async in
-            #expect(res.status == .ok)
-            #expect(res.body.string == "testuser:test@example.com")
-        }
-
-        try await app.shutdownForTesting()
-    }
-
     // MARK: - API Key Storage Tests
 
     @Test("APIKeyAuthenticator stores API key in request storage")
@@ -375,7 +305,8 @@ struct APIKeyAuthenticatorTests {
             guard let storedKey = req.apiKey else {
                 throw Abort(.internalServerError, reason: "API key not stored")
             }
-            return storedKey.name
+            let authUser = try req.auth.require(User.self)
+            return "\(storedKey.name):\(authUser.username):\(authUser.email)"
         }
 
         try await app.test(
@@ -385,7 +316,7 @@ struct APIKeyAuthenticatorTests {
             }
         ) { res async in
             #expect(res.status == .ok)
-            #expect(res.body.string == "Test API Key")
+            #expect(res.body.string == "Test API Key:testuser:test@example.com")
         }
 
         try await app.shutdownForTesting()

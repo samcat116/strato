@@ -253,8 +253,20 @@ extension Agent: ReconcileActuator {
                 presence[sandboxId] = .managed(.unknown)
                 continue
             }
-            let status = (try? await runtime.getSandboxStatus(sandboxId: sandboxId)) ?? .unknown
-            presence[sandboxId] = .managed(status)
+            do {
+                let record = try await runtime.suspensionRecord(sandboxId: sandboxId)
+                if record?.requiresOriginalGuestRollback == true {
+                    // The VMM may still run while its workload is frozen. Keep
+                    // Start level-triggered until original-guest rollback has
+                    // durably released the interrupted preparation fence.
+                    presence[sandboxId] = .managed(.starting)
+                } else {
+                    let status = try await runtime.getSandboxStatus(sandboxId: sandboxId)
+                    presence[sandboxId] = .managed(status)
+                }
+            } catch {
+                presence[sandboxId] = .managed(.unknown)
+            }
         }
         for sandboxId in orphanedSandboxes.keys where presence[sandboxId] == nil {
             presence[sandboxId] = .orphaned
@@ -323,6 +335,10 @@ extension Agent: ReconcileActuator {
             }
         } catch SandboxRuntimeError.adoptionTargetGone(let reason) {
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
+            guard entry.sandboxSuspension == nil, item.desiredSandbox?.suspensionCheckpointId == nil else {
+                throw ConvergenceError.sourceNotReady(
+                    "checkpoint-backed guest state cannot be replaced by an OCI create")
+            }
             try await runtime.prepareJailUIDRelease(for: item.id, jailUID: jailUID)
             logger.warning(
                 "Orphaned sandbox has no live process; re-creating it from the desired entry",
@@ -330,9 +346,15 @@ extension Agent: ReconcileActuator {
             try await sandboxReconcileCreate(item)
             return .stopped
         }
-        managedSandboxes[item.id] = entry
+        var adoptedEntry = entry
+        adoptedEntry.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
+        managedSandboxes[item.id] = adoptedEntry
         orphanedSandboxes.removeValue(forKey: item.id)
-        persistManifest()
+        guard persistManifest() else {
+            managedSandboxes.removeValue(forKey: item.id)
+            orphanedSandboxes[item.id] = entry
+            throw SandboxRuntimeError.snapshotIOFailed("could not persist adopted suspension reservations")
+        }
 
         logger.info(
             "Orphaned sandbox re-adopted and managed again",
@@ -601,6 +623,10 @@ extension Agent: ReconcileActuator {
             return
         }
         do {
+            if step != .shutdown && step != .delete, item.desired?.spec.resourceClass?.policy.kind == .burstable {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "Burstable workloads require verified STR272 runtime enforcement")
+            }
             switch step {
             case .adopt:
                 // Adoption flows through adoptVM (the reconciler needs the
@@ -719,15 +745,16 @@ extension Agent: ReconcileActuator {
 
         let raw = await rawHostCapacitySnapshot()
         let currentReservation = VMHostReservation.forManifestEntry(
-            current, architecture: .current)
+            current, architecture: .current, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let desiredReservation = VMHostReservation.forSpec(
-            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current,
+            qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
         let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
         try capacityAdmissionLedger.validateExistingReservation(
             currentReservation, snapshot: raw, agentName: initialAgentID)
         let claim = try capacityAdmissionLedger.claim(
             growth, desiredWorkloadReservation: desiredReservation,
-            snapshot: raw, agentName: initialAgentID)
+            snapshot: raw, agentName: initialAgentID, workloadID: item.id)
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
@@ -736,7 +763,8 @@ extension Agent: ReconcileActuator {
                     desiredReservation.memoryBytes > currentReservation.memoryBytes,
                     let entry = managedVMs[item.id] ?? orphanedVMs[item.id]
                 {
-                    let widened = entry.reservingMemory(atLeast: desiredReservation.memoryBytes)
+                    let widened = entry.reservingMemory(
+                        atLeast: max(0, desiredReservation.memoryBytes - configuration.qemuMemoryOverheadBytes))
                     if managedVMs[item.id] != nil {
                         managedVMs[item.id] = widened
                     } else {
@@ -808,7 +836,10 @@ extension Agent: ReconcileActuator {
             var booted = entry.reservingPositiveSizingGrowth(toward: desired.spec)
             if entry.hypervisorType == .qemu {
                 booted = booted.reservingMemory(
-                    atLeast: max(currentReservation.memoryBytes, desiredReservation.memoryBytes))
+                    atLeast: max(
+                        0,
+                        max(currentReservation.memoryBytes, desiredReservation.memoryBytes)
+                            - configuration.qemuMemoryOverheadBytes))
             }
             if managedVMs[item.id] != nil {
                 managedVMs[item.id] = booted

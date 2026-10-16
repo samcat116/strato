@@ -11,7 +11,7 @@ import AppTestSupport
 /// listing (scoped to the caller's projects), creation with CIDR/gateway
 /// validation and per-project name uniqueness, update guards while a network is
 /// in use, and the delete-in-use protections.
-@Suite("Network Controller Tests", .serialized)
+@Suite("Network Controller Tests", .serialized, .postgresFixture)
 final class NetworkControllerTests {
 
     fileprivate static let fixtureSiteID = UUID(uuidString: "00000000-0000-4000-8000-000000000765")!

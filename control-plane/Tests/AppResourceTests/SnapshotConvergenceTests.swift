@@ -22,7 +22,7 @@ import VaporTesting
 /// * a report that says *nothing* about snapshots deletes nothing;
 /// * retention exists at all, and goes down the same path an operator's
 ///   `DELETE` takes.
-@Suite("Snapshot Convergence Tests", .serialized)
+@Suite("Snapshot Convergence Tests", .serialized, .postgresFixture)
 final class SnapshotConvergenceTests {
 
     private func withSnapshotApp(

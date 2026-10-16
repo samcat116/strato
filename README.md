@@ -43,10 +43,15 @@ real-hostname/TLS deployments.
 git clone https://github.com/samcat116/strato.git
 cd strato/helm/strato-control-plane
 helm dependency build
-helm install strato .
+helm install strato . \
+  --set image.repository=ghcr.io/samcat116/strato-control-plane \
+  --set frontend.image.repository=ghcr.io/samcat116/strato-frontend \
+  --set image.tag=main --set frontend.image.tag=main
 ```
 
-Strong credentials are auto-generated on first install and reused across
+The chart defaults to local image names; these overrides select published
+images. Pin matching immutable tags for reproducible deployments. Strong
+credentials are auto-generated on first install and reused across
 upgrades (stored in the `<release>-strato-credentials` secret). See the
 [Kubernetes guide](docs/deployment/kubernetes.md) for production values
 (Gateway exposure, TLS, WebAuthn hostname).
@@ -135,16 +140,26 @@ strato/
 
 ## Documentation
 
-Full documentation lives in [docs/](docs/) (VitePress site), including
-architecture, deployment guides, and troubleshooting.
+Start with the [documentation map](docs/documentation.md):
+
+- [Getting started](docs/guide/getting-started.md): install, sign in, enroll
+  an agent, and prepare your first VM.
+- [User guide](docs/guide/user-guide.md): use an existing installation.
+- [Deployment and operations](docs/deployment/overview.md): configure and
+  operate the platform.
+- [Developer guide](docs/development/overview.md): package checks and code maps.
+
+The VitePress site preserves the same guides and architecture references.
+Proposal and gated-feature pages describe their own implementation and
+validation status; their inclusion is not a production-support claim.
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Make your changes and add tests
-4. Ensure the tests pass for each package you touched:
-   `swift test --package-path <package>`
+3. Follow [repository guidance](AGENTS.md) and make focused changes.
+4. Run the [checks appropriate to the change](docs/development/local-development.md#validation-scope);
+   documentation-only changes need the docs build and link checks.
 5. Submit a pull request
 
 ## License

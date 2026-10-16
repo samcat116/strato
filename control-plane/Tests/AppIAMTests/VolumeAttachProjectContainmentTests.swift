@@ -16,7 +16,7 @@ import AppTestSupport
 ///
 /// VM create already enforces this containment for networks and security
 /// groups; attach was the outlier.
-@Suite("Volume Attach Project Containment Tests", .serialized)
+@Suite("Volume Attach Project Containment Tests", .serialized, .postgresFixture)
 struct VolumeAttachProjectContainmentTests {
 
     /// Boots a test app with a system-admin caller holding real permissions on

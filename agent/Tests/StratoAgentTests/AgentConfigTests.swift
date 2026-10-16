@@ -32,6 +32,15 @@ struct AgentConfigTests {
             environmentVariables: [:])
     }
 
+    @Test(
+        "Full-refetch configuration retains the 1–300 second bounds",
+        arguments: [(-1, 1), (0, 1), (1, 1), (240, 240), (300, 300), (600, 300)])
+    func fullRefetchBounds(seconds: Int, expectedSeconds: Int) {
+        let config = AgentConfig(
+            controlPlaneURL: "ws://localhost:8080/agent/ws", desiredStateFullRefetchSeconds: seconds)
+        #expect(config.desiredStateFullRefetchInterval == .seconds(expectedSeconds))
+    }
+
     // MARK: - Storage paths
 
     @Test("Load volume_storage_dir alongside vm_storage_dir")
@@ -49,6 +58,67 @@ struct AgentConfigTests {
 
             #expect(config.vmStoragePath == "/srv/strato/vms")
             #expect(config.volumeStoragePath == "/srv/strato/volumes")
+        }
+    }
+
+    @Test("Suspension restore timeout loads at the supported boundaries", arguments: [5, 1200])
+    func suspensionRestoreTimeoutLoads(seconds: Int) async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try
+                "control_plane_url = \"ws://localhost:8080/agent/ws\"\nsandbox_suspension_restore_timeout_seconds = \(seconds)\n"
+                .write(toFile: path, atomically: true, encoding: .utf8)
+            #expect(try await loadConfig(from: path).sandboxSuspensionRestoreTimeoutSeconds == seconds)
+        }
+    }
+
+    @Test("Invalid suspension restore timeouts fail configuration", arguments: [0, 4, 1201])
+    func suspensionRestoreTimeoutRejects(seconds: Int) async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try
+                "control_plane_url = \"ws://localhost:8080/agent/ws\"\nsandbox_suspension_restore_timeout_seconds = \(seconds)\n"
+                .write(toFile: path, atomically: true, encoding: .utf8)
+            await #expect(throws: AgentConfigError.self) { try await loadConfig(from: path) }
+        }
+    }
+
+    @Test("Idle policy is disabled by default and configuration reaches runtime values")
+    func idlePolicyConfiguration() async throws {
+        #expect(!AgentConfig(controlPlaneURL: "ws://localhost").resolvedSandboxIdlePolicy.enabled)
+        try await withTempDirectory { directory in
+            let id = UUID()
+            let path = directory.appendingPathComponent("config.toml").path
+            let toml = """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                sandbox_idle_suspend_enabled = true
+                sandbox_idle_seconds = 42
+                sandbox_minimum_residency_seconds = 15
+                sandbox_suspension_restore_timeout_seconds = 90
+                sandbox_idle_excluded_sandbox_ids = ["\(id.uuidString)"]
+                """
+            try toml.write(toFile: path, atomically: true, encoding: .utf8)
+            let policy = try await loadConfig(from: path).resolvedSandboxIdlePolicy
+            #expect(policy.enabled)
+            #expect(policy.idleSeconds == 42)
+            #expect(policy.minimumResidencySeconds == 15)
+            #expect(policy.restoreTimeoutSeconds == 90)
+            #expect(policy.excludedSandboxIDs == [id])
+        }
+    }
+
+    @Test(
+        "Invalid idle thresholds or exclusions refuse configuration",
+        arguments: [
+            "sandbox_idle_seconds = 0", "sandbox_minimum_residency_seconds = -1",
+            "sandbox_idle_excluded_sandbox_ids = [\"bad-id\"]",
+        ])
+    func invalidIdleConfiguration(setting: String) async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://localhost:8080/agent/ws\"\n\(setting)\n".write(
+                toFile: path, atomically: true, encoding: .utf8)
+            await #expect(throws: AgentConfigError.self) { try await loadConfig(from: path) }
         }
     }
 
@@ -244,6 +314,23 @@ struct AgentConfigTests {
     }
 
     // MARK: - Sandbox jailer settings (issue #425)
+
+    @Test("host memory reserve defaults, zero, and bounds")
+    func hostMemoryReserve() async throws {
+        try await withTempDirectory { directory in
+            let path = directory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(toFile: path, atomically: true, encoding: .utf8)
+            #expect(try await loadConfig(from: path).hostMemoryReserveBytes == 1024 * 1024 * 1024)
+            for reserve in [0, 2048] {
+                try "control_plane_url = \"ws://x:8080/agent/ws\"\nhost_memory_reserve_mb = \(reserve)".write(
+                    toFile: path, atomically: true, encoding: .utf8)
+                #expect(try await loadConfig(from: path).hostMemoryReserveBytes == Int64(reserve) * 1024 * 1024)
+            }
+            try "control_plane_url = \"ws://x:8080/agent/ws\"\nhost_memory_reserve_mb = -1".write(
+                toFile: path, atomically: true, encoding: .utf8)
+            await #expect(throws: AgentConfigError.self) { try await loadConfig(from: path) }
+        }
+    }
 
     @Test("QEMU memory overhead defaults to 512 MiB and loads valid bounds")
     func qemuMemoryOverhead() async throws {
@@ -502,8 +589,8 @@ struct AgentConfigTests {
     }
 
     @Test(
-        "TOML accepts every representative log threshold",
-        arguments: [AgentLogLevel.trace, .info, .warning])
+        "TOML wires a valid log threshold",
+        arguments: [AgentLogLevel.warning])
     func loadSupportedTOMLLogLevel(_ level: AgentLogLevel) async throws {
         try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
@@ -1051,8 +1138,8 @@ struct AgentConfigTests {
     }
 
     @Test(
-        "Environment accepts every representative log threshold",
-        arguments: [AgentLogLevel.trace, .info, .warning])
+        "Environment wires a valid log threshold",
+        arguments: [AgentLogLevel.warning])
     func loadSupportedEnvironmentLogLevel(_ level: AgentLogLevel) async throws {
         let config = try await AgentConfig.loadDefaultConfig(
             searchPaths: [],

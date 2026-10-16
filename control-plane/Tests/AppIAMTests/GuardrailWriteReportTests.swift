@@ -13,7 +13,7 @@ import AppTestSupport
 /// plumbing, and the thing worth testing is whether the symbolic question we
 /// ask is the question we meant. Point `IAM_SYMCC_SOLVER_PATH` or `CVC5` at
 /// the binary, or put `cvc5` on `PATH`; CI installs one.
-@Suite("IAM Guardrail Write Report", .serialized, .enabled(if: solverPath() != nil))
+@Suite("IAM Guardrail Write Report", .serialized, .enabled(if: solverPath() != nil), .postgresFixture)
 final class GuardrailWriteReportTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

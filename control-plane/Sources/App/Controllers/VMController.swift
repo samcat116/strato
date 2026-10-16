@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import NIOConcurrencyHelpers
 import SQLKit
 import Vapor
 import StratoShared
@@ -141,62 +142,46 @@ struct VMController: RouteCollection {
         return userData
     }
 
-    /// Runs `body` again (up to `attempts` total) when it fails with a
-    /// database constraint violation. Used around the VM-create transaction:
-    /// two concurrent creates can race IPAM to the same address, and the
-    /// loser's unique-index violation is only recoverable by rerunning the
-    /// whole transaction with a fresh read of the used set. A violation that
-    /// persists through every attempt propagates.
-    static func retryingOnConstraintFailure<T>(
-        attempts: Int = 3, _ body: () async throws -> T
-    ) async throws -> T {
-        precondition(attempts >= 1)
-        for attempt in 1...attempts {
-            do {
-                return try await body()
-            } catch let error as any DatabaseError where error.isConstraintFailure && attempt < attempts {
-                continue
-            }
-        }
-        preconditionFailure("unreachable: the final attempt either returns or throws")
-    }
-
     func boot(routes: any RoutesBuilder) throws {
         let vms = routes.grouped("api", "vms")
         vms.get(use: index)
-        vms.post(use: create)
+        vms.post(use: create).supportsIdempotency()
         vms.group(":vmID") { vm in
             vm.get(use: show)
             vm.get("project-grant", use: projectGrant)
             vm.get("guest-config", use: guestConfiguration)
             vm.on(.PUT, "guest-config", body: .collect(maxSize: "8mb"), use: replaceGuestConfiguration)
-            vm.put(use: update)
+                .supportsIdempotency()
+            vm.put(use: update).supportsIdempotency()
             vm.patch(use: patchMetadata)
-            vm.delete(use: delete)
-            vm.post("start", use: start)
-            vm.post("stop", use: stop)
-            vm.post("restart", use: restart)
-            vm.post("pause", use: pause)
-            vm.post("resume", use: resume)
+            vm.delete(use: delete).supportsIdempotency()
+            vm.post("start", use: start).supportsIdempotency()
+            vm.post("retry-placement", use: retryPlacement).supportsIdempotency()
+            vm.post("stop", use: stop).supportsIdempotency()
+            vm.post("restart", use: restart).supportsIdempotency()
+            vm.post("pause", use: pause).supportsIdempotency()
+            vm.post("resume", use: resume).supportsIdempotency()
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
             vm.post("exec", use: exec)
+            vm.get("exec-sessions", use: liveExecSessions)
+            vm.post("exec-sessions", ":sessionID", "terminate", use: terminateExecSession)
             vm.group("actions") { actions in
                 actions.post("run", use: runCommand)
             }
             vm.get("interfaces", use: listInterfaces)
-            vm.post("interfaces", use: attachInterface)
+            vm.post("interfaces", use: attachInterface).supportsIdempotency()
             vm.group("interfaces", ":interfaceID") { interface in
-                interface.delete(use: detachInterface)
-                interface.post("retry", use: retryInterfaceMutation)
+                interface.delete(use: detachInterface).supportsIdempotency()
+                interface.post("retry", use: retryInterfaceMutation).supportsIdempotency()
             }
             // Full-VM checkpoints (issue #564); handlers live in
             // VMSnapshotController.swift.
-            vm.post("snapshots", use: createSnapshot)
+            vm.post("snapshots", use: createSnapshot).supportsIdempotency()
             vm.get("snapshots", use: listSnapshots)
             vm.group("snapshots", ":snapshotID") { snapshot in
-                snapshot.delete(use: deleteSnapshot)
-                snapshot.post("restore", use: restoreSnapshot)
+                snapshot.delete(use: deleteSnapshot).supportsIdempotency()
+                snapshot.post("restore", use: restoreSnapshot).supportsIdempotency()
             }
         }
     }
@@ -231,7 +216,9 @@ struct VMController: RouteCollection {
             request.securityGroupIds, projectID: projectID, on: req.db)
         let userID = try user.requireID()
 
-        let accepted = try await Self.retryingOnConstraintFailure {
+        let accepted = try await DatabaseTransactionRetry.retrying(
+            on: req.db, uniqueConstraints: DatabaseTransactionRetry.ipamConstraints
+        ) {
             try await req.resourceMutation.accept(
                 .attach, on: vm, actor: .user(userID), dispatch: .stateSync,
                 on: req.db, app: req.application
@@ -409,12 +396,6 @@ struct VMController: RouteCollection {
     /// limit/offset (optional) — select the page.
     func index(req: Request) async throws -> PagedResponse<VMDetailResponse> {
         let paging = try ListPaging.decode(from: req)
-        let vms = try await visibleVMs(req: req)
-        return paging.page(vms)
-    }
-
-    /// Every VM the caller may read, newest first, ready for slicing.
-    func visibleVMs(req: Request) async throws -> [VMDetailResponse] {
         // Any authenticated principal — a user, or a service account /
         // workload authenticated by JWT-SVID (issue #495). Which VMs it may
         // actually see is `canFilter`'s answer below, not this guard's.
@@ -424,53 +405,44 @@ struct VMController: RouteCollection {
         // narrowing to that org's projects. An org with no projects matches no VMs —
         // return early rather than let an empty `~~ []` stand in for "unfiltered".
         var query = VM.query(on: req.db)
-            .with(\.$networkInterfaces) {
-                $0.with(\.$addresses)
-                $0.with(\.$observedAddresses)
-                // The response reports each NIC's network by name as well as id.
-                $0.with(\.$logicalNetwork)
-                // …and which security groups filter it (STR-34).
-                $0.with(\.$securityGroupMemberships)
-            }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
-            if projectIDs.isEmpty { return [] }
+            if projectIDs.isEmpty {
+                return PagedResponse(items: [], total: 0, limit: paging.limit, offset: paging.offset)
+            }
             query = query.filter(\.$project.$id ~~ projectIDs)
         }
 
-        // Scope the page to what the caller may read. One batched decision for
-        // the whole page (#687): looping `req.can` per VM cost a full entity
-        // slice and a decision-log insert each, so a hundred rows meant
-        // hundreds of queries to answer one question a hundred times.
-        let allVMs = try await query.all()
-        let nodes = allVMs.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
-        let readable = try await req.canFilter("vm:read", on: nodes)
+        // Authorization still precedes slicing, so totals and full pages retain
+        // Cedar's object-level decisions. Only IDs cross this fleet-wide read;
+        // NICs, addresses, enforcement and identities are loaded for one page.
+        let ids = try await query.all(\.$id).compactMap { $0 }
+        let readable = try await req.canFilter("vm:read", on: ids.map { IAMNode(type: .virtualMachine, id: $0) })
+        let visibleIDs = ids.filter { readable.contains(IAMNode(type: .virtualMachine, id: $0)) }
+        let selected = paging.slice(visibleIDs)
+        guard !selected.isEmpty else {
+            return PagedResponse(items: [], total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
+        }
+        let visible = try await VM.query(on: req.db)
+            .filter(\.$id ~~ selected)
+            .with(\.$networkInterfaces) {
+                $0.with(\.$addresses).with(\.$observedAddresses)
+                    .with(\.$logicalNetwork).with(\.$securityGroupMemberships)
+            }
+            .sort(\.$createdAt, .descending).sort(\.$id, .descending)
+            .all()
 
-        // Batched for the same reason the authorization decision is: a
-        // per-row realizer walk would be three queries per VM.
         let enforcement = try await SecurityGroupService.enforcementByVM(
-            allVMs,
+            visible,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
             on: req.db)
 
-        let visible = allVMs.filter { vm in
-            vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
-        }
-
-        // …and for the same reason again: the page's instance identities
-        // (STR-55) in one query rather than one per row.
-        //
-        // Over `visible`, not `allVMs`: this is the one lookup here whose `IN`
-        // list grows with the *fleet* rather than with the host count, so it is
-        // also the one worth not widening with rows whose identity is about to
-        // be discarded — and resolving an identity for a VM the caller may not
-        // read is work with no reader.
         let identities = try await GuestIdentity.registrations(
             forVMs: visible.compactMap(\.id), on: req.db)
 
-        return visible.compactMap { vm in
+        let items = visible.compactMap { vm -> VMDetailResponse? in
             guard let id = vm.id else { return nil }
             return VMDetailResponse(
                 from: vm,
@@ -479,6 +451,7 @@ struct VMController: RouteCollection {
                 instanceIdentityPrincipalId: identities[id]?.principalID,
                 instanceIdentityStatus: identities[id] == nil ? .revoked : .enabled)
         }
+        return PagedResponse(items: items, total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
     }
 
     /// Fetch a VM by its :vmID route parameter and enforce a permission on it.
@@ -667,164 +640,185 @@ struct VMController: RouteCollection {
 
         try Self.validateSizing(cpu: newCPU, memory: newMemory, balloonTarget: newBalloonTarget)
 
-        let project = try await existingVM.project(on: req.db)
-        // A resting VM can apply the new sizing without live-unplug support.
-        // QEMU/libvirt still has a persistent definition to update, so this
-        // generation must reach the placed agent before it is converged.
-        guard existingVM.status == .running else {
-            guard existingVM.status == .created || existingVM.status == .shutdown || existingVM.status == .error
-            else {
+        let growthMutationID = UUID()
+        let growthClaim = NIOLockedValueBox<WorkloadResourceClassService.GrowthClaim?>(nil)
+        do {
+            let project = try await existingVM.project(on: req.db)
+            // A resting VM can apply the new sizing without live-unplug support.
+            // QEMU/libvirt still has a persistent definition to update, so this
+            // generation must reach the placed agent before it is converged.
+            guard existingVM.status == .running else {
+                guard existingVM.status == .created || existingVM.status == .shutdown || existingVM.status == .error
+                else {
+                    throw Abort(
+                        .conflict,
+                        reason: "A VM can only be resized while it is running or stopped (this one is "
+                            + "\(existingVM.status.rawValue))")
+                }
+                try await Self.requirePlacedResizeCapacity(
+                    vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
+                try await req.db.transaction { db in
+                    try await IdempotencyService.reserve(
+                        req.idempotencyContext, actor: actor, on: db)
+                    guard try await existingVM.lockAndRefresh(on: db) else {
+                        throw Abort(.notFound, reason: "VM no longer exists")
+                    }
+                    let committed = try await Self.committedVMSizing(existingVMID, on: db)
+                    let lockedCPU = updateRequest.cpu ?? committed.cpu
+                    let lockedMemory = updateRequest.memory ?? committed.memory
+                    let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
+                    try Self.validateSizing(
+                        cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
+                    _ = try await Self.applyMetadataUpdate(
+                        updateRequest.metadataEnabled, to: existingVM, on: db)
+                    try WorkloadResourceClassService.requireGrowthAvailable(
+                        vm: existingVM, cpu: lockedCPU, memory: lockedMemory)
+                    try await QuotaEnforcementService.reserveVMResize(
+                        for: project, environment: existingVM.environment,
+                        vcpuDelta: lockedCPU - committed.cpu,
+                        memoryDelta: lockedMemory - committed.memory, on: db)
+                    let claim = try await WorkloadResourceClassService.prepareVMResize(
+                        existingVM, cpu: lockedCPU, memory: lockedMemory, mutationID: growthMutationID,
+                        coordination: req.application.coordination, on: db)
+                    growthClaim.withLockedValue { $0 = claim }
+                    existingVM.cpu = lockedCPU
+                    existingVM.memory = lockedMemory
+                    existingVM.balloonTarget = lockedBalloonTarget
+                    existingVM.maxCpu = max(committed.maxCPU, lockedCPU)
+                    existingVM.maxMemory = max(committed.maxMemory, lockedMemory)
+                    // The stopped VM still has a desired-state entry the agent
+                    // syncs on; bump so the new spec isn't dropped as stale.
+                    let expectedGeneration = existingVM.generation
+                    guard
+                        case .applied = try await existingVM.advanceDesiredStateGeneration(
+                            expectedGeneration: expectedGeneration, on: db)
+                    else {
+                        throw Abort(
+                            .internalServerError,
+                            reason: "Failed to advance the locked VM generation")
+                    }
+                    try await existingVM.save(on: db)
+                    try await IdempotencyService.completeSynchronousResponse(
+                        req.idempotencyContext,
+                        actor: actor,
+                        resourceKind: .virtualMachine,
+                        resourceID: existingVMID,
+                        responseStatus: .ok,
+                        on: db)
+                }
+                if let placedAgentId = existingVM.hypervisorId {
+                    await req.application.agentService.syncDesiredState(agentId: placedAgentId)
+                }
+                await Self.nudgeAfterMetadataOrHostnameUpdate(
+                    hostnameChanged: hostnameChanged,
+                    // The generation sync above already carries this switch to the
+                    // placed agent. Only the fleet-scoped hostname nudge remains.
+                    metadataEnabledChanged: false,
+                    placedAgentId: existingVM.hypervisorId,
+                    app: req.application)
+                return try await Self.detailResponse(for: existingVM, on: req)
+            }
+
+            // The running-resize contract is online. libvirt deliberately does
+            // not attempt vCPU unplug because guest support is unreliable; writing
+            // only the persistent definition would make this request look
+            // converged while `virsh vcpucount --live` still showed the old count.
+            // Refuse before quota or generation moves when the current desired
+            // count is also known to be the live count. While another resize is
+            // pending, `cpu` is only its desired value: a 2 -> 6 request followed
+            // by 2 -> 4 is still growth from the last observed runtime and retains
+            // ResourceMutation's last-writer-wins contract. The libvirt guard is
+            // authoritative if the runtime races ahead of the control-plane report.
+            if let requestedCPU = updateRequest.cpu,
+                requestedCPU < existingVM.cpu,
+                existingVM.conditions.converged
+            {
+                throw Self.runningVCPUShrinkAbort(from: existingVM.cpu, to: requestedCPU)
+            }
+
+            // Online resize: the ceilings were fixed when the process spawned, so
+            // exceeding them is a `422` naming the restart as the remedy rather
+            // than an operation that could never converge.
+            guard newCPU <= existingVM.maxCpu else {
                 throw Abort(
-                    .conflict,
-                    reason: "A VM can only be resized while it is running or stopped (this one is "
-                        + "\(existingVM.status.rawValue))")
+                    .unprocessableEntity,
+                    reason: "This VM was started with a maximum of \(existingVM.maxCpu) vCPUs; "
+                        + "restart it to grow beyond that")
+            }
+            guard newMemory <= existingVM.maxMemory else {
+                throw Abort(
+                    .unprocessableEntity,
+                    reason: "This VM was started with a maximum of \(existingVM.maxMemory) bytes of memory; "
+                        + "restart it to grow beyond that")
             }
             try await Self.requirePlacedResizeCapacity(
                 vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
-            try await req.db.transaction { db in
-                try await IdempotencyService.reserve(
-                    req.idempotencyContext, actor: actor, on: db)
-                guard try await existingVM.lockAndRefresh(on: db) else {
-                    throw Abort(.notFound, reason: "VM no longer exists")
-                }
+            let accepted = try await req.resourceMutation.accept(
+                .resize, on: existingVM, actor: actor, dispatch: .stateSync,
+                on: req.db, app: req.application
+            ) { @Sendable db in
+                // `accept` took and refreshed the row lock before entering this
+                // closure, so a placement that won the race is visible to the
+                // capability gate and a placement still waiting must schedule
+                // from the value persisted here.
+                _ = try await Self.applyMetadataUpdate(
+                    updateRequest.metadataEnabled, to: existingVM, on: db)
+                // Lock the row and recompute the deltas against what it says right
+                // now. This is the one guard the dropped "operation already
+                // pending" mutex was actually load-bearing for (STR-147): the
+                // sizing above was read before the transaction, so two concurrent
+                // resizes would each charge quota for the same delta and the
+                // project would be under-counted by one of them. `accept` already
+                // holds this row's lock, so the read below sees the winner's
+                // committed sizing — which is what makes the delta right rather
+                // than merely refused.
                 let committed = try await Self.committedVMSizing(existingVMID, on: db)
                 let lockedCPU = updateRequest.cpu ?? committed.cpu
                 let lockedMemory = updateRequest.memory ?? committed.memory
                 let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
                 try Self.validateSizing(
                     cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
-                _ = try await Self.applyMetadataUpdate(
-                    updateRequest.metadataEnabled, to: existingVM, on: db)
+                try WorkloadResourceClassService.requireGrowthAvailable(
+                    vm: existingVM, cpu: lockedCPU, memory: lockedMemory)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
                     vcpuDelta: lockedCPU - committed.cpu,
                     memoryDelta: lockedMemory - committed.memory, on: db)
+                let claim = try await WorkloadResourceClassService.prepareVMResize(
+                    existingVM, cpu: lockedCPU, memory: lockedMemory, mutationID: growthMutationID,
+                    coordination: req.application.coordination, on: db)
+                growthClaim.withLockedValue { $0 = claim }
                 existingVM.cpu = lockedCPU
                 existingVM.memory = lockedMemory
+                // Deliberately not a quota movement: ballooning reclaims memory
+                // opportunistically, the grant the project is charged for is
+                // still committed, and the guest takes it all back the moment the
+                // target is cleared.
                 existingVM.balloonTarget = lockedBalloonTarget
-                existingVM.maxCpu = max(committed.maxCPU, lockedCPU)
-                existingVM.maxMemory = max(committed.maxMemory, lockedMemory)
-                // The stopped VM still has a desired-state entry the agent
-                // syncs on; bump so the new spec isn't dropped as stale.
-                let expectedGeneration = existingVM.generation
-                guard
-                    case .applied = try await existingVM.advanceDesiredStateGeneration(
-                        expectedGeneration: expectedGeneration, on: db)
-                else {
-                    throw Abort(
-                        .internalServerError,
-                        reason: "Failed to advance the locked VM generation")
-                }
-                try await existingVM.save(on: db)
-                try await IdempotencyService.completeSynchronousResponse(
-                    req.idempotencyContext,
-                    actor: actor,
-                    resourceKind: .virtualMachine,
-                    resourceID: existingVMID,
-                    responseStatus: .ok,
-                    on: db)
+                // Desired status is unchanged — this is a spec change — but the
+                // generation must still advance for the agent to apply it. The
+                // generation it builds on came from `accept`'s refresh, so the
+                // loser of a race lands strictly above the winner rather than
+                // reusing its number.
             }
-            if let placedAgentId = existingVM.hypervisorId {
-                await req.application.agentService.syncDesiredState(agentId: placedAgentId)
-            }
+            // The resize's own dispatch reaches this VM's agent and its site
+            // controller — which already covers a kill-switch edge riding along,
+            // since the sync it triggers is the whole desired entry. A hostname
+            // edge needs the wider ring, and that is what this call is for; the
+            // redundant placement ring in the other branch is harmless (identical
+            // syncs diff to nothing on the agent) and keeps one exit rule.
             await Self.nudgeAfterMetadataOrHostnameUpdate(
                 hostnameChanged: hostnameChanged,
-                // The generation sync above already carries this switch to the
-                // placed agent. Only the fleet-scoped hostname nudge remains.
                 metadataEnabledChanged: false,
                 placedAgentId: existingVM.hypervisorId,
                 app: req.application)
-            return try await Self.detailResponse(for: existingVM, on: req)
+            return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+        } catch {
+            await WorkloadResourceClassService.releaseRolledBackGrowth(
+                growthClaim.withLockedValue { $0 },
+                vmID: existingVMID, coordination: req.application.coordination, on: req.db)
+            throw error
         }
-
-        // The running-resize contract is online. libvirt deliberately does
-        // not attempt vCPU unplug because guest support is unreliable; writing
-        // only the persistent definition would make this request look
-        // converged while `virsh vcpucount --live` still showed the old count.
-        // Refuse before quota or generation moves when the current desired
-        // count is also known to be the live count. While another resize is
-        // pending, `cpu` is only its desired value: a 2 -> 6 request followed
-        // by 2 -> 4 is still growth from the last observed runtime and retains
-        // ResourceMutation's last-writer-wins contract. The libvirt guard is
-        // authoritative if the runtime races ahead of the control-plane report.
-        if let requestedCPU = updateRequest.cpu,
-            requestedCPU < existingVM.cpu,
-            existingVM.conditions.converged
-        {
-            throw Self.runningVCPUShrinkAbort(from: existingVM.cpu, to: requestedCPU)
-        }
-
-        // Online resize: the ceilings were fixed when the process spawned, so
-        // exceeding them is a `422` naming the restart as the remedy rather
-        // than an operation that could never converge.
-        guard newCPU <= existingVM.maxCpu else {
-            throw Abort(
-                .unprocessableEntity,
-                reason: "This VM was started with a maximum of \(existingVM.maxCpu) vCPUs; "
-                    + "restart it to grow beyond that")
-        }
-        guard newMemory <= existingVM.maxMemory else {
-            throw Abort(
-                .unprocessableEntity,
-                reason: "This VM was started with a maximum of \(existingVM.maxMemory) bytes of memory; "
-                    + "restart it to grow beyond that")
-        }
-        try await Self.requirePlacedResizeCapacity(
-            vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
-        let accepted = try await req.resourceMutation.accept(
-            .resize, on: existingVM, actor: actor, dispatch: .stateSync,
-            on: req.db, app: req.application
-        ) { @Sendable db in
-            // `accept` took and refreshed the row lock before entering this
-            // closure, so a placement that won the race is visible to the
-            // capability gate and a placement still waiting must schedule
-            // from the value persisted here.
-            _ = try await Self.applyMetadataUpdate(
-                updateRequest.metadataEnabled, to: existingVM, on: db)
-            // Lock the row and recompute the deltas against what it says right
-            // now. This is the one guard the dropped "operation already
-            // pending" mutex was actually load-bearing for (STR-147): the
-            // sizing above was read before the transaction, so two concurrent
-            // resizes would each charge quota for the same delta and the
-            // project would be under-counted by one of them. `accept` already
-            // holds this row's lock, so the read below sees the winner's
-            // committed sizing — which is what makes the delta right rather
-            // than merely refused.
-            let committed = try await Self.committedVMSizing(existingVMID, on: db)
-            let lockedCPU = updateRequest.cpu ?? committed.cpu
-            let lockedMemory = updateRequest.memory ?? committed.memory
-            let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
-            try Self.validateSizing(
-                cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
-            try await QuotaEnforcementService.reserveVMResize(
-                for: project, environment: existingVM.environment,
-                vcpuDelta: lockedCPU - committed.cpu,
-                memoryDelta: lockedMemory - committed.memory, on: db)
-            existingVM.cpu = lockedCPU
-            existingVM.memory = lockedMemory
-            // Deliberately not a quota movement: ballooning reclaims memory
-            // opportunistically, the grant the project is charged for is
-            // still committed, and the guest takes it all back the moment the
-            // target is cleared.
-            existingVM.balloonTarget = lockedBalloonTarget
-            // Desired status is unchanged — this is a spec change — but the
-            // generation must still advance for the agent to apply it. The
-            // generation it builds on came from `accept`'s refresh, so the
-            // loser of a race lands strictly above the winner rather than
-            // reusing its number.
-        }
-        // The resize's own dispatch reaches this VM's agent and its site
-        // controller — which already covers a kill-switch edge riding along,
-        // since the sync it triggers is the whole desired entry. A hostname
-        // edge needs the wider ring, and that is what this call is for; the
-        // redundant placement ring in the other branch is harmless (identical
-        // syncs diff to nothing on the agent) and keeps one exit rule.
-        await Self.nudgeAfterMetadataOrHostnameUpdate(
-            hostnameChanged: hostnameChanged,
-            metadataEnabledChanged: false,
-            placedAgentId: existingVM.hypervisorId,
-            app: req.application)
-        return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
     }
 
     /// Replaces the guest-visible tags and authorized-key list without
@@ -922,6 +916,7 @@ struct VMController: RouteCollection {
     private static func requirePlacedResizeCapacity(
         vm: VM, newCPU: Int, newMemory: Int64, on req: Request
     ) async throws {
+        try WorkloadResourceClassService.requireGrowthAvailable(vm: vm, cpu: newCPU, memory: newMemory)
         guard let agentIDString = vm.hypervisorId else {
             // A stopped, unplaced VM is sized before placement and relies on
             // the scheduler. A running VM without a placement is inconsistent
@@ -950,14 +945,20 @@ struct VMController: RouteCollection {
             // realize, not the raw maxMemory request. Recompute both sides with
             // the placed host's architecture so sub-block headroom is charged
             // when a stopped resize turns it into guest memory.
-            let currentReservation = QEMUMemoryReservation.reservedBytes(
+            let currentReservation = WorkloadMemoryReservation.vm(
                 memoryBytes: vm.memory,
-                maxMemoryBytes: vm.maxMemory,
-                architecture: architecture)
-            let requestedReservation = QEMUMemoryReservation.reservedBytes(
+                maxMemoryBytes: vm.maxMemory, hypervisorType: .qemu,
+                architecture: architecture,
+                qemuOverheadBytes: agent.memoryAccounting?.qemuOverheadBytes
+                    ?? WorkloadMemoryReservation.defaultQEMUOverheadBytes
+            ).effectiveBytes
+            let requestedReservation = WorkloadMemoryReservation.vm(
                 memoryBytes: newMemory,
-                maxMemoryBytes: max(vm.maxMemory, newMemory),
-                architecture: architecture)
+                maxMemoryBytes: max(vm.maxMemory, newMemory), hypervisorType: .qemu,
+                architecture: architecture,
+                qemuOverheadBytes: agent.memoryAccounting?.qemuOverheadBytes
+                    ?? WorkloadMemoryReservation.defaultQEMUOverheadBytes
+            ).effectiveBytes
             memoryGrowth = max(0, requestedReservation - currentReservation)
         } else if vm.hypervisorType == .qemu {
             // Alignment can make the recomputed reservation move upward while
@@ -972,11 +973,17 @@ struct VMController: RouteCollection {
         let active =
             await req.application.coordination.activeReservations(agentIds: [agentIDString])[
                 agentIDString] ?? .zero
-        let reservedCPU = max(0, active.cpu)
+        let reservedCPU = active.cpuMicroUnits
         let reservedMemory = max(Int64(0), active.memory)
-        let effectiveCPU = reservedCPU >= agent.availableCPU ? 0 : agent.availableCPU - reservedCPU
+        let availableCPU =
+            agent.availableCPUMicroUnits
+            ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: agent.availableCPU)
+        let effectiveCPUMicroUnits = reservedCPU >= availableCPU ? 0 : availableCPU - reservedCPU
+        let effectiveCPU = Int(effectiveCPUMicroUnits / 1_000_000)
         let effectiveMemory = reservedMemory >= agent.availableMemory ? 0 : agent.availableMemory - reservedMemory
-        guard cpuGrowth <= effectiveCPU, memoryGrowth <= effectiveMemory else {
+        guard WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: cpuGrowth) <= effectiveCPUMicroUnits,
+            memoryGrowth <= effectiveMemory
+        else {
             throw Abort(
                 .conflict,
                 reason: "Agent `\(agent.name)` has \(effectiveCPU) vCPUs and "
@@ -1134,10 +1141,51 @@ struct VMController: RouteCollection {
     /// `POST /api/vms/:id/actions/run`: accept a durable captured command and
     /// queue its exec stream on the replica that owns the VM's agent socket.
     func runCommand(req: Request) async throws -> Response {
-        let user = try req.requireActingUser("Running a command on a VM")
         let run = try req.content.decodeValidated(VMRunCommandRequest.self)
-        let vm = try await fetchVMWithAction(req: req, action: "vm:runCommand")
-        let vmID = try vm.requireID()
+        guard let vmID = req.parameters.get("vmID", as: UUID.self) else { throw Abort(.badRequest) }
+        let executionID = UUID()
+        let execution = try await acceptRunCommand(req: req, vmID: vmID, run: run, executionID: executionID, on: req.db)
+        do {
+            try await req.application.replicaBridge.deliver(
+                GuestExecStartMessage(
+                    resourceKind: .virtualMachine,
+                    resourceId: vmID.uuidString,
+                    sessionKind: .recorded,
+                    sessionId: executionID.uuidString,
+                    command: run.command,
+                    env: run.env,
+                    workingDir: run.workingDir,
+                    tty: false),
+                agentKey: execution.agentKey)
+        } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
+            req.logger.warning(
+                "VM command delivery outcome is unknown; leaving operation pending",
+                metadata: [
+                    "executionId": .string(executionID.uuidString),
+                    "strato.agent.identity": .string(execution.agentKey),
+                    "error": .string(error.localizedDescription),
+                ])
+        } catch {
+            await req.vmCommandExecutionService.markDispatchFailed(
+                id: executionID, reason: "Could not dispatch command: \(error.localizedDescription)")
+        }
+
+        guard let stored = try await VMCommandExecution.find(executionID, on: req.db) else {
+            throw Abort(.internalServerError, reason: "Command execution disappeared after acceptance")
+        }
+        let response = Response(status: .accepted)
+        try response.content.encode(try await stored.operationResponse(on: req.db))
+        return response
+    }
+
+    /// Shared acceptance path: the fleet owns queueing, but every child uses
+    /// the same permission, eligibility, attribution and durable command contract.
+    func acceptRunCommand(
+        req: Request, vmID: UUID, run: VMRunCommandRequest, executionID: UUID = UUID(),
+        on db: any Database, recordAudit: Bool = true
+    ) async throws -> VMCommandExecution {
+        let user = try req.requireActingUser("Running a command on a VM")
+        let vm = try await req.authorizedVM(vmID, action: "vm:runCommand")
 
         guard vm.isRunning else {
             throw Abort(
@@ -1151,7 +1199,7 @@ struct VMController: RouteCollection {
         }
         guard let agentIDString = vm.hypervisorId,
             let agentID = UUID(uuidString: agentIDString),
-            let agent = try await Agent.find(agentID, on: req.db)
+            let agent = try await Agent.find(agentID, on: db)
         else {
             throw Abort(.conflict, reason: "VM is not placed on an available agent")
         }
@@ -1161,14 +1209,14 @@ struct VMController: RouteCollection {
                 reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)")
         }
 
-        let executionID = UUID()
         let auditContext = VMGuestExecutionAudit.makeContext(
             vmID: vmID,
             projectID: vm.$project.id,
             correlationID: executionID.uuidString,
             argv: run.command,
             on: req)
-        try await req.db.transaction { db in
+        let execution = try await db.transaction { db in
+            try await VMExecSessionLimits.admitRun(projectID: vm.$project.id, vmID: vmID, on: db)
             let acceptedAt = try await ClusterClock.read(on: db)
             let execution = VMCommandExecution(
                 id: executionID,
@@ -1183,41 +1231,14 @@ struct VMController: RouteCollection {
                 sourceIP: auditContext.sourceIP,
                 adminBypass: auditContext.adminBypass)
             try await execution.create(command: run.command, on: db)
+            return execution
         }
-        let requestedAuditRecord = VMGuestExecutionAudit.makeCommandRequestedRecord(auditContext)
-        await req.audit.recordFailOpen(requestedAuditRecord)
-
-        do {
-            try await req.application.replicaBridge.deliver(
-                GuestExecStartMessage(
-                    resourceKind: .virtualMachine,
-                    resourceId: vmID.uuidString,
-                    sessionKind: .recorded,
-                    sessionId: executionID.uuidString,
-                    command: run.command,
-                    env: run.env,
-                    workingDir: run.workingDir,
-                    tty: false),
-                agentKey: agent.identity.key)
-        } catch let error as ReplicaMessageBridge.DeliveryError where !error.isDefinitive {
-            req.logger.warning(
-                "VM command delivery outcome is unknown; leaving operation pending",
-                metadata: [
-                    "executionId": .string(executionID.uuidString),
-                    "strato.agent.identity": .string(agent.identity.key),
-                    "error": .string(error.localizedDescription),
-                ])
-        } catch {
-            await req.vmCommandExecutionService.markDispatchFailed(
-                id: executionID, reason: "Could not dispatch command: \(error.localizedDescription)")
+        if recordAudit {
+            let requestedAuditRecord = VMGuestExecutionAudit.makeCommandRequestedRecord(auditContext)
+            await req.audit.recordFailOpen(requestedAuditRecord)
         }
 
-        guard let stored = try await VMCommandExecution.find(executionID, on: req.db) else {
-            throw Abort(.internalServerError, reason: "Command execution disappeared after acceptance")
-        }
-        let response = Response(status: .accepted)
-        try response.content.encode(try await stored.operationResponse(on: req.db))
-        return response
+        return execution
     }
 
     /// `POST /api/vms/:id/exec`: mint an exec session inside a running VM.
@@ -1278,13 +1299,17 @@ struct VMController: RouteCollection {
             )
         }
 
-        let sessionId = UUID().uuidString
+        let sessionUUID = UUID()
+        let sessionId = sessionUUID.uuidString
         let auditContext = VMGuestExecutionAudit.makeContext(
             vmID: vmID,
             projectID: vm.$project.id,
             correlationID: sessionId,
             argv: execRequest.command,
             on: req)
+        try await VMExecSessionLimits.reserve(
+            id: sessionUUID, vmID: vmID, userID: try user.requireID(),
+            username: user.username, on: req.db)
         let session = req.guestExecSessionManager.createPendingSession(
             sessionId: sessionId,
             resourceKind: .virtualMachine,
@@ -1312,6 +1337,19 @@ struct VMController: RouteCollection {
                 outputMode: session.outputMode
             ))
         return response
+    }
+
+    func liveExecSessions(req: Request) async throws -> [LiveVMExecSession] {
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
+        return try await VMExecSessionLimits.list(vmID: vm.requireID(), on: req.db)
+    }
+
+    func terminateExecSession(req: Request) async throws -> HTTPStatus {
+        _ = try req.requireActingUser("Terminating a VM exec session")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:exec")
+        guard let id = req.parameters.get("sessionID", as: UUID.self) else { throw Abort(.badRequest) }
+        try await VMExecSessionLimits.requestTermination(id: id, vmID: vm.requireID(), on: req.db)
+        return .accepted
     }
 
     func delete(req: Request) async throws -> Response {

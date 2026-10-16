@@ -29,6 +29,10 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Enum(key: "status")
     var status: AgentStatus
 
+    /// Operator intent; only the explicit resume action clears it.
+    @Field(key: "administratively_offline")
+    var administrativelyOffline: Bool
+
     @Field(key: "total_cpu")
     var totalCPU: Int
 
@@ -151,6 +155,15 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "resource_telemetry")
     var resourceTelemetry: HostResourceTelemetry?
 
+    @OptionalField(key: "memory_accounting")
+    var memoryAccounting: HostMemoryAccounting?
+
+    @OptionalField(key: "available_cpu_micro_units")
+    var availableCPUMicroUnits: Int64?
+
+    @OptionalField(key: "resource_class_enforcement")
+    var resourceClassEnforcement: [WorkloadResourceClassEnforcement]?
+
     /// Control-plane receipt time for `resourceTelemetry`; placement must not
     /// trust the agent's wall clock when evaluating freshness.
     @OptionalField(key: "resource_telemetry_received_at")
@@ -234,6 +247,20 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "update_failure_reason")
     var updateFailureReason: String?
 
+    /// Assignment-time working capabilities and inventory state (STR-333).
+    @OptionalField(key: "update_health_baseline")
+    var updateHealthBaseline: AgentUpdateHealthBaseline?
+
+    @OptionalField(key: "update_target_registered_at")
+    var updateTargetRegisteredAt: Date?
+
+    @OptionalField(key: "update_verification_started_at")
+    var updateVerificationStartedAt: Date?
+
+    /// Receipt of an observed inventory report, distinct from registration/heartbeat.
+    @OptionalField(key: "update_inventory_received_at")
+    var updateInventoryReceivedAt: Date?
+
     /// Why this agent last refused to converge a sync's workload teardowns
     /// (STR-98 phase 2), as reported. Non-nil means the host is holding
     /// workloads the control plane authorized it to remove, because removing
@@ -298,8 +325,11 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.version = version
         self.$site.id = siteID
         self.status = status
+        self.administrativelyOffline = false
         self.totalCPU = resources.totalCPU
         self.totalMemory = resources.totalMemory
+        self.memoryAccounting = resources.memoryAccounting
+        self.availableCPUMicroUnits = resources.availableCPUMicroUnits
         self.totalDisk = resources.totalDisk
         self.availableCPU = resources.availableCPU
         self.availableMemory = resources.availableMemory
@@ -337,11 +367,15 @@ final class Agent: Model, Content, @unchecked Sendable {
                 || availableMemory != memory
                 || availableDisk != disk
                 || physicalFreeDisk != resources.physicalFreeDisk
+                || memoryAccounting != resources.memoryAccounting
+                || availableCPUMicroUnits != resources.availableCPUMicroUnits
         else { return false }
         availableCPU = cpu
         availableMemory = memory
         availableDisk = disk
         physicalFreeDisk = resources.physicalFreeDisk
+        availableCPUMicroUnits = resources.availableCPUMicroUnits
+        memoryAccounting = resources.memoryAccounting
         return true
     }
 
@@ -353,7 +387,9 @@ final class Agent: Model, Content, @unchecked Sendable {
             availableMemory: availableMemory,
             totalDisk: totalDisk,
             availableDisk: availableDisk,
-            physicalFreeDisk: physicalFreeDisk
+            physicalFreeDisk: physicalFreeDisk,
+            memoryAccounting: memoryAccounting,
+            availableCPUMicroUnits: availableCPUMicroUnits
         )
     }
 }
@@ -393,6 +429,13 @@ extension Agent {
         updateDesiredVersion = version
         updateAssignmentSource = source
         updateArtifactOverride = artifact
+        updateHealthBaseline = AgentUpdateHealthBaseline(
+            assignedAt: now.date,
+            capabilities: workingUpdateCapabilities(at: now).sorted(),
+            inventoryHealthy: manifestInventoryComplete != false && manifestStatusReason == nil)
+        updateTargetRegisteredAt = nil
+        updateVerificationStartedAt = nil
+        updateInventoryReceivedAt = nil
         updateAttemptedAt = now.date
         updateBlockedReason = nil
         updateFailureReason = nil
@@ -408,13 +451,16 @@ extension Agent {
         updateAssignmentSource = nil
         updateArtifactOverride = nil
         updateAttemptedAt = nil
+        updateHealthBaseline = nil
+        updateTargetRegisteredAt = nil
+        updateVerificationStartedAt = nil
+        updateInventoryReceivedAt = nil
         updateBlockedReason = nil
         updateFailureReason = nil
     }
 
     /// Records a terminal failure for the current assignment. The assignment
-    /// itself stays — it is what an operator sees, and what a returning agent
-    /// could still converge on if the blocker was environmental — but the
+    /// itself stays for operator inspection and explicit recovery, but the
     /// pinned artifact goes, because it may carry a presigned credential and
     /// this update is not finishing on its own. Re-issuing the update supplies
     /// a fresh one. Callers save.
@@ -436,6 +482,13 @@ extension Agent {
         dependencyObservations: [NodeDependencyObservation],
         receivedAt: Date
     ) {
+        if let target = updateDesiredVersion {
+            updateTargetRegisteredAt =
+                AgentVersionTarget.updateAvailable(agentVersion: registration.version, target: target)
+                ? nil : receivedAt
+            updateVerificationStartedAt = nil
+            updateInventoryReceivedAt = nil
+        }
         hostname = registration.hostname
         version = registration.version
         architecture = registration.architecture.rawValue
@@ -443,6 +496,7 @@ extension Agent {
         hypervisors = registration.hypervisors
         networkCapability = registration.networkCapability?.rawValue
         if let hostInfo = registration.hostInfo { self.hostInfo = hostInfo }
+        resourceClassEnforcement = registration.resourceClassEnforcement
         sandboxCapable = registration.sandboxCapable
         sandboxNetworkingCapable = registration.sandboxNetworkingCapable
         tpmCapable = registration.tpmCapable
@@ -452,10 +506,12 @@ extension Agent {
         dependencyObservationsReceivedAt = receivedAt
         totalCPU = registration.resources.totalCPU
         totalMemory = registration.resources.totalMemory
+        availableCPUMicroUnits = registration.resources.availableCPUMicroUnits
+        memoryAccounting = registration.resources.memoryAccounting
         totalDisk = registration.resources.totalDisk
         _ = updateAvailableResources(registration.resources)
         lastHeartbeat = receivedAt
-        status = .online
+        status = administrativelyOffline ? .offline : .online
     }
 
     /// Create an agent from a registration message.
@@ -494,6 +550,7 @@ extension Agent {
     /// Check whether the agent is considered online using the same cluster
     /// clock that stamped its heartbeat.
     func isOnline(at instant: ClusterInstant) -> Bool {
+        guard !administrativelyOffline else { return false }
         guard let lastHeartbeat = lastHeartbeat else { return false }
         let heartbeatAge = instant.date.timeIntervalSince(lastHeartbeat)
         return heartbeatAge >= 0 && heartbeatAge < 60
@@ -527,13 +584,26 @@ extension Agent {
         }
     }
 
+    /// Memory profile failures (especially KSM unmerging) fence every backend,
+    /// including Firecracker VMs and sandboxes without networking.
+    func hostMemoryProfileAllowsPlacement(at instant: ClusterInstant) -> Bool {
+        guard let profile = dependencyObservations.first(where: { $0.id == .hostMemoryProfile }) else {
+            return resourceTelemetry?.memoryProfile == nil
+        }
+        guard let receivedAt = dependencyObservationsReceivedAt else { return false }
+        return profile.allowsNewWork(
+            receivedAt: receivedAt, at: instant.date,
+            staleAfter: Self.dependencyObservationStaleAfter)
+    }
+
     /// Hypervisor backends this agent can actually run. Agents probe each
     /// backend before reporting it, so an empty list means the agent cannot
     /// run VMs at all — it stays registered but is never eligible for
     /// placement. No QEMU fallback here: assuming QEMU for an empty list
     /// would defeat the agent-side probe in exactly the case it exists for.
     func supportedHypervisors(at instant: ClusterInstant) -> [HypervisorType] {
-        hypervisors.filter { support in
+        guard hostMemoryProfileAllowsPlacement(at: instant) else { return [] }
+        return hypervisors.filter { support in
             guard support.available else { return false }
             return support.type != .qemu || dependencyAllows(.qemuPlacement, at: instant)
         }.map(\.type)
@@ -591,6 +661,7 @@ extension Agent {
     /// both Firecracker snapshot support and the separately probed sandbox
     /// runtime; a Firecracker binary alone cannot load Strato's guest image.
     func supportsSnapshotArtifact(_ kind: SnapshotArtifactKind, at instant: ClusterInstant) -> Bool {
+        guard hostMemoryProfileAllowsPlacement(at: instant) else { return false }
         let backend: HypervisorType
         switch kind {
         case .volumeSnapshot, .vmCheckpoint:
@@ -612,6 +683,7 @@ extension Agent {
     /// response DTOs, while registration/heartbeat handling and the stale-agent
     /// monitor own durable status transitions.
     func statusBasedOnHeartbeat(at instant: ClusterInstant) -> AgentStatus {
+        guard !administrativelyOffline else { return .offline }
         if isOnline(at: instant) && status == .offline {
             return .online
         } else if !isOnline(at: instant) && status == .online {
@@ -690,6 +762,7 @@ struct AgentResponse: Content {
     let hostname: String
     let version: String
     let status: AgentStatus
+    let administrativelyOffline: Bool
     let resources: AgentResources
     let architecture: CPUArchitecture?
     let operatingSystem: OperatingSystem?
@@ -714,6 +787,7 @@ struct AgentResponse: Content {
     let dependencyObservationsReceivedAt: Date?
     /// Latest host PSI, reclaim, swap, OOM, and MGLRU snapshot.
     let resourceTelemetry: HostResourceTelemetry?
+    let memoryAccounting: HostMemoryAccounting?
     /// Control-plane receipt time for the snapshot above.
     let resourceTelemetryReceivedAt: Date?
     /// Descriptive hardware/platform/OS details for operator display; nil for
@@ -807,6 +881,7 @@ struct AgentResponse: Content {
         self.hostname = agent.hostname
         self.version = agent.version
         self.status = agent.statusBasedOnHeartbeat(at: instant)
+        self.administrativelyOffline = agent.administrativelyOffline
         self.resources = agent.resources
         self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
         self.operatingSystem = agent.hostOperatingSystem
@@ -820,6 +895,7 @@ struct AgentResponse: Content {
         self.dependencyObservations = agent.dependencyObservations
         self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
         self.resourceTelemetry = agent.resourceTelemetry
+        self.memoryAccounting = agent.memoryAccounting
         self.resourceTelemetryReceivedAt = agent.resourceTelemetryReceivedAt
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
@@ -845,5 +921,93 @@ struct AgentResponse: Content {
         self.manifestStatusAt = agent.manifestStatusAt
         self.manifestInventoryComplete = agent.manifestInventoryComplete
         self.heldWorkloads = heldWorkloads
+    }
+}
+
+struct AgentUpdateHealthBaseline: Codable, Sendable {
+    let assignedAt: Date
+    let capabilities: [String]
+    let inventoryHealthy: Bool
+}
+
+extension Agent {
+    func workingUpdateCapabilities(at instant: ClusterInstant) -> Set<String> {
+        var result = Set<String>()
+        for capability in NodeCapability.allCases where dependencyAllows(capability, at: instant) {
+            result.insert("dependency:" + capability.rawValue)
+        }
+        for backend in hypervisors where supportedHypervisors(at: instant).contains(backend.type) {
+            let prefix = "hypervisor:" + backend.type.rawValue
+            result.insert(prefix)
+            if backend.accelerated { result.insert(prefix + ":accelerated") }
+            if backend.supportsSnapshots { result.insert(prefix + ":snapshots") }
+            if backend.supportsVsock == true { result.insert(prefix + ":vsock") }
+            if backend.supportsGuestExec == true { result.insert(prefix + ":guest_exec") }
+            if backend.supportsVolumeIOLimits == true { result.insert(prefix + ":volume_io_limits") }
+        }
+        if sandboxCapable && hostMemoryProfileAllowsPlacement(at: instant) { result.insert("sandbox") }
+        if effectiveSandboxNetworkingCapable(at: instant) { result.insert("sandbox_networking") }
+        if supportsInterVMNetworking(at: instant) {
+            result.insert("overlay_networking")
+            result.insert("networking")
+        }
+        if networkCapability == NetworkCapability.userMode.rawValue { result.insert("networking") }
+        if tpmCapable { result.insert("tpm") }
+        if effectiveResolverCapable(at: instant) { result.insert("resolver") }
+        if metadataServiceCapable { result.insert("metadata_service") }
+        return result
+    }
+}
+
+extension Agent {
+    func hasFreshUpdateHealth(at instant: ClusterInstant) -> Bool {
+        guard let assignedAt = updateHealthBaseline?.assignedAt,
+            let registeredAt = updateTargetRegisteredAt, registeredAt > assignedAt,
+            let inventoryAt = updateInventoryReceivedAt, inventoryAt >= registeredAt,
+            inventoryAt >= (updateAttemptedAt ?? assignedAt),
+            let dependenciesAt = dependencyObservationsReceivedAt, dependenciesAt >= registeredAt,
+            dependenciesAt >= (updateAttemptedAt ?? assignedAt),
+            isOnline(at: instant)
+        else { return false }
+        return [registeredAt, inventoryAt, dependenciesAt].allSatisfy { $0 <= instant.date }
+            && instant.date.timeIntervalSince(inventoryAt) < Self.dependencyObservationStaleAfter
+            && instant.date.timeIntervalSince(dependenciesAt) < Self.dependencyObservationStaleAfter
+    }
+
+    func updateHealthVerificationFailure(at instant: ClusterInstant) -> String? {
+        guard let baseline = updateHealthBaseline else {
+            return
+                "missing pre-update health baseline; review agent health and explicitly cancel this assignment after any needed recovery"
+        }
+        guard baseline.inventoryHealthy else {
+            return
+                "inventory was degraded at assignment; recover inventory, review agent health, and explicitly cancel this assignment"
+        }
+        if updateVerificationStartedAt != nil && !hasFreshUpdateHealth(at: instant) {
+            return
+                "agent disappeared or target-version health became stale during verification; check agent and inventory reports"
+        }
+        guard hasFreshUpdateHealth(at: instant) else { return nil }
+        if manifestInventoryComplete == false || manifestStatusReason != nil {
+            return "target-version inventory is incomplete or degraded: "
+                + (manifestStatusReason ?? "inventory enumeration failed")
+        }
+        let required = Set(baseline.capabilities)
+        for observation in dependencyObservations where observation.desiredState == .required {
+            let requiredFeature = observation.affectedCapabilities.contains {
+                required.contains("dependency:" + $0.rawValue)
+            }
+            if (requiredFeature || observation.id == .hostMemoryProfile), observation.functionalState != .healthy {
+                return "target-version required dependency is degraded or unhealthy: " + observation.id.rawValue
+            }
+        }
+        let lost = required.subtracting(workingUpdateCapabilities(at: instant)).sorted()
+        if !lost.isEmpty {
+            return "target-version lost required working capabilities: " + lost.joined(separator: ", ")
+        }
+        guard hostMemoryProfileAllowsPlacement(at: instant) else {
+            return "target-version host memory dependency is unhealthy"
+        }
+        return nil
     }
 }

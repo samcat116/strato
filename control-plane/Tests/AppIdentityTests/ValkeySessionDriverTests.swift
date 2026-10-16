@@ -8,7 +8,7 @@ import AppTestSupport
 
 /// The Valkey session driver's write-back and expiry policy (issue #695),
 /// exercised against an in-memory `SessionStore` so no Valkey is needed.
-@Suite("Valkey Session Driver Tests", .serialized)
+@Suite("Valkey Session Driver Tests", .serialized, .postgresFixture)
 struct ValkeySessionDriverTests {
 
     /// Session lifetime used throughout; distinct from any TTL a test seeds so

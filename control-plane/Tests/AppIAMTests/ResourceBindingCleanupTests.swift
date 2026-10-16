@@ -15,7 +15,7 @@ import AppTestSupport
 /// What these tests guard is the part no call site can assert: that
 /// `ResourceBindingCleanup` still knows about every child the database quietly
 /// deletes along with a VM or a sandbox.
-@Suite("Resource Binding Cleanup", .serialized)
+@Suite("Resource Binding Cleanup", .serialized, .postgresFixture)
 struct ResourceBindingCleanupTests {
 
     /// Delete actions Postgres records in `pg_constraint.confdeltype`. Only

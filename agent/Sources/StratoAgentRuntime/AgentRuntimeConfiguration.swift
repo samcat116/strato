@@ -54,10 +54,13 @@ struct AgentRuntimeConfiguration: Sendable {
     // Warm start (issue #426): provision sandboxes from per-image template
     // snapshots when possible. Default on; warm failures cold-boot.
     let sandboxWarmStart: Bool
+    let sandboxSuspensionRestoreTimeoutSeconds: Int
+    let sandboxIdlePolicy: SandboxIdlePolicy
     let sandboxWarmCacheMaxSizeBytes: Int64?
     let hypervisorType: HypervisorType
     let hardwareAccelerationEnabled: Bool
     let qemuMemoryOverheadBytes: Int64
+    let hostMemoryReserveBytes: Int64
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real
     // networking/storage, and reports the configured fake host capacity instead

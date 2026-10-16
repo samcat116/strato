@@ -87,7 +87,7 @@ private func makePushFixture(
 
 // MARK: - Push delivery endpoint
 
-@Suite("SSF Push Delivery Tests", .serialized)
+@Suite("SSF Push Delivery Tests", .serialized, .postgresFixture)
 final class SSFPushDeliveryTests {
     init() {
         // Honored only under .testing: lets tests deliver unsigned SETs
@@ -388,7 +388,7 @@ final class SSFPushDeliveryTests {
 
 // MARK: - Stream management API
 
-@Suite("SSF Stream API Tests", .serialized)
+@Suite("SSF Stream API Tests", .serialized, .postgresFixture)
 final class SSFStreamAPITests {
     init() {
         setenv("SSF_TRANSMITTER_ALLOWED_SUFFIXES", ".example.com", 1)
@@ -631,7 +631,7 @@ final class SSFStreamAPITests {
 
 // MARK: - UserSecurityMiddleware
 
-@Suite("User Security Middleware Tests", .serialized)
+@Suite("User Security Middleware Tests", .serialized, .postgresFixture)
 final class UserSecurityMiddlewareTests {
     private struct OKResponder: AsyncResponder {
         func respond(to request: Request) async throws -> Response {
@@ -797,7 +797,7 @@ final class UserSecurityMiddlewareTests {
 /// classification or connection pin behind it, unlike the guarded fetches.
 /// That makes the matching rule load-bearing, and it is exercised through the
 /// list-taking overload so no process-wide environment is disturbed.
-@Suite("SSF Transmitter URL Validation")
+@Suite("SSF Transmitter URL Validation", .postgresFixture)
 struct SSFTransmitterURLValidationTests {
     private func validate(_ url: String, suffixes: [String], hosts: Set<String> = []) throws {
         try SSFValidation.validateTransmitterURL(

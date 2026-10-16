@@ -10,7 +10,7 @@ import AppTestSupport
 /// Tests for the `conditions` block VM and sandbox responses project (ADR 0001
 /// stage 1, STR-142): the derivation itself, and the observed-report path that
 /// mirrors the agent's convergence progress onto the row it reads from.
-@Suite("Resource Conditions Tests", .serialized)
+@Suite("Resource Conditions Tests", .serialized, .postgresFixture)
 final class ResourceConditionsTests {
 
     // MARK: - Harness

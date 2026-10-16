@@ -60,7 +60,7 @@ private struct ContextProbeMiddleware: AsyncMiddleware {
     }
 }
 
-@Suite("Tracing context propagation", .serialized)
+@Suite("Tracing context propagation", .serialized, .postgresFixture)
 struct TracingContextPropagationTests {
 
     /// The regression this guards: a future-based middleware severs the Swift

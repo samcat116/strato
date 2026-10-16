@@ -5,7 +5,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Create MAC address ledger migration", .serialized)
+@Suite("Create MAC address ledger migration", .serialized, .postgresFixture)
 struct CreateMACAddressLedgerMigrationTests {
     @Test("Backfills both interface families and installs all uniqueness constraints")
     func backfillsAndConstrains() async throws {

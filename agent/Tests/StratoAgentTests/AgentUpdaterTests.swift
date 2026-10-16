@@ -32,6 +32,42 @@ struct AgentUpdaterTests {
 
     private let noopProbe: AgentUpdater.BinaryProbe = { _ in }
 
+    @Test("Skewed bridge artifact is verified before the existing atomic swap", arguments: [true, false])
+    func bridgeArtifactVerification(validDigest: Bool) async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let binary = dir + "/strato-agent"
+        let fixture = dir + "/bridge-artifact"
+        try write("old bridge", to: binary, executable: true)
+        try write("new bridge", to: fixture)
+        let assignment = DesiredAgentUpdate(
+            targetVersion: "new", artifactURL: "https://example.test/agent",
+            sha256: validDigest ? sha256Hex(of: "new bridge") : String(repeating: "0", count: 64),
+            artifactKind: .binary)
+        let response = try JSONDecoder().decode(
+            AgentUpdateBridgeResponse.self,
+            from: JSONEncoder().encode(AgentUpdateBridgeResponse(workloadWireVersion: 70, update: assignment)))
+        let update = try #require(try response.skewUpdate(agentWireVersion: 69))
+        let updater = AgentUpdater(
+            logger: logger, installMode: .supervisedBinary, binaryPath: binary,
+            download: fixtureDownloader(from: fixture), probe: noopProbe)
+        if validDigest {
+            _ = try await updater.applyUpdate(
+                artifactURL: update.artifactURL, sha256: update.sha256,
+                artifactKind: update.artifactKind, tarballMember: update.tarballMember)
+            #expect(try String(contentsOfFile: binary, encoding: .utf8) == "new bridge")
+            #expect(try String(contentsOfFile: binary + ".prev", encoding: .utf8) == "old bridge")
+        } else {
+            await #expect(throws: AgentUpdateError.self) {
+                _ = try await updater.applyUpdate(
+                    artifactURL: update.artifactURL, sha256: update.sha256,
+                    artifactKind: update.artifactKind, tarballMember: update.tarballMember)
+            }
+            #expect(try String(contentsOfFile: binary, encoding: .utf8) == "old bridge")
+            #expect(!FileManager.default.fileExists(atPath: binary + ".prev"))
+        }
+    }
+
     // MARK: - Install-mode detection
 
     @Test("Explicit container marker refuses in both directions")

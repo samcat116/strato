@@ -123,6 +123,13 @@ actor LibvirtService: HypervisorService {
     /// KVM on Linux, HVF on macOS; when false, domains run under TCG.
     private let hardwareAccelerationEnabled: Bool
     private let memoryOverheadBytes: Int64
+    private let cloudInitProvisioner: CloudInitProvisioner
+    private let defineDomain: (@Sendable (String) async throws -> Void)?
+    private let burstableEnforcement: WorkloadResourceClassEnforcement?
+    private let burstableOwnedCgroupPath: (@Sendable (String) -> String?)?
+    /// Transient control transactions, not cached workload specs. A status
+    /// query or another mutation must not interleave a live limit transition.
+    private var burstableOperations: Set<String> = []
     private let memoryControllerAvailable: Bool
 
     let hypervisorType: HypervisorType = .qemu
@@ -183,9 +190,15 @@ actor LibvirtService: HypervisorService {
         hardwareAccelerationEnabled: Bool = true,
         memoryOverheadBytes: Int64 = Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
         memoryControllerAvailable: Bool = HostMemoryController.isAvailable(),
-        varstore: UEFIVarstore? = nil
+        varstore: UEFIVarstore? = nil,
+        burstableEnforcement: WorkloadResourceClassEnforcement? = nil,
+        burstableOwnedCgroupPath: (@Sendable (String) -> String?)? = nil,
+        cloudInitProvisioner: CloudInitProvisioner? = nil,
+        defineDomain: (@Sendable (String) async throws -> Void)? = nil
     ) {
         self.logger = logger
+        self.cloudInitProvisioner = cloudInitProvisioner ?? CloudInitProvisioner(logger: logger)
+        self.defineDomain = defineDomain
         self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.uri = uri
@@ -194,6 +207,8 @@ actor LibvirtService: HypervisorService {
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         self.memoryOverheadBytes = max(0, memoryOverheadBytes)
         self.memoryControllerAvailable = memoryControllerAvailable
+        self.burstableEnforcement = burstableEnforcement?.backend == .qemuVM ? burstableEnforcement : nil
+        self.burstableOwnedCgroupPath = burstableOwnedCgroupPath
         (self.lifecycleStream, self.lifecycleContinuation) = AsyncStream.makeStream(
             of: VMLifecycleChange.self, bufferingPolicy: .bufferingNewest(64))
         logger.info("libvirt hypervisor service initialized", metadata: ["uri": .string(uri)])
@@ -296,6 +311,11 @@ actor LibvirtService: HypervisorService {
     private func perform<T>(
         _ operation: String, vmId: String, _ body: () async throws -> T
     ) async throws -> T {
+        let serializesControls = burstableEnforcement?.supportsBurstable == true
+        if serializesControls, !burstableOperations.insert(vmId).inserted {
+            throw ConvergenceError.blocked("A libvirt resource operation is already in flight for this workload")
+        }
+        defer { if serializesControls { burstableOperations.remove(vmId) } }
         do {
             return try await body()
         } catch {
@@ -580,6 +600,7 @@ actor LibvirtService: HypervisorService {
         metadata: InstanceMetadata? = nil,
         vsockCID: UInt32? = nil
     ) async throws {
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
         try await perform("create", vmId: vmId) {
             logger.info("Creating libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
 
@@ -622,17 +643,24 @@ actor LibvirtService: HypervisorService {
             // assembled from (STR-177).
             var cloudInitISOPath: String?
             let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
-            if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
-                at: isoPath, vmId: vmId, hostname: metadata?.hostname,
-                sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
-                guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
-                metadataSource: spec.metadataSource,
-                noCloudSeedToken: metadata?.noCloudSeedToken,
-                networkAttachments: networkAttachments)
-            {
-                cloudInitISOPath = isoPath
-            } else if spec.guestAgentEnabled {
-                throw HypervisorServiceError.diskError("could not create guest-agent bootstrap seed for VM \(vmId)")
+            let needsSeed =
+                spec.guestAgentEnabled || !spec.sshAuthorizedKeys.isEmpty || spec.userData != nil
+                || metadata?.hostname != nil || spec.metadataSource == .imds
+                || CloudInitProvisioner.networkConfigYAML(
+                    for: networkAttachments, renameInterfaces: spec.metadataSource == .iso) != nil
+            if needsSeed {
+                do {
+                    _ = try await cloudInitProvisioner.makeNoCloudISO(
+                        at: isoPath, vmId: vmId, hostname: metadata?.hostname,
+                        sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                        guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
+                        metadataSource: spec.metadataSource,
+                        noCloudSeedToken: metadata?.noCloudSeedToken,
+                        networkAttachments: networkAttachments)
+                    cloudInitISOPath = isoPath
+                } catch {
+                    throw HypervisorServiceError.diskError("could not create guest bootstrap seed for VM \(vmId)")
+                }
             }
 
             let input = DomainXMLInput(
@@ -650,7 +678,13 @@ actor LibvirtService: HypervisorService {
                     ? QEMUMemoryCeiling.bytes(
                         guestMemoryBytes: spec.memoryBytes, overheadBytes: memoryOverheadBytes)
                     : nil)
-            let xml = try DomainXMLBuilder.build(input)
+            var xml = try DomainXMLBuilder.build(input)
+            if let limits = try burstableLimits(spec.resourceClass, guestBytes: spec.memoryBytes) {
+                xml =
+                    try DomainBurstableTuning.updating(
+                        in: xml, limits: limits, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes,
+                        resourceClass: spec.resourceClass, guestGrantBytes: spec.memoryBytes) ?? xml
+            }
 
             // A VM with enough devices of its own to reach the root-port ceiling
             // gets fewer spare ports than the builder would like to give it, and
@@ -680,9 +714,14 @@ actor LibvirtService: HypervisorService {
             // domain, which would boot every fresh VM once (the next periodic
             // sync then shuts it down again) and leave nothing behind for an
             // agent restart to adopt.
-            _ = try await call("libvirt-define", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
-                client, deadline in
-                try await client.domainDefineXML(xml: xml, deadline: deadline)
+            let definitionXML = xml
+            if let defineDomain {
+                try await defineDomain(definitionXML)
+            } else {
+                _ = try await call("libvirt-define", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
+                    client, deadline in
+                    try await client.domainDefineXML(xml: definitionXML, deadline: deadline)
+                }
             }
 
             logger.info("libvirt domain defined", metadata: ["strato.vm.id": .string(vmId)])
@@ -825,13 +864,14 @@ actor LibvirtService: HypervisorService {
 
             let vmDirectory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
             let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
-            let refreshed = await CloudInitProvisioner(logger: logger).makeNoCloudISO(
-                at: isoPath, vmId: vmId, hostname: metadata?.hostname,
-                sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
-                guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
-                metadataSource: spec.metadataSource, noCloudSeedToken: token,
-                networkAttachments: networkAttachments)
-            guard refreshed else {
+            do {
+                _ = try await cloudInitProvisioner.makeNoCloudISO(
+                    at: isoPath, vmId: vmId, hostname: metadata?.hostname,
+                    sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                    guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
+                    metadataSource: spec.metadataSource, noCloudSeedToken: token,
+                    networkAttachments: networkAttachments)
+            } catch {
                 throw HypervisorServiceError.diskError(
                     "could not refresh the IMDS bootstrap seed for VM \(vmId)")
             }
@@ -851,9 +891,15 @@ actor LibvirtService: HypervisorService {
     /// Required boot-time convergence, separate from best-effort widening.
     /// The inactive definition is the source the next QEMU process reads.
     func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
         do {
             try await perform("memory-ceiling", vmId: vmId) {
                 let dom = try await domain(vmId)
+                if let limits = try burstableLimits(spec.resourceClass, guestBytes: spec.memoryBytes) {
+                    try await defineBurstableControls(
+                        dom, vmId: vmId, limits: limits, resourceClass: spec.resourceClass)
+                    return
+                }
                 let desired =
                     memoryControllerAvailable
                     ? QEMUMemoryCeiling.bytes(
@@ -870,7 +916,7 @@ actor LibvirtService: HypervisorService {
                     try await client.domainDefineXML(xml: xml, deadline: deadline)
                 }
             }
-        } catch  where !memoryControllerAvailable {
+        } catch  where !memoryControllerAvailable && spec.resourceClass?.policy.kind != .burstable {
             // Graceful degradation is deliberate on unsupported hosts. A stale
             // hard limit may remain in the definition, but this host cannot
             // enforce one and the boot must not be held behind its removal.
@@ -883,11 +929,13 @@ actor LibvirtService: HypervisorService {
     func bootVM(vmId: String) async throws {
         try await perform("boot", vmId: vmId) {
             let dom = try await domain(vmId)
+            let burstable = try await persistedBurstableLimits(dom, vmId: vmId)
             // `isRunningOrPaused`, not the negation of `holdsResources`: this
             // branch *skips the boot*, so a state this build cannot read has to
             // fall through and attempt the start. Reading it as "active" would
             // report success on a VM that never came up.
             guard !LibvirtDomain.isRunningOrPaused(rawState: try await state(of: dom, vmId: vmId)) else {
+                if let burstable { try verifyBurstableControls(vmId: vmId, limits: burstable) }
                 logger.info(
                     "libvirt domain is already running; treating boot as a no-op",
                     metadata: ["strato.vm.id": .string(vmId)])
@@ -905,7 +953,8 @@ actor LibvirtService: HypervisorService {
                 _ = try await call("libvirt-create", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
                     client, deadline in
                     try await client.domainCreateWithFlags(
-                        dom: dom, flags: LibvirtDomain.startFlags, deadline: deadline)
+                        dom: dom, flags: burstable == nil ? LibvirtDomain.startFlags : LibvirtDomain.startPausedFlags,
+                        deadline: deadline)
                 }
             } catch let error where LibvirtFailure.isOperationInvalid(error) {
                 // Lost a race with something else starting the domain. Same
@@ -913,6 +962,12 @@ actor LibvirtService: HypervisorService {
                 // counts as this request being satisfied.
                 guard try await satisfied(dom, vmId: vmId, by: LibvirtDomain.isRunningOrPaused(rawState:))
                 else { throw error }
+            }
+            if let burstable {
+                try verifyBurstableControls(vmId: vmId, limits: burstable)
+                try await call("libvirt-burstable-resume", vmId: vmId) { client, deadline in
+                    try await client.domainResume(dom: dom, deadline: deadline)
+                }
             }
             logger.info("libvirt domain started", metadata: ["strato.vm.id": .string(vmId)])
         }
@@ -973,6 +1028,10 @@ actor LibvirtService: HypervisorService {
     /// already treat a domain that crossed the boundary concurrently as having
     /// satisfied that half of the restart.
     func rebootVM(vmId: String) async throws {
+        try await perform("burstable-reboot-preflight", vmId: vmId) {
+            let dom = try await domain(vmId)
+            _ = try await persistedBurstableLimits(dom, vmId: vmId)
+        }
         logger.info(
             "Restarting libvirt domain from its persistent definition",
             metadata: ["strato.vm.id": .string(vmId)])
@@ -1000,6 +1059,9 @@ actor LibvirtService: HypervisorService {
     func resumeVM(vmId: String) async throws {
         try await perform("resume", vmId: vmId) {
             let dom = try await domain(vmId)
+            if let limits = try await persistedBurstableLimits(dom, vmId: vmId) {
+                try verifyBurstableControls(vmId: vmId, limits: limits)
+            }
             logger.info("Resuming libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
             do {
                 try await call("libvirt-resume", vmId: vmId) { client, deadline in
@@ -1107,9 +1169,30 @@ actor LibvirtService: HypervisorService {
     /// the manifest spec — a define over the VM's existing disks, which is
     /// exactly the right recovery.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
+        let serializesControls = spec.resourceClass?.policy.kind == .burstable
+        if serializesControls, !burstableOperations.insert(vmId).inserted {
+            throw ConvergenceError.blocked("A libvirt resource operation is already in flight for this workload")
+        }
+        defer { if serializesControls { burstableOperations.remove(vmId) } }
         do {
             let dom = try await domain(vmId)
             let status = LibvirtDomain.vmStatus(forRawState: try await state(of: dom, vmId: vmId))
+            if let limits = try burstableLimits(spec.resourceClass, guestBytes: spec.memoryBytes) {
+                let persisted = try DomainBurstableTuning.resourceClass(
+                    in: try await inactiveDomainXML(dom, vmId: vmId))
+                guard persisted == spec.resourceClass else {
+                    throw ConvergenceError.blocked(
+                        "Adopted QEMU definition does not contain its admitted resource class")
+                }
+                if LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) {
+                    try verifyBurstableControls(vmId: vmId, limits: limits)
+                } else {
+                    try await defineBurstableControls(
+                        dom, vmId: vmId, limits: limits, resourceClass: spec.resourceClass)
+                }
+                return status
+            }
             if memoryControllerAvailable, (status == .running || status == .paused) {
                 let layout = try DomainMemoryInventory.memoryLayout(
                     inDomainXML: try await domainXML(dom, vmId: vmId))
@@ -1210,7 +1293,10 @@ actor LibvirtService: HypervisorService {
                                 dom.name,
                                 HostReservation(
                                     cpus: reservation.vcpus,
-                                    memoryBytes: reservation.memoryBytes)
+                                    memoryBytes: WorkloadMemoryReservation(
+                                        guestBytes: reservation.memoryBytes,
+                                        backendOverheadBytes: self.memoryOverheadBytes
+                                    ).effectiveBytes)
                             )
                         }
                     }
@@ -1773,6 +1859,7 @@ actor LibvirtService: HypervisorService {
     ///   the guest may ignore, and `domainMemoryStats`' `actualBalloon` on the
     ///   next poll is what says whether memory came back.
     func resizeVM(vmId: String, spec: VMSpec) async throws {
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
         try await perform("resize", vmId: vmId) {
             let dom = try await domain(vmId)
             let info = try await call(
@@ -1797,6 +1884,55 @@ actor LibvirtService: HypervisorService {
                 live && layout.virtioMem != nil
                 ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
 
+            if let target = try burstableLimits(spec.resourceClass, guestBytes: targetGuestMemory) {
+                if live && layout.virtioMem == nil && targetGuestMemory != currentGuestMemory {
+                    throw ConvergenceError.blocked(
+                        "Burstable memory changes require guest hotplug support or a stopped VM")
+                }
+                if live {
+                    let priorXML = try await inactiveDomainXML(dom, vmId: vmId)
+                    let priorClass = try DomainBurstableTuning.resourceClass(in: priorXML)
+                    let priorGrant =
+                        try DomainBurstableTuning.acknowledgedGuestGrant(in: priorXML) ?? currentGuestMemory
+                    guard let current = try burstableLimits(priorClass, guestBytes: priorGrant) else {
+                        throw ConvergenceError.blocked("Running QEMU has no admitted burstable runtime definition")
+                    }
+                    try await BurstableRuntimeTransition.apply(
+                        current: current, target: target, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes,
+                        setHigh: {
+                            try await self.setBurstableMemory(
+                                dom, vmId: vmId, field: "soft_limit", bytes: $0,
+                                flags: LibvirtDomain.affectLiveAndConfig)
+                        },
+                        setMaximum: {
+                            try await self.setBurstableMemory(
+                                dom, vmId: vmId, field: "hard_limit", bytes: $0,
+                                flags: LibvirtDomain.affectLiveAndConfig)
+                        },
+                        setWeight: { weight in
+                            try await self.call("libvirt-burstable-weight", vmId: vmId) { client, deadline in
+                                try await client.domainSetSchedulerParametersFlags(
+                                    dom: dom, params: [TypedParam(field: "cpu_shares", value: .ullong(UInt64(weight)))],
+                                    flags: LibvirtDomain.affectLiveAndConfig, deadline: deadline)
+                            }
+                        },
+                        resizeGuest: {
+                            try await self.resizeCPUs(
+                                dom, vmId: vmId, spec: spec, currentCPUs: Int(info.nrVirtCpu), live: live)
+                            try await self.resizeMemory(dom, vmId: vmId, spec: spec, layout: layout, live: live)
+                        },
+                        verify: { try self.verifyBurstableControls(vmId: vmId, limits: $0) },
+                        verifyExisting: {
+                            try self.verifyBurstableControls(vmId: vmId, limits: $0, alternativeLimits: $1)
+                        })
+                } else {
+                    try await resizeCPUs(dom, vmId: vmId, spec: spec, currentCPUs: Int(info.nrVirtCpu), live: false)
+                    try await resizeMemory(dom, vmId: vmId, spec: spec, layout: layout, live: false)
+                }
+                try await defineBurstableControls(dom, vmId: vmId, limits: target, resourceClass: spec.resourceClass)
+                if live { await applyBalloonTarget(dom, vmId: vmId, spec: spec, layout: layout) }
+                return
+            }
             if memoryControllerAvailable, spec.memoryBytes > currentGuestMemory {
                 try await setMemoryCeiling(
                     dom, vmId: vmId, guestMemoryBytes: targetGuestMemory, flags: ceilingFlags)
@@ -1812,6 +1948,113 @@ actor LibvirtService: HypervisorService {
             if live {
                 await applyBalloonTarget(dom, vmId: vmId, spec: spec, layout: layout)
             }
+        }
+    }
+
+    func resourceEnforcementEvidence(
+        vmId: String, application: ResourceEnforcementProducer.Application,
+        desired: BurstableResourceLimits
+    ) async -> WorkloadResourceLimitsEvidence {
+        do {
+            try requireBurstableSupport(vmId: vmId, resourceClass: application.resourceClass)
+            return try await perform("verify resource enforcement", vmId: vmId) {
+                let dom = try await domain(vmId)
+                let persistent = try await inactiveDomainXML(dom, vmId: vmId)
+                let live = try await domainXML(dom, vmId: vmId)
+                let layout = try DomainMemoryInventory.memoryLayout(inDomainXML: live)
+                let info = try await call("libvirt-enforcement-info", vmId: vmId) { client, deadline in
+                    try await client.domainGetInfo(dom: dom, deadline: deadline)
+                }
+                guard try DomainBurstableTuning.resourceClass(in: persistent) == application.resourceClass,
+                    try DomainBurstableTuning.acknowledgedGuestGrant(in: persistent) == application.guestBytes,
+                    layout.bootBytes + (layout.virtioMem?.requestedBytes ?? 0) == application.guestBytes,
+                    Int(info.nrVirtCpu) == application.cpuCount
+                else {
+                    throw ConvergenceError.blocked(
+                        "Applied QEMU snapshot/grant differs from the convergence binding")
+                }
+                return await resourceLimitsEvidence(vmId: vmId, desired: desired)
+            }
+        } catch {
+            return .sample(limits: desired, ownedPath: nil, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes)
+        }
+    }
+
+    func resourceLimitsEvidence(vmId: String, desired: BurstableResourceLimits) async -> WorkloadResourceLimitsEvidence
+    {
+        let pageSize = BurstableCgroupEnforcement.hostPageSizeBytes
+        guard let path = burstableOwnedCgroupPath?(vmId) else {
+            return .sample(limits: desired, ownedPath: nil, pageSize: pageSize)
+        }
+        do {
+            try BurstableQEMUOwnership.verify(
+                vmID: vmId, ownedPath: path, limits: desired, pageSize: pageSize,
+                pidFilePath: "/run/libvirt/qemu/\(vmId).pid", requireMatchingLimits: false)
+            return .sample(limits: desired, ownedPath: path, pageSize: pageSize, ownershipVerified: true)
+        } catch {
+            return .sample(limits: desired, ownedPath: nil, pageSize: pageSize)
+        }
+    }
+
+    private func requireBurstableSupport(vmId: String, resourceClass: WorkloadResourceClassSnapshot?) throws {
+        try BurstableRuntimeGate.requireSupport(resourceClass: resourceClass, enforcement: burstableEnforcement)
+        guard resourceClass?.policy.kind == .burstable else { return }
+        guard memoryControllerAvailable else { throw ConvergenceError.blocked("Memory controller is unavailable") }
+        guard let path = burstableOwnedCgroupPath?(vmId), BurstableCgroupReadback.sample(ownedPath: path) != nil else {
+            throw ConvergenceError.blocked("No verified stable libvirt cgroup ownership arrangement is configured")
+        }
+        try BurstableCgroupEnforcement.requireDelegatedControllers()
+    }
+
+    private func burstableLimits(_ snapshot: WorkloadResourceClassSnapshot?, guestBytes: Int64) throws
+        -> BurstableResourceLimits?
+    {
+        try BurstableResourceLimits.plan(
+            resourceClass: snapshot, guestGrantBytes: guestBytes, backendOverheadBytes: memoryOverheadBytes)
+    }
+
+    private func persistedBurstableLimits(_ dom: Domain, vmId: String) async throws -> BurstableResourceLimits? {
+        let xml = try await inactiveDomainXML(dom, vmId: vmId)
+        let snapshot = try DomainBurstableTuning.resourceClass(in: xml)
+        try requireBurstableSupport(vmId: vmId, resourceClass: snapshot)
+        guard snapshot?.policy.kind == .burstable else { return nil }
+        let layout = try DomainMemoryInventory.memoryLayout(inDomainXML: xml)
+        return try burstableLimits(snapshot, guestBytes: layout.bootBytes + (layout.virtioMem?.requestedBytes ?? 0))
+    }
+
+    private func verifyBurstableControls(
+        vmId: String, limits: BurstableResourceLimits, alternativeLimits: BurstableResourceLimits? = nil
+    ) throws {
+        guard let path = burstableOwnedCgroupPath?(vmId) else {
+            throw ConvergenceError.blocked("The stable libvirt ownership boundary is unavailable")
+        }
+        try BurstableQEMUOwnership.verify(
+            vmID: vmId, ownedPath: path, limits: limits, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes,
+            pidFilePath: "/run/libvirt/qemu/\(vmId).pid", alternativeLimits: alternativeLimits)
+    }
+
+    private func defineBurstableControls(
+        _ dom: Domain, vmId: String, limits: BurstableResourceLimits, resourceClass: WorkloadResourceClassSnapshot?
+    ) async throws {
+        guard
+            let xml = try DomainBurstableTuning.updating(
+                in: try await inactiveDomainXML(dom, vmId: vmId), limits: limits,
+                pageSize: BurstableCgroupEnforcement.hostPageSizeBytes, resourceClass: resourceClass,
+                guestGrantBytes: limits.memoryMaxBytes - memoryOverheadBytes)
+        else { return }
+        _ = try await call("libvirt-burstable-define", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
+            client, deadline in
+            try await client.domainDefineXML(xml: xml, deadline: deadline)
+        }
+    }
+
+    private func setBurstableMemory(_ dom: Domain, vmId: String, field: String, bytes: Int64, flags: UInt32)
+        async throws
+    {
+        try await call("libvirt-burstable-memory", vmId: vmId) { client, deadline in
+            try await client.domainSetMemoryParameters(
+                dom: dom, params: [TypedParam(field: field, value: .ullong(UInt64(bytes / 1024)))], flags: flags,
+                deadline: deadline)
         }
     }
 
@@ -2081,6 +2324,9 @@ actor LibvirtService: HypervisorService {
     func restoreVM(vmId: String, snapshotId: String) async throws {
         try await perform("restore", vmId: vmId) {
             let dom = try await domain(vmId)
+            let expectedClass = try DomainBurstableTuning.resourceClass(
+                in: try await inactiveDomainXML(dom, vmId: vmId))
+            let burstable = try await persistedBurstableLimits(dom, vmId: vmId)
             let name = VMSnapshotTag.tag(for: snapshotId)
             logger.info(
                 "Restoring libvirt domain from checkpoint",
@@ -2094,10 +2340,42 @@ actor LibvirtService: HypervisorService {
                     "VM \(vmId) has no checkpoint \(snapshotId); it was deleted, or captured on another host")
             }
 
+            if let burstable {
+                let checkpointXML = try await call("libvirt-burstable-checkpoint-xml", vmId: vmId) { client, deadline in
+                    try await client.domainSnapshotGetXMLDesc(snap: snapshot, flags: 0, deadline: deadline)
+                }
+                let recorded = try DomainBurstableTuning.snapshotDomainXML(in: checkpointXML)
+                guard try DomainBurstableTuning.resourceClass(in: recorded) == expectedClass,
+                    try DomainBurstableTuning.updating(
+                        in: recorded, limits: burstable, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes,
+                        resourceClass: expectedClass, guestGrantBytes: burstable.memoryMaxBytes - memoryOverheadBytes)
+                        == nil
+                else {
+                    throw ConvergenceError.blocked(
+                        "Checkpoint does not contain the current admitted burstable controls")
+                }
+                let recordedLayout = try DomainMemoryInventory.memoryLayout(inDomainXML: recorded)
+                let currentLayout = try DomainMemoryInventory.memoryLayout(
+                    inDomainXML: try await inactiveDomainXML(dom, vmId: vmId))
+                guard
+                    recordedLayout.bootBytes + (recordedLayout.virtioMem?.requestedBytes ?? 0)
+                        == currentLayout.bootBytes + (currentLayout.virtioMem?.requestedBytes ?? 0)
+                else {
+                    throw ConvergenceError.blocked("Checkpoint guest grant differs from the current burstable grant")
+                }
+            }
             try await call("libvirt-snapshot-revert", vmId: vmId, seconds: StageBudget.checkpointSeconds) {
                 client, deadline in
                 try await client.domainRevertToSnapshot(
-                    snap: snapshot, flags: LibvirtDomain.snapshotRevertRunning, deadline: deadline)
+                    snap: snapshot,
+                    flags: burstable == nil ? LibvirtDomain.snapshotRevertRunning : LibvirtDomain.snapshotRevertPaused,
+                    deadline: deadline)
+            }
+            if let burstable {
+                try verifyBurstableControls(vmId: vmId, limits: burstable)
+                try await call("libvirt-burstable-restore-resume", vmId: vmId) { client, deadline in
+                    try await client.domainResume(dom: dom, deadline: deadline)
+                }
             }
             logger.info(
                 "libvirt domain restored from checkpoint",
@@ -2378,10 +2656,8 @@ actor LibvirtService: HypervisorService {
     }
 
     private func makeVMDirectory(_ path: String, vmId: String) throws {
-        guard !FileManager.default.fileExists(atPath: path) else { return }
         do {
-            try FileManager.default.createDirectory(
-                atPath: path, withIntermediateDirectories: true, attributes: nil)
+            try ManagedStatePermissions.prepareVMDirectory(at: path)
         } catch {
             throw HypervisorServiceError.diskError(
                 "failed to create VM directory \(path) for VM \(vmId): \(error.localizedDescription)")

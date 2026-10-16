@@ -23,7 +23,7 @@ import AppTestSupport
 /// old five-endpoint version could not have caught the divergence it was written
 /// beside, because the two endpoints that diverged were the two it did not post
 /// to.
-@Suite("Project Resolution Tests", .serialized)
+@Suite("Project Resolution Tests", .serialized, .postgresFixture)
 final class ProjectResolutionTests {
 
     /// What every test needs to reach project resolution at all seven endpoints.

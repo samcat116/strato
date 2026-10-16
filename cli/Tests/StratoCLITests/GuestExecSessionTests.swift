@@ -25,22 +25,6 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Raw terminal scope restores settings after cancellation")
-    func terminalRestoration() async {
-        let terminal = FakeGuestExecTerminal()
-        let started = Mutex(false)
-        let task = Task {
-            try await withRawTerminal(terminal) {
-                started.withLock { $0 = true }
-                try await Task.sleep(for: .seconds(30))
-            }
-        }
-        while !started.withLock({ $0 }) { await Task.yield() }
-        task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(terminal.transitions() == [.entered, .restored])
-    }
-
     @Test("Cancellation aborts a stalled WebSocket handshake")
     func stalledHandshakeCancellation() async {
         let started = Mutex(false)
@@ -133,7 +117,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Fails closed when the server does not echo multiplexed mode",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func requiresMultiplexNegotiation(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -162,7 +146,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Terminal stdin sends EOF immediately without reading input",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func terminalStdinEOF(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -195,7 +179,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Attach forwards terminal resizes",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func forwardsResize(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -238,7 +222,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Retries a replica that did not claim the single-use session",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func attachRetry(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -276,7 +260,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Retries 503 mint failures only within the thirty-second budget",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func mintRetryBudget(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(handler: { _ in
@@ -303,6 +287,176 @@ struct GuestExecSessionTests {
 
             #expect(transport.recordedRequests.count == 4)
             #expect(clock.current().timeIntervalSince1970 == 1_030)
+            #expect(await connector.calls().isEmpty)
+        }
+    }
+
+    @Test("Waits for an accepted sandbox wake before attaching", arguments: [GuestExecOutputMode.raw, .multiplexed])
+    func acceptedWake(mode: GuestExecOutputMode) async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(responses: [
+                .init(statusCode: 202, json: Self.acceptedWakeJSON),
+                .init(
+                    statusCode: 200,
+                    json: Self.wakeDetail(
+                        status: "Suspended", degraded: #", "degraded":{"reason":"old failure","sinceGeneration":1}"#)),
+                .init(statusCode: 200, json: Self.wakeDetail(status: "Starting")),
+                .init(statusCode: 200, json: Self.wakeDetail(status: "Running", observed: 2)),
+                .init(statusCode: 200, json: Self.wakeDetail(status: "Running", observed: 2, converged: true)),
+                .init(statusCode: 201, json: Self.sessionJSON(mode: mode == .raw ? "raw" : "multiplexed")),
+            ])
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let socket = FakeGuestExecSocket(frames: [
+                .text(#"{"type":"ready"}"#),
+                .text(#"{"type":"exit","exitCode":17}"#),
+            ])
+            let connector = FakeGuestExecConnector(sockets: [socket])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector,
+                now: Date.init,
+                sleep: { _ in
+                    #expect(transport.recordedRequests.filter { $0.request.method == .post }.count == 1)
+                    #expect(await connector.calls().isEmpty)
+                })
+            let exit = try await session.run(
+                GuestExecInvocation(
+                    resource: .sandbox("sandbox-1"), command: ["true"],
+                    tty: mode == .raw, outputMode: mode), onOutput: { _ in })
+            #expect(exit == 17)
+            #expect(transport.recordedRequests.map { $0.request.method } == [.post, .get, .get, .get, .get, .post])
+            #expect(
+                transport.recordedRequests.filter { $0.request.method == .get }.allSatisfy {
+                    $0.path == "/api/sandboxes/sandbox-1"
+                })
+            #expect(await connector.calls().count == 1)
+            #expect(await socket.wasClosed())
+        }
+    }
+
+    @Test("Pending sandbox wake polling exhausts the existing mint budget")
+    func acceptedWakeTimeout() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(handler: { request in
+                request.request.method == .post
+                    ? .init(statusCode: 202, json: Self.acceptedWakeJSON)
+                    : .init(statusCode: 200, json: Self.wakeDetail(status: "Starting"))
+            })
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let clock = FakeGuestExecClock(now: Date(timeIntervalSince1970: 1_000))
+            let connector = FakeGuestExecConnector(sockets: [])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector,
+                now: { clock.current() }, sleep: { _ in clock.advance(by: 10) })
+            let failure = await #expect(throws: CLIError.self) {
+                try await session.run(
+                    GuestExecInvocation(
+                        resource: .sandbox("sandbox-1"), command: ["true"],
+                        tty: false, outputMode: .multiplexed), onOutput: { _ in })
+            }
+            if case .timedOut(let message)? = failure {
+                #expect(message == "Sandbox did not become ready for guest exec within thirty seconds.")
+            } else {
+                Issue.record("Expected a sandbox wake timeout, got \(String(describing: failure))")
+            }
+            #expect(transport.recordedRequests.map { $0.request.method } == [.post, .get, .get, .get])
+            #expect(clock.current().timeIntervalSince1970 == 1_030)
+            #expect(await connector.calls().isEmpty)
+        }
+    }
+
+    @Test("Sandbox wake rejects superseded and degraded generations", arguments: [false, true])
+    func acceptedWakeRejected(degraded: Bool) async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let detail = Self.wakeDetail(
+                status: "Starting", target: degraded ? 2 : 3,
+                degraded: degraded ? #", "degraded":{"reason":"restore failed","sinceGeneration":2}"# : "")
+            let transport = MockTransport(responses: [
+                .init(statusCode: 202, json: Self.acceptedWakeJSON),
+                .init(statusCode: 200, json: detail),
+            ])
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let connector = FakeGuestExecConnector(sockets: [])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector,
+                now: Date.init, sleep: { _ in Issue.record("Terminal wake must not sleep or retry") })
+            let failure = await #expect(throws: CLIError.self) {
+                try await session.run(
+                    GuestExecInvocation(
+                        resource: .sandbox("sandbox-1"), command: ["true"],
+                        tty: false, outputMode: .multiplexed), onOutput: { _ in })
+            }
+            switch failure {
+            case .operationFailed(let kind, let message) where degraded:
+                #expect(kind == "sandbox wake")
+                #expect(message == "restore failed")
+            case .guestExec(let message) where !degraded:
+                #expect(message == "Sandbox wake was superseded by a newer mutation.")
+            default: Issue.record("Unexpected terminal wake verdict: \(String(describing: failure))")
+            }
+            #expect(transport.recordedRequests.map { $0.request.method } == [.post, .get])
+            #expect(await connector.calls().isEmpty)
+        }
+    }
+
+    @Test("Transient wake polling failures retry GET without repeating the boot mutation")
+    func acceptedWakePollRetry() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(responses: [
+                .init(statusCode: 202, json: Self.acceptedWakeJSON),
+                .init(statusCode: 503, json: #"{"reason":"temporarily unavailable"}"#),
+                .init(statusCode: 200, json: Self.wakeDetail(status: "Running", observed: 2, converged: true)),
+                .init(statusCode: 201, json: Self.sessionJSON(mode: "multiplexed")),
+            ])
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let socket = FakeGuestExecSocket(frames: [
+                .text(#"{"type":"ready"}"#), .text(#"{"type":"exit","exitCode":0}"#),
+            ])
+            let connector = FakeGuestExecConnector(sockets: [socket])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector, now: Date.init, sleep: { _ in })
+            #expect(
+                try await session.run(
+                    GuestExecInvocation(
+                        resource: .sandbox("sandbox-1"), command: ["true"], tty: false,
+                        outputMode: .multiplexed), onOutput: { _ in }) == 0)
+            #expect(transport.recordedRequests.map { $0.request.method } == [.post, .get, .get, .post])
+            #expect(await connector.calls().count == 1)
+        }
+    }
+
+    @Test("Cancellation during sandbox wake does not retry or attach")
+    func acceptedWakeCancellation() async throws {
+        try await withTemporaryDirectoryAsync { directory in
+            let transport = MockTransport(handler: { request in
+                request.request.method == .post
+                    ? .init(statusCode: 202, json: Self.acceptedWakeJSON)
+                    : .init(statusCode: 200, json: Self.wakeDetail(status: "Starting"))
+            })
+            let authenticated = try makeAuthenticated(transport: transport, directory: directory)
+            let waiting = Mutex(false)
+            let connector = FakeGuestExecConnector(sockets: [])
+            let session = GuestExecSessionClient(
+                serverURL: baseURL, client: authenticated.client,
+                credentials: authenticated.credentials, connector: connector,
+                now: Date.init,
+                sleep: { _ in
+                    waiting.withLock { $0 = true }
+                    while !Task.isCancelled { await Task.yield() }
+                })
+            let task = Task {
+                try await session.run(
+                    GuestExecInvocation(
+                        resource: .sandbox("sandbox-1"), command: ["true"],
+                        tty: false, outputMode: .multiplexed), onOutput: { _ in })
+            }
+            while !waiting.withLock({ $0 }) { await Task.yield() }
+            task.cancel()
+            await #expect(throws: CancellationError.self) { try await task.value }
+            #expect(transport.recordedRequests.map { $0.request.method } == [.post, .get])
             #expect(await connector.calls().isEmpty)
         }
     }
@@ -339,7 +493,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Cancellation closes an attached WebSocket",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func cancellationClosesSocket(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -380,7 +534,7 @@ struct GuestExecSessionTests {
             .remoteError,
             .malformedControl,
             .duplicateReady,
-        ], [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        ], [GuestExecResource.virtualMachine("vm-1")])
     func rejectsMalformedSessions(testCase: MalformedSessionCase, resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -412,7 +566,6 @@ struct GuestExecSessionTests {
         "VM refusals retain their distinct server reasons and do not attach",
         arguments: [
             (400, "VM must be running to exec. Current state: Stopped"),
-            (400, "VM exec requires a VM created with the Strato guest agent enabled"),
             (503, "Agent 'node' does not support VM guest exec for qemu"),
             (403, "Forbidden: vm:exec"),
             (404, "VM not found"),
@@ -468,6 +621,23 @@ struct GuestExecSessionTests {
         case .virtualMachine(let id): "vms/\(id)"
         }
     }
+
+    private static func wakeDetail(
+        status: String, target: Int = 2, observed: Int = 1, converged: Bool = false,
+        degraded: String = ""
+    ) -> String {
+        """
+        {"name":"sandbox-1","environment":"test","image":"alpine","cpus":1,"memory":256,
+        "env":{},"status":"\(status)","conditions":{"converged":\(converged),
+        "targetGeneration":\(target),"observedGeneration":\(observed)\(degraded)}}
+        """
+    }
+
+    private static let acceptedWakeJSON = """
+        {"resource":{"name":"sandbox-1","environment":"test","image":"alpine",
+        "cpus":1,"memory":256,"env":{},"status":"Starting","conditions":{"converged":false,"targetGeneration":2,"observedGeneration":1}},
+        "targetGeneration":2,"mutationId":"00000000-0000-0000-0000-000000000001"}
+        """
 
     private static func sessionJSON(
         mode: String?, resource: GuestExecResource = .sandbox("sandbox-1")

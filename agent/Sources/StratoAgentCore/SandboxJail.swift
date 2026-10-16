@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// How the agent applies Firecracker's jailer to sandboxes (issue #425).
 ///
@@ -288,10 +289,10 @@ public struct SandboxJailPlan: Sendable, Equatable {
     /// (Firecracker's own overhead is single-digit MiB; the headroom covers
     /// virtio queues, vsock buffers, and jemalloc slack). This is a
     /// host-protection backstop against a compromised VMM ballooning host
-    /// memory — *not* an accounting input; the agent's manifest-based
-    /// reservation remains the only capacity owner.
+    /// memory. The same shared allowance is included once in the agent's
+    /// manifest-based host reservation.
     public static func memoryLimitBytes(guestMemoryBytes: Int64) -> Int64 {
-        guestMemoryBytes + 128 * 1024 * 1024
+        WorkloadMemoryReservation.sandbox(memoryBytes: guestMemoryBytes).effectiveBytes
     }
 
     /// Whether this host can take the jailer memory ceiling: cgroup v2

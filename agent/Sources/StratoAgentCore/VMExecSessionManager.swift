@@ -33,6 +33,7 @@ public enum VMExecBridgeError: Error, LocalizedError, Sendable {
     case guestAgentNotResponding(vmId: String, detail: String)
     case interactiveSessionsQuiesced
     case recordedSessionCapacityExceeded
+    case vmSessionCapacityExceeded
     case sessionManagerStopped
     case sessionNotFound(String)
     case identityMismatch(expected: String, got: String)
@@ -48,6 +49,8 @@ public enum VMExecBridgeError: Error, LocalizedError, Sendable {
             return "guest agent not responding for VM \(vmId): \(detail)"
         case .interactiveSessionsQuiesced:
             return "interactive VM exec is unavailable while the control plane is disconnected"
+        case .vmSessionCapacityExceeded:
+            return "VM concurrent exec session limit reached; command was not started"
         case .recordedSessionCapacityExceeded:
             return "recorded VM exec capacity is exhausted; command was not started"
         case .sessionManagerStopped:
@@ -178,6 +181,7 @@ public actor VMExecSessionManager {
     private var sessions: [String: Session] = [:]
     private var externallyClosingSessions: Set<String> = []
     private var startingSessions: Set<String> = []
+    private var startingVMs: [String: String] = [:]
     private var cancelledStartingSessions: Set<String> = []
     private var recordedCaptures: [String: RecordedCapture] = [:]
     private var sweepEpoch: UInt64 = 0
@@ -218,6 +222,13 @@ public actor VMExecSessionManager {
         guard sessionKind == .recorded || acceptingInteractiveSessions else {
             throw VMExecBridgeError.interactiveSessionsQuiesced
         }
+        if sessionKind == .recorded, recordedCaptures[sessionId] != nil { return }
+        // Reserve before the first suspension so concurrent connects cannot
+        // all pass admission. Terminal retained captures consume no live slot.
+        guard
+            sessions.values.filter({ $0.vmId == placement.vmId }).count
+                + startingVMs.values.filter({ $0 == placement.vmId }).count < GuestExecLimits.maxSessionsPerVM
+        else { throw VMExecBridgeError.vmSessionCapacityExceeded }
         if sessionKind == .recorded {
             // A retained running or terminal record means this same agent
             // process has already accepted the command. Never spawn it twice.
@@ -229,7 +240,9 @@ public actor VMExecSessionManager {
         }
 
         startingSessions.insert(sessionId)
+        startingVMs[sessionId] = placement.vmId
         defer {
+            startingVMs.removeValue(forKey: sessionId)
             startingSessions.remove(sessionId)
             cancelledStartingSessions.remove(sessionId)
         }

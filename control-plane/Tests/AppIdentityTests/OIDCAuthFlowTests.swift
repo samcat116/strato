@@ -271,7 +271,7 @@ private final class FakeIdPClient: Client, Sendable {
 /// redirect, callback CSRF/replay rejection, token exchange, JWKS-based
 /// ID-token validation (signature, exp, aud, nonce, iss), and JIT user
 /// creation — driven through the real HTTP routes with a scripted IdP client.
-@Suite("OIDC Auth Flow Tests", .serialized)
+@Suite("OIDC Auth Flow Tests", .serialized, .postgresFixture)
 final class OIDCAuthFlowTests {
 
     init() {

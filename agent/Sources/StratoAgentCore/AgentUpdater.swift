@@ -157,7 +157,7 @@ public struct AgentUpdater: Sendable {
         // Apple Swift 6.4 can crash when async callbacks are emitted as default
         // arguments across modules. Construct them here; the default-download
         // and default-probe tests exercise these real callback paths.
-        self.runSubprocess = runSubprocess ?? { try await ProcessRunner.run(executableURL: $0, arguments: $1) }
+        self.runSubprocess = runSubprocess ?? SubprocessBudget.run
     }
 
     /// Downloads, verifies, and atomically installs a new agent binary.
@@ -198,7 +198,8 @@ public struct AgentUpdater: Sendable {
         try FileManager.default.createDirectory(
             atPath: workspace, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
-        defer { try? FileManager.default.removeItem(atPath: workspace) }
+        var retainWorkspace = false
+        defer { if !retainWorkspace { try? FileManager.default.removeItem(atPath: workspace) } }
 
         logger.info(
             "Downloading agent update artifact",
@@ -221,9 +222,16 @@ public struct AgentUpdater: Sendable {
             stagedBinary = artifactPath
         case .tarball:
             let member = tarballMember ?? "strato-agent"
-            let result = try await runSubprocess(
-                URL(fileURLWithPath: "/usr/bin/tar"),
-                ["-xzf", artifactPath, "-C", workspace, member])
+            let result: ProcessResult
+            do {
+                result = try await runSubprocess(
+                    URL(fileURLWithPath: "/usr/bin/tar"),
+                    ["-xzf", artifactPath, "-C", workspace, member],
+                    .imageWork(bytes: SubprocessBudget.fileBytes(artifactPath)))
+            } catch {
+                retainWorkspace = SubprocessBudget.preserveStaging(after: error)
+                throw error
+            }
             guard result.terminationStatus == 0 else {
                 throw AgentUpdateError.extractionFailed(
                     "tar exited \(result.terminationStatus): \(result.combinedOutput)")
@@ -246,8 +254,10 @@ public struct AgentUpdater: Sendable {
         } else {
             let result: ProcessResult
             do {
-                result = try await runSubprocess(URL(fileURLWithPath: stagedBinary), ["--version"])
+                result = try await runSubprocess(URL(fileURLWithPath: stagedBinary), ["--version"], .updateProbe)
             } catch {
+                retainWorkspace = SubprocessBudget.preserveStaging(after: error)
+                if retainWorkspace { throw error }
                 throw AgentUpdateError.probeFailed("could not execute staged binary: \(error)")
             }
             guard result.terminationStatus == 0 else {

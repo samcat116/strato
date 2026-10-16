@@ -127,6 +127,8 @@ public struct DesiredVMState: Codable, Sendable {
     /// Nil means no managed guest intent. Omission never reverses previous guest changes.
     /// Changes share this VM's generation; no separate guest generation exists.
     public let guestConfig: GuestConfig?
+    /// Durable control-plane verdict. A matching generation must never reissue guest work after restart.
+    public let guestConfigFailedGeneration: Int64?
 
     public init(
         vmId: UUID,
@@ -138,7 +140,8 @@ public struct DesiredVMState: Codable, Sendable {
         metadata: InstanceMetadata? = nil,
         rebootGeneration: Int64? = nil,
         restore: DesiredRestore? = nil,
-        guestConfig: GuestConfig? = nil
+        guestConfig: GuestConfig? = nil,
+        guestConfigFailedGeneration: Int64? = nil
     ) {
         self.vmId = vmId
         self.hypervisorType = hypervisorType
@@ -150,6 +153,7 @@ public struct DesiredVMState: Codable, Sendable {
         self.rebootGeneration = rebootGeneration
         self.restore = restore
         self.guestConfig = guestConfig
+        self.guestConfigFailedGeneration = guestConfigFailedGeneration
     }
 }
 
@@ -177,6 +181,14 @@ public struct DesiredSandboxState: Codable, Sendable {
     /// This is an edge applied to a sandbox that already exists — same id, same
     /// addresses, rewound — and is consulted only while it is present.
     public let restore: DesiredRestore?
+    /// Total admitted internal checkpoint bytes, including the retained predecessor.
+    public let suspensionStorageBudgetBytes: Int64?
+    public let suspensionAfterSnapshotId: UUID?
+    /// Existing durable guest state must never be replaced by a cold OCI create.
+    public let suspensionCheckpointId: UUID?
+    public let automaticSuspensionFence: SandboxAutomaticSuspensionFence?
+    public let idleControlPlaneRevision: Int64?
+    public let idlePendingCommandCount: Int?
 
     public init(
         sandboxId: UUID,
@@ -184,7 +196,13 @@ public struct DesiredSandboxState: Codable, Sendable {
         desiredStatus: DesiredSandboxStatus,
         generation: Int64,
         registryCredential: RegistryCredential? = nil,
-        restore: DesiredRestore? = nil
+        restore: DesiredRestore? = nil,
+        suspensionStorageBudgetBytes: Int64? = nil,
+        suspensionAfterSnapshotId: UUID? = nil,
+        suspensionCheckpointId: UUID? = nil,
+        automaticSuspensionFence: SandboxAutomaticSuspensionFence? = nil,
+        idleControlPlaneRevision: Int64? = nil,
+        idlePendingCommandCount: Int? = nil
     ) {
         self.sandboxId = sandboxId
         self.spec = spec
@@ -192,6 +210,12 @@ public struct DesiredSandboxState: Codable, Sendable {
         self.generation = generation
         self.registryCredential = registryCredential
         self.restore = restore
+        self.suspensionStorageBudgetBytes = suspensionStorageBudgetBytes
+        self.suspensionAfterSnapshotId = suspensionAfterSnapshotId
+        self.suspensionCheckpointId = suspensionCheckpointId
+        self.automaticSuspensionFence = automaticSuspensionFence
+        self.idleControlPlaneRevision = idleControlPlaneRevision
+        self.idlePendingCommandCount = idlePendingCommandCount
     }
 }
 
@@ -1323,6 +1347,8 @@ public struct ObservedVMState: Codable, Sendable {
     public let guestInfo: GuestInfo?
     public let guestAgentObservation: GuestAgentObservation?
     public let guestConfigObservation: GuestConfigObservation?
+    /// Terminal failure of the guest configuration step, including channel failure without read-back.
+    public let guestConfigFailedGeneration: Int64?
     /// Guest memory usage from the VM's virtio-balloon device (issue #567).
     /// Nil for guests without the virtio_balloon driver, still booting, or on
     /// agents/hypervisors that don't poll it — the same tolerant-both-ways
@@ -1349,6 +1375,7 @@ public struct ObservedVMState: Codable, Sendable {
         guestInfo: GuestInfo? = nil,
         guestAgentObservation: GuestAgentObservation? = nil,
         guestConfigObservation: GuestConfigObservation? = nil,
+        guestConfigFailedGeneration: Int64? = nil,
         memoryStats: VMMemoryStats? = nil,
         resourceTelemetry: WorkloadResourceTelemetry? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
@@ -1363,6 +1390,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.guestInfo = guestInfo
         self.guestAgentObservation = guestAgentObservation
         self.guestConfigObservation = guestConfigObservation
+        self.guestConfigFailedGeneration = guestConfigFailedGeneration
         self.memoryStats = memoryStats
         self.resourceTelemetry = resourceTelemetry
         self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds
@@ -1397,6 +1425,11 @@ public struct ObservedSandboxState: Codable, Sendable {
     public let exitCode: Int?
     /// Last host-side contention sample for this sandbox.
     public let resourceTelemetry: WorkloadResourceTelemetry?
+    public let idleActivity: SandboxIdleActivityReport?
+    public let suspension: SandboxSuspensionEvidence?
+    public let suspensionStorageReservedBytes: Int64?
+    /// Next capture estimate, based on actual local files; nil means unsupported/unavailable.
+    public let suspensionStorageEstimateBytes: Int64?
 
     public init(
         sandboxId: UUID,
@@ -1407,7 +1440,11 @@ public struct ObservedSandboxState: Codable, Sendable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil,
         exitCode: Int? = nil,
-        resourceTelemetry: WorkloadResourceTelemetry? = nil
+        resourceTelemetry: WorkloadResourceTelemetry? = nil,
+        idleActivity: SandboxIdleActivityReport? = nil,
+        suspension: SandboxSuspensionEvidence? = nil,
+        suspensionStorageReservedBytes: Int64? = nil,
+        suspensionStorageEstimateBytes: Int64? = nil
     ) {
         self.sandboxId = sandboxId
         self.status = status
@@ -1418,6 +1455,10 @@ public struct ObservedSandboxState: Codable, Sendable {
         self.failureClassification = failureClassification
         self.exitCode = exitCode
         self.resourceTelemetry = resourceTelemetry
+        self.idleActivity = idleActivity
+        self.suspension = suspension
+        self.suspensionStorageReservedBytes = suspensionStorageReservedBytes
+        self.suspensionStorageEstimateBytes = suspensionStorageEstimateBytes
     }
 }
 
@@ -1845,6 +1886,8 @@ public struct ObservedStateReport: WebSocketMessage {
     /// empty.
     public let sandboxes: [ObservedSandboxState]
     public let resources: AgentResources
+    /// Coherent wire67 enforcement/accounting acknowledgement. Nil is unknown.
+    public let resourceEnforcement: ResourceEnforcementSnapshot?
     /// Same independently sampled host-resource snapshot carried by the
     /// heartbeat. It is duplicated here so either periodic path refreshes the
     /// operator view without doing any probe work itself.
@@ -1912,6 +1955,7 @@ public struct ObservedStateReport: WebSocketMessage {
         vms: [ObservedVMState],
         sandboxes: [ObservedSandboxState] = [],
         resources: AgentResources,
+        resourceEnforcement: ResourceEnforcementSnapshot? = nil,
         hostResourceTelemetry: HostResourceTelemetry? = nil,
         agentUpdateStatus: ObservedAgentUpdateStatus? = nil,
         unrecognized: [UnrecognizedWorkload] = [],
@@ -1931,6 +1975,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.vms = vms
         self.sandboxes = sandboxes
         self.resources = resources
+        self.resourceEnforcement = resourceEnforcement
         self.hostResourceTelemetry = hostResourceTelemetry
         self.agentUpdateStatus = agentUpdateStatus
         self.unrecognized = unrecognized

@@ -285,7 +285,13 @@ struct AgentMessageTests {
             reclaimScannedPagesTotal: .available(0),
             reclaimReclaimedPagesTotal: .available(0),
             oomKillsTotal: .available(0),
-            mglruEnabled: .unavailable)
+            mglruEnabled: .unavailable,
+            memoryProfile: HostMemoryProfileObservation(
+                configured: nil, effectiveTier: .zram, thpPolicy: "madvise",
+                ksmRunning: false, reason: nil),
+            swapInPagesTotal: .available(12), swapOutPagesTotal: .available(24),
+            zramOriginalBytes: .available(4096), swapInPagesPerSecond: 1,
+            swapOutPagesPerSecond: 2, memoryWarnings: ["swap_thrashing"])
         let decoded = try throughEnvelope(
             AgentHeartbeatMessage(
                 requestId: Fixtures.requestId,

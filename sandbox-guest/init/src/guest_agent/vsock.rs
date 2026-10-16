@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use strato_sandbox_init::convergence::Converger;
 
 use strato_sandbox_init::protocol::{
-    decode_request, encode_line, read_request_line, Request, Response, WorkloadState,
-    CONTROL_PROTOCOL_VERSION, DEFAULT_VSOCK_PORT,
+    decode_request, encode_line, read_vm_control_line, Request, Response, WorkloadState,
+    CONTROL_PROTOCOL_VERSION, DEFAULT_VSOCK_PORT, GUEST_CONFIG_CAPABILITY,
 };
 
 use super::exec::{self, ExecRequest};
@@ -150,7 +150,7 @@ fn handle_connection(
 
     let mut first = String::new();
     loop {
-        if read_request_line(&mut reader, &mut first)? == 0 {
+        if read_vm_control_line(&mut reader, &mut first)? == 0 {
             return Ok(());
         }
         if !first.trim().is_empty() {
@@ -163,6 +163,7 @@ fn handle_connection(
             request @ (Request::Ping | Request::GetStatus | Request::ConvergeGuestConfig { .. }),
         ) => serve_control(request, reader, writer, identity, convergence),
         Ok(Request::Exec {
+            session_id: _,
             argv,
             env,
             cwd,
@@ -216,7 +217,7 @@ fn serve_control(
 
     let mut line = String::new();
     loop {
-        if read_request_line(&mut reader, &mut line)? == 0 {
+        if read_vm_control_line(&mut reader, &mut line)? == 0 {
             return Ok(());
         }
         if line.trim().is_empty() {
@@ -256,7 +257,7 @@ fn vm_control_response(
                 observation: engine.converge(
                     generation,
                     guest_config,
-                    &mut strato_sandbox_init::convergence_linux::LinuxBackend,
+                    &mut strato_sandbox_init::convergence_linux::LinuxBackend::default(),
                 ),
             },
             Err(_) => Response::Error {
@@ -280,6 +281,7 @@ fn control_response(request: Request, identity: &GuestIdentity) -> Response {
             sandbox_id: identity.guest_id.clone(),
             nonce: identity.nonce.clone(),
             control_protocol_version: CONTROL_PROTOCOL_VERSION,
+            capabilities: vec![GUEST_CONFIG_CAPABILITY.into()],
         },
     }
 }
@@ -396,6 +398,42 @@ mod tests {
     }
 
     #[test]
+    fn large_guest_configuration_is_accepted_as_the_first_control_frame() {
+        let config = strato_sandbox_init::convergence::GuestConfig {
+            files: (0..4)
+                .map(|index| strato_sandbox_init::convergence::File {
+                    path: format!("/escaped-{index}"),
+                    content: "\u{1}".repeat(65536),
+                    mode: "0600".into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        let mut request = serde_json::to_vec(&Request::ConvergeGuestConfig {
+            generation: 9,
+            guest_config: Some(config),
+        })
+        .unwrap();
+        request.push(b'\n');
+        assert!(request.len() > strato_sandbox_init::protocol::MAX_REQUEST_LINE_BYTES);
+
+        let (mut client, handle) = connection();
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        client.write_all(&request).unwrap();
+        match read_response(&mut reader) {
+            Response::GuestConfigState { nonce, observation } => {
+                assert_eq!(nonce, "boot-1");
+                assert_eq!(observation.generation, 9);
+            }
+            response => panic!("unexpected response: {response:?}"),
+        }
+        drop(reader);
+        drop(client);
+        handle.join().unwrap();
+    }
+
+    #[test]
     fn only_the_hypervisor_host_cid_is_accepted() {
         let mut peer: libc::sockaddr_vm = unsafe { mem::zeroed() };
         peer.svm_family = libc::AF_VSOCK as libc::sa_family_t;
@@ -430,6 +468,7 @@ mod tests {
                 sandbox_id: "machine-1".into(),
                 nonce: "boot-1".into(),
                 control_protocol_version: CONTROL_PROTOCOL_VERSION,
+                capabilities: vec!["guest_config_convergence".into()],
             }
         );
         assert_eq!(
@@ -451,6 +490,7 @@ mod tests {
         let (mut client, handle) = connection();
         let mut reader = BufReader::new(client.try_clone().expect("clone client"));
         let request = Request::Exec {
+            session_id: None,
             argv: vec![
                 "/bin/sh".into(),
                 "-c".into(),
@@ -511,6 +551,7 @@ mod tests {
         let (mut client, handle) = connection();
         let mut reader = BufReader::new(client.try_clone().expect("clone client"));
         let request = Request::Exec {
+            session_id: None,
             argv: vec![
                 "/bin/sh".into(),
                 "-c".into(),

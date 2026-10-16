@@ -10,6 +10,7 @@ actor AgentMaintenanceLoop {
     private let interval: Duration
     private var task: Task<Void, Never>?
     var isShutDown = false
+    var idleSuspensionCursor: UUID?
     private var autoUpdateTargetOverride: String?
 
     init(app: Application, interval: Duration) {
@@ -111,6 +112,8 @@ actor AgentMaintenanceLoop {
         try checkTickPreconditions()
         await sweepOrphanedTerminatingResources(at: instant)
         try checkTickPreconditions()
+        await sweepIdleSandboxes(at: instant)
+        try checkTickPreconditions()
         await sweepExpiredSandboxes(at: instant)
         try checkTickPreconditions()
         await SnapshotRetentionSweep.run(app: app, at: instant)
@@ -133,6 +136,10 @@ actor AgentMaintenanceLoop {
 
         try checkTickPreconditions()
         await sweepAgentAutoUpdates(at: instant)
+        try checkTickPreconditions()
+        do { try await VMExecSessionLimits.prune(on: app.db) } catch {
+            app.logger.warning("Could not prune expired VM exec presence: \(error)")
+        }
     }
 
     /// Throws when the current tick must stop: the task was cancelled, the
@@ -266,6 +273,7 @@ actor AgentMaintenanceLoop {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
         await app.vmCommandExecutionService.sweepStuck(at: instant)
+        await VMFleetRunDispatcher.sweep(app: app)
     }
 
     /// Grace before a resting desired/observed mismatch becomes divergent.

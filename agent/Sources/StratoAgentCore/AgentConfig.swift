@@ -26,8 +26,13 @@ public struct AgentConfig {
     public let ovnNorthboundTLS: OVNNorthboundTLSConfig?
     public let enableKVM: Bool?
     /// Fixed QEMU process allowance above current guest RAM. This only sizes
-    /// libvirt's cgroup ceiling; it is not a placement reservation.
+    /// libvirt's cgroup ceiling and the workload placement reservation.
     public let qemuMemoryOverheadMB: Int?
+    public let hostMemoryReserveMB: Int?
+    public var hostMemoryReserveBytes: Int64 {
+        let (bytes, overflow) = Int64(max(0, hostMemoryReserveMB ?? 1024)).multipliedReportingOverflow(by: 1024 * 1024)
+        return overflow ? Int64.max : bytes
+    }
     public let vmStoragePath: String?
     /// Where managed volume disks and their snapshots live. Nil means the
     /// platform default (`/var/lib/strato/volumes` on Linux) — see
@@ -87,6 +92,12 @@ public struct AgentConfig {
     /// per-(image, machine shape) template snapshot instead of cold-booting.
     /// Default true; every warm failure falls back to a cold boot.
     public let sandboxWarmStart: Bool?
+    /// Bounded suspension restore budget, 5...1200 seconds; default 1200.
+    public let sandboxSuspensionRestoreTimeoutSeconds: Int?
+    public let sandboxIdleSuspendEnabled: Bool?
+    public let sandboxIdleSeconds: Int?
+    public let sandboxMinimumResidencySeconds: Int?
+    public let sandboxIdleExcludedSandboxIDs: [String]?
     /// Size budget for the warm-snapshot template cache in GB (entries are
     /// roughly guest-memory sized). Default 20.
     public let sandboxWarmCacheMaxSizeGB: Int?
@@ -153,12 +164,12 @@ public struct AgentConfig {
 
     /// The forced-unconditional-fetch interval, floored at one second so a
     /// zero or negative value in a config file cannot turn the loop into a
-    /// spin.
+    /// spin, and capped at 300 seconds to retain the correctness backstop.
     public var desiredStateFullRefetchInterval: Duration {
         guard let seconds = desiredStateFullRefetchSeconds else {
             return DesiredStatePoller<ContinuousClock>.defaultFullRefetchInterval
         }
-        return .seconds(max(1, seconds))
+        return .seconds(min(300, max(1, seconds)))
     }
 
     /// The teardown blast-radius guard this configuration asks for.
@@ -181,6 +192,7 @@ public struct AgentConfig {
         ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
         enableKVM: Bool? = nil,
         qemuMemoryOverheadMB: Int? = nil,
+        hostMemoryReserveMB: Int? = nil,
         vmStoragePath: String? = nil,
         volumeStoragePath: String? = nil,
         imageCacheDir: String? = nil,
@@ -202,6 +214,11 @@ public struct AgentConfig {
         sandboxJailerChrootDir: String? = nil,
         sandboxJailerUidBase: UInt32? = nil,
         sandboxWarmStart: Bool? = nil,
+        sandboxSuspensionRestoreTimeoutSeconds: Int? = nil,
+        sandboxIdleSuspendEnabled: Bool? = nil,
+        sandboxIdleSeconds: Int? = nil,
+        sandboxMinimumResidencySeconds: Int? = nil,
+        sandboxIdleExcludedSandboxIDs: [String]? = nil,
         sandboxWarmCacheMaxSizeGB: Int? = nil,
         hypervisorType: HypervisorType? = nil,
         ovnUplink: OVNUplinkConfig? = nil,
@@ -226,6 +243,7 @@ public struct AgentConfig {
         self.ovnNorthboundTLS = ovnNorthboundTLS
         self.enableKVM = enableKVM
         self.qemuMemoryOverheadMB = qemuMemoryOverheadMB
+        self.hostMemoryReserveMB = hostMemoryReserveMB
         self.vmStoragePath = vmStoragePath
         self.volumeStoragePath = volumeStoragePath
         self.imageCacheDir = imageCacheDir
@@ -247,6 +265,11 @@ public struct AgentConfig {
         self.sandboxJailerChrootDir = sandboxJailerChrootDir
         self.sandboxJailerUidBase = sandboxJailerUidBase
         self.sandboxWarmStart = sandboxWarmStart
+        self.sandboxSuspensionRestoreTimeoutSeconds = sandboxSuspensionRestoreTimeoutSeconds
+        self.sandboxIdleSuspendEnabled = sandboxIdleSuspendEnabled
+        self.sandboxIdleSeconds = sandboxIdleSeconds
+        self.sandboxMinimumResidencySeconds = sandboxMinimumResidencySeconds
+        self.sandboxIdleExcludedSandboxIDs = sandboxIdleExcludedSandboxIDs
         self.sandboxWarmCacheMaxSizeGB = sandboxWarmCacheMaxSizeGB
         self.hypervisorType = hypervisorType
         self.ovnUplink = ovnUplink
@@ -286,4 +309,21 @@ public struct AgentConfig {
         )
     }
 
+}
+
+extension AgentConfig {
+    public var resolvedSandboxIdlePolicy: SandboxIdlePolicy {
+        var policy = SandboxIdlePolicy()
+        policy.enabled = sandboxIdleSuspendEnabled ?? false
+        policy.idleSeconds = TimeInterval(sandboxIdleSeconds ?? 300)
+        policy.minimumResidencySeconds = TimeInterval(sandboxMinimumResidencySeconds ?? 60)
+        policy.restoreTimeoutSeconds = TimeInterval(sandboxSuspensionRestoreTimeoutSeconds ?? 1200)
+        let excluded = sandboxIdleExcludedSandboxIDs ?? []
+        let ids = excluded.compactMap(UUID.init(uuidString:))
+        // Programmatic configurations receive the same fail-closed exclusion
+        // guarantee as the TOML loader; a malformed ID must not disappear.
+        if ids.count != excluded.count { policy.enabled = false }
+        policy.excludedSandboxIDs = Set(ids)
+        return policy
+    }
 }

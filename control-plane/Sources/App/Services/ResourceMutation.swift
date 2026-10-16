@@ -78,6 +78,15 @@ struct ResourceMutation {
         case directResolution(@Sendable (any Database) async throws -> Void)
     }
 
+    /// Metadata may advance generation during planning. The accepted deadline
+    /// identifies this unplaced VM attempt; failure locks and settles its current
+    /// generation without touching a later retry, deletion or committed placement.
+    struct PlacementFailure: LocalizedError {
+        let deadline: Date
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
     /// What the `202` needs: the generation the client waits for, and the id of
     /// the `resource_events` row that recorded the request.
     ///
@@ -227,10 +236,16 @@ struct ResourceMutation {
             // lock has completed. A lock wait must not consume the agent's
             // opportunity to realize the mutation after this transaction.
             let acceptedAt = try await ClusterClock.read(on: db)
+            if actor.type != .system, let sandbox = resource as? Sandbox {
+                SandboxActivityService.touch(sandbox, at: acceptedAt)
+            }
             resource.extendConvergenceDeadline(
                 by: R.operationResourceKind.completionBudgetSeconds(for: kind),
                 from: acceptedAt)
             try await resource.save(on: db)
+            if actor.type == .system, let sandbox = resource as? Sandbox {
+                try await SandboxIdleFenceService.finalizePendingAdmission(sandbox, on: db)
+            }
             if kind == .delete {
                 try await ResourceFinalizerService.stampOrphanReapAge(for: resource, on: db)
             }
@@ -321,12 +336,45 @@ struct ResourceMutation {
                 do {
                     _ = try await work(db)
                 } catch {
-                    await degrade(
-                        R.self, id: resourceID, mutation: kind,
-                        expectedGeneration: targetGeneration,
-                        reason: error.localizedDescription, app: app)
+                    if let failure = error as? PlacementFailure {
+                        await degradeUnplacedVM(id: resourceID, mutation: kind, failure: failure, app: app)
+                    } else {
+                        await degrade(
+                            R.self, id: resourceID, mutation: kind,
+                            expectedGeneration: targetGeneration,
+                            reason: error.localizedDescription, app: app)
+                    }
                 }
             }
+        }
+    }
+
+    private func degradeUnplacedVM(
+        id: UUID, mutation: VMOperationKind, failure: PlacementFailure, app: Application
+    ) async {
+        guard let db = app.liveDB else { return }
+        do {
+            try await db.transaction { tx in
+                guard let vm = try await VM.find(id, on: tx),
+                    try await vm.lockAndRefresh(on: tx), vm.hypervisorId == nil,
+                    vm.desiredStatus != .absent,
+                    vm.convergenceDeadline == failure.deadline
+                else { return }
+                let outcome = try await ResourceConvergence.recordFailure(
+                    vm, mutation: mutation, reason: failure.reason,
+                    telemetryReason: "mutation_failed", at: try await ClusterClock.read(on: tx), on: tx)
+                if outcome == .recorded {
+                    logger.warning(
+                        "Unplaced VM placement failed",
+                        metadata: [
+                            "resourceId": .string(id.uuidString), "error": .string(failure.reason),
+                        ])
+                }
+            }
+        } catch {
+            logger.error(
+                "Failed to record an unplaced VM failure: \(error)",
+                metadata: ["resourceId": .string(id.uuidString)])
         }
     }
 

@@ -5,7 +5,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("User API Authorization Tests", .serialized)
+@Suite("User API Authorization Tests", .serialized, .postgresFixture)
 final class UserControllerTests: BaseTestCase {
 
     /// Create an additional user (distinct from `testUser`) plus a bearer token for it.

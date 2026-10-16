@@ -16,7 +16,7 @@ import AppTestSupport
 ///
 /// The endpoint now refuses an attached volume outright rather than returning
 /// a silently-wrong point-in-time image.
-@Suite("Volume Snapshot Guard Tests", .serialized)
+@Suite("Volume Snapshot Guard Tests", .serialized, .postgresFixture)
 struct VolumeSnapshotGuardTests {
 
     /// Boots a test app with an admin caller and one volume in `status`,

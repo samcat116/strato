@@ -12,7 +12,7 @@ import AppTestSupport
 /// answering from `role_bindings`, so denial is the *absence of a binding*
 /// rather than a mock verdict, and an unclassified path is denied outright by
 /// the default-deny middleware.
-@Suite("VM Authorization Tests", .serialized)
+@Suite("VM Authorization Tests", .serialized, .postgresFixture)
 final class VMAuthorizationTests {
 
     /// Boots a configured test app with a non-admin org *member* (bare

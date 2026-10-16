@@ -1,6 +1,12 @@
+import Crypto
 import Foundation
 import Logging
 import StratoShared
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 
 /// An RBD client driver for a Ceph cluster operated outside Strato.
 ///
@@ -40,9 +46,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         virshPath: String = defaultVirshPath,
         qemuImgPath: String = FileSystemStorageBackend.defaultQemuImgPath,
         clientRoot: String = defaultClientRoot,
-        runSubprocess: @escaping SubprocessRunner = {
-            try await ProcessRunner.run(executableURL: $0, arguments: $1)
-        }
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run
     ) {
         self.logger = logger
         self.configuration = configuration
@@ -167,18 +171,36 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             image: Self.temporaryImageName(prefix: Self.importImagePrefix, volumeId: volumeId))
         try await removeImageIfPresent(staging, operation: "rbd import staging cleanup")
         let source = try await imageSource.localImagePath(for: imageInfo, kind: artifactKind)
-        let preparedSource = try await rawImportSource(from: source)
+        let imported: ImportedDiskImageValidation.PreparedImage
+        do {
+            imported = try ImportedDiskImageValidation.prepare(filePath: source)
+        } catch {
+            throw StorageBackendError.createFailed("Image import validation failed: \(error.localizedDescription)")
+        }
+        var retainSources = false
+        defer { if !retainSources { imported.remove() } }
+        let preparedSource: (path: String, temporaryDirectory: URL?)
+        do { preparedSource = try await rawImportSource(from: imported.path) } catch {
+            retainSources = SubprocessBudget.preserveStaging(after: error)
+            throw error
+        }
         defer {
-            if let directory = preparedSource.temporaryDirectory {
+            if !retainSources, let directory = preparedSource.temporaryDirectory {
                 try? FileManager.default.removeItem(at: directory)
             }
         }
-        let result = try await runRBD([
-            "import", preparedSource.path, coordinate(for: staging),
-            "--image-format", "2",
-            "--image-feature", "layering",
-            "--image-feature", "exclusive-lock",
-        ])
+        let result: ProcessResult
+        do {
+            result = try await runRBD([
+                "import", preparedSource.path, coordinate(for: staging),
+                "--image-format", "2",
+                "--image-feature", "layering",
+                "--image-feature", "exclusive-lock",
+            ])
+        } catch {
+            retainSources = SubprocessBudget.preserveStaging(after: error)
+            throw error
+        }
         guard result.terminationStatus == 0 else {
             try? await removeImageIfPresent(staging, operation: "rbd import failure cleanup")
             throw sanitizedFailure(
@@ -412,7 +434,25 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         try writer.write(Data(renderConfig().utf8), to: configPath, permissions: 0o600)
         try writer.write(Data(configuration.keyring.utf8), to: keyringPath, permissions: 0o600)
 
+        // Per-call destinations will never be reused. Reclaim only interrupted
+        // staging, not published inputs still needed by another pool's reader.
+        let directory = (configPath as NSString).deletingLastPathComponent
+        let descriptor = try OwnedFileCleanup.lockDirectory(directory)
+        defer { _ = close(descriptor) }
+        try OwnedFileCleanup.removeFiles(in: directory, descriptor: descriptor) {
+            Self.isSecretValueFile($0, stagingOnly: true)
+        }
+
         isPrepared = true
+    }
+
+    nonisolated static func isSecretValueFile(_ name: String, stagingOnly: Bool = false) -> Bool {
+        let prefix = "libvirt-secret.value."
+        guard name.hasPrefix(prefix) else { return false }
+        let suffix = String(name.dropFirst(prefix.count))
+        if OwnedFileCleanup.isUUID(suffix) { return !stagingOnly }
+        let components = suffix.components(separatedBy: ".tmp.")
+        return components.count == 2 && components.allSatisfy(OwnedFileCleanup.isUUID)
     }
 
     public func prepareAttachmentForQEMU(_ attachment: DiskAttachment) async throws {
@@ -426,7 +466,9 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             credentialId: configuration.credentialId)
         let directory = (configPath as NSString).deletingLastPathComponent
         let secretXMLPath = "\(directory)/libvirt-secret.xml"
-        let secretValuePath = "\(directory)/libvirt-secret.value"
+        // Per-call ownership also isolates actor reentrancy and different pools
+        // sharing this credential: cleanup cannot remove another virsh input.
+        let secretValuePath = "\(directory)/libvirt-secret.value.\(UUID().uuidString)"
         let writer = DurableFileWriter()
 
         // Libvirt needs only the cephx key value, not the whole keyring. Parse
@@ -435,7 +477,8 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         let secretValue = try Self.parseKey(
             from: configuration.keyring, expectedClientName: configuration.clientName)
         try writer.write(Data(secretValue.utf8), to: secretValuePath, permissions: 0o600)
-        defer { try? FileManager.default.removeItem(atPath: secretValuePath) }
+        var retainSecretInput = false
+        defer { if !retainSecretInput { try? FileManager.default.removeItem(atPath: secretValuePath) } }
         let usage =
             "strato-ceph-\(configuration.clusterId.uuidString.lowercased())-\(configuration.credentialId.uuidString.lowercased())"
         let xml = """
@@ -447,17 +490,23 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             """
         try writer.write(Data(xml.utf8), to: secretXMLPath, permissions: 0o600)
 
-        let define = try await runSubprocess(
+        let define = try await runCommand(
             URL(fileURLWithPath: virshPath), ["secret-define", "--file", secretXMLPath])
         try requireNotRevoked()
         try requireSuccess(
             define, operation: "virsh secret-define", error: StorageBackendError.hostMisconfiguration)
-        let set = try await runSubprocess(
-            URL(fileURLWithPath: virshPath),
-            [
-                "secret-set-value", "--secret", configuration.credentialId.uuidString.lowercased(),
-                "--file", secretValuePath, "--plain",
-            ])
+        let set: ProcessResult
+        do {
+            set = try await runCommand(
+                URL(fileURLWithPath: virshPath),
+                [
+                    "secret-set-value", "--secret", configuration.credentialId.uuidString.lowercased(),
+                    "--file", secretValuePath, "--plain",
+                ])
+        } catch {
+            retainSecretInput = SubprocessBudget.preserveStaging(after: error)
+            throw error
+        }
         try requireNotRevoked()
         try requireSuccess(
             set, operation: "virsh secret-set-value", error: StorageBackendError.hostMisconfiguration)
@@ -582,15 +631,48 @@ public actor CephRBDStorageBackend: CephStorageBackend {
                 credentialId: configuration.credentialId),
             "--namespace", configuration.namespace,
         ]
-        let result = try await runSubprocess(URL(fileURLWithPath: rbdPath), common + arguments)
-        try requireNotRevoked()
-        return result
+        let directory = Self.clientDirectory(
+            root: clientRoot, clusterId: configuration.clusterId, credentialId: configuration.credentialId)
+        // Scope retry refusals to the images this command touches, including
+        // both coordinates of clone/move. A hung image must not block other
+        // volumes or add synchronized staging writes to read-only inventory.
+        let coordinates = Set(
+            arguments.filter { $0.hasPrefix(configuration.pool + "/") }.map {
+                String($0.split(separator: "@", maxSplits: 1)[0])
+            })
+        let markers = coordinates.map { coordinate in
+            let digest = SHA256.hash(data: Data(coordinate.utf8)).map { String(format: "%02x", $0) }.joined()
+            return directory + "/.rbd-building-" + digest
+        }
+        for marker in markers where FileManager.default.fileExists(atPath: marker) {
+            throw SubprocessStagingBlockedError(path: marker)
+        }
+        let mutates =
+            arguments.first != "info" && arguments.first != "ls"
+            && Array(arguments.prefix(2)) != ["snap", "ls"]
+        let ownedMarkers = mutates ? markers : []
+        do {
+            // Remote mutation can outlive the local child. Persist before
+            // spawn so neither a crash nor a timeout authorizes staging reuse.
+            for marker in ownedMarkers {
+                try DurableFileWriter().write(Data(), to: marker, permissions: 0o600)
+            }
+            let result = try await runCommand(URL(fileURLWithPath: rbdPath), common + arguments)
+            for marker in ownedMarkers { try FileManager.default.removeItem(atPath: marker) }
+            try requireNotRevoked()
+            return result
+        } catch {
+            if !SubprocessBudget.preserveStaging(after: error) {
+                for marker in ownedMarkers { try? FileManager.default.removeItem(atPath: marker) }
+            }
+            throw error
+        }
     }
 
     private func rawImportSource(
         from source: String
     ) async throws -> (path: String, temporaryDirectory: URL?) {
-        let info = try await runSubprocess(
+        let info = try await runCommand(
             URL(fileURLWithPath: qemuImgPath), ["info", "--output=json", source])
         try requireNotRevoked()
         guard info.terminationStatus == 0 else {
@@ -611,9 +693,10 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             attributes: [.posixPermissions: 0o700])
         let converted = directory.appendingPathComponent("image.raw").path
         do {
-            let conversion = try await runSubprocess(
+            let conversion = try await runCommand(
                 URL(fileURLWithPath: qemuImgPath),
-                ["convert", "-f", format, "-O", DiskFormat.raw.rawValue, source, converted])
+                ["convert", "-f", format, "-O", DiskFormat.raw.rawValue, source, converted],
+                budget: .imageWork(bytes: (object["virtual-size"] as? NSNumber)?.int64Value))
             try requireNotRevoked()
             guard conversion.terminationStatus == 0 else {
                 throw StorageBackendError.createFailed(
@@ -621,7 +704,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             }
             return (converted, directory)
         } catch {
-            try? FileManager.default.removeItem(at: directory)
+            if !SubprocessBudget.preserveStaging(after: error) { try? FileManager.default.removeItem(at: directory) }
             throw error
         }
     }
@@ -969,4 +1052,10 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             || output.contains("no such key")
             || output.contains("does not exist")
     }
+    private func runCommand(_ executable: URL, _ arguments: [String], budget: SubprocessBudget? = nil) async throws
+        -> ProcessResult
+    {
+        try await runSubprocess(executable, arguments, budget ?? .storage(executable: executable, arguments: arguments))
+    }
+
 }

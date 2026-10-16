@@ -4,19 +4,35 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("HealthController Tests", .serialized)
+@Suite("HealthController Tests", .serialized, .postgresFixture)
 struct HealthControllerTests {
 
-    // MARK: - Basic Health Check Tests
-
-    @Test("Health endpoint returns 200 OK")
-    func testHealthEndpoint() async throws {
+    @Test("Readiness reports observed coordination degradation without probing the store")
+    func observedCoordinationDegradation() async throws {
         let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health") { res async throws in
-            #expect(res.status == .ok)
+        do {
+            try await configure(app)
+            let gate = CoordinationFailureGate(
+                threshold: 1, cooldown: .seconds(60),
+                probe: {
+                    Issue.record("Readiness must not issue a recovery probe")
+                })
+            app.coordination = CoordinationService(
+                store: InMemoryCoordinationStore(), logger: app.logger, failureGate: gate)
+            await #expect(throws: StoreTimeoutError.self) {
+                try await gate.run(operation: "fixture", deadline: .milliseconds(10)) {
+                    try await Task.sleep(for: .seconds(60))
+                }
+            }
+            try await app.test(.GET, "/health/ready") { response async throws in
+                #expect(response.status == .ok)
+                let health = try response.content.decode(HealthResponse.self)
+                #expect(health.status == "degraded")
+                #expect(health.checks.first { $0.name == "coordination" }?.status == "degraded")
+            }
+        } catch {
+            try await app.shutdownForTesting()
+            throw error
         }
         try await app.shutdownForTesting()
     }
@@ -35,28 +51,18 @@ struct HealthControllerTests {
             let health = try res.content.decode(HealthResponse.self)
             #expect(health.status == "healthy")
             #expect(health.checks.count > 0)
+            #expect(res.headers.contentType?.type.description == "application")
+            #expect(res.headers.contentType?.subType == "json")
+            #expect(abs(Date().timeIntervalSince(health.timestamp)) < 60)
+            for check in health.checks {
+                #expect(!check.name.isEmpty)
+                #expect(!check.status.isEmpty)
+            }
 
             let appCheck = health.checks.first { $0.name == "application" }
             #expect(appCheck != nil)
             #expect(appCheck?.status == "up")
             #expect(appCheck?.error == nil)
-        }
-        try await app.shutdownForTesting()
-    }
-
-    @Test("Liveness endpoint includes timestamp")
-    func testLivenessTimestamp() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health/live") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-
-            // Timestamp should be recent (within last minute)
-            let now = Date()
-            let timeDifference = abs(now.timeIntervalSince(health.timestamp))
-            #expect(timeDifference < 60)
         }
         try await app.shutdownForTesting()
     }
@@ -75,139 +81,20 @@ struct HealthControllerTests {
             let health = try res.content.decode(HealthResponse.self)
             #expect(health.status == "healthy")
 
+            #expect(res.headers.contentType?.type.description == "application")
+            #expect(res.headers.contentType?.subType == "json")
+            #expect(abs(Date().timeIntervalSince(health.timestamp)) < 60)
+            let names = health.checks.map(\.name)
+            // Testing uses Fluent sessions; there is no separate Valkey session store.
+            #expect(Set(names) == ["database", "migrations", "coordination", "secrets-encryption"])
+            #expect(names.count == Set(names).count)
+            for check in health.checks {
+                #expect(check.status == "up")
+            }
             let dbCheck = health.checks.first { $0.name == "database" }
             #expect(dbCheck != nil)
             #expect(dbCheck?.status == "up")
             #expect(dbCheck?.error == nil)
-        }
-        try await app.shutdownForTesting()
-    }
-
-    @Test("Readiness endpoint includes timestamp")
-    func testReadinessTimestamp() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-
-            // Timestamp should be recent (within last minute)
-            let now = Date()
-            let timeDifference = abs(now.timeIntervalSince(health.timestamp))
-            #expect(timeDifference < 60)
-        }
-        try await app.shutdownForTesting()
-    }
-
-    // MARK: - Response Structure Tests
-
-    @Test("Health response has correct structure")
-    func testHealthResponseStructure() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health/live") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-
-            // Verify required fields are present
-            #expect(!health.status.isEmpty)
-            #expect(health.checks.count > 0)
-
-            // Verify check structure
-            for check in health.checks {
-                #expect(!check.name.isEmpty)
-                #expect(!check.status.isEmpty)
-            }
-        }
-        try await app.shutdownForTesting()
-    }
-
-    // MARK: - Content Type Tests
-
-    @Test("Health endpoints return JSON content")
-    func testHealthEndpointsReturnJSON() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health/live") { res async throws in
-            let contentType = res.headers.contentType
-            #expect(contentType != nil)
-            #expect(contentType?.type.description == "application")
-            #expect(contentType?.subType == "json")
-        }
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            let contentType = res.headers.contentType
-            #expect(contentType != nil)
-            #expect(contentType?.type.description == "application")
-            #expect(contentType?.subType == "json")
-        }
-        try await app.shutdownForTesting()
-    }
-
-    // MARK: - Multiple Checks Tests
-
-    @Test("Readiness endpoint can have multiple checks")
-    func testMultipleChecks() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-
-            // Currently only database check, but structure supports multiple
-            #expect(health.checks.count >= 1)
-
-            // All check names should be unique
-            let checkNames = health.checks.map { $0.name }
-            let uniqueNames = Set(checkNames)
-            #expect(checkNames.count == uniqueNames.count)
-        }
-        try await app.shutdownForTesting()
-    }
-
-    // MARK: - Overall Status Tests
-
-    @Test("Overall status is healthy when all checks pass")
-    func testOverallStatusHealthy() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-
-            #expect(health.status == "healthy")
-
-            // All checks should be up
-            for check in health.checks {
-                #expect(check.status == "up")
-            }
-        }
-        try await app.shutdownForTesting()
-    }
-
-    // MARK: - Dependency Coverage
-
-    @Test("Readiness reports every gating dependency")
-    func testReadinessCoversDependencies() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-
-        try await app.test(.GET, "/health/ready") { res async throws in
-            let health = try res.content.decode(HealthResponse.self)
-            let names = Set(health.checks.map(\.name))
-
-            // A readiness probe that only knows about Postgres would keep a
-            // replica in rotation while another gating dependency is down.
-            // No `session-store` check here: `.testing` uses Fluent sessions, so
-            // there is no Valkey-backed session store to probe.
-            #expect(names == ["database", "migrations", "coordination", "secrets-encryption"])
         }
         try await app.shutdownForTesting()
     }

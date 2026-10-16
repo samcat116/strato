@@ -22,7 +22,7 @@ private actor MetadataDoorbellCollector {
     }
 }
 
-@Suite("VM mutable metadata tests", .serialized)
+@Suite("VM mutable metadata tests", .serialized, .postgresFixture)
 final class VMMutableMetadataTests {
     private static let firstKey =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f first@test"

@@ -60,6 +60,11 @@ public struct VMCheckpointReport: Sendable {
 /// Protocol defining the interface for hypervisor services
 /// Both LibvirtService and FirecrackerService conform to this protocol
 public protocol HypervisorService: Actor, Sendable {
+    func resourceEnforcementEvidence(
+        vmId: String, application: ResourceEnforcementProducer.Application,
+        desired: BurstableResourceLimits
+    ) async -> WorkloadResourceLimitsEvidence
+    func resourceLimitsEvidence(vmId: String, desired: BurstableResourceLimits) async -> WorkloadResourceLimitsEvidence
     /// The type of hypervisor
     var hypervisorType: HypervisorType { get }
 
@@ -404,6 +409,17 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    public func resourceEnforcementEvidence(
+        vmId: String, application: ResourceEnforcementProducer.Application,
+        desired: BurstableResourceLimits
+    ) async -> WorkloadResourceLimitsEvidence {
+        .sample(limits: desired, ownedPath: nil, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes)
+    }
+
+    func resourceLimitsEvidence(vmId: String, desired: BurstableResourceLimits) async -> WorkloadResourceLimitsEvidence
+    {
+        .sample(limits: desired, ownedPath: nil, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes)
+    }
     func bootstrapWorkloadIDs() async -> Set<String>? { nil }
 
     func refreshInstanceMetadata(vmId: String, metadata: InstanceMetadata?) async throws {}

@@ -13,8 +13,73 @@ import AppTestSupport
 /// mechanics (all endpoints go through the same `ListPaging` helper); the
 /// authorization interaction gets its own test because it is the property the
 /// slicing order exists to protect.
-@Suite("List Pagination Tests", .serialized)
+@Suite("List Pagination Tests", .serialized, .postgresFixture)
 final class ListPaginationTests: BaseTestCase {
+
+    @Test("workload pages hydrate related rows only for the requested slice")
+    func pageHydrationIsBounded() async throws {
+        try await withTestApp { app in
+            try await setupCommonTestData(on: app.db)
+            let builder = TestDataBuilder(db: app.db)
+            let project = try await builder.createProject(
+                name: "Bounded pages", description: "", organization: testOrganization)
+            for index in 0..<6 {
+                _ = try await builder.createVM(name: "vm-\(index)", project: project)
+                _ = try await builder.createSandbox(name: "sandbox-\(index)", project: project)
+                _ = try await builder.createVolume(name: "volume-\(index)", project: project, createdBy: testUser)
+            }
+            for kind in ["vms", "sandboxes", "volumes"] {
+                let req = Request(
+                    application: app, method: .GET,
+                    url: URI(string: "/api/\(kind)?limit=2&offset=1"), on: app.eventLoopGroup.next())
+                req.auth.login(testUser)
+                req.fluent.history.start()
+                let ids: Set<UUID>
+                let schema: String
+                let foreignKey: FieldKey
+                switch kind {
+                case "vms":
+                    let page = try await VMController().index(req: req)
+                    #expect(page.total == 6)
+                    ids = Set(page.items.compactMap(\.id))
+                    schema = VMNetworkInterface.schema
+                    foreignKey = "vm_id"
+                case "sandboxes":
+                    let page = try await SandboxController().index(req: req)
+                    #expect(page.total == 6)
+                    ids = Set(page.items.compactMap(\.id))
+                    schema = SandboxNetworkInterface.schema
+                    foreignKey = "sandbox_id"
+                default:
+                    let page = try await VolumeController().listVolumes(req: req)
+                    #expect(page.total == 6)
+                    ids = Set(page.items.compactMap(\.id))
+                    schema = VolumeReplica.schema
+                    foreignKey = "volume_id"
+                }
+                req.fluent.history.stop()
+                #expect(ids.count == 2)
+                let hydrated = req.fluent.history.queries.filter { $0.schema == schema }.flatMap { query in
+                    query.filters.flatMap { filter -> [UUID] in
+                        guard case .value(let field, .subset(inverse: false), .array(let values)) = filter else {
+                            return []
+                        }
+                        let path: [FieldKey]
+                        switch field {
+                        case .path(let keys, _), .extendedPath(let keys, _, _): path = keys
+                        default: return []
+                        }
+                        guard path == [foreignKey] else { return [] }
+                        return values.compactMap { value in
+                            guard case .bind(let id) = value else { return nil }
+                            return id as? UUID
+                        }
+                    }
+                }
+                #expect(Set(hydrated) == ids, "\(kind) hydrated rows beyond its requested page")
+            }
+        }
+    }
 
     @Test("GET /api/vms pages with the envelope: defaults, slices, clamping, validation")
     func vmListPages() async throws {
@@ -109,9 +174,15 @@ final class ListPaginationTests: BaseTestCase {
 
             for index in 0..<3 {
                 _ = try await builder.createVM(name: "granted-vm-\(index)", project: granted)
+                _ = try await builder.createSandbox(name: "granted-sandbox-\(index)", project: granted)
+                _ = try await builder.createVolume(
+                    name: "granted-volume-\(index)", project: granted, createdBy: testUser)
             }
             for index in 0..<2 {
                 _ = try await builder.createVM(name: "withheld-vm-\(index)", project: withheld)
+                _ = try await builder.createSandbox(name: "withheld-sandbox-\(index)", project: withheld)
+                _ = try await builder.createVolume(
+                    name: "withheld-volume-\(index)", project: withheld, createdBy: testUser)
             }
 
             // A limit of 1 forces slicing, and total must still be the
@@ -125,6 +196,24 @@ final class ListPaginationTests: BaseTestCase {
                 #expect(page.total == 3)
                 #expect(page.items.count == 1)
                 #expect(page.items.allSatisfy { $0.name.hasPrefix("granted-vm-") })
+            }
+            try await app.test(.GET, "/api/sandboxes?limit=1&offset=1") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let page = try res.content.decode(PagedResponse<SandboxDetailResponse>.self)
+                #expect(page.total == 3)
+                #expect(page.items.count == 1)
+                #expect(page.items.allSatisfy { $0.name.hasPrefix("granted-sandbox-") })
+            }
+            try await app.test(.GET, "/api/volumes?limit=1&offset=1") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let page = try res.content.decode(PagedResponse<VolumeResponse>.self)
+                #expect(page.total == 3)
+                #expect(page.items.count == 1)
+                #expect(page.items.allSatisfy { $0.name.hasPrefix("granted-volume-") })
             }
         }
     }

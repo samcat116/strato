@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// Shared cgroup-v2 memory-controller detection for every VMM backend.
 public enum HostMemoryController {
@@ -13,13 +14,10 @@ public enum HostMemoryController {
 }
 
 /// QEMU's process ceiling is current guest RAM plus a fixed VMM allowance. It
-/// is a host-protection backstop and never enters placement accounting.
+/// shares its allowance arithmetic with host placement accounting.
 public enum QEMUMemoryCeiling {
     public static func bytes(guestMemoryBytes: Int64, overheadBytes: Int64) -> Int64 {
-        let guest = max(0, guestMemoryBytes)
-        let overhead = max(0, overheadBytes)
-        let (sum, overflow) = guest.addingReportingOverflow(overhead)
-        return overflow ? Int64.max : sum
+        WorkloadMemoryReservation(guestBytes: guestMemoryBytes, backendOverheadBytes: overheadBytes).effectiveBytes
     }
 
     /// libvirt memory parameters use KiB. Round up so the requested byte

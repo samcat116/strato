@@ -8,7 +8,7 @@ import Vapor
 
 @testable import App
 
-@Suite("MAC allocator")
+@Suite("MAC allocator", .postgresFixture)
 struct MACAllocatorTests {
     @Test("Concurrent VM and sandbox NIC allocations remain fleet-wide unique")
     func concurrentCrossTableAllocationsAreUnique() async throws {

@@ -196,41 +196,6 @@ struct VMSpecBuilderTests {
 
     // MARK: - Resource Configuration Tests
 
-    @Test("VMSpecBuilder creates spec with VM defaults")
-    func testBasicSpecCreation() throws {
-        let image = createTestImage()
-        let vm = createTestVM()
-
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-
-        #expect(spec.cpus == 2)
-        #expect(spec.maxCpus == 4)
-        #expect(spec.memoryBytes == 2048)
-        #expect(spec.sharedMemory == false)
-        #expect(spec.hugepages == false)
-    }
-
-    @Test("VMSpecBuilder sets CPU counts correctly")
-    func testCPUConfiguration() throws {
-        let image = createTestImage()
-        let vm = createTestVM(cpu: 8, maxCpu: 16)
-
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-
-        #expect(spec.cpus == 8)
-        #expect(spec.maxCpus == 16)
-    }
-
-    @Test("VMSpecBuilder sets memory size from VM")
-    func testMemorySize() throws {
-        let image = createTestImage()
-        let vm = createTestVM(memory: 4096)
-
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-
-        #expect(spec.memoryBytes == 4096)
-    }
-
     @Test("VMSpecBuilder carries the VM's disk requirement on both build paths")
     func testDiskBytes() throws {
         let image = createTestImage()
@@ -242,26 +207,6 @@ struct VMSpecBuilderTests {
         let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
             from: vm, image: image, volumes: [], networkInterfaces: [])
         #expect(specWithVolumes.diskBytes == 10_737_418_240)
-    }
-
-    @Test("VMSpecBuilder configures hugepages correctly")
-    func testHugepagesConfiguration() throws {
-        let image = createTestImage()
-        let vm = createTestVM(hugepages: true)
-
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-
-        #expect(spec.hugepages == true)
-    }
-
-    @Test("VMSpecBuilder configures shared memory correctly")
-    func testSharedMemoryConfiguration() throws {
-        let image = createTestImage()
-        let vm = createTestVM(sharedMemory: true)
-
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-
-        #expect(spec.sharedMemory == true)
     }
 
     // MARK: - Boot Source Tests
@@ -345,16 +290,6 @@ struct VMSpecBuilderTests {
         #expect(spec.volumes.first?.readonly == false)
         #expect(spec.volumes.first?.deviceName.rawValue == "disk0")
         #expect(spec.volumes.first?.volumeId == UUID(uuidString: "00000000-0000-4000-8000-000000000001"))
-    }
-
-    @Test("A canonical boot volume is writable")
-    func testReadonlyVolume() throws {
-        let image = createTestImage()
-        let vm = createTestVM()
-
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-
-        #expect(spec.volumes.first?.readonly == false)
     }
 
     /// An attached volume, as `volumeSpecs` sees it after `.with(\.$volumes)`.
@@ -550,16 +485,6 @@ struct VMSpecBuilderTests {
         #expect(spec.networks.first?.netmask == nil)
     }
 
-    @Test("VMSpecBuilder omits networks when the VM has no interfaces")
-    func testNoNetworkInterfaces() throws {
-        let image = createTestImage()
-        let vm = createTestVM()
-
-        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-
-        #expect(spec.networks.isEmpty)
-    }
-
     @Test("VMSpecBuilder orders multiple interfaces by order index, then device name")
     func testMultipleInterfaceOrdering() throws {
         let image = createTestImage()
@@ -611,6 +536,9 @@ struct VMSpecBuilderTests {
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.cpus == 2)
+        #expect(spec.maxCpus == 4)
+        #expect(spec.sharedMemory == false)
+        #expect(spec.hugepages == false)
         #expect(spec.memoryBytes == 2048)
         #expect(spec.volumes.count == 1)
         guard case .disk(let firmware) = spec.boot else {

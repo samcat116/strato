@@ -679,12 +679,19 @@ public protocol ReconcileActuator: Sendable {
     func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) async
     /// Execute one non-adopt step; `item.kind` selects the runtime.
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
+    /// Retire guest facts when generation-guarded intent withdraws management.
+    func retireGuestConfigObservation(_ item: ReconcileWorkItem) async
+    func resourceEnforcementWillConverge(_ item: ReconcileWorkItem) async
+    func resourceEnforcementDidConverge(_ item: ReconcileWorkItem) async
     /// Called after every work item finishes (success or failure) so the agent
     /// can push a fresh `ObservedStateReport` to the control plane.
     func convergenceDidChange() async
 }
 
 extension ReconcileActuator {
+    public func retireGuestConfigObservation(_: ReconcileWorkItem) async {}
+    public func resourceEnforcementWillConverge(_: ReconcileWorkItem) async {}
+    public func resourceEnforcementDidConverge(_: ReconcileWorkItem) async {}
     public func prepareManagedVolumeInventory(
         from _: [DesiredVMState], desiredVolumes _: [DesiredVolumeState]
     ) async {}

@@ -14,7 +14,7 @@ import AppTestSupport
 /// the agent RPC's verdict resolves the operation. No live agent socket exists
 /// in these tests, so background RPCs fail fast — which exercises exactly the
 /// failure bookkeeping (error rows, dropped charge, operation verdict).
-@Suite("VM Snapshot Tests", .serialized)
+@Suite("VM Snapshot Tests", .serialized, .postgresFixture)
 final class VMSnapshotTests {
 
     private func withCheckpointTestApp(

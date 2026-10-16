@@ -262,10 +262,10 @@ bindings it now shadows (`shadowedBindings`). A binding write returns the
 ceilings that narrow it (`ceilings`). Same relation, both directions, and each
 write is logged with what it changed.
 
-The same machinery proves the role-nesting invariant in CI
-(`RoleNestingSubsumptionTests`): `check_implies` over the compiled role
-policies, in both directions, so `viewer ⊂ operator ⊂ editor ⊂ admin` is
-verified rather than assumed.
+The seeded role-nesting invariant `viewer ⊂ operator ⊂ editor ⊂ admin` is
+checked directly by `CedarSchemaTests.seededRoleChainNested`;
+`SwiftCedarEngineTests.roleActionEnumeration` evaluates the actual assembled
+role policies. Solver coverage remains on conditioned guardrails and write reports.
 
 ## Grants (tier 3)
 
@@ -381,9 +381,8 @@ narrow per-type roles can be added later if needed. This is deliberately not
 GCP's basic-roles mistake: membership is a curated, reviewable schema change —
 new actions join roles by explicit decision, never by default. (Ceilings are
 the opposite: subtractive and automatically covering, per tier 2. The
-asymmetry is intentional.) The implication-nesting direction is verified with
-symcc subsumption checks in CI (`RoleNestingSubsumptionTests`, #484); it is
-easy to get backwards.
+asymmetry is intentional.) The implication-nesting direction is checked by the registry subset contract
+and actual role-policy evaluation described above; it is easy to get backwards.
 
 Today's environment roles (`environment_manager`, deployer, approver) are
 expressed as an environment-scoped restriction rather than a role per
@@ -1553,3 +1552,22 @@ carries it. A custom role must grant it deliberately on the VM or its hierarchy;
 including on the GET route. Updating also requires `vm:read` because the response
 contains the VM. Ordinary VM details contain no raw guest file contents.
 Idempotent replay rechecks this grant before returning a cached outcome.
+
+### Account identity validation
+
+Account creation and edits share the username, email, and display-name grammars.
+Request DTOs normalize values before checking uniqueness; Fluent user middleware
+also validates every new account and each changed identity field. Unchanged
+legacy identity values do not prevent security-state changes such as disabling
+an account or invalidating sessions. SQL length checks use Unicode scalar counts,
+matching PostgreSQL `char_length`; the additive upgrade refuses incompatible
+existing rows and requires explicit repair rather than rewriting identifiers.
+
+OIDC derives email-shaped username claims from their local part and rejects
+claims that cannot satisfy the username grammar. Without an email claim it uses
+a provider/subject digest for a unique reserved `@identity.invalid` address and,
+when no username claim is available, a bounded username. Synthetic addresses
+never participate in verified-email linking. SCIM validates both creation and
+replacement and returns protocol `invalidValue` errors for malformed input.
+The headless bootstrap email defaults to `bootstrap@localhost.invalid`, and
+explicit bootstrap identifiers follow the same grammar.

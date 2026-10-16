@@ -62,12 +62,13 @@ extension ObservedStateApplier {
         let failedGuestReport =
             vm.guestConfigEvidence?.observation.generation == vm.generation
             && vm.guestConfigEvidence?.observation.status == .failed
-        // STR-91's terminal nonblocked failures also include loss of the
-        // guest channel before read-back. Never synthesize a report for that.
+        // Attribute channel loss only to an explicitly failed guest step.
+        // Host failures before that step provide no guest verdict or item facts.
         if vm.guestConfig?.isEmpty == false,
             failedGuestReport
-                || (vm.desiredStatus == .running && observed.lastError != nil
-                    && observed.failedGeneration == vm.generation && observed.failureClassification != .blocked),
+                || (observed.guestConfigFailedGeneration == vm.generation
+                    && observed.lastError != nil && observed.failedGeneration == vm.generation
+                    && observed.failureClassification == .permanent),
             vm.guestConfigFailedGeneration != vm.generation
         {
             vm.guestConfigFailedGeneration = vm.generation
@@ -80,7 +81,8 @@ extension ObservedStateApplier {
         let effectiveError =
             guestFailed
             ? VMGuestConfigPresentation.safeFailure(vm.guestConfigEvidence?.observation.error)
-            : ((vm.guestConfig?.isEmpty == false || observed.guestConfigObservation != nil
+            : ((observed.guestConfigObservation?.status == .failed
+                || observed.guestConfigFailedGeneration.map { $0 == observed.failedGeneration } == true
                 || observed.failedGeneration.map { $0 == vm.guestConfigFailedGeneration } == true)
                 && observed.lastError != nil
                 ? VMGuestConfigPresentation.failure : observed.lastError)
@@ -569,6 +571,7 @@ extension ObservedStateApplier {
         try logSupersededFailureReport(sandbox, reportedGeneration: observed.failedGeneration)
         let wasConverged = sandbox.isConverged
         let failedBefore = sandbox.failedGeneration
+        let suspensionChanged = try await SandboxSuspensionService.apply(observed, to: sandbox, on: db)
 
         var resourceTelemetryChanged = false
         if let telemetry = observed.resourceTelemetry, sandbox.resourceTelemetry != telemetry {
@@ -592,7 +595,7 @@ extension ObservedStateApplier {
             failedGeneration: observed.failedGeneration,
             at: instant
         )
-        changed = resourceTelemetryChanged || changed
+        changed = suspensionChanged || resourceTelemetryChanged || changed
 
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
@@ -616,7 +619,11 @@ extension ObservedStateApplier {
 
         if sandbox.status != observed.status, observed.status != .unknown || sandbox.status.isTransitional {
             let previous = sandbox.status
-            sandbox.setStatus(observed.status, at: instant)
+            let idleFence = try await SandboxIdleFenceService.state(id: sandboxID, on: db)
+            let automatic =
+                observed.status == .suspended && sandbox.desiredStatus == .suspended
+                && idleFence?.decodedFence?.generation == sandbox.generation
+            sandbox.setStatus(observed.status, at: instant, recordsActivity: !automatic)
             changed = true
 
             // A workload finishing on its own (`.exited`) is the normal end

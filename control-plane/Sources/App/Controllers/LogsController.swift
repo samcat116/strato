@@ -1,3 +1,4 @@
+import Foundation
 import Vapor
 import Fluent
 import StratoShared
@@ -33,13 +34,29 @@ struct LogsController: RouteCollection {
     /// mirroring the VM logs endpoint.
     @Sendable
     func getSandboxLogs(req: Request) async throws -> [LogEntry] {
-        try await queryLogs(
-            req: req, parameter: "sandboxID", invalidReason: "Invalid sandbox ID",
-            authorize: { _ = try await req.authorizedSandbox($0, action: "sandbox:read") },
-            query: { id, start, end, limit, direction in
-                try await req.lokiService.querySandboxLogs(
-                    sandboxId: id, start: start, end: end, limit: limit, direction: direction)
-            })
+        _ = try req.auth.require(User.self)
+        guard let id = req.parameters.get("sandboxID").flatMap(UUID.init(uuidString:)) else {
+            throw Abort(.badRequest, reason: "Invalid sandbox ID")
+        }
+        _ = try await req.authorizedSandbox(id, action: "sandbox:read")
+        let queryID = UUID()
+        try await SandboxActivityService.admitLogQuery(id: id, queryID: queryID, on: req.db)
+        do {
+            let result = try await queryLogs(
+                req: req, parameter: "sandboxID", invalidReason: "Invalid sandbox ID",
+                authorize: { _ in },
+                query: { id, start, end, limit, direction in
+                    try await req.lokiService.querySandboxLogs(
+                        sandboxId: id, start: start, end: end, limit: limit, direction: direction)
+                })
+            try await SandboxActivityService.end(id: id, sessionID: queryID, on: req.db)
+            return result
+        } catch {
+            // If shutdown/DB failure prevents the terminal release, the durable
+            // active lease remains unknown and protective across replica restart.
+            try? await SandboxActivityService.end(id: id, sessionID: queryID, on: req.db)
+            throw error
+        }
     }
 
     private func queryLogs(

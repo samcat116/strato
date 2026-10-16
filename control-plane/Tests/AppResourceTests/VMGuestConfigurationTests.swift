@@ -7,7 +7,7 @@ import Vapor
 import VaporTesting
 @testable import App
 
-@Suite("VM guest configuration", .serialized)
+@Suite("VM guest configuration", .serialized, .postgresFixture)
 struct VMGuestConfigurationTests {
     private func withFixture(_ test: (Application, User, VM, String) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
@@ -376,6 +376,52 @@ struct VMGuestConfigurationTests {
         }
     }
 
+    @Test("Earlier host failures preserve their error and do not invent a terminal guest outcome")
+    func hostFailureDoesNotBecomeGuestFailure() async throws {
+        try await withFixture { app, user, vm, token in
+            vm.hypervisorId = "config-node"
+            vm.setFixtureDesiredStatus(.running)
+            vm.generation = 3
+            vm.guestConfig = GuestConfig(packages: [.init(name: "curl", state: .present)])
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .guestConfig, resourceKind: .virtualMachine, resourceID: vm.requireID(),
+                actor: .system, phase: .requested,
+                scope: .init(organizationID: nil, projectID: vm.$project.id, resourceName: vm.name, generation: 3),
+                on: app.db)
+            let applier = ObservedStateApplier(app: app)
+            let instant = try await ClusterClock.read(on: app.db)
+            for reason in ["resize failed", "network reconfiguration failed", "boot failed", "restore failed"] {
+                let failed = ObservedVMState(
+                    vmId: try vm.requireID(), status: .running, observedGeneration: 2,
+                    lastError: reason, failedGeneration: 3, failureClassification: .permanent)
+                _ = try await applier.withLockedCurrent(vm, reportedBy: "config-node", on: app.db) { vm, db in
+                    try await applier.applyObservedVMState(
+                        vm: vm, observed: failed, interfaces: [], bootVolumes: nil, at: instant, on: db)
+                }
+                #expect(vm.guestConfigFailedGeneration == nil)
+                #expect(vm.guestConfigEvidence == nil)
+                #expect(vm.lastError == reason)
+            }
+            let outcomes = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceID == vm.id!).filter(\.$mutation == .guestConfig)
+                .filter(\.$phase == .failed).all()
+            #expect(outcomes.isEmpty)
+            #expect(VMGuestConfigPresentation.status(vm, agentOnline: true) != "failed")
+            user.isSystemAdmin = true
+            try await user.save(on: app.db)
+            try await app.test(.GET, "/api/vms/\(vm.id!)/guest-config") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(VMGuestConfigurationResponse.self)
+                #expect(response.status != "failed")
+                #expect(response.failureGeneration == nil)
+                #expect(response.error == nil)
+            }
+        }
+    }
+
     @Test("A terminal guest-channel failure without read-back survives restart and withdrawal redacts late errors")
     func terminalChannelFailure() async throws {
         try await withFixture { app, user, vm, _ in
@@ -388,7 +434,8 @@ struct VMGuestConfigurationTests {
             let instant = try await ClusterClock.read(on: app.db)
             let failed = ObservedVMState(
                 vmId: try vm.requireID(), status: .running, observedGeneration: 3,
-                lastError: "STR92_SECRET_SENTINEL", failedGeneration: 3)
+                lastError: "STR92_SECRET_SENTINEL", failedGeneration: 3,
+                failureClassification: .permanent, guestConfigFailedGeneration: 3)
             _ = try await applier.withLockedCurrent(vm, reportedBy: "config-node", on: app.db) { vm, db in
                 try await applier.applyObservedVMState(
                     vm: vm, observed: failed, interfaces: [], bootVolumes: nil, at: instant, on: db)

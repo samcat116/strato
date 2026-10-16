@@ -6,7 +6,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("ConsoleSessionManager Tests", .serialized)
+@Suite("ConsoleSessionManager Tests", .serialized, .postgresFixture)
 final class ConsoleSessionManagerTests: BaseTestCase {
 
     @Test("Session lifecycle: create, look up, remove, and per-VM index")

@@ -173,8 +173,9 @@ struct HostCapacityAdmissionTests {
 
         var ledger = HostCapacityAdmissionLedger()
         let snapshot = HostCapacitySnapshot(
-            total: HostReservation(cpus: Int.max, memoryBytes: Int64.max),
-            reserved: HostReservation(cpus: Int.max - 1, memoryBytes: Int64.max - 1))
+            // Exercise the representable boundary in the exact CPU micro-unit domain.
+            total: HostReservation(memoryBytes: Int64.max, cpuMicroUnits: Int64.max),
+            reserved: HostReservation(memoryBytes: Int64.max - 1, cpuMicroUnits: Int64.max - 1_000_000))
         _ = try ledger.claim(
             HostReservation(cpus: 1, memoryBytes: 1),
             desiredWorkloadReservation: HostReservation(cpus: 1, memoryBytes: 1),
@@ -269,10 +270,10 @@ struct HostCapacityAdmissionTests {
             boot: .disk(firmware: nil))
         #expect(
             VMHostReservation.forSpec(spec, hypervisorType: .qemu, architecture: .x86_64)
-                == HostReservation(cpus: 2, memoryBytes: 8 * gib))
+                == HostReservation(cpus: 2, memoryBytes: 8 * gib + 512 * 1024 * 1024))
         #expect(
             VMHostReservation.forSpec(spec, hypervisorType: .firecracker, architecture: .x86_64)
-                == HostReservation(cpus: 2, memoryBytes: 2 * gib))
+                == HostReservation(cpus: 2, memoryBytes: 2 * gib + 128 * 1024 * 1024))
     }
 
     @Test("manifest keeps a QEMU domain's fixed reservation after live resize")
@@ -292,7 +293,7 @@ struct HostCapacityAdmissionTests {
 
         #expect(
             VMHostReservation.forManifestEntry(entry, architecture: .arm64)
-                == HostReservation(cpus: 2, memoryBytes: 2 * gib))
+                == HostReservation(cpus: 2, memoryBytes: 2 * gib + 512 * 1024 * 1024))
     }
 
     @Test("legacy QEMU manifests conservatively keep requested maximum memory")
@@ -304,7 +305,7 @@ struct HostCapacityAdmissionTests {
 
         #expect(
             VMHostReservation.forManifestEntry(entry, architecture: .arm64)
-                == HostReservation(cpus: 2, memoryBytes: gib + 256 * 1024 * 1024))
+                == HostReservation(cpus: 2, memoryBytes: gib + 768 * 1024 * 1024))
     }
 
     @Test("backend inventory keeps only missing orphan reservations")
@@ -359,7 +360,7 @@ struct HostCapacityAdmissionTests {
             image: "docker.io/library/alpine:3.20", cpus: 3, memoryBytes: 768 * 1024 * 1024)
         #expect(
             SandboxHostReservation.forSpec(spec)
-                == HostReservation(cpus: 3, memoryBytes: 768 * 1024 * 1024))
+                == HostReservation(cpus: 3, memoryBytes: 896 * 1024 * 1024))
     }
 
     @Test("capacity refusals are blocked and actionable")
@@ -503,5 +504,219 @@ struct QEMUMemoryContainmentTests {
         let hardOnly = "<domain><memtune><hard_limit unit='KiB'>200</hard_limit></memtune></domain>"
         let removed = try #require(try DomainMemoryTuning.updatingHardLimit(in: hardOnly, bytes: nil))
         #expect(!removed.contains("memtune"))
+    }
+}
+
+@Suite("effective memory admission")
+struct EffectiveMemoryAdmissionTests {
+    private let mib: Int64 = 1024 * 1024
+
+    @Test(
+        "each backend checks effective bytes at the capacity boundary", arguments: ["qemu", "firecracker", "sandbox"])
+    func boundary(backend: String) throws {
+        let reservation =
+            backend == "sandbox"
+            ? WorkloadMemoryReservation.sandbox(memoryBytes: 1024 * mib)
+            : WorkloadMemoryReservation.vm(
+                memoryBytes: 1024 * mib, maxMemoryBytes: 1024 * mib,
+                hypervisorType: backend == "qemu" ? .qemu : .firecracker, architecture: .arm64)
+        let request = HostReservation(cpus: 1, memoryBytes: reservation.effectiveBytes)
+        for delta in [Int64(-1), 0, 1] {
+            var ledger = HostCapacityAdmissionLedger()
+            let snapshot = HostCapacitySnapshot(
+                total: HostReservation(
+                    cpus: 4,
+                    memoryBytes: reservation.effectiveBytes + 256 * mib + delta), reserved: HostReservation(),
+                hostReservedMemoryBytes: 256 * mib)
+            if delta < 0 {
+                do {
+                    _ = try ledger.claim(
+                        request, desiredWorkloadReservation: request, snapshot: snapshot, agentName: "host")
+                    Issue.record("overhead must prevent admission")
+                } catch let error as HostCapacityAdmissionError {
+                    #expect(error.failureClassification == .blocked)
+                    #expect(error.memoryAccounting?.hostReservedBytes == 256 * mib)
+                    #expect(error.errorDescription?.contains("requiredEffectiveBytes=") == true)
+                }
+            } else {
+                let claim = try #require(
+                    try ledger.claim(
+                        request, desiredWorkloadReservation: request,
+                        snapshot: snapshot, agentName: "host"))
+                #expect(ledger.provisionalReservation.memoryBytes == reservation.effectiveBytes)
+                #expect(throws: HostCapacityAdmissionError.self) {
+                    try ledger.claim(
+                        request, desiredWorkloadReservation: request, snapshot: snapshot, agentName: "host")
+                }
+                ledger.release(claim)
+                #expect(ledger.provisionalReservation.memoryBytes == 0)
+            }
+        }
+    }
+
+    @Test("reserve edits block boots and growth but permit no-growth reconciliation")
+    func reserveChange() throws {
+        var ledger = HostCapacityAdmissionLedger()
+        let current = HostReservation(cpus: 1, memoryBytes: 1024 * mib)
+        let snapshot = HostCapacitySnapshot(
+            total: HostReservation(cpus: 4, memoryBytes: 2048 * mib),
+            reserved: current, hostReservedMemoryBytes: 1536 * mib)
+        #expect(snapshot.available.memoryBytes == 0)
+        #expect(
+            try ledger.claim(
+                HostReservation(), desiredWorkloadReservation: current,
+                snapshot: snapshot, agentName: "host") == nil)
+        #expect(throws: HostCapacityAdmissionError.self) {
+            try ledger.validateExistingReservation(current, snapshot: snapshot, agentName: "host")
+        }
+        do {
+            _ = try ledger.claim(
+                HostReservation(memoryBytes: mib), desiredWorkloadReservation: current,
+                snapshot: snapshot, agentName: "host")
+            Issue.record("growth must be blocked")
+        } catch let error as HostCapacityAdmissionError {
+            #expect(error.failureClassification == .blocked)
+        }
+    }
+
+    @Test("restart manifests and running domain inventory charge overhead once")
+    func adoption() throws {
+        let spec = VMSpec(cpus: 1, memoryBytes: 1024 * mib, maxMemoryBytes: 2048 * mib, boot: .disk(firmware: nil))
+        let entry = VMManifestEntry(hypervisorType: .qemu, spec: spec, realizedMemoryReservationBytes: 2048 * mib)
+        let persisted = try JSONDecoder().decode(VMManifestEntry.self, from: JSONEncoder().encode(entry))
+        let durable = VMHostReservation.forManifestEntry(persisted, architecture: .arm64)
+        let observed = VMHostReservation.forSpec(spec, hypervisorType: .qemu, architecture: .arm64)
+        #expect(durable == observed)
+        let inventory = HypervisorReservationInventory(reservation: observed, workloadReservations: ["vm": observed])
+        #expect(inventory.includingMissingWorkloads(["vm": durable]) == observed)
+        #expect(observed.memoryBytes == 2560 * mib)
+    }
+}
+
+@Suite("observed provisional memory claims")
+struct ObservedProvisionalMemoryClaimTests {
+    @Test func backendPublicationBeforeManifestCommitIsChargedOnce() throws {
+        var ledger = HostCapacityAdmissionLedger()
+        let footprint = HostReservation(cpus: 1, memoryBytes: 1024)
+        let initial = HostCapacitySnapshot(
+            total: HostReservation(cpus: 4, memoryBytes: 2304),
+            reserved: HostReservation(), hostReservedMemoryBytes: 256)
+        let first = try ledger.claim(
+            footprint, desiredWorkloadReservation: footprint, snapshot: initial,
+            agentName: "host", workloadID: "first")
+        let observed = HostCapacitySnapshot(
+            total: initial.total, reserved: footprint,
+            hostReservedMemoryBytes: 256, workloadReservations: ["first": footprint])
+        #expect(ledger.provisionalReservation.memoryBytes == 1024)
+        #expect(ledger.provisionalReservation(excludingObserved: observed.workloadReservations).memoryBytes == 0)
+        let second = try ledger.claim(
+            footprint, desiredWorkloadReservation: footprint, snapshot: observed,
+            agentName: "host", workloadID: "second")
+        #expect(ledger.provisionalReservation(excludingObserved: observed.workloadReservations).memoryBytes == 1024)
+        #expect(throws: HostCapacityAdmissionError.self) {
+            try ledger.claim(
+                HostReservation(memoryBytes: 1), desiredWorkloadReservation: HostReservation(memoryBytes: 1),
+                snapshot: observed, agentName: "host", workloadID: "third")
+        }
+        ledger.release(first)
+        ledger.release(second)
+    }
+
+    @Test func partiallyObservedGrowthRetainsOnlyTheUnobservedDelta() throws {
+        var ledger = HostCapacityAdmissionLedger()
+        let before = HostReservation(memoryBytes: 3072)
+        let desired = HostReservation(memoryBytes: 4096)
+        let initial = HostCapacitySnapshot(
+            total: HostReservation(memoryBytes: 4352), reserved: before,
+            hostReservedMemoryBytes: 256)
+        let claim = try ledger.claim(
+            .positiveDelta(from: before, to: desired), desiredWorkloadReservation: desired,
+            snapshot: initial, agentName: "host", workloadID: "vm")
+        #expect(
+            ledger.provisionalReservation(excludingObserved: ["vm": HostReservation(memoryBytes: 3584)]).memoryBytes
+                == 512)
+        #expect(ledger.provisionalReservation(excludingObserved: ["vm": desired]).memoryBytes == 0)
+        #expect(ledger.provisionalReservation(excludingObserved: [:]).memoryBytes == 1024)
+        ledger.release(claim)
+    }
+}
+
+@Suite("Fractional host resource commitments")
+struct FractionalHostCapacityTests {
+    @Test func fourQuarterCPUClaimsFillOneCPU() throws {
+        var ledger = HostCapacityAdmissionLedger()
+        let snapshot = HostCapacitySnapshot(total: HostReservation(cpus: 1), reserved: HostReservation())
+        for index in 0..<4 {
+            let quarter = HostReservation(cpuMicroUnits: 250_000)
+            #expect(
+                try ledger.claim(
+                    quarter, desiredWorkloadReservation: quarter,
+                    snapshot: snapshot, agentName: "host", workloadID: "workload-\(index)") != nil)
+        }
+        #expect(ledger.provisionalReservation.cpuMicroUnits == 1_000_000)
+        #expect(throws: HostCapacityAdmissionError.self) {
+            try ledger.claim(
+                HostReservation(cpuMicroUnits: 1), desiredWorkloadReservation: HostReservation(cpuMicroUnits: 1),
+                snapshot: snapshot, agentName: "host")
+        }
+        #expect(
+            ledger.provisionalReservation(excludingObserved: ["workload-0": HostReservation(cpuMicroUnits: 250_000)])
+                .cpuMicroUnits == 750_000)
+    }
+
+    @Test func guaranteedClassUsesItsExistingPhysicalFootprintEvenWithAnOldLedger() throws {
+        let snapshot = try WorkloadResourceClassSnapshot(
+            classID: WorkloadResourceClassSnapshot.guaranteedID, siteID: UUID(), revision: 1, policy: .guaranteed)
+        let oldLedger = WorkloadAdmittedReservation(cpus: 1, memory: .sandbox(memoryBytes: 1024), policy: .burstable)
+        let spec = SandboxSpec(
+            image: "example.test/worker:v1", cpus: 2, memoryBytes: 2048, resourceClass: snapshot,
+            admittedReservation: oldLedger)
+        let reservation = SandboxHostReservation.forSpec(spec)
+        #expect(reservation.cpuMicroUnits == 2_000_000)
+        #expect(reservation.memoryBytes == WorkloadMemoryReservation.sandbox(memoryBytes: 2048).effectiveBytes)
+    }
+
+    @Test func manifestPreservesMixedRevisionCommitment() throws {
+        let original = WorkloadAdmittedReservation(cpus: 1, memory: .sandbox(memoryBytes: 1024), policy: .burstable)
+        let changed = try WorkloadResourceClassPolicy(
+            kind: .burstable, cpuAllocationRatio: 2,
+            memoryAllocationRatio: 2, memoryHighPercent: 70)
+        let grown = original.growing(cpus: 2, memory: .sandbox(memoryBytes: 2048), policy: changed)
+        let snapshot = try WorkloadResourceClassSnapshot(
+            classID: WorkloadResourceClassSnapshot.burstableID,
+            siteID: UUID(), revision: 2, policy: changed)
+        let entry = VMManifestEntry(
+            sandboxSpec: SandboxSpec(
+                image: "example.test/worker:v1", cpus: 2,
+                memoryBytes: 2048, resourceClass: snapshot, admittedReservation: grown))
+        let decoded = try JSONDecoder().decode(VMManifestEntry.self, from: JSONEncoder().encode(entry))
+        #expect(decoded.spec.resourceClass == snapshot)
+        #expect(decoded.spec.admittedReservation == grown)
+        #expect(SandboxHostReservation.forSpec(try #require(decoded.sandboxSpec)).cpuMicroUnits == 750_000)
+        #expect(
+            VMHostReservation.forManifestEntry(decoded, architecture: .x86_64).memoryBytes == grown.effectiveMemoryBytes
+        )
+    }
+}
+
+@Suite("Mixed class backend inventory")
+struct MixedClassInventoryTests {
+    @Test func ownedCommitmentIsDiscountedAndUnknownDomainRemainsPhysical() {
+        let admitted = WorkloadAdmittedReservation(
+            cpus: 1,
+            memory: WorkloadMemoryReservation.sandbox(memoryBytes: 1024), policy: .burstable)
+        let raw = HostReservation(
+            cpus: 1, memoryBytes: admitted.guestCommitmentBytes + admitted.backendOverheadBytes, diskBytes: 4096)
+        let inventory = HypervisorReservationInventory(
+            reservation: raw.addingSaturating(raw),
+            workloadReservations: ["owned": raw, "unknown": raw])
+        let normalized = inventory.accountingForAdmittedWorkloads(["owned": admitted])
+        #expect(normalized.reservation.cpuMicroUnits == 1_250_000)
+        #expect(normalized.reservation.diskBytes == 8192)
+        #expect(normalized.workloadReservations?["unknown"] == raw)
+        let oversized = HypervisorReservationInventory(
+            reservation: HostReservation(cpus: 2),
+            workloadReservations: ["owned": HostReservation(cpus: 2)])
+        #expect(oversized.accountingForAdmittedWorkloads(["owned": admitted]).reservation.cpus == 2)
     }
 }

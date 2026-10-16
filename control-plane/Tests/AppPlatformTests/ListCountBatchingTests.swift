@@ -14,7 +14,7 @@ import AppTestSupport
 /// of queries. A per-row count creeping back in shows up here as a difference
 /// equal to the size gap. Each test also asserts the counts themselves, because
 /// a batched aggregate that mislabels its keys is just as wrong as a slow one.
-@Suite("List Count Batching Tests", .serialized)
+@Suite("List Count Batching Tests", .serialized, .postgresFixture)
 final class ListCountBatchingTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

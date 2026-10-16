@@ -15,6 +15,8 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
     /// — the doorbell is broadcast precisely so no one has to know in advance
     /// which replica can act on it.
     func deliverDoorbell(agentKey: String) async
+
+    func disconnectLocalAgent(agentKey: String) async
 }
 
 /// Cross-replica desired-state doorbell and agent-stream delivery.
@@ -117,7 +119,8 @@ actor ReplicaMessageBridge {
         let rpcId: String
         let replyChannel: String
         let agentKey: String
-        let envelope: MessageEnvelope
+        let envelope: MessageEnvelope?
+        var disconnect: Bool? = nil
     }
 
     struct AgentDeliveryReply: Codable {
@@ -172,12 +175,26 @@ actor ReplicaMessageBridge {
             throw DeliveryError.agentNotConnected(agentKey)
         }
 
+        try await sendRequest(agentKey: agentKey, replicaId: replicaId, envelope: envelope)
+    }
+
+    func disconnectAgent(agentKey: String, owner: String?) async throws {
+        if let owner, owner != app.replicaID {
+            try await sendRequest(agentKey: agentKey, replicaId: owner, envelope: nil, disconnect: true)
+        } else {
+            await delegate?.disconnectLocalAgent(agentKey: agentKey)
+        }
+    }
+
+    private func sendRequest(
+        agentKey: String, replicaId: String, envelope: MessageEnvelope?, disconnect: Bool = false
+    ) async throws {
         let rpcId = UUID().uuidString
         let request = AgentDeliveryRequest(
             rpcId: rpcId,
             replyChannel: CoordinationService.rpcReplyChannel(replicaId: app.replicaID),
             agentKey: agentKey,
-            envelope: envelope)
+            envelope: envelope, disconnect: disconnect)
         let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
 
         try await withCheckedThrowingContinuation { continuation in
@@ -214,7 +231,13 @@ actor ReplicaMessageBridge {
         let reply: AgentDeliveryReply
         do {
             guard let delegate else { throw DeliveryError.agentNotConnected(request.agentKey) }
-            try await delegate.deliverAgentEnvelope(request.envelope, agentKey: request.agentKey)
+            if request.disconnect == true {
+                await delegate.disconnectLocalAgent(agentKey: request.agentKey)
+            } else if let envelope = request.envelope {
+                try await delegate.deliverAgentEnvelope(envelope, agentKey: request.agentKey)
+            } else {
+                throw DeliveryError.remote("Missing agent delivery envelope")
+            }
             reply = AgentDeliveryReply(rpcId: request.rpcId, delivered: true, error: nil)
         } catch {
             reply = AgentDeliveryReply(

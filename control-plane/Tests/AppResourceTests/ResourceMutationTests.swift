@@ -43,7 +43,7 @@ actor DispatchFailureGate {
 
 /// Exercises state-sync, placement, direct-resolution, convergence-deadline
 /// composition, and overlapping mutations through `ResourceMutation`.
-@Suite("Resource Mutation", .serialized)
+@Suite("Resource Mutation", .serialized, .postgresFixture)
 final class ResourceMutationTests {
     private func withVM(_ test: (Application, VM) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()

@@ -151,14 +151,16 @@ struct QuotaUsageAggregator {
         ).first(decoding: VMTotals.self)
 
         struct SandboxTotals: Decodable {
+            let storage_bytes: Int64
             let vcpus: Int64
             let memory_bytes: Int64
             let sandbox_count: Int64
         }
         let sandboxes = try await sql.raw(
             """
-            SELECT COALESCE(SUM(vcpus), 0)::bigint AS vcpus,
-                   COALESCE(SUM(memory), 0)::bigint AS memory_bytes,
+            SELECT COALESCE(SUM(CASE WHEN suspension_compute_reserved THEN vcpus ELSE 0 END), 0)::bigint AS vcpus,
+                   COALESCE(SUM(CASE WHEN suspension_compute_reserved THEN memory ELSE 0 END), 0)::bigint AS memory_bytes,
+                   COALESCE(SUM(suspension_storage_bytes), 0)::bigint AS storage_bytes,
                    COUNT(*)::bigint AS sandbox_count
             FROM sandboxes
             WHERE \(inScope)
@@ -172,7 +174,8 @@ struct QuotaUsageAggregator {
         return QuotaMeasuredUsage(
             vcpus: Int(vms?.vcpus ?? 0) + Int(sandboxes?.vcpus ?? 0),
             memoryBytes: (vms?.memory_bytes ?? 0) + (sandboxes?.memory_bytes ?? 0),
-            storageBytes: snapshotStorage + checkpointStorage + infrastructure.storageBytes,
+            storageBytes: snapshotStorage + checkpointStorage + infrastructure.storageBytes
+                + (sandboxes?.storage_bytes ?? 0),
             vmCount: Int(vms?.vm_count ?? 0),
             sandboxCount: Int(sandboxes?.sandbox_count ?? 0),
             volumeCount: infrastructure.volumeCount,

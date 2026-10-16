@@ -5,7 +5,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Agent inventory session migration", .serialized)
+@Suite("Agent inventory session migration", .serialized, .postgresFixture)
 struct AddAgentInventorySessionTests {
     @Test("Existing agents have no invented generation; migration is reversible")
     func roundTrip() async throws {

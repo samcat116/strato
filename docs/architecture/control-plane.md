@@ -82,6 +82,8 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
    once — see "Model and migration conventions" for how that is made safe
    (STR-183). `STRATO_RUN_MIGRATIONS=false` turns a replica into a verifier: it
    refuses to boot if anything is unapplied rather than migrating itself.
+   Both paths reject applied migration names outside this binary's registered
+   history before readiness opens; see the applied-catalog contract below.
 5. Post-migration convergence: the Cedar policy set is compiled at its
    current version and stored secrets are re-encrypted. Grant completeness is
    a schema-migration invariant; startup does not scan membership relations to
@@ -209,8 +211,11 @@ background. For the state-sync strategy that is the `AgentDispatch` seam's
 `syncDesiredState(agentId:)`: ring the local and broadcast desired-state
 doorbells so whichever replica holds the agent's parked poll wakes it. A lost
 doorbell is harmless but not instantly repaired: the agent omits
-`If-None-Match` on its own full-refetch interval (300 seconds by default), and
-that unconditional request must receive the complete current state.
+`If-None-Match` on its own full-refetch interval (jittered from 240–300 seconds
+by default), and that unconditional request must receive the complete current state. Each server
+poll samples a hold window at 80–100% of its configured ceiling (45 seconds
+maximum). Doorbells reuse that deadline, preserving parking and assembly limits;
+initial, stale-validator and unconditional payloads are still served immediately.
 
 There is **no double-submit `409`** on these verbs (STR-147). Desired state is
 level-triggered, so two overlapping writes leave the last one standing and the
@@ -478,12 +483,13 @@ sandboxes, volumes, networks, security groups, floating IPs/pools, agents,
 enrollments, sites, users, images, snapshots, quotas) returns a
 `PagedResponse` envelope — `items` plus `total`/`limit`/`offset` — with
 `limit` defaulting to 50 and capped at 500 (`Extensions/ListPaging.swift`).
-Handlers fetch the SQL-scoped rows with a deterministic sort (`createdAt` or
-`name`, `id` tiebreak), run the batched authorization filter, and slice the
-page from the filtered result — so `total` counts exactly the rows the caller
-may read, at the cost of still materializing the scoped set server-side.
-Pushing the slice into SQL requires authorization-aware query scoping and is
-future work.
+Handlers retain a deterministic sort (`createdAt` or `name`, `id` tiebreak)
+and authorize before slicing, so `total` counts exactly the rows the caller
+may read. VM and sandbox lists authorize lightweight candidate IDs, then load
+NICs, addresses, enforcement and identities only for the selected page.
+Volume lists authorize the candidate projects first, then count and page their
+volumes in SQL before loading replicas. The other list families still slice
+their authorized row sets in memory.
 
 ## The agent WebSocket (`/agent/ws`)
 
@@ -710,6 +716,36 @@ what makes the test harness safe.
     what keeps the connection budget at one: a migrator drawing its own
     connections while the lock sat on a pinned one would need a pool of ≥2 *per
     event loop*, and Vapor's Postgres pool defaults to exactly 1.
+- **Applied-catalog compatibility (STR-323)**: this binary supports
+  the migration names registered by `Application.registerMigrations()` in
+  `Bootstrap/DatabaseBootstrap.swift`: the frozen `CurrentSchemaBaseline` plus
+  its registered forward migrations, together with explicitly reviewed retired
+  data-only migration records.
+  `App.BackfillNetworkQuotaAccounting` is the sole retired record currently
+  supported. Its implementation in `87b79418` refreshed cached quota counters
+  and performed no DDL; `da964334` removed its executable registration. The
+  current admission paths resync counters before quota decisions. Recognizing
+  this exact applied name preserves completed history without replaying its
+  backfill, rewriting its log row, or registering it as pending on fresh
+  databases. Other names, including similarly prefixed names, remain unknown.
+  Both startup paths compare every `_fluent_migrations` name against that
+  history before applying pending migrations or opening readiness. An unknown
+  applied name is an unsupported catalog, even if its change looks additive;
+  migration batch numbers and name ordering are not schema versions. Diagnostics
+  name the unsupported entries and direct operators to a build that supports
+  them. Known but unapplied migrations remain a separate error when
+  `STRATO_RUN_MIGRATIONS=false`.
+  Fresh databases can boot with migrations enabled. A catalog containing only
+  supported applied entries can advance through known pending migrations; with
+  migrations disabled, all registered migrations must already be applied.
+  The STR-234 baseline still requires a fresh database at its cutover; this check
+  does not make pre-baseline history eligible for an in-place upgrade.
+  After an upgrade, rollback to a binary missing an applied migration is refused.
+  Restore a compatible database backup with its matching build, or run a build
+  supporting the applied history. Do not delete migration log rows to bypass the
+  gate: that neither reverts schema changes nor establishes compatibility.
+  This contract checks recorded migration history, not arbitrary schema drift,
+  and does not establish safe concurrent serving by different binary versions.
 - `UntransactedMigration` is the documented opt-out, for the one case Postgres
   forbids in a transaction block: `CREATE INDEX CONCURRENTLY`. No production
   migration conforms today. Opting out gives back the crash window above, so
@@ -850,7 +886,10 @@ normalized sysctl facts compare as UTF-8 bytes, preserving Linux path/hash
 semantics instead of Swift canonical Unicode equality.
 
 The VM also retains a terminal guest failure generation when a channel failure
-prevents any read-back. This creates no observed item facts. Guest request
+prevents any read-back, attributed by the agent to the guest convergence step.
+Host failures preserve their original diagnostic and do not stamp a guest failure.
+The terminal guest generation is projected back into desired state (wire v71),
+so an agent restart cannot replay that generation. This creates no observed item facts. Guest request
 completion/failure is appended to the existing resource event ledger, with the
 requested intent generation. The first realization's actual VM generation is
 retained separately: a failure at that same generation overrides completion,
@@ -878,3 +917,84 @@ is interrupted.
 The request transport and CLI file read are bounded at 8 MiB, allowing escaped JSON
 for the shared model's bounded content/path payload; semantic limits still come
 from STR-90's shared validator.
+
+## Recorded fleet commands (STR-85)
+
+`strato vm run --selector 'project=<uuid>,environment=production,tag:role=web' -- <argv>`
+resolves an intersection of filters. `ids=<uuid;uuid>` selects an explicit list.
+Environment and tag filters require a project; unknown, empty, duplicate and
+oversized selectors fail closed. Resolution is capped at 100 targets and filters
+tags in PostgreSQL. Tags narrow a query and confer no permission.
+
+`POST /api/vm-fleet-runs` saves an immutable command and target snapshot for ten
+minutes, without starting anything. The CLI prints the snapshot and asks for
+`yes` (automation can explicitly pass `--yes`); `/vms/run` displays it before a
+separate confirmation. `POST /api/vm-fleet-runs/:id/confirm` requires the exact
+resolved ID list and rechecks **`vm:runCommand` for each VM**, using the same
+acceptance path as a single recorded command. It also rechecks VM read access,
+running state, opt-in guest-agent enablement and agent support. Inaccessible,
+denied and ineligible VMs become explicit skipped entries. No `vm:exec` grant
+is substituted. A newly matching VM never joins an already prepared run.
+Confirmation bodies must contain 1–100 IDs; empty or oversized lists return
+HTTP 400 before comparison with the snapshot, including repeat confirmations.
+Expired unconfirmed previews are deleted by maintenance in indexed batches of
+at most 1,000. Cleanup skips locked previews and preserves all confirmed runs
+and their collected command results.
+
+The parent and accepted children commit atomically. Repeat confirmations return
+the same children. A run belongs to its initiating user and exact API key (or
+browser session credential class); another key cannot confirm or read it.
+Per-child requested/completed audit events retain the existing guest command
+contract. Environment overrides and working directories are not fleet options.
+
+The maintenance loop drains a durable queue. A PostgreSQL parent row lock
+serializes competing replicas and allows at most eight pending dispatched
+children **per fleet**, not merely eight concurrent delivery calls. Each claim
+commits before socket delivery. Lost responses, cancellations and crashes never
+return a claimed child to the queue: its result or the recorded-command timeout
+releases the slot. An unclaimed queue survives replica restart; its two-hour
+budget bounds deferred dispatch. Definitive delivery failures are ordinary
+child failures. Queued commands are authorized at confirmation, the acceptance
+boundary, rather than carrying credentials into an asynchronous worker.
+
+Client interruption after confirmation leaves accepted work running. Save the
+printed run ID and use `strato vm run-results <id>` or load it at `/vms/run`.
+Fleet polls expose per-VM status, exit code and at most 4 KiB from each stream;
+individual operation reads retain the full bounded recorded output. Partial
+failure completes the fleet normally; CLI waiting returns a failure exit status
+when a VM is skipped, a child fails, or a command exits nonzero.
+
+## Bounded workload log delivery (issue #1366)
+
+When Loki is configured, VM and sandbox log ingestors each own a 4 MiB FIFO
+with at most 4,096 entries. The budget includes all retained message strings,
+agent identity, and a 128-byte per-entry allowance. Overflow evicts oldest;
+an entry larger than the budget is rejected without evicting useful lines.
+These are lossy workload logs: shedding never closes the authenticated agent
+socket or affects exec/console sessions. Cached negative ownership answers are
+rejected before enqueue. Cache misses are checked by one serial worker, with a
+hard 1,024-pair cache bound and the existing 30-second TTL. Resource IDs over
+256 UTF-8 bytes or agent keys over 1,024 bytes are rejected before retaining
+cache keys; ordinary UUID IDs and authenticated identities fit these limits.
+
+The worker flushes at 256 lines / 256 KiB or within 100 ms (size pressure is
+checked every 5 ms), grouping complete Loki label sets in one HTTP request and
+preserving each stream's arrival order. The active batch is separately bounded;
+a single oversize line can occupy up to the FIFO budget. HTTP push has a
+2-second deadline covering both response headers and body consumption, plus
+a 64 KiB response-body cap. Transport/non-2xx failures
+reach the ingestor, which sheds the failed batch and queued backlog and rejects
+new lines for 30 seconds. The next arrival after cooldown permits one serial
+probe; success resumes delivery. Failed telemetry is never retried. Outage
+errors are rate limited across both ingestors. Shutdown discards pending logs
+and cancels the active consumer without waiting on the backend.
+
+Replica-local metrics use bounded kind/reason labels:
+`strato_workload_log_queue_depth`, `strato_workload_log_queue_bytes`,
+`strato_workload_log_dropped_total`, `strato_workload_log_push_failures_total`,
+and `strato_workload_log_batch_duration_seconds`. Aggregate queue gauges by sum
+across replicas. Drop reasons distinguish overflow, unowned, backend unavailable,
+failed push, and shutdown. Payload estimates bound retained queue data rather
+than claiming an exact allocator/RSS measurement. A non-cooperative injected
+push closure can retain one active batch until it returns; production uses the
+HTTP client's deadline and task cancellation.

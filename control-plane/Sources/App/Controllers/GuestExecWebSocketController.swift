@@ -181,7 +181,18 @@ struct GuestExecWebSocketController: RouteCollection {
             // Consume the pending session: it must exist, be unexpired, target
             // this resource, and have been minted for this user.
             let session: GuestExecSessionManager.PendingExecSession
+            var activatedAdmission: UUID?
             do {
+                if resource.kind == .sandbox {
+                    try manager.validatePendingSandboxSession(
+                        sessionId: sessionId, resourceId: resourceId, userId: userId)
+                    guard let leaseID = UUID(uuidString: sessionId)
+                    else {
+                        throw Abort(.conflict, reason: "Command admission is unavailable")
+                    }
+                    try await SandboxActivityService.activate(id: resourceId, sessionID: leaseID, on: req.db)
+                    activatedAdmission = leaseID
+                }
                 session = try manager.attachSession(
                     sessionId: sessionId,
                     resourceKind: resource.kind,
@@ -189,7 +200,20 @@ struct GuestExecWebSocketController: RouteCollection {
                     userId: userId,
                     websocket: ws
                 )
+                if resource.kind == .virtualMachine, let id = UUID(uuidString: sessionId) {
+                    do { try await VMExecSessionLimits.attach(id: id, on: req.db) } catch {
+                        await manager.endSession(
+                            sessionId: sessionId, outcome: .refused, reason: "Presence reservation expired")
+                        throw error
+                    }
+                }
             } catch {
+                // No start could be dispatched before attach succeeded. This
+                // process can release its own rejected claim; crash/reconnect
+                // without such proof retains unknown activity instead.
+                if let leaseID = activatedAdmission {
+                    try? await SandboxActivityService.end(id: resourceId, sessionID: leaseID, on: req.db)
+                }
                 let rejectionStatus = Self.attachRejectionStatus(for: error)
                 req.logger.warning(
                     "\(resource.logName) exec attach rejected: \(error)",
@@ -281,6 +305,16 @@ struct GuestExecWebSocketController: RouteCollection {
                         } catch {
                             req.logger.error("Failed to route exec stdin EOF to agent: \(error)")
                         }
+                    case .terminate(let reason):
+                        if started {
+                            try? await manager.sendExecClose(sessionId: sessionId, reason: reason)
+                        }
+                        await manager.endSession(sessionId: sessionId, outcome: .terminated, reason: reason)
+                        let frame = TerminationControlFrame(type: "error", message: reason)
+                        if let data = try? JSONEncoder().encode(frame), let text = String(data: data, encoding: .utf8) {
+                            try? await ws.send(text)
+                        }
+                        try? await ws.close(code: .policyViolation)
                     case .browserClosed:
                         // Tell the agent to tear the exec down before removing
                         // the session. A no-op if the agent already reported
@@ -300,6 +334,9 @@ struct GuestExecWebSocketController: RouteCollection {
             // The start is the pump's first event — enqueued before the frame
             // handlers exist, so no input/resize/close can precede it.
             eventContinuation.yield(.start)
+            manager.setTerminationHandler(sessionId: sessionId) { reason in
+                eventContinuation.yield(.terminate(reason))
+            }
 
             // WebSocketKit's frame-callback setters are loop-bound
             // (`NIOLoopBoundBox`): calling them from this task — which runs on
@@ -309,6 +346,7 @@ struct GuestExecWebSocketController: RouteCollection {
             ws.eventLoop.execute {
                 // Binary frames are stdin bytes for the exec process.
                 ws.onBinary { _, buffer in
+                    manager.noteActivity(sessionId: sessionId)
                     let bytes = buffer.getBytes(at: 0, length: buffer.readableBytes) ?? []
                     eventContinuation.yield(.input(Data(bytes)))
                 }
@@ -318,8 +356,10 @@ struct GuestExecWebSocketController: RouteCollection {
                 ws.onText { _, text in
                     switch Self.decodeClientControlFrame(text) {
                     case .resize(let rows, let cols):
+                        manager.noteActivity(sessionId: sessionId)
                         eventContinuation.yield(.resize(rows: rows, cols: cols))
                     case .stdinEOF:
+                        manager.noteActivity(sessionId: sessionId)
                         eventContinuation.yield(.stdinEOF)
                     case nil:
                         break
@@ -365,6 +405,12 @@ struct GuestExecWebSocketController: RouteCollection {
         case resize(rows: Int, cols: Int)
         case stdinEOF
         case browserClosed
+        case terminate(String)
+    }
+
+    private struct TerminationControlFrame: Encodable {
+        let type: String
+        let message: String
     }
 
     private struct ClientControlFrame: Decodable {

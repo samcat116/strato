@@ -35,11 +35,14 @@ struct DatabaseStatementTimeout: Equatable, Sendable {
     /// startup-packet parameters by default, whereas a session-level
     /// `set_config` is ordinary PostgreSQL traffic and survives for the life of
     /// a directly connected or session-pooled connection.
-    func applying(to base: DatabaseConfigurationFactory) -> DatabaseConfigurationFactory {
+    func applying(
+        to base: DatabaseConfigurationFactory,
+        sessionTimeouts: DatabaseSessionTimeouts = .defaults
+    ) -> DatabaseConfigurationFactory {
         DatabaseConfigurationFactory {
             StatementTimeoutDatabaseConfiguration(
                 base: base.make(),
-                timeout: self
+                timeout: self, sessionTimeouts: sessionTimeouts
             )
         }
     }
@@ -68,6 +71,7 @@ enum DatabaseStatementTimeoutConfigurationError: Error, CustomStringConvertible 
     case pinnedConnectionRequired
     case transactionAlreadyActive
     case transactionNotActive
+    case connectionClosed
 
     var description: String {
         switch self {
@@ -84,6 +88,8 @@ enum DatabaseStatementTimeoutConfigurationError: Error, CustomStringConvertible 
             return "A transaction is already active on this PostgreSQL connection"
         case .transactionNotActive:
             return "No transaction is active on this PostgreSQL connection"
+        case .connectionClosed:
+            return "The pinned PostgreSQL connection closed; the transaction outcome is unknown"
         }
     }
 }
@@ -98,17 +104,19 @@ private struct StatementTimeoutDatabaseConfiguration: DatabaseConfiguration {
     var middleware: [any AnyModelMiddleware]
     let base: any DatabaseConfiguration
     let timeout: DatabaseStatementTimeout
+    let sessionTimeouts: DatabaseSessionTimeouts
 
-    init(base: any DatabaseConfiguration, timeout: DatabaseStatementTimeout) {
+    init(base: any DatabaseConfiguration, timeout: DatabaseStatementTimeout, sessionTimeouts: DatabaseSessionTimeouts) {
         self.middleware = base.middleware
         self.base = base
         self.timeout = timeout
+        self.sessionTimeouts = sessionTimeouts
     }
 
     func makeDriver(for databases: Databases) -> any DatabaseDriver {
         StatementTimeoutDatabaseDriver(
             base: base.makeDriver(for: databases),
-            initializer: StatementTimeoutConnectionInitializer(timeout: timeout)
+            initializer: StatementTimeoutConnectionInitializer(timeout: timeout, sessionTimeouts: sessionTimeouts)
         )
     }
 }
@@ -137,10 +145,12 @@ private struct StatementTimeoutDatabaseDriver: DatabaseDriver {
 
 private final class StatementTimeoutConnectionInitializer: Sendable {
     private let timeout: DatabaseStatementTimeout
+    private let sessionTimeouts: DatabaseSessionTimeouts
     private let configuredConnectionIDs = NIOLockedValueBox<Set<PostgresConnection.ID>>([])
 
-    init(timeout: DatabaseStatementTimeout) {
+    init(timeout: DatabaseStatementTimeout, sessionTimeouts: DatabaseSessionTimeouts) {
         self.timeout = timeout
+        self.sessionTimeouts = sessionTimeouts
     }
 
     func configure(_ database: any Database) -> EventLoopFuture<Void> {
@@ -157,7 +167,9 @@ private final class StatementTimeoutConnectionInitializer: Sendable {
             if self.isConfigured(connection.id) {
                 return connection.eventLoop.makeSucceededFuture(())
             }
-            return self.timeout.apply(on: sql).map {
+            return self.timeout.apply(on: sql).flatMap {
+                self.sessionTimeouts.apply(on: database)
+            }.map {
                 self.markConfigured(connection.id)
             }
         }
@@ -168,6 +180,7 @@ private final class StatementTimeoutConnectionInitializer: Sendable {
         // refinement, so initialize this explicitly. It is an uncommon API and
         // a redundant SET is preferable to an unbounded session.
         try await timeout.apply(on: database).get()
+        try await sessionTimeouts.apply(on: database).get()
     }
 
     private func isConfigured(_ id: PostgresConnection.ID) -> Bool {
@@ -270,7 +283,19 @@ private struct StatementTimeoutDatabase: Database {
         _ closure: @escaping @Sendable (any Database) -> EventLoopFuture<T>
     ) -> EventLoopFuture<T> {
         if isPinned {
-            return closure(base)
+            guard let postgres = base as? any PostgresDatabase else {
+                return eventLoop.makeFailedFuture(DatabaseStatementTimeoutConfigurationError.postgresRequired)
+            }
+            return postgres.withConnection { connection in
+                // The legacy SQL/send bridge can leave a future unresolved when
+                // asked to use a connection already closed by PostgreSQL (for
+                // example an idle-transaction deadline). Fail before posting it.
+                guard !connection.isClosed else {
+                    return connection.eventLoop.makeFailedFuture(
+                        DatabaseStatementTimeoutConfigurationError.connectionClosed)
+                }
+                return closure(base)
+            }
         }
         let boxed = base.withConnection { connection in
             initializer.configure(connection).flatMap {
@@ -375,7 +400,7 @@ extension StatementTimeoutDatabase: TransactionControlDatabase {
     }
 
     private func endTransaction(
-        _ operation: (any TransactionControlDatabase) -> EventLoopFuture<Void>
+        _ operation: @escaping (any TransactionControlDatabase) -> EventLoopFuture<Void>
     ) -> EventLoopFuture<Void> {
         guard
             isPinned,
@@ -392,7 +417,17 @@ extension StatementTimeoutDatabase: TransactionControlDatabase {
         } catch {
             return eventLoop.makeFailedFuture(error)
         }
-        return operation(control).map {
+        guard let postgres = base as? any PostgresDatabase else {
+            transactionState.endFailed()
+            return eventLoop.makeFailedFuture(DatabaseStatementTimeoutConfigurationError.postgresRequired)
+        }
+        return postgres.withConnection { connection in
+            guard !connection.isClosed else {
+                return connection.eventLoop.makeFailedFuture(
+                    DatabaseStatementTimeoutConfigurationError.connectionClosed)
+            }
+            return operation(control)
+        }.map {
             transactionState.didEnd()
         }.flatMapErrorThrowing { error in
             transactionState.endFailed()

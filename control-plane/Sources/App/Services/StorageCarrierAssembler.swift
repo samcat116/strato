@@ -113,6 +113,15 @@ extension DesiredStateAssembler {
     /// write-only project credential because every eligible client can reach
     /// the same image.
     func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
+        var imageGrants: Set<UUID> = []
+        let entries = try await desiredVolumes(agentId: agentId, on: db, imageGrants: &imageGrants)
+        await app.coordination.grantImageDownloads(agentId: agentId, imageIds: imageGrants)
+        return entries
+    }
+
+    func desiredVolumes(agentId: String, on db: any Database, imageGrants: inout Set<UUID>) async throws
+        -> [DesiredVolumeState]
+    {
         let scopedVolumes = try await VolumeService.volumes(onAgent: agentId, on: db)
         let scopedVolumeIDs = scopedVolumes.compactMap(\.id)
         guard !scopedVolumeIDs.isEmpty else { return [] }
@@ -178,7 +187,7 @@ extension DesiredStateAssembler {
                     // moved here from the old create RPC's dispatch: with no
                     // dispatch left, assembly is the only place that knows which
                     // agent is about to be asked to download what.
-                    await app.coordination.grantImageDownload(agentId: agentId, imageId: imageId)
+                    imageGrants.insert(imageId)
                 } catch {
                     app.logger.warning(
                         "Failed to build image info for a volume's desired state; syncing without it",

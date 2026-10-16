@@ -1,4 +1,6 @@
 import Fluent
+import Crypto
+import X509
 import Foundation
 import NIOConcurrencyHelpers
 import NIOCore
@@ -19,7 +21,7 @@ import AppTestSupport
 /// after upgrade, and the refusals that apply when SPIRE is unconfigured or no
 /// client certificate is presented. None of this is reachable through Vapor's
 /// in-memory `test()` harness, which never performs a WebSocket upgrade.
-@Suite("Agent WebSocket Integration", .serialized)
+@Suite("Agent WebSocket Integration", .serialized, .postgresFixture)
 struct AgentWebSocketIntegrationTests {
 
     @Test("Recorded command output is excluded from raw trace previews regardless of JSON key order")
@@ -67,6 +69,168 @@ struct AgentWebSocketIntegrationTests {
             name: "X-Forwarded-Client-Cert",
             value: "URI=spiffe://strato.local/agent/\(agentName)")
         return headers
+    }
+
+    @Test("A non-owning replica revokes a deleted agent socket and clears identity claims")
+    func nonOwnerDeregisterClosesSocket() async throws {
+        let store = InMemoryCoordinationStore()
+        try await withRunningApp(coordinationStore: store) { holder, port in
+            self.enableSPIRE(on: holder)
+            try await withTestApp { requester in
+                requester.coordination = CoordinationService(store: store, logger: requester.logger)
+                await holder.replicaBridge.start(delegate: holder.agentService)
+                await requester.replicaBridge.start(delegate: requester.agentService)
+                let builder = TestDataBuilder(db: holder.db)
+                let org = try await builder.createOrganization(name: "Revocation Org")
+                let agent = try await builder.createAgent(
+                    named: "revoked-node", status: .online,
+                    organizationScope: .organization(try org.requireID()))
+                let identity = agent.identity
+                let client = try await AgentTestClient.connect(
+                    app: holder, port: port, name: identity.name,
+                    headers: self.xfccHeaders(agentName: identity.name))
+                client.send(try encodeRegister(agentName: identity.name))
+                #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+                #expect(await requester.coordination.agentRoute(agentKey: identity.key) == holder.replicaID)
+                // Match the endpoint's order: durable deletion precedes teardown.
+                try await agent.delete(on: holder.db)
+                try await WorkloadRegistry.deregisterAgent(identity: identity, on: holder.db)
+                try await requester.agentService.forceUnregisterAgent(identity)
+                #expect(try await client.waitForClose() == .policyViolation)
+                #expect(holder.websocketManager.getConnection(agentKey: identity.key) == nil)
+                #expect(await requester.coordination.isAgentPresent(agentKey: identity.key) == false)
+                #expect(await requester.coordination.agentRoute(agentKey: identity.key) == nil)
+                await #expect(throws: Abort.self) {
+                    try await WorkloadRegistry.requireAgentRegistration(identity: identity, on: holder.db)
+                }
+                #expect(try await WorkloadRegistry.resolve(spiffeID: identity.key, on: holder.db) == nil)
+            }
+        }
+    }
+
+    @Test("Remote force-offline closes its owner socket and refuses ordinary reconnect until resumed")
+    func nonOwnerOfflineClosesSocket() async throws {
+        let store = InMemoryCoordinationStore()
+        try await withRunningApp(coordinationStore: store) { holder, port in
+            self.enableSPIRE(on: holder)
+            try await withTestApp { requester in
+                requester.coordination = CoordinationService(store: store, logger: requester.logger)
+                await holder.replicaBridge.start(delegate: holder.agentService)
+                await requester.replicaBridge.start(delegate: requester.agentService)
+                let builder = TestDataBuilder(db: holder.db)
+                let org = try await builder.createOrganization(name: "Offline Org")
+                let agent = try await builder.createAgent(
+                    named: "offline-node", status: .online,
+                    organizationScope: .organization(try org.requireID()))
+                let client = try await AgentTestClient.connect(
+                    app: holder, port: port, name: agent.name,
+                    headers: self.xfccHeaders(agentName: agent.name))
+                client.send(try encodeRegister(agentName: agent.name))
+                #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+                try await Agent.query(on: holder.db).filter(\.$id == agent.id!)
+                    .set(\.$administrativelyOffline, to: true).set(\.$status, to: .offline).update()
+                try await requester.agentService.forceUnregisterAgent(agent.identity)
+                #expect(try await client.waitForClose() == .policyViolation)
+                let reconnect = try await AgentTestClient.connect(
+                    app: holder, port: port, name: agent.name,
+                    headers: self.xfccHeaders(agentName: agent.name))
+                #expect(try await reconnect.waitForClose() == .unacceptableData)
+                let persisted = try #require(try await Agent.find(agent.id, on: holder.db))
+                #expect(persisted.status == .offline)
+                #expect(persisted.administrativelyOffline)
+                #expect(await holder.coordination.isAgentPresent(agentKey: agent.identity.key) == false)
+            }
+        }
+    }
+
+    @Test("A lost remote route cannot acknowledge revocation of a socket held by another replica")
+    func unknownRemoteOwnerDoesNotAcknowledge() async throws {
+        let store = InMemoryCoordinationStore()
+        try await withRunningApp(coordinationStore: store) { holder, port in
+            self.enableSPIRE(on: holder)
+            try await withTestApp { requester in
+                requester.coordination = CoordinationService(store: store, logger: requester.logger)
+                await holder.replicaBridge.start(delegate: holder.agentService)
+                await requester.replicaBridge.start(delegate: requester.agentService)
+                let builder = TestDataBuilder(db: holder.db)
+                let org = try await builder.createOrganization(name: "Lost Route Org")
+                let agent = try await builder.createAgent(
+                    named: "lost-remote-route", status: .online,
+                    organizationScope: .organization(try org.requireID()))
+                let client = try await AgentTestClient.connect(
+                    app: holder, port: port, name: agent.name,
+                    headers: self.xfccHeaders(agentName: agent.name))
+                client.send(try encodeRegister(agentName: agent.name))
+                #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+                #expect(await requester.coordination.agentRoute(agentKey: agent.identity.key) == holder.replicaID)
+                try await Agent.query(on: holder.db).filter(\.$id == agent.id!)
+                    .set(\.$administrativelyOffline, to: true).set(\.$status, to: .offline).update()
+                await requester.coordination.clearAgentRoute(agentKey: agent.identity.key, replicaId: holder.replicaID)
+                #expect(await requester.coordination.agentRoute(agentKey: agent.identity.key) == nil)
+                do {
+                    try await requester.agentService.forceUnregisterAgent(agent.identity)
+                    Issue.record("An unknown remote socket owner cannot acknowledge teardown")
+                } catch let error as Abort {
+                    #expect(error.status == .serviceUnavailable)
+                }
+                #expect(holder.websocketManager.getConnection(agentKey: agent.identity.key) != nil)
+                #expect(try await Agent.find(agent.id, on: holder.db)?.administrativelyOffline == true)
+                #expect(await requester.coordination.isAgentPresent(agentKey: agent.identity.key) == false)
+                try await client.close()
+            }
+        }
+    }
+
+    @Test("A local socket is revoked and acknowledged even when its coordination route is absent")
+    func unknownRouteWithLocalSocketIsAcknowledged() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Local Lost Route Org")
+            let agent = try await builder.createAgent(
+                named: "lost-local-route", status: .online,
+                organizationScope: .organization(try org.requireID()))
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: agent.name, headers: self.xfccHeaders(agentName: agent.name))
+            client.send(try encodeRegister(agentName: agent.name))
+            #expect(try await client.nextEnvelope().type == .agentRegisterResponse)
+            try await Agent.query(on: app.db).filter(\.$id == agent.id!)
+                .set(\.$administrativelyOffline, to: true).set(\.$status, to: .offline).update()
+            await app.coordination.clearAgentRoute(agentKey: agent.identity.key, replicaId: app.replicaID)
+            #expect(await app.coordination.agentRoute(agentKey: agent.identity.key) == nil)
+            #expect(app.websocketManager.getConnection(agentKey: agent.identity.key) != nil)
+            try await app.agentService.forceUnregisterAgent(agent.identity)
+            #expect(try await client.waitForClose() == .policyViolation)
+            #expect(app.websocketManager.getConnection(agentKey: agent.identity.key) == nil)
+            #expect(await app.coordination.isAgentPresent(agentKey: agent.identity.key) == false)
+        }
+    }
+
+    @Test("The forwarded leaf deadline closes the socket and a rotated SVID can reconnect")
+    func leafExpiryAndRotatedReconnect() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Rotation Org")
+            let agent = try await builder.createAgent(
+                named: "rotating-node", organizationScope: .organization(try org.requireID()))
+            // The test emulates Envoy's forwarded certificate. An elapsed
+            // deadline avoids sleeps while exercising the real close timer.
+            var expiredHeaders = self.xfccHeaders(agentName: agent.name)
+            let expired = try forwardedCertificate(name: agent.name, expiresAt: Date().addingTimeInterval(-1))
+            expiredHeaders.replaceOrAdd(name: "X-Forwarded-Client-Cert", value: expired)
+            let old = try await AgentTestClient.connect(app: app, port: port, name: agent.name, headers: expiredHeaders)
+            #expect(try await old.waitForClose() == .policyViolation)
+            var freshHeaders = self.xfccHeaders(agentName: agent.name)
+            freshHeaders.replaceOrAdd(
+                name: "X-Forwarded-Client-Cert",
+                value: try forwardedCertificate(name: agent.name, expiresAt: Date().addingTimeInterval(3600)))
+            let fresh = try await AgentTestClient.connect(app: app, port: port, name: agent.name, headers: freshHeaders)
+            fresh.send(try encodeRegister(agentName: agent.name))
+            #expect(try await fresh.nextEnvelope().type == .agentRegisterResponse)
+            #expect(try await Agent.find(agent.id, on: app.db)?.status == .online)
+            try await fresh.close()
+        }
     }
 
     // MARK: - (1) mTLS happy path: the enrollment supplies scope and site
@@ -373,8 +537,14 @@ struct AgentWebSocketIntegrationTests {
 /// Configure and migrate a fresh test application, bind its HTTP server on an
 /// ephemeral loopback port, and hand the bound port to the test. The server and
 /// application are always torn down, even if the test body throws.
-private func withRunningApp(_ test: (Application, Int) async throws -> Void) async throws {
+private func withRunningApp(
+    coordinationStore: InMemoryCoordinationStore? = nil,
+    _ test: (Application, Int) async throws -> Void
+) async throws {
     try await withTestApp { app in
+        if let coordinationStore {
+            app.coordination = CoordinationService(store: coordinationStore, logger: app.logger)
+        }
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         do {
             guard let port = app.http.server.shared.localAddress?.port else {
@@ -672,4 +842,20 @@ private func encodeRegisterOmittingPhysicalFreeDisk(
     let legacyPayload = try JSONSerialization.data(withJSONObject: registration)
     envelope["payload"] = legacyPayload.base64EncodedString()
     return String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
+}
+
+/// Public test certificate only; no infrastructure credential is used.
+private func forwardedCertificate(name: String, expiresAt: Date) throws -> String {
+    let key = Certificate.PrivateKey(P256.Signing.PrivateKey())
+    let subject = try DistinguishedName { CommonName("test-agent") }
+    let uri = "spiffe://strato.local/agent/\(name)"
+    let certificate = try Certificate(
+        version: .v3, serialNumber: .init(), publicKey: key.publicKey,
+        notValidBefore: Date().addingTimeInterval(-60), notValidAfter: expiresAt,
+        issuer: subject, subject: subject, signatureAlgorithm: .ecdsaWithSHA256,
+        extensions: try Certificate.Extensions { SubjectAlternativeNames([.uniformResourceIdentifier(uri)]) },
+        issuerPrivateKey: key)
+    let pem = try certificate.serializeAsPEM().pemString
+    let encoded = try #require(pem.addingPercentEncoding(withAllowedCharacters: .alphanumerics))
+    return "URI=\(uri);Cert=\(encoded)"
 }

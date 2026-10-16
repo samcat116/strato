@@ -80,6 +80,7 @@ struct GuestAgentProbeTests {
     @Test(
         arguments: [
             nil, "{}", "{\"type\":\"pong\",\"sandbox_id\":\"vm\",\"nonce\":\"n\",\"control_protocol_version\":4}",
+            #"{"type":"pong","sandbox_id":"vm","nonce":"n","control_protocol_version":4,"capabilities":["guest_config_convergence"]}"#,
         ] as [String?])
     func probeRequiresProtocolPong(response: String?) async throws {
         let connection = ProbeConnection(response)

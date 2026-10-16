@@ -50,7 +50,9 @@ enum VMGuestConfigPresentation {
         lhs.utf8.elementsEqual(rhs.utf8)
     }
     static func validate(_ report: GuestConfigObservation, config: GuestConfig, generation: Int64) throws {
-        try report.validate(for: config, generation: generation)
+        try report.validate(
+            for: config, generation: generation,
+            expectedFileSHA256: Dictionary(uniqueKeysWithValues: config.files.map { ($0.path, hash($0.content)) }))
         // Linux paths are byte identities. Canonical Unicode String equality
         // must not turn another path into a managed identity.
         guard report.files.allSatisfy({ fact in config.files.contains { sameBytes($0.path, fact.path) } }),
@@ -85,9 +87,14 @@ enum VMGuestConfigPresentation {
         return matches(evidence.observation, config: config, generation: vm.generation)
             && vm.failedGeneration != vm.generation
     }
+    static func failureGeneration(_ vm: VM) -> Int64? {
+        vm.guestConfigFailedGeneration
+            ?? (vm.guestConfigEvidence?.observation.status == .failed
+                ? vm.guestConfigEvidence?.observation.generation : nil)
+    }
     static func status(_ vm: VM, agentOnline: Bool) -> String {
         guard let config = vm.guestConfig, !config.isEmpty else { return "unmanaged" }
-        if vm.failedGeneration == vm.generation { return "failed" }
+        if failureGeneration(vm) == vm.generation { return "failed" }
         if vm.desiredStatus != .running { return "deferred" }
         if !agentOnline || vm.guestAgentObservation?.reachable == false { return "unavailable" }
         if let evidence = vm.guestConfigEvidence,

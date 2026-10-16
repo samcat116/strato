@@ -21,7 +21,7 @@ private actor MessageCollector {
 }
 
 /// Store-level tests for pub/sub and doorbell payloads.
-@Suite("Replica Routing Primitive Tests")
+@Suite("Replica Routing Primitive Tests", .postgresFixture)
 struct ReplicaRoutingPrimitiveTests {
 
     private func makeService() -> (CoordinationService, InMemoryCoordinationStore) {
@@ -91,7 +91,7 @@ struct ReplicaRoutingPrimitiveTests {
 /// AgentService-level doorbell tests (issue #261, STR-146): a mutation rings
 /// the fleet-wide broadcast without consulting any directory, an offline agent
 /// is rung anyway, and a socket close marks the agent offline.
-@Suite("Replica Routing AgentService Tests", .serialized)
+@Suite("Replica Routing AgentService Tests", .serialized, .postgresFixture)
 final class ReplicaRoutingAgentServiceTests {
 
     /// App harness with a shared coordination store injected before the

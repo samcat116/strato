@@ -1,3 +1,4 @@
+import StratoShared
 import Foundation
 import Valkey
 import Vapor
@@ -27,9 +28,16 @@ enum ValkeyConfigurationError: Error, CustomStringConvertible {
 /// Resource amounts held by a placement reservation: what a VM being scheduled
 /// will consume on its agent before the agent's own resource reports reflect it.
 struct ReservationAmounts: Sendable, Equatable {
-    let cpu: Int
+    let cpuMicroUnits: Int64
+    var cpu: Int { Int(cpuMicroUnits / 1_000_000 + (cpuMicroUnits % 1_000_000 == 0 ? 0 : 1)) }
     let memory: Int64
     let disk: Int64
+
+    init(cpu: Int = 0, memory: Int64, disk: Int64, cpuMicroUnits: Int64? = nil) {
+        self.cpuMicroUnits = max(0, cpuMicroUnits ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: cpu))
+        self.memory = memory
+        self.disk = disk
+    }
 
     static let zero = ReservationAmounts(cpu: 0, memory: 0, disk: 0)
 }
@@ -46,6 +54,7 @@ struct ReservationAmounts: Sendable, Equatable {
 protocol CoordinationStore: Sendable {
     /// Write `key` with a TTL, unconditionally refreshing both (SETEX semantics).
     func setKey(_ key: String, ttlSeconds: Int) async throws
+    func setKeys(_ keys: [String], ttlSeconds: Int) async throws
 
     /// Whether `key` currently exists (i.e. was written and has not expired).
     func keyExists(_ key: String) async throws -> Bool
@@ -103,6 +112,12 @@ protocol CoordinationStore: Sendable {
     func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) async throws
 }
 
+extension CoordinationStore {
+    func setKeys(_ keys: [String], ttlSeconds: Int) async throws {
+        for key in keys { try await setKey(key, ttlSeconds: ttlSeconds) }
+    }
+}
+
 // MARK: - Valkey backend
 
 /// Valkey/Redis-backed coordination store. Reservation accounting runs as Lua
@@ -155,7 +170,11 @@ struct ValkeyCoordinationStore: CoordinationStore {
             if value == false then
                 redis.call('SREM', index, id)
             elseif id ~= vmId then
-                local c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                local c, m, d = string.match(value, '^u:(%d+):(%d+):(%d+)$')
+                if not c then
+                    c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                    if c then c = tonumber(c) * 1000000 end
+                end
                 if c then
                     usedCpu = usedCpu + tonumber(c)
                     usedMem = usedMem + tonumber(m)
@@ -166,7 +185,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
         if usedCpu + cpu > capCpu or usedMem + mem > capMem or usedDisk + disk > capDisk then
             return 0
         end
-        redis.call('SET', prefix .. vmId, cpu .. ':' .. mem .. ':' .. disk, 'EX', ttl)
+        redis.call('SET', prefix .. vmId, 'u:' .. cpu .. ':' .. mem .. ':' .. disk, 'EX', ttl)
         redis.call('SADD', index, vmId)
         redis.call('EXPIRE', index, ttl * 2)
         return 1
@@ -183,7 +202,11 @@ struct ValkeyCoordinationStore: CoordinationStore {
             if value == false then
                 redis.call('SREM', index, id)
             else
-                local c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                local c, m, d = string.match(value, '^u:(%d+):(%d+):(%d+)$')
+                if not c then
+                    c, m, d = string.match(value, '^(%d+):(%d+):(%d+)$')
+                    if c then c = tonumber(c) * 1000000 end
+                end
                 if c then
                     usedCpu = usedCpu + tonumber(c)
                     usedMem = usedMem + tonumber(m)
@@ -197,6 +220,19 @@ struct ValkeyCoordinationStore: CoordinationStore {
     func setKey(_ key: String, ttlSeconds: Int) async throws {
         _ = try await client.set(
             ValkeyKey(key), value: "1", expiration: .seconds(max(1, ttlSeconds)))
+    }
+
+    func setKeys(_ keys: [String], ttlSeconds: Int) async throws {
+        guard !keys.isEmpty else { return }
+        _ = try await scripts.execute(
+            name: "coordination.set-keys",
+            script: """
+                for _, key in ipairs(KEYS) do
+                    redis.call('SET', key, '1', 'EX', ARGV[1])
+                end
+                return #KEYS
+                """,
+            keys: keys.map { ValkeyKey($0) }, args: [String(max(1, ttlSeconds))])
     }
 
     func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
@@ -261,10 +297,10 @@ struct ValkeyCoordinationStore: CoordinationStore {
             args: [
                 Self.vmKeyPrefix(agentKey),
                 vmId,
-                String(amounts.cpu),
+                String(amounts.cpuMicroUnits),
                 String(amounts.memory),
                 String(amounts.disk),
-                String(capacity.cpu),
+                String(capacity.cpuMicroUnits),
                 String(capacity.memory),
                 String(capacity.disk),
                 String(max(1, ttlSeconds)),
@@ -338,7 +374,7 @@ struct ValkeyCoordinationStore: CoordinationStore {
         guard let values = try? response.decode(as: [Int].self), values.count == 3 else {
             throw CoordinationStoreError.unexpectedResponse
         }
-        return ReservationAmounts(cpu: values[0], memory: Int64(values[1]), disk: Int64(values[2]))
+        return ReservationAmounts(memory: Int64(values[1]), disk: Int64(values[2]), cpuMicroUnits: Int64(values[0]))
     }
 }
 
@@ -367,6 +403,11 @@ actor InMemoryCoordinationStore: CoordinationStore {
     private var subscribers: [String: [@Sendable (String) -> Void]] = [:]
     private var failNextValueWriteKeys: Set<String> = []
     private var publishDeliveryEnabled = true
+
+    func setKeys(_ keys: [String], ttlSeconds: Int) {
+        let expiry = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
+        for key in keys { self.keys[key] = expiry }
+    }
 
     func setKey(_ key: String, ttlSeconds: Int) {
         keys[key] = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
@@ -433,13 +474,13 @@ actor InMemoryCoordinationStore: CoordinationStore {
     ) -> Bool {
         let active = activeReservations(agentKey: agentKey)
         let others = active.filter { $0.key != vmId }
-        let usedCPU = others.values.reduce(0) { $0 + $1.amounts.cpu }
-        let usedMemory = others.values.reduce(Int64(0)) { $0 + $1.amounts.memory }
-        let usedDisk = others.values.reduce(Int64(0)) { $0 + $1.amounts.disk }
+        let usedCPU = others.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.cpuMicroUnits) }
+        let usedMemory = others.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.memory) }
+        let usedDisk = others.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.disk) }
 
-        guard usedCPU + amounts.cpu <= capacity.cpu,
-            usedMemory + amounts.memory <= capacity.memory,
-            usedDisk + amounts.disk <= capacity.disk
+        guard usedCPU <= capacity.cpuMicroUnits, amounts.cpuMicroUnits <= capacity.cpuMicroUnits - usedCPU,
+            usedMemory <= capacity.memory, amounts.memory <= capacity.memory - usedMemory,
+            usedDisk <= capacity.disk, amounts.disk <= capacity.disk - usedDisk
         else {
             return false
         }
@@ -461,12 +502,17 @@ actor InMemoryCoordinationStore: CoordinationStore {
         Array(activeReservations(agentKey: agentKey).keys)
     }
 
+    private static func saturatedSum(_ lhs: Int64, _ rhs: Int64) -> Int64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? .max : sum
+    }
+
     func reservedTotal(agentKey: String) -> ReservationAmounts {
         let active = activeReservations(agentKey: agentKey)
         return ReservationAmounts(
-            cpu: active.values.reduce(0) { $0 + $1.amounts.cpu },
-            memory: active.values.reduce(Int64(0)) { $0 + $1.amounts.memory },
-            disk: active.values.reduce(Int64(0)) { $0 + $1.amounts.disk }
+            memory: active.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.memory) },
+            disk: active.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.disk) },
+            cpuMicroUnits: active.values.reduce(Int64(0)) { Self.saturatedSum($0, $1.amounts.cpuMicroUnits) }
         )
     }
 
@@ -572,10 +618,30 @@ actor CoordinationService {
 
     private let store: any CoordinationStore
     private let logger: Logger
+    nonisolated let failureGate: CoordinationFailureGate
+    private let deadline: Duration
 
-    init(store: any CoordinationStore, logger: Logger) {
+    init(
+        store: any CoordinationStore, logger: Logger,
+        deadline: Duration = CoordinationService.storeDeadline, failureGate: CoordinationFailureGate? = nil
+    ) {
         self.store = store
         self.logger = logger
+        self.deadline = deadline
+        self.failureGate =
+            failureGate
+            ?? CoordinationFailureGate(
+                deadline: deadline, logger: logger,
+                probe: {
+                    _ = try await store.keyExists("health:probe")
+                })
+    }
+
+    private func storeCall<Value: Sendable>(
+        operation: String = #function,
+        _ body: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        try await failureGate.run(operation: operation, deadline: deadline, body)
     }
 
     // MARK: Agent presence
@@ -602,13 +668,13 @@ actor CoordinationService {
         ttlSeconds: Int = CoordinationService.presenceTTLSeconds
     ) async -> Bool {
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 try await self.store.setValue(
                     Self.routeKey(agentKey: agentKey), value: replicaId, ttlSeconds: ttlSeconds)
             }
             return true
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to record agent socket route",
                 metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return false
@@ -617,11 +683,11 @@ actor CoordinationService {
 
     func agentRoute(agentKey: String) async -> String? {
         do {
-            return try await withStoreTimeout(Self.storeDeadline) {
+            return try await storeCall {
                 try await self.store.getValue(Self.routeKey(agentKey: agentKey))
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to read agent socket route",
                 metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return nil
@@ -630,12 +696,12 @@ actor CoordinationService {
 
     func clearAgentRoute(agentKey: String, replicaId: String) async {
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 try await self.store.deleteValue(
                     Self.routeKey(agentKey: agentKey), ifEquals: replicaId)
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to clear agent socket route; TTL will reclaim it",
                 metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
         }
@@ -656,12 +722,12 @@ actor CoordinationService {
         agentKey: String, ttlSeconds: Int = CoordinationService.presenceTTLSeconds
     ) async -> Bool {
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 try await self.store.setKey(Self.presenceKey(agentKey: agentKey), ttlSeconds: ttlSeconds)
             }
             return true
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to record agent presence in coordination store",
                 metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return false
@@ -675,11 +741,11 @@ actor CoordinationService {
     /// live presence key. Best-effort, like every write here.
     func clearAgentPresence(agentKey: String) async {
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 try await self.store.deleteKey(Self.presenceKey(agentKey: agentKey))
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to clear agent presence in coordination store; TTL will reclaim it",
                 metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
         }
@@ -690,11 +756,11 @@ actor CoordinationService {
     /// of treating an outage as universal agent death.
     func isAgentPresent(agentKey: String) async -> Bool? {
         do {
-            return try await withStoreTimeout(Self.storeDeadline) {
+            return try await storeCall {
                 try await self.store.keyExists(Self.presenceKey(agentKey: agentKey))
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to read agent presence from coordination store",
                 metadata: ["strato.agent.identity": .string(agentKey), "error": .string("\(error)")])
             return nil
@@ -706,12 +772,12 @@ actor CoordinationService {
     /// the database's online rows under the fail-open policy.
     func agentPresence(agentKeys: [String]) async -> [Bool]? {
         do {
-            return try await withStoreTimeout(Self.storeDeadline) {
+            return try await storeCall {
                 try await self.store.keysExist(
                     agentKeys.map { Self.presenceKey(agentKey: $0) })
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to batch-read agent presence from coordination store",
                 metadata: ["agentCount": .stringConvertible(agentKeys.count), "error": .string("\(error)")])
             return nil
@@ -726,22 +792,12 @@ actor CoordinationService {
     /// request or an agent's desired-state poll (STR-206).
     static let storeDeadline: Duration = .seconds(2)
 
-    /// Round-trip the store so `/health/ready` can report coordination
-    /// reachability. Deliberately the one method here that **rethrows**: every
-    /// other caller wants the fail-open degradation described above, but the
-    /// health endpoint's whole job is to surface the failure rather than paper
-    /// over it. Readiness grades the result as degraded, not fatal, so the
-    /// fail-open policy still holds where it matters.
-    ///
-    /// Bounded by ``storeDeadline``: the underlying client's `commandTimeout`
-    /// defaults to 30s (valkey-swift), so a probe issued while the connection is
-    /// being torn down would otherwise block for 30s and stall `/health/ready`
-    /// long past `timeoutSeconds: 5` — the exact 30s-tail latency behind #731.
-    /// Reaching a fail-open verdict must be fast, so cap it here. The timeout
-    /// surfaces as the thrown error readiness grades as `degraded` (still 200).
+    /// Explicit diagnostic round trip, subject to the shared failure gate.
+    /// Recovery uses the same health key in one half-open probe. Readiness
+    /// consumes the observed gate state instead of adding its own store call.
     func probe() async throws {
         let store = self.store
-        try await withStoreTimeout(Self.storeDeadline) {
+        try await storeCall {
             _ = try await store.keyExists("health:probe")
         }
     }
@@ -750,6 +806,19 @@ actor CoordinationService {
 
     nonisolated static func imageDownloadGrantKey(agentId: String, imageId: UUID) -> String {
         "imggrant:agent:\(agentId):image:\(imageId.uuidString.lowercased())"
+    }
+
+    func grantImageDownloads(agentId: String, imageIds: Set<UUID>) async {
+        guard !imageIds.isEmpty else { return }
+        do {
+            try await storeCall {
+                try await self.store.setKeys(
+                    imageIds.map { Self.imageDownloadGrantKey(agentId: agentId, imageId: $0) },
+                    ttlSeconds: Self.imageDownloadGrantTTLSeconds)
+            }
+        } catch {
+            logger.debug("Image grant batch degraded")
+        }
     }
 
     /// Record that the agent was handed download URLs for `imageId` — by a
@@ -763,12 +832,12 @@ actor CoordinationService {
         agentId: String, imageId: UUID, ttlSeconds: Int = CoordinationService.imageDownloadGrantTTLSeconds
     ) async {
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 try await self.store.setKey(
                     Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId), ttlSeconds: ttlSeconds)
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to record image download grant in coordination store",
                 metadata: [
                     "strato.agent.id": .string(agentId),
@@ -783,11 +852,11 @@ actor CoordinationService {
     /// turn a Valkey outage into a fleet-wide image-pull outage.
     func hasImageDownloadGrant(agentId: String, imageId: UUID) async -> Bool? {
         do {
-            return try await withStoreTimeout(Self.storeDeadline) {
+            return try await storeCall {
                 try await self.store.keyExists(Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId))
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to read image download grant from coordination store",
                 metadata: [
                     "strato.agent.id": .string(agentId),
@@ -808,11 +877,11 @@ actor CoordinationService {
         -> Bool
     {
         do {
-            return try await withStoreTimeout(Self.storeDeadline) {
+            return try await storeCall {
                 try await self.store.acquireLock("lock:sweep:\(sweepName)", ttlSeconds: ttlSeconds)
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to acquire sweep lock; proceeding without cluster exclusion",
                 metadata: ["sweep": .string(sweepName), "error": .string("\(error)")])
             return true
@@ -833,6 +902,26 @@ actor CoordinationService {
     /// the selected node if capacity raced away, while refusing here would
     /// couple all VM creation availability to Valkey. Agent admission is the
     /// physical-capacity authority.
+    /// A growth generation has its own claim: rolling back a later mutation
+    /// cannot delete an earlier unobserved commitment for the same workload.
+    static func growthReservationID(workloadID: UUID, generation: Int64, mutationID: UUID? = nil) -> String {
+        let base = "\(workloadID.uuidString):growth:\(generation)"
+        return mutationID.map { "\(base):\($0.uuidString)" } ?? base
+    }
+
+    /// This primitive does not enable burstable admission. Its production use
+    /// also requires the agreed runtime acknowledgement/resource-report contract.
+    func reserveGrowthCapacity(
+        agentId: String, workloadID: UUID, generation: Int64, mutationID: UUID,
+        amounts: ReservationAmounts, capacity: ReservationAmounts
+    ) async -> Bool {
+        guard generation > 0 else { return false }
+        return await reserveCapacity(
+            agentId: agentId,
+            vmId: Self.growthReservationID(workloadID: workloadID, generation: generation, mutationID: mutationID),
+            amounts: amounts, capacity: capacity)
+    }
+
     func reserveCapacity(
         agentId: String,
         vmId: String,
@@ -841,7 +930,7 @@ actor CoordinationService {
         ttlSeconds: Int = CoordinationService.reservationTTLSeconds
     ) async -> Bool {
         do {
-            return try await withStoreTimeout(Self.storeDeadline) {
+            return try await storeCall {
                 try await self.store.tryReserve(
                     agentKey: Self.reservationKey(agentId: agentId),
                     vmId: vmId,
@@ -851,7 +940,7 @@ actor CoordinationService {
                 )
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to write placement reservation; placing without one",
                 metadata: [
                     "strato.agent.id": .string(agentId),
@@ -866,12 +955,12 @@ actor CoordinationService {
     /// already expired). Best-effort: the TTL is the backstop.
     func releaseReservation(agentId: String, vmId: String) async {
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 try await self.store.releaseReservation(
                     agentKey: Self.reservationKey(agentId: agentId), vmId: vmId)
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to release placement reservation; TTL will reclaim it",
                 metadata: [
                     "strato.agent.id": .string(agentId),
@@ -890,7 +979,7 @@ actor CoordinationService {
     func releaseReservations(agentId: String, vmIds: [String]) async {
         guard !vmIds.isEmpty else { return }
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 let reserved = try await self.store.reservedVMIds(
                     agentKey: Self.reservationKey(agentId: agentId))
                 guard !reserved.isEmpty else { return }
@@ -900,7 +989,7 @@ actor CoordinationService {
                 }
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to release reported VMs' reservations; TTL will reclaim them",
                 metadata: ["strato.agent.id": .string(agentId), "error": .string("\(error)")])
         }
@@ -952,13 +1041,13 @@ actor CoordinationService {
     /// of whether anything rang.
     func publishDoorbell(agentKey: String, fromReplica replicaId: String) async {
         do {
-            try await withStoreTimeout(Self.storeDeadline) {
+            try await storeCall {
                 try await self.store.publish(
                     channel: Self.doorbellChannel,
                     message: Self.doorbellPayload(agentKey: agentKey, fromReplica: replicaId))
             }
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to publish desired-state doorbell; the agent's own re-fetch will converge it",
                 metadata: [
                     "strato.agent.identity": .string(agentKey),
@@ -986,7 +1075,7 @@ actor CoordinationService {
     func activeReservations(agentIds: [String]) async -> [String: ReservationAmounts] {
         guard !agentIds.isEmpty else { return [:] }
         do {
-            let totals = try await withStoreTimeout(Self.storeDeadline) {
+            let totals = try await storeCall {
                 try await self.store.reservedTotals(
                     agentKeys: agentIds.map { Self.reservationKey(agentId: $0) })
             }
@@ -995,7 +1084,7 @@ actor CoordinationService {
             }
             return Dictionary(uniqueKeysWithValues: zip(agentIds, totals))
         } catch {
-            logger.warning(
+            logger.debug(
                 "Failed to batch-read placement reservations; treating as none",
                 metadata: ["agentCount": .stringConvertible(agentIds.count), "error": .string("\(error)")])
             return Dictionary(uniqueKeysWithValues: agentIds.map { ($0, .zero) })

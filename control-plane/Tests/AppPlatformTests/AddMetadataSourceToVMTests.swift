@@ -7,7 +7,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Add metadata source to VM migration", .serialized)
+@Suite("Add metadata source to VM migration", .serialized, .postgresFixture)
 struct AddMetadataSourceToVMTests {
     @Test("existing rows remain on the complete seed ISO")
     func existingRowsDefaultToISO() async throws {

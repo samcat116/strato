@@ -200,6 +200,6 @@ extension SandboxStatus {
     /// (`observedGeneration == 0`) — a fresh sandbox's `.stopped` predates
     /// any agent involvement.
     var assertsAgentPresence: Bool {
-        self == .running || self == .stopped || self == .exited
+        self == .running || self == .stopped || self == .suspended || self == .exited
     }
 }

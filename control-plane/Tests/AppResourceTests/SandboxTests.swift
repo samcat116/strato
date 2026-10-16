@@ -1,6 +1,7 @@
 import Testing
 import Vapor
 import Fluent
+import SQLKit
 import VaporTesting
 import StratoShared
 import AppTestSupport
@@ -13,7 +14,7 @@ import AppTestSupport
 /// the generalized prefix mapping, desired-state syncs carry sandboxes, and
 /// observed-state reports settle convergence by generation — all mirroring the
 /// VM contracts.
-@Suite("Sandbox Tests", .serialized)
+@Suite("Sandbox Tests", .serialized, .postgresFixture)
 final class SandboxTests {
 
     /// The `202` body a sandbox lifecycle mutation answers with (STR-147).
@@ -1925,6 +1926,336 @@ final class SandboxTests {
 
             let gone = try await Sandbox.find(sandbox.id, on: app.db)
             #expect(gone == nil)
+        }
+    }
+    @Test("Durable suspension releases only compute; count and checkpoint storage survive reload")
+    func suspensionQuotaPersistence() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            sandbox.hypervisorId = UUID().uuidString
+            sandbox.status = .running
+            sandbox.generation = 4
+            sandbox.observedGeneration = 3
+            sandbox.desiredStatus = .suspended
+            sandbox.suspensionStorageBytes = 100
+            try await sandbox.save(on: app.db)
+            let evidence = SandboxSuspensionEvidence(
+                checkpointId: UUID(), generation: 4,
+                storageBytes: 90, vmmDestroyed: true, verified: true)
+            let report = ObservedSandboxState(
+                sandboxId: try sandbox.requireID(), status: .suspended,
+                observedGeneration: 4, suspension: evidence)
+            try await app.db.transaction { db in
+                _ = try await SandboxSuspensionService.apply(report, to: sandbox, on: db)
+            }
+            let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(!reopened.suspensionComputeReserved)
+            #expect(reopened.suspensionEvidence == evidence)
+            let usage = try await QuotaUsageAggregator.measure(
+                QuotaScope(projects: .project(try project.requireID()), environment: nil), on: app.db)
+            #expect(usage.vcpus == 0)
+            #expect(usage.memoryBytes == 0)
+            #expect(usage.sandboxCount == 1)
+            #expect(usage.storageBytes == 90)
+        }
+    }
+
+    @Test("Stale suspension cannot undo newer wake admission")
+    func staleSuspensionCannotReleaseWake() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            sandbox.generation = 5
+            sandbox.desiredStatus = .running
+            sandbox.suspensionStorageBytes = 100
+            try await sandbox.save(on: app.db)
+            let report = ObservedSandboxState(
+                sandboxId: try sandbox.requireID(), status: .suspended,
+                observedGeneration: 4,
+                suspension: SandboxSuspensionEvidence(
+                    checkpointId: UUID(), generation: 4,
+                    storageBytes: 90, vmmDestroyed: true, verified: true))
+            try await app.db.transaction { db in
+                _ = try await SandboxSuspensionService.apply(report, to: sandbox, on: db)
+            }
+            let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(reopened.suspensionComputeReserved)
+            #expect(reopened.suspensionStorageBytes == 100)
+        }
+    }
+
+    @Test("Concurrent wakes cannot overbook a shared quota")
+    func concurrentSuspensionWakeAdmission() async throws {
+        try await withSandboxTestApp { app, _, project, first, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let second = try await builder.createSandbox(name: "second", project: project)
+            for sandbox in [first, second] {
+                sandbox.status = .suspended
+                sandbox.desiredStatus = .suspended
+                sandbox.suspensionComputeReserved = false
+                try await sandbox.save(on: app.db)
+            }
+            _ = try await builder.createResourceQuota(name: "one CPU", maxVCPUs: 1, project: project)
+            let ids = try [first.requireID(), second.requireID()]
+            let admitted = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+                for id in ids {
+                    group.addTask {
+                        do {
+                            try await app.db.transaction { db in
+                                let sandbox = try #require(try await Sandbox.find(id, on: db))
+                                guard try await sandbox.lockAndRefresh(on: db) else { throw Abort(.notFound) }
+                                try await SandboxSuspensionService.admitWake(sandbox, on: db)
+                                sandbox.setDesiredStatus(.running)
+                                try await sandbox.save(on: db)
+                            }
+                            return true
+                        } catch { return false }
+                    }
+                }
+                var count = 0
+                for await allowed in group { if allowed { count += 1 } }
+                return count
+            }
+            #expect(admitted == 1)
+            let usage = try await QuotaUsageAggregator.measure(
+                QuotaScope(projects: .project(try project.requireID()), environment: nil), on: app.db)
+            #expect(usage.vcpus == 1)
+            #expect(usage.sandboxCount == 2)
+        }
+    }
+
+    @Test("An opt-in stop refuses missing storage evidence without changing intent")
+    func suspensionStopNeedsEstimate() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, token in
+            sandbox.status = .running
+            sandbox.desiredStatus = .running
+            try await sandbox.save(on: app.db)
+            try await app.testing().test(
+                .POST, "/api/sandboxes/\(sandbox.id!)/stop",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = .init(token: token)
+                    try req.content.encode(["suspend": true])
+                },
+                afterResponse: { response in
+                    #expect(response.status == .conflict)
+                })
+            let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(reopened.desiredStatus == .running)
+            #expect(reopened.suspensionComputeReserved)
+            #expect(reopened.suspensionStorageBytes == 0)
+        }
+    }
+
+    @Test("Keyed sandbox exec refuses both wake and session branches before side effects")
+    func keyedExecRejectsBeforeWakeOrSessionMint() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, token in
+            _ = try await self.registerAgent(app: app, sandbox: sandbox)
+            struct LeaseCount: Decodable { let count: Int }
+            let sql = try #require(app.db as? any SQLDatabase)
+            for (status, desiredStatus) in [
+                (SandboxStatus.suspended, DesiredSandboxStatus.suspended), (.running, .running),
+            ] {
+                sandbox.status = status
+                sandbox.desiredStatus = desiredStatus
+                sandbox.suspensionComputeReserved = false
+                try await sandbox.save(on: app.db)
+                let generation = sandbox.generation
+                let events = try await ResourceEvent.query(on: app.db).count()
+                let claims = try await IdempotencyKey.query(on: app.db).count()
+                let leases = try await sql.raw("SELECT COUNT(*) AS count FROM sandbox_activity_leases")
+                    .first(decoding: LeaseCount.self)?.count
+                try await app.testing().test(
+                    .POST, "/api/sandboxes/\(sandbox.id!)/exec",
+                    beforeRequest: { req in
+                        req.headers.bearerAuthorization = .init(token: token)
+                        req.headers.replaceOrAdd(name: "Idempotency-Key", value: "sandbox-exec-retry")
+                        try req.content.encode(["command": ["true"]])
+                    },
+                    afterResponse: { response in
+                        #expect(response.status == .badRequest)
+                        #expect(response.body.string.contains("Idempotency-Key is not supported for this route"))
+                    })
+                let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+                #expect(reopened.generation == generation)
+                #expect(reopened.desiredStatus == desiredStatus)
+                #expect(!reopened.suspensionComputeReserved)
+                #expect(try await ResourceEvent.query(on: app.db).count() == events)
+                #expect(try await IdempotencyKey.query(on: app.db).count() == claims)
+                #expect(
+                    try await sql.raw("SELECT COUNT(*) AS count FROM sandbox_activity_leases")
+                        .first(decoding: LeaseCount.self)?.count == leases)
+            }
+        }
+    }
+
+    @Test("Exec wakes a suspended guest through a durable mutation without minting a session")
+    func suspendedExecStartsQuotaAdmittedWake() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, token in
+            _ = try await self.registerAgent(app: app, sandbox: sandbox)
+            sandbox.status = .suspended
+            sandbox.desiredStatus = .suspended
+            sandbox.suspensionComputeReserved = false
+            try await sandbox.save(on: app.db)
+            try await app.testing().test(
+                .POST, "/api/sandboxes/\(sandbox.id!)/exec",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = .init(token: token)
+                    try req.content.encode(["command": ["true"]])
+                },
+                afterResponse: { response in
+                    #expect(response.status == .accepted)
+                    let accepted = try response.content.decode(AcceptedSandbox.self)
+                    #expect(accepted.resource.conditions.targetGeneration == accepted.targetGeneration)
+                })
+            let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(reopened.suspensionComputeReserved)
+            #expect(reopened.desiredStatus == .running)
+        }
+    }
+
+    @Test("A status-only suspension report cannot claim convergence")
+    func suspensionRequiresVerifiedConvergence() async throws {
+        try await withSandboxTestApp { _, _, _, sandbox, _ in
+            sandbox.status = .suspended
+            sandbox.desiredStatus = .suspended
+            sandbox.generation = 4
+            sandbox.observedGeneration = 4
+            #expect(!sandbox.conditions.converged)
+            sandbox.suspensionEvidence = SandboxSuspensionEvidence(
+                checkpointId: UUID(), generation: 4,
+                storageBytes: 90, vmmDestroyed: true, verified: true)
+            #expect(!sandbox.conditions.converged)
+            sandbox.suspensionComputeReserved = false
+            #expect(sandbox.conditions.converged)
+            sandbox.failedGeneration = 4
+            sandbox.lastError = "restore/load proof failed"
+            #expect(!sandbox.conditions.converged)
+        }
+    }
+
+    @Test("Opt-in stop admits storage before changing desired state")
+    func suspensionStopAdmission() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, token in
+            _ = try await self.registerAgent(app: app, sandbox: sandbox)
+            sandbox.status = .running
+            sandbox.desiredStatus = .running
+            sandbox.observedGeneration = 1
+            sandbox.generation = 1
+            sandbox.suspensionStorageEstimateBytes = 512
+            try await sandbox.save(on: app.db)
+            try await app.testing().test(
+                .POST, "/api/sandboxes/\(sandbox.id!)/stop",
+                beforeRequest: { req in
+                    req.headers.bearerAuthorization = .init(token: token)
+                    try req.content.encode(["suspend": true])
+                },
+                afterResponse: { response in
+                    #expect(response.status == .accepted)
+                })
+            let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(reopened.desiredStatus == .suspended)
+            #expect(reopened.suspensionComputeReserved)
+            #expect(reopened.suspensionStorageBytes == 512)
+        }
+    }
+
+    @Test("Failed pre-destruction capture releases staging admission only after owner cleanup evidence")
+    func suspensionFailedCaptureStorageCleanup() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            sandbox.status = .running
+            sandbox.generation = 4
+            sandbox.suspensionStorageBytes = 512
+            try await sandbox.save(on: app.db)
+            let report = ObservedSandboxState(
+                sandboxId: try sandbox.requireID(), status: .running,
+                observedGeneration: 3, lastError: "validation failed", failedGeneration: 4,
+                suspensionStorageReservedBytes: 0)
+            try await app.db.transaction { db in
+                _ = try await SandboxSuspensionService.apply(report, to: sandbox, on: db)
+            }
+            let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(reopened.suspensionStorageBytes == 0)
+            #expect(reopened.suspensionComputeReserved)
+        }
+    }
+
+    @Test("Schema downgrade refuses retained checkpoint ownership")
+    func suspensionDowngradePreservesRecoveryState() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let evidence = SandboxSuspensionEvidence(
+                checkpointId: UUID(), generation: 1,
+                storageBytes: 90, vmmDestroyed: false, verified: true)
+            sandbox.suspensionEvidence = evidence
+            sandbox.suspensionStorageBytes = 90
+            try await sandbox.save(on: app.db)
+            do {
+                try await app.db.transaction { db in
+                    try await AddSandboxSuspension().revert(on: db)
+                }
+                Issue.record("downgrade must retain checkpoint ownership")
+            } catch {}
+            let reopened = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(reopened.suspensionEvidence == evidence)
+            #expect(reopened.suspensionStorageBytes == 90)
+        }
+    }
+
+}
+
+extension SandboxTests {
+    @Test("Concurrent class placements preserve a single committed owner and ledger")
+    func concurrentGuaranteedClassPlacements() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let agentID = try await self.registerAgent(app: app, named: "class-atomic-agent", sandboxCapable: true)
+            let agent = try #require(try await Agent.find(UUID(uuidString: agentID), on: app.db))
+            let site = try #require(try await Site.find(agent.$site.id, on: app.db))
+            sandbox.resourceClass = try site.resourceClasses()[0]
+            try await sandbox.save(on: app.db)
+            let stale = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            async let first: Void = app.workloadPlacement.createSandbox(sandbox: sandbox, db: app.db)
+            async let second: Void = app.workloadPlacement.createSandbox(sandbox: stale, db: app.db)
+            _ = try await (first, second)
+            let persisted = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(persisted.hypervisorId == agentID)
+            #expect(persisted.resourceClass == sandbox.resourceClass)
+            #expect(persisted.admittedReservation?.cpuMicroUnits == 1_000_000)
+            #expect(
+                persisted.admittedReservation?.effectiveMemoryBytes
+                    == WorkloadMemoryReservation.sandbox(memoryBytes: sandbox.memory).effectiveBytes)
+            let claims = await app.coordination.activeReservations(agentIds: [agentID])
+            #expect(claims[agentID]?.cpuMicroUnits == 1_000_000)
+            let cached = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            cached.admittedReservation = nil
+            try await app.db.transaction { tx in
+                #expect(try await cached.lockAndRefresh(on: tx))
+                try await cached.save(on: tx)
+            }
+            #expect(
+                try await Sandbox.find(sandbox.id, on: app.db)?.admittedReservation == persisted.admittedReservation)
+        }
+    }
+}
+
+extension SandboxTests {
+    @Test("Metadata edits retain the admitted class and physical commitment")
+    func metadataPreservesClassAdmission() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, token in
+            let site = Site(
+                name: "Metadata class site", organizationScope: .organization(try #require(project.$organization.id)))
+            try await site.save(on: app.db)
+            let snapshot = try site.resourceClasses()[0]
+            let admitted = WorkloadAdmittedReservation(
+                cpus: sandbox.cpus, memory: .sandbox(memoryBytes: sandbox.memory), policy: .guaranteed)
+            sandbox.resourceClass = snapshot
+            sandbox.admittedReservation = admitted
+            try await sandbox.save(on: app.db)
+            try await app.testing().test(
+                .PUT, "/api/sandboxes/\(try sandbox.requireID())",
+                beforeRequest: { request in
+                    request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    request.headers.contentType = .json
+                    request.body = ByteBuffer(string: "{\"name\":\"renamed-class-sandbox\",\"ttlSeconds\":600}")
+                }, afterResponse: { response in #expect(response.status == .ok) })
+            let saved = try #require(try await Sandbox.find(sandbox.id, on: app.db))
+            #expect(saved.name == "renamed-class-sandbox" && saved.ttlSeconds == 600)
+            #expect(saved.resourceClass == snapshot && saved.admittedReservation == admitted)
         }
     }
 }

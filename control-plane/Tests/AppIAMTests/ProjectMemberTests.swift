@@ -9,7 +9,7 @@ import VaporTesting
 /// Project membership is policy, so grants are represented only by
 /// `role_bindings`. These tests pin the UUID-only API and the exclusive grant
 /// invariant for users and groups.
-@Suite("Project Member Tests", .serialized)
+@Suite("Project Member Tests", .serialized, .postgresFixture)
 final class ProjectMemberTests {
     private struct InvalidRoleGrant: Content {
         let userEmail: String

@@ -2,13 +2,44 @@
 //! convergence tests; no test installs a package or changes a host service.
 use crate::convergence::*;
 use crate::convergence_command::{self, CommandFailure};
-use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-pub struct LinuxBackend;
+pub struct LinuxBackend {
+    package_manager: Option<PackageManager>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageManager {
+    DpkgApt,
+    RpmDnf,
+}
+impl PackageManager {
+    fn detect(exists: impl Fn(&str) -> bool) -> Option<Self> {
+        if exists("/usr/bin/dpkg-query") && exists("/usr/bin/apt-get") {
+            Some(Self::DpkgApt)
+        } else if exists("/usr/bin/rpm") && exists("/usr/bin/dnf") {
+            Some(Self::RpmDnf)
+        } else {
+            None
+        }
+    }
+}
+impl Default for LinuxBackend {
+    fn default() -> Self {
+        Self {
+            package_manager: PackageManager::detect(|path| Path::new(path).exists()),
+        }
+    }
+}
+impl LinuxBackend {
+    fn package_manager(&self) -> Result<PackageManager, String> {
+        self.package_manager.ok_or_else(|| {
+            "unsupported guest package manager (requires complete dpkg/apt or rpm/dnf pair)".into()
+        })
+    }
+}
 fn check(deadline: Instant) -> Result<Duration, String> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
@@ -49,95 +80,79 @@ fn command(
         .map(|s| s.trim().to_string())
         .map_err(|_| "non-UTF8 guest observation".into())
 }
-fn no_symlinks(path: &Path) -> Result<(), String> {
-    let mut current = std::path::PathBuf::from("/");
-    for part in path.components().skip(1) {
-        current.push(part);
-        match std::fs::symlink_metadata(&current) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err("managed path contains a symlink".into())
-            }
-            Ok(_) => (),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(_) => return Err("managed path is inaccessible".into()),
-        }
-    }
-    Ok(())
-}
 fn read(path: &Path, limit: u64, deadline: Instant) -> Result<Option<String>, String> {
     check(deadline)?;
-    no_symlinks(path)?;
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    let (bytes, _) = match read_regular_file(path, limit as usize) {
+        Ok(Some(file)) => file,
+        Ok(None) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            return Err("managed file exceeds observation byte limit".into())
+        }
         Err(_) => return Err("managed file is unreadable".into()),
     };
-    if !file
-        .metadata()
-        .map_err(|_| "managed file metadata unavailable")?
-        .is_file()
-    {
-        return Err("managed path is not a regular file".into());
-    }
-    let mut bytes = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "managed file read failed")?;
     check(deadline)?;
-    if bytes.len() as u64 > limit {
-        return Err("managed file exceeds observation byte limit".into());
-    }
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|_| "managed file is not UTF-8".into())
 }
+fn bounded_package_version(
+    result: Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    match result {
+        Err(error) if error == "not_found" => Ok(None),
+        Ok(Some(version)) if version.is_empty() || version.len() > 255 => {
+            Err("package observation exceeds byte limit".into())
+        }
+        other => other,
+    }
+}
+// Linked units are discoverable outside the unit search path, but have no
+// boot enablement. Disabling an already linked unit can remove its link.
+fn service_boot_enabled(state: &str) -> Option<bool> {
+    match state {
+        "enabled" => Some(true),
+        "enabled-runtime" | "linked" | "linked-runtime" | "disabled" | "static" | "masked"
+        | "masked-runtime" | "indirect" | "alias" | "generated" | "transient" => Some(false),
+        _ => None,
+    }
+}
 impl Backend for LinuxBackend {
     fn package(&mut self, name: &str, deadline: Instant) -> Result<Option<String>, String> {
-        let result = if Path::new("/usr/bin/dpkg-query").exists() {
-            command(
+        let result = match self.package_manager()? {
+            PackageManager::DpkgApt => command(
                 "/usr/bin/dpkg-query",
                 &["-W", "-f=${db:Status-Status}\t${Version}", "--", name],
                 deadline,
                 false,
             )
-            .map(|s| s.strip_prefix("installed\t").map(str::to_owned))
-        } else if Path::new("/usr/bin/rpm").exists() {
-            command(
+            .map(|s| s.strip_prefix("installed\t").map(str::to_owned)),
+            PackageManager::RpmDnf => command(
                 "/usr/bin/rpm",
                 &["-q", "--qf", "%{VERSION}-%{RELEASE}", "--", name],
                 deadline,
                 false,
             )
-            .map(Some)
-        } else {
-            return Err("unsupported guest package manager (requires dpkg/apt or rpm/dnf)".into());
+            .map(Some),
         };
-        match result {
-            Err(e) if e == "not_found" => Ok(None),
-            other => other,
-        }
+        bounded_package_version(result)
     }
     fn file(&mut self, path: &str, deadline: Instant) -> Result<FileObservation, String> {
-        let content = read(Path::new(path), 65536, deadline)?;
-        let mode = if content.is_some() {
-            Some(format!(
-                "{:04o}",
-                std::fs::metadata(path)
-                    .map_err(|_| "file mode unavailable")?
-                    .permissions()
-                    .mode()
-                    & 0o7777
-            ))
-        } else {
-            None
+        check(deadline)?;
+        let file = read_regular_file(Path::new(path), 65536).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                "managed file exceeds observation byte limit"
+            } else {
+                "managed file is unreadable"
+            }
+        })?;
+        check(deadline)?;
+        let (sha256, mode) = match file {
+            Some((content, mode)) => (Some(hash(&content)), Some(format!("{mode:04o}"))),
+            None => (None, None),
         };
         Ok(FileObservation {
             path: path.into(),
-            sha256: content.map(|c| hash(c.as_bytes())),
+            sha256,
             mode,
         })
     }
@@ -150,12 +165,7 @@ impl Backend for LinuxBackend {
             deadline,
             false,
         )?;
-        let enabled = match state.as_str() {
-            "enabled" => Some(true),
-            "enabled-runtime" | "disabled" | "static" | "masked" | "masked-runtime"
-            | "indirect" | "alias" | "generated" | "transient" => Some(false),
-            _ => None,
-        };
+        let enabled = service_boot_enabled(&state);
         let active = command(
             "/usr/bin/systemctl",
             &["show", "--property=ActiveState", "--value", "--", name],
@@ -189,41 +199,41 @@ impl Backend for LinuxBackend {
         } else {
             "remove"
         };
-        if Path::new("/usr/bin/apt-get").exists() {
-            command(
-                "/usr/bin/apt-get",
-                &[
-                    "-y",
-                    "-o",
-                    "Acquire::Retries=0",
-                    "-o",
-                    "Acquire::http::Timeout=30",
-                    "-o",
-                    "Acquire::https::Timeout=30",
-                    "-o",
-                    "DPkg::Lock::Timeout=10",
-                    operation,
-                    "--",
-                    &package.name,
-                ],
-                deadline,
-                true,
-            )?;
-        } else if Path::new("/usr/bin/dnf").exists() {
-            command(
-                "/usr/bin/dnf",
-                &["-y", operation, "--", &package.name],
-                deadline,
-                true,
-            )?;
-        } else {
-            return Err("unsupported guest package manager (requires apt or dnf)".into());
+        match self.package_manager()? {
+            PackageManager::DpkgApt => {
+                command(
+                    "/usr/bin/apt-get",
+                    &[
+                        "-y",
+                        "-o",
+                        "Acquire::Retries=0",
+                        "-o",
+                        "Acquire::http::Timeout=30",
+                        "-o",
+                        "Acquire::https::Timeout=30",
+                        "-o",
+                        "DPkg::Lock::Timeout=10",
+                        operation,
+                        "--",
+                        &package.name,
+                    ],
+                    deadline,
+                    true,
+                )?;
+            }
+            PackageManager::RpmDnf => {
+                command(
+                    "/usr/bin/dnf",
+                    &["-y", operation, "--", &package.name],
+                    deadline,
+                    true,
+                )?;
+            }
         }
         Ok(())
     }
     fn apply_file(&mut self, file: &File, deadline: Instant) -> Result<(), String> {
         check(deadline)?;
-        no_symlinks(Path::new(&file.path))?;
         atomic_write(
             Path::new(&file.path),
             file.content.as_bytes(),
@@ -247,12 +257,7 @@ impl Backend for LinuxBackend {
     fn apply_sysctl(&mut self, sysctl: &Sysctl, deadline: Instant) -> Result<(), String> {
         check(deadline)?;
         let path = std::path::PathBuf::from(format!("/proc/sys/{}", sysctl.key.replace('.', "/")));
-        no_symlinks(&path)?;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .map_err(|_| "sysctl write refused")?;
+        let mut file = open_regular_file_for_write(&path).map_err(|_| "sysctl write refused")?;
         file.write_all(sysctl.value.as_bytes())
             .map_err(|_| "sysctl write failed".into())
     }
@@ -278,7 +283,7 @@ mod tests {
             content: "configured\n".into(),
             mode: "0640".into(),
         };
-        let mut backend = LinuxBackend;
+        let mut backend = LinuxBackend::default();
         assert!(backend
             .file(&entry.path, deadline)
             .unwrap()
@@ -323,5 +328,45 @@ mod tests {
             "package operation budget exhausted (mirror or package manager unavailable)"
         );
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn package_observation_and_effects_select_a_complete_pair() {
+        let rpm_guest = ["/usr/bin/dpkg-query", "/usr/bin/rpm", "/usr/bin/dnf"];
+        assert_eq!(
+            PackageManager::detect(|p| rpm_guest.contains(&p)),
+            Some(PackageManager::RpmDnf)
+        );
+        let debian_guest = ["/usr/bin/dpkg-query", "/usr/bin/apt-get", "/usr/bin/dnf"];
+        assert_eq!(
+            PackageManager::detect(|p| debian_guest.contains(&p)),
+            Some(PackageManager::DpkgApt)
+        );
+        let incomplete = ["/usr/bin/dpkg-query", "/usr/bin/dnf"];
+        assert_eq!(PackageManager::detect(|p| incomplete.contains(&p)), None);
+    }
+
+    #[test]
+    fn linked_units_satisfy_boot_disabled_intent() {
+        for state in ["linked", "linked-runtime"] {
+            assert_eq!(service_boot_enabled(state), Some(false), "{state}");
+        }
+    }
+
+    #[test]
+    fn package_versions_match_the_observation_contract() {
+        assert_eq!(
+            bounded_package_version(Err("not_found".into())).unwrap(),
+            None
+        );
+        assert_eq!(
+            bounded_package_version(Ok(Some("v".repeat(255)))).unwrap(),
+            Some("v".repeat(255))
+        );
+        assert_eq!(
+            bounded_package_version(Ok(Some("v".repeat(256)))).unwrap_err(),
+            "package observation exceeds byte limit"
+        );
+        assert!(bounded_package_version(Ok(Some(String::new()))).is_err());
     }
 }

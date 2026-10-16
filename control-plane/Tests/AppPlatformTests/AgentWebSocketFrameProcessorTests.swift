@@ -53,6 +53,27 @@ struct AgentWebSocketFrameProcessorTests {
         #expect(third == "fgh")
     }
 
+    @Test("Revocation discards queued frames and waits only for the active handler")
+    func revocationDiscardsQueuedFrames() async {
+        let started = Latch()
+        let release = Latch()
+        let recorder = Recorder()
+        let processor = AgentWebSocketFrameProcessor { frame in
+            await recorder.append(frame)
+            await started.signal()
+            await release.wait()
+        }
+        #expect(processor.enqueue("active") == .accepted)
+        await started.wait()
+        #expect(processor.enqueue("queued") == .accepted)
+        let active = processor.stopAndDiscard()
+        #expect(processor.enqueue("after revocation") == .closed)
+        await release.signal()
+        await active?.value
+        await processor.finishAndDrain()
+        #expect(await recorder.frames == ["active"])
+    }
+
     @Test("Finish waits for accepted frames in wire order")
     func finishDrainsAcceptedFrames() async {
         let firstStarted = Latch()

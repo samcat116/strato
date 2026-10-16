@@ -60,6 +60,12 @@ public actor OCIRootfsCache {
     /// the idle TTL. Enforced by LRU eviction during `cleanup`.
     private let maxSizeBytes: Int64?
     private let logger: Logger
+    private let hashFile: @Sendable (String) throws -> String
+    private let lookups = SingleFlight<CachedSandboxRootfs?>()
+    // File reads and SHA-256 must not occupy the cache actor or a cooperative
+    // executor thread. A serial IO queue also bounds verification resource use.
+    private let verificationQueue = DispatchQueue(label: "strato.rootfs-cache-verification")
+    private var lookupTokens: [String: UUID] = [:]
 
     private var imagesPath: String { rootPath + "/images" }
     private var aliasesPath: String { rootPath + "/aliases" }
@@ -70,10 +76,23 @@ public actor OCIRootfsCache {
         maxSizeBytes: Int64? = nil,
         logger: Logger
     ) {
+        self.init(
+            rootPath: rootPath, ttl: ttl, maxSizeBytes: maxSizeBytes, logger: logger,
+            hashFile: FileHashing.sha256Hex)
+    }
+
+    init(
+        rootPath: String,
+        ttl: TimeInterval = OCIRootfsCache.defaultTTL,
+        maxSizeBytes: Int64? = nil,
+        logger: Logger,
+        hashFile: @escaping @Sendable (String) throws -> String
+    ) {
         self.rootPath = rootPath
         self.ttl = ttl
         self.maxSizeBytes = maxSizeBytes
         self.logger = logger
+        self.hashFile = hashFile
     }
 
     // MARK: - Lookup
@@ -81,24 +100,46 @@ public actor OCIRootfsCache {
     /// Returns the cached rootfs for a manifest digest, refreshing its
     /// last-use time. Nil on miss (including structurally incomplete entries,
     /// which are removed).
-    public func lookup(manifestDigest: String) -> CachedSandboxRootfs? {
+    public func lookup(manifestDigest: String) async -> CachedSandboxRootfs? {
+        // Only overlapping readers share a proof. A subsequent lookup always
+        // hashes again, including after a same-size overwrite or silent damage.
+        try? await lookups.run(key: manifestDigest) { [self] in
+            await self.verify(manifestDigest: manifestDigest)
+        }
+    }
+
+    private func verify(manifestDigest: String) async -> CachedSandboxRootfs? {
         guard let directory = imageDirectory(for: manifestDigest) else { return nil }
         let rootfsPath = directory + "/" + Self.rootfsFileName
         let configPath = directory + "/" + Self.configFileName
         let completionPath = directory + "/" + Self.completionFileName
         guard FileManager.default.fileExists(atPath: directory) else { return nil }
-        guard FileManager.default.fileExists(atPath: rootfsPath),
-            FileManager.default.fileExists(atPath: configPath),
-            let completionData = FileManager.default.contents(atPath: completionPath),
-            let completion = try? JSONDecoder().decode(Completion.self, from: completionData),
-            completion.version == 1,
-            completion.rootfsSizeBytes >= 0,
-            completion.rootfsSHA256.count == 64,
-            completion.rootfsSHA256.allSatisfy({ $0.isHexDigit }),
-            fileSize(at: rootfsPath) == completion.rootfsSizeBytes,
-            let rootfsSHA256 = try? FileHashing.sha256Hex(ofFileAt: rootfsPath),
-            rootfsSHA256 == completion.rootfsSHA256
-        else {
+        let token = UUID()
+        lookupTokens[manifestDigest] = token
+        defer {
+            if lookupTokens[manifestDigest] == token { lookupTokens.removeValue(forKey: manifestDigest) }
+        }
+        let hashFile = self.hashFile
+        let valid = await withCheckedContinuation { continuation in
+            verificationQueue.async {
+                let completionData = FileManager.default.contents(atPath: completionPath)
+                let completion = completionData.flatMap { try? JSONDecoder().decode(Completion.self, from: $0) }
+                let size = (try? FileManager.default.attributesOfItem(atPath: rootfsPath)[.size]) as? NSNumber
+                let valid =
+                    FileManager.default.fileExists(atPath: configPath)
+                    && completion?.version == 1
+                    && (completion?.rootfsSizeBytes ?? -1) >= 0
+                    && completion?.rootfsSHA256.count == 64
+                    && completion?.rootfsSHA256.allSatisfy({ $0.isHexDigit }) == true
+                    && size?.int64Value == completion?.rootfsSizeBytes
+                    && (try? hashFile(rootfsPath)) == completion?.rootfsSHA256
+                continuation.resume(returning: valid)
+            }
+        }
+        // Invalidation, eviction, or publication may have replaced the entry
+        // while the IO queue was reading it. Never serve or delete its successor.
+        guard lookupTokens[manifestDigest] == token else { return nil }
+        guard valid else {
             // Missing sidecars are pre-durability entries. A size mismatch is
             // a torn rootfs; a hash mismatch catches same-size damage. Neither
             // is safe to boot.
@@ -115,6 +156,7 @@ public actor OCIRootfsCache {
 
     /// Removes a cache entry (e.g. one whose config no longer decodes).
     public func invalidate(manifestDigest: String) {
+        lookupTokens.removeValue(forKey: manifestDigest)
         guard let directory = imageDirectory(for: manifestDigest) else { return }
         try? FileManager.default.removeItem(atPath: directory)
     }
@@ -160,6 +202,9 @@ public actor OCIRootfsCache {
             throw OCIError.malformedResponse(detail: "malformed manifest digest \(manifestDigest)")
         }
         let staging = directory + ".partial"
+        guard !FileManager.default.fileExists(atPath: staging + "/.building") else {
+            throw SubprocessStagingBlockedError(path: staging)
+        }
         try? FileManager.default.removeItem(atPath: staging)
         try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: true)
         return staging
@@ -168,12 +213,12 @@ public actor OCIRootfsCache {
     /// Atomically publishes the staged entry. If the digest was published
     /// concurrently by another path, the existing entry wins and the staging
     /// directory is discarded — content-addressing makes both identical.
-    public func publish(manifestDigest: String) throws -> CachedSandboxRootfs {
+    public func publish(manifestDigest: String) async throws -> CachedSandboxRootfs {
         guard let directory = imageDirectory(for: manifestDigest) else {
             throw OCIError.malformedResponse(detail: "malformed manifest digest \(manifestDigest)")
         }
         let staging = directory + ".partial"
-        if let existing = lookup(manifestDigest: manifestDigest) {
+        if let existing = await lookup(manifestDigest: manifestDigest) {
             try? FileManager.default.removeItem(atPath: staging)
             return existing
         }
@@ -195,6 +240,7 @@ public actor OCIRootfsCache {
         try encoder.encode(completion).write(
             to: URL(fileURLWithPath: staging + "/" + Self.completionFileName))
 
+        lookupTokens.removeValue(forKey: manifestDigest)
         try DurableFileWriter().publishDirectory(
             stagingPath: staging, to: directory,
             completionFileName: Self.completionFileName)
@@ -230,6 +276,8 @@ public actor OCIRootfsCache {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: imagesPath)) ?? []
         let stagingDirectories = names.filter { $0.hasSuffix(".partial") }
             .map { imagesPath + "/" + $0 }
+            // Age cannot prove that an aborted builder stopped using staging.
+            .filter { !FileManager.default.fileExists(atPath: $0 + "/.building") }
         DiskCacheLRU.removeStaleStaging(
             candidates: stagingDirectories,
             olderThan: Self.stalePartialAge,
@@ -271,6 +319,9 @@ public actor OCIRootfsCache {
             if targetHex.isEmpty || !FileManager.default.fileExists(atPath: imagesPath + "/" + targetHex) {
                 try? FileManager.default.removeItem(atPath: path)
             }
+        }
+        lookupTokens = lookupTokens.filter { digest, _ in
+            imageDirectory(for: digest).map { FileManager.default.fileExists(atPath: $0) } ?? false
         }
     }
 

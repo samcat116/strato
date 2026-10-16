@@ -303,6 +303,21 @@ and its sha256 together.
 
 The node's per-VM serial reconciliation lane sends `converge_guest_config` over
 its existing host-only vsock control connection after a nonce-checked ping.
+The VM daemon advertises `capabilities: ["guest_config_convergence"]` in its
+v4 `pong`; the sandbox daemon does not advertise this VM-only capability. The
+host requires that capability before sending intent. An older guest remains
+reachable for exec/health, but guest configuration waits for an explicit guest
+upgrade instead of sending an unsupported command or permanently failing the
+generation.
+
+First-boot installation is pinned to **v0.1.3**. Publish that release from a
+commit containing STR-91, including both architecture tarballs and a
+`guest-agent-manifest.json` advertising `guest_config_convergence`, before
+deploying the wire-v70 control plane/agent. The installer rejects a manifest
+missing this capability. The pin does not update existing VMs: operators must
+explicitly install the compatible daemon in those guests. v0.1.2 does not
+support guest configuration.
+
 The request contains `generation` (the enclosing VM generation) and
 `guest_config` (the four STR-90 arrays). The guest diffs live facts, applies only
 mismatches, reads them back, and returns `guest_config_state` with `nonce` and
@@ -310,6 +325,12 @@ mismatches, reads them back, and returns `guest_config_state` with `nonce` and
 `ObservedVMState.guestConfigObservation`; failures also use the existing VM
 `lastError` / `failedGeneration` path. The control plane/API persistence and
 projection of the detailed observation belong to STR-92.
+
+Generic control frames retain their 1 MiB ceiling. The configuration request
+and response use a 4 MiB ceiling, including when convergence is the first
+control frame, so every valid STR-90 intent still fits after JSON escaping;
+oversized or unrelated frames are rejected without changing the v64 model
+contract.
 
 Observation fields use camelCase: `generation`, `status` (`converged` or
 `failed`), `error`, `packages` (`name`, nullable `version`), `files` (`path`,
@@ -320,7 +341,10 @@ contents and package-manager output never appear in diagnostics or the journal.
 
 This surface is for Linux VMs that opted into the Strato guest agent. It runs
 only while the VM's desired status is running; intent for stopped or paused VMs
-is deferred until they run. Package realization supports dpkg/apt and rpm/dnf.
+is deferred until they run. Package realization selects one complete dpkg/apt
+or rpm/dnf pair per pass and uses its database for observation, mutation, and
+read-back. A lone query utility from the other distribution cannot change the
+selected backend; incomplete pairs are unsupported.
 Services manage boot enablement only, never start/stop policy. Sysctls are live
 kernel values and are re-applied after reboot when a sync observes drift. File
 writes atomically publish UTF-8 content and ordinary permission bits; managed

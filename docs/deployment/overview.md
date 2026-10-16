@@ -11,6 +11,22 @@ turn off:
 VMs run on **[agents](/deployment/agents)** — hypervisor hosts joined with a
 one-line command.
 
+## Operator path
+
+1. Choose the deployment and configure the exact browser origin and TLS.
+2. Complete first-administrator setup and decide how other users are provisioned.
+3. Expose the agent mTLS and SPIRE endpoints, then enroll a Linux hypervisor.
+4. Configure site networking and image storage before validating a workload.
+   Kubernetes's default filesystem image storage is ephemeral; follow the
+   [S3 production guidance](/deployment/kubernetes#image-storage-use-s3-in-production).
+5. Check readiness, logs, and metrics, and validate recovery and upgrade
+   procedures for the deployed versions.
+
+The [getting-started guide](/guide/getting-started) gives the first-run sequence.
+The [documentation map](/documentation#operator-tasks) includes specialized
+cutovers and acceptance procedures. Production readiness depends on this
+configuration and validation, beyond generated credentials.
+
 ## What's where
 
 | Page | Covers |

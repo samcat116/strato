@@ -13,7 +13,7 @@ import AppTestSupport
 /// project match, agent-version gate), delete protection, the VM-create
 /// default attachment, and desired-state assembly (scoping, reference
 /// closure, old-agent omission).
-@Suite("Security Group Controller Tests", .serialized)
+@Suite("Security Group Controller Tests", .serialized, .postgresFixture)
 final class SecurityGroupControllerTests {
 
     private static func healthyOverlayObservation(at checkedAt: Date = Date())

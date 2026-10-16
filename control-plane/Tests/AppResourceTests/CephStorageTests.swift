@@ -9,7 +9,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("External Ceph Storage Tests", .serialized)
+@Suite("External Ceph Storage Tests", .serialized, .postgresFixture)
 final class CephStorageTests {
     private struct CreateVMBody: Content {
         let name: String

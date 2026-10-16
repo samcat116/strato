@@ -195,14 +195,52 @@ public struct GuestExecSessionClient: Sendable {
             outputMode: invocation.outputMode.schemaValue
         )
 
+        var wakeGeneration: Int64?
         while true {
+            try Task.checkCancellation()
+            if wakeGeneration != nil, now() >= deadline {
+                throw CLIError.timedOut("Sandbox did not become ready for guest exec within thirty seconds.")
+            }
             do {
                 let response: Components.Schemas.GuestExecSession
                 switch invocation.resource {
                 case .sandbox(let id):
-                    response = try await client.createSandboxExecSession(
-                        path: .init(sandboxID: id), body: .json(request)
-                    ).created.body.json
+                    if let generation = wakeGeneration {
+                        let sandbox = try await client.getSandbox(path: .init(sandboxID: id)).ok.body.json
+                        try Task.checkCancellation()
+                        guard now() < deadline else {
+                            throw CLIError.timedOut(
+                                "Sandbox did not become ready for guest exec within thirty seconds.")
+                        }
+                        let conditions = sandbox.conditions
+                        guard conditions.targetGeneration <= generation else {
+                            throw CLIError.guestExec("Sandbox wake was superseded by a newer mutation.")
+                        }
+                        if let degraded = conditions.degraded?.value1, degraded.sinceGeneration == generation {
+                            throw CLIError.operationFailed(kind: "sandbox wake", message: degraded.reason)
+                        }
+                        guard conditions.targetGeneration == generation, conditions.converged,
+                            conditions.observedGeneration >= generation, sandbox.status == .running
+                        else {
+                            try await sleep(Self.retryDelay)
+                            continue
+                        }
+                        wakeGeneration = nil
+                    }
+                    let result = try await client.createSandboxExecSession(
+                        path: .init(sandboxID: id), body: .json(request))
+                    try Task.checkCancellation()
+                    if case .accepted(let accepted) = result {
+                        let generation = try accepted.body.json.targetGeneration
+                        guard generation > 0 else {
+                            throw CLIError.unexpectedResponse("Sandbox wake returned an invalid target generation.")
+                        }
+                        // Follow this accepted intent without creating another
+                        // boot mutation while its restore is still in flight.
+                        wakeGeneration = generation
+                        continue
+                    }
+                    response = try result.created.body.json
                 case .virtualMachine(let id):
                     response = try await client.createVMExecSession(
                         path: .init(vmID: id), body: .json(request)
@@ -215,6 +253,11 @@ public struct GuestExecSessionClient: Sendable {
                 )
             } catch {
                 guard let cliError = CLIError.from(error) else { throw error }
+                if case .api(let status, _) = cliError, status == 503,
+                    wakeGeneration != nil, now() >= deadline
+                {
+                    throw CLIError.timedOut("Sandbox did not become ready for guest exec within thirty seconds.")
+                }
                 guard case .api(let status, _) = cliError,
                     status == 503,
                     now() < deadline

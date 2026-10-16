@@ -14,7 +14,7 @@ import AppTestSupport
 /// assigned (offline agents, pre-v7 wire protocols that ignore the field,
 /// missing artifacts, the sandbox re-adoption caveat), and the assignment
 /// itself landing on the agent row for sync assembly to pick up.
-@Suite("Agent Update Endpoint Tests", .serialized)
+@Suite("Agent Update Endpoint Tests", .serialized, .postgresFixture)
 final class AgentUpdateEndpointTests {
 
     private actor FirstInstantRecorder {

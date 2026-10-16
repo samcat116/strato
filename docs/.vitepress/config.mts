@@ -15,23 +15,30 @@ export default defineConfig({
 
     nav: [
       { text: 'Home', link: '/' },
-      { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Architecture', link: '/architecture/overview' },
-      { text: 'API', link: '/api-reference' },
-      { text: 'Deployment', link: '/deployment/overview' }
+      { text: 'Get Started', link: '/guide/getting-started' },
+      { text: 'Users', link: '/guide/user-guide' },
+      { text: 'Operators', link: '/deployment/overview' },
+      { text: 'Developers', link: '/development/overview' },
+      { text: 'References', items: [
+        { text: 'Documentation Map', link: '/documentation' },
+        { text: 'Architecture', link: '/architecture/overview' },
+        { text: 'API', link: '/api-reference' }
+      ] }
     ],
 
     sidebar: [
       {
         text: 'Introduction',
         items: [
+          { text: 'Documentation Map', link: '/documentation' },
           { text: 'What is Strato?', link: '/guide/what-is-strato' },
           { text: 'Getting Started', link: '/guide/getting-started' }
         ]
       },
       {
-        text: 'Guides',
+        text: 'User Guides',
         items: [
+          { text: 'User Guide', link: '/guide/user-guide' },
           { text: 'Instance Metadata', link: '/guide/instance-metadata' },
           { text: 'Graphics Console', link: '/guide/graphics-console' },
           { text: 'Windows Guests', link: '/guide/windows-guests' }
@@ -52,6 +59,10 @@ export default defineConfig({
           { text: 'Storage', link: '/architecture/storage' },
           { text: 'Distributed Storage (Proposal)', link: '/architecture/distributed-storage' },
           { text: 'Sandboxes', link: '/architecture/sandboxes' },
+          { text: 'Sandbox Suspension (Opt-in)', link: '/architecture/sandbox-suspension' },
+          { text: 'Resource Classes (Gated)', link: '/architecture/resource-classes-contract' },
+          { text: 'Burstable Runtime (Gated)', link: '/architecture/burstable-runtime' },
+          { text: 'Mutation Idempotency', link: '/architecture/idempotency' },
           { text: 'IAM', link: '/architecture/iam' },
           { text: 'Guest Identity (Proposal)', link: '/architecture/guest-identity' },
           { text: 'Webhooks', link: '/architecture/webhooks' },
@@ -96,6 +107,7 @@ export default defineConfig({
       {
         text: 'Development',
         items: [
+          { text: 'Developer Guide', link: '/development/overview' },
           { text: 'Local Development', link: '/development/local-development' },
           { text: 'End-to-End Testing', link: '/development/e2e-testing' },
           { text: 'Code Review', link: '/development/code-review' },
@@ -103,19 +115,31 @@ export default defineConfig({
         ]
       },
       {
-        text: 'Deployment',
+        text: 'Deployment and Operations',
         items: [
           { text: 'Overview', link: '/deployment/overview' },
           { text: 'Docker Compose', link: '/deployment/docker-compose' },
           { text: 'Kubernetes (Helm)', link: '/deployment/kubernetes' },
           { text: 'Agents', link: '/deployment/agents' },
+          { text: 'Host Memory Profile (Opt-in)', link: '/deployment/host-memory-profile' },
           { text: 'IAM & Permissions', link: '/deployment/iam' },
-          { text: 'Health Checks & Zero-Downtime Deploys', link: '/deployment/health-checks' },
+          { text: 'Health Checks & Controlled Deploys', link: '/deployment/health-checks' },
           { text: 'Rate Limiting', link: '/deployment/rate-limiting' },
           { text: 'Logging', link: '/deployment/logging' },
           { text: 'Audit Logging', link: '/deployment/audit-logging' },
           { text: 'Shared Signals (SSF)', link: '/deployment/shared-signals' },
           { text: 'Observability', link: '/deployment/observability' }
+        ]
+      },
+      {
+        text: 'Cutovers and Validation',
+        collapsed: true,
+        items: [
+          { text: 'Membership Role Cutover', link: '/deployment/membership-role-cutover' },
+          { text: 'Credential Restriction Cutover', link: '/runbooks/credential-restriction-cutover' },
+          { text: 'VM Boot-Volume Cutover', link: '/operations/vm-boot-volume-cutover' },
+          { text: 'Volume Replica Cutover', link: '/operations/volume-replica-cutover' },
+          { text: 'QEMU Block Policy Benchmark', link: '/operations/qemu-block-policy-benchmark' }
         ]
       },
       {

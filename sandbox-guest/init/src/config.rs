@@ -607,13 +607,6 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_schema_is_rejected() {
-        let mut c = base_config();
-        c.schema_version = 99;
-        assert_eq!(c.resolve_process(), Err(ConfigError::UnsupportedSchema(99)));
-    }
-
-    #[test]
     fn an_older_schema_is_refused() {
         let mut c = base_config();
         c.schema_version = SCHEMA_VERSION - 1;

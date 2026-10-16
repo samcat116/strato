@@ -12,29 +12,29 @@ struct SandboxController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let sandboxes = routes.grouped("api", "sandboxes")
         sandboxes.get(use: index)
-        sandboxes.post(use: create)
+        sandboxes.post(use: create).supportsIdempotency()
         sandboxes.group(":sandboxID") { sandbox in
             sandbox.get(use: show)
             sandbox.put(use: update)
-            sandbox.delete(use: delete)
-            sandbox.post("start", use: start)
-            sandbox.post("stop", use: stop)
-            sandbox.post("restart", use: restart)
+            sandbox.delete(use: delete).supportsIdempotency()
+            sandbox.post("start", use: start).supportsIdempotency()
+            sandbox.post("stop", use: stop).supportsIdempotency()
+            sandbox.post("restart", use: restart).supportsIdempotency()
             sandbox.get("status", use: status)
             sandbox.get("operations", use: listOperations)
             sandbox.post("exec", use: exec)
             // Snapshots / checkpoint-resume (issue #426); handlers live in
             // SandboxSnapshotController.swift.
-            sandbox.post("snapshots", use: createSnapshot)
+            sandbox.post("snapshots", use: createSnapshot).supportsIdempotency()
             sandbox.get("snapshots", use: listSnapshots)
             sandbox.group("snapshots", ":snapshotID") { snapshot in
-                snapshot.delete(use: deleteSnapshot)
-                snapshot.post("restore", use: restoreSnapshot)
+                snapshot.delete(use: deleteSnapshot).supportsIdempotency()
+                snapshot.post("restore", use: restoreSnapshot).supportsIdempotency()
                 // Snapshot mobility (issue #428); handlers live in
                 // SandboxSnapshotTransferController.swift. The artifact
                 // routes are signed agent routes (streamed bodies, no
                 // session — see the AuthorizationMiddleware carve-out).
-                snapshot.post("export", use: exportSnapshot)
+                snapshot.post("export", use: exportSnapshot).supportsIdempotency()
                 snapshot.on(.PUT, "artifacts", ":artifactKind", body: .stream, use: uploadSnapshotArtifact)
                 snapshot.get("artifacts", ":artifactKind", use: downloadSnapshotArtifact)
             }
@@ -64,41 +64,36 @@ struct SandboxController: RouteCollection {
     /// limit/offset (optional) — select the page.
     func index(req: Request) async throws -> PagedResponse<SandboxDetailResponse> {
         let paging = try ListPaging.decode(from: req)
-        let sandboxes = try await visibleSandboxes(req: req)
-        return paging.page(sandboxes)
-    }
-
-    /// Every sandbox the caller may read, newest first, ready for slicing.
-    func visibleSandboxes(req: Request) async throws -> [SandboxDetailResponse] {
-        // Any authenticated principal, as in VMController.visibleVMs — which
+        // Any authenticated principal, as in VMController.index — which
         // sandboxes it may see is the `canFilter` answer below (issue #495).
         _ = try req.requireActingPrincipal()
 
         // Scoped through the sandbox's project, as in VMController.index.
         var query = Sandbox.query(on: req.db)
-            // The response reports each NIC's network, addresses and security
-            // groups (STR-34, STR-102). Fluent batches children one `IN` query
-            // per relation, so this is three extra queries for the whole page,
-            // not three per sandbox.
-            .with(\.$networkInterfaces) {
-                $0.with(\.$securityGroupMemberships).with(\.$addresses).with(\.$logicalNetwork)
-            }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
-            if projectIDs.isEmpty { return [] }
+            if projectIDs.isEmpty {
+                return PagedResponse(items: [], total: 0, limit: paging.limit, offset: paging.offset)
+            }
             query = query.filter(\.$project.$id ~~ projectIDs)
         }
 
-        // One batched decision for the whole page, as in VMController.index.
-        let allSandboxes = try await query.all()
-        let nodes = allSandboxes.compactMap { $0.id.map { IAMNode(type: .sandbox, id: $0) } }
-        let readable = try await req.canFilter("sandbox:read", on: nodes)
-
-        let visible = allSandboxes.filter { sandbox in
-            sandbox.id.map { readable.contains(IAMNode(type: .sandbox, id: $0)) } ?? false
+        let ids = try await query.all(\.$id).compactMap { $0 }
+        let readable = try await req.canFilter("sandbox:read", on: ids.map { IAMNode(type: .sandbox, id: $0) })
+        let visibleIDs = ids.filter { readable.contains(IAMNode(type: .sandbox, id: $0)) }
+        let selected = paging.slice(visibleIDs)
+        guard !selected.isEmpty else {
+            return PagedResponse(items: [], total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
         }
+        let visible = try await Sandbox.query(on: req.db)
+            .filter(\.$id ~~ selected)
+            .with(\.$networkInterfaces) {
+                $0.with(\.$securityGroupMemberships).with(\.$addresses).with(\.$logicalNetwork)
+            }
+            .sort(\.$createdAt, .descending).sort(\.$id, .descending)
+            .all()
         // Batched, like the VM list: since STR-103 the enforcement verdict reads
         // the host row (it needs the sandbox-networking capability), so a
         // per-row call would be one query per sandbox plus a site lookup each.
@@ -106,11 +101,12 @@ struct SandboxController: RouteCollection {
             visible,
             offlineGrace: req.controlPlaneConfiguration.double(.siteControllerOfflineGraceSeconds),
             on: req.db)
-        return visible.map { sandbox in
+        let items = visible.map { sandbox in
             SandboxDetailResponse(
                 from: sandbox,
                 securityGroupsEnforced: sandbox.id.flatMap { enforcedBySandbox[$0] })
         }
+        return PagedResponse(items: items, total: visibleIDs.count, limit: paging.limit, offset: paging.offset)
     }
 
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a
@@ -287,19 +283,24 @@ struct SandboxController: RouteCollection {
 
         let updateRequest = try req.content.decodeValidated(UpdateSandboxRequest.self)
 
-        // Only metadata is updatable: image/resources/process changes would
-        // need a re-converge story that phase 1 doesn't have.
-        if let name = updateRequest.name {
-            sandbox.name = name
-        }
-        if let ttl = updateRequest.ttlSeconds {
-            guard ttl > 0 else {
-                throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
+        try await req.db.transaction { db in
+            guard try await sandbox.lockAndRefresh(on: db), sandbox.desiredStatus != .absent else {
+                throw Abort(.conflict, reason: "Sandbox is being deleted")
             }
-            sandbox.ttlSeconds = ttl
-        }
+            if let name = updateRequest.name {
+                sandbox.name = name
+            }
+            if let ttl = updateRequest.ttlSeconds {
+                guard ttl > 0 else {
+                    throw Abort(.badRequest, reason: "'ttlSeconds' must be positive")
+                }
+                sandbox.ttlSeconds = ttl
+            }
 
-        try await sandbox.save(on: req.db)
+            try await SandboxIdleFenceService.cancelForUserActivity(sandbox, on: db)
+            SandboxActivityService.touch(sandbox, at: try await ClusterClock.read(on: db))
+            try await sandbox.save(on: db)
+        }
         return try await Self.detailResponse(for: sandbox, on: req)
     }
 
@@ -318,7 +319,8 @@ struct SandboxController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .boot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
+            try await SandboxSuspensionService.admitWake(sandbox, on: db)
             sandbox.setDesiredStatus(.running)
         }
 
@@ -334,12 +336,21 @@ struct SandboxController: RouteCollection {
                 .badRequest, reason: "Sandbox cannot be stopped in current state: \(sandbox.status.rawValue)")
         }
 
+        struct StopRequest: Content { let suspend: Bool? }
+        let suspend =
+            (req.body.data?.readableBytes ?? 0) == 0 ? false : try req.content.decode(StopRequest.self).suspend ?? false
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
             .shutdown, on: sandbox, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
-            sandbox.setDesiredStatus(.stopped)
+        ) { @Sendable db in
+            sandbox.suspensionAfterSnapshotId = nil
+            if suspend {
+                try await SandboxSuspensionService.admitSuspension(sandbox, on: db)
+                sandbox.setDesiredStatus(.suspended)
+            } else {
+                sandbox.setDesiredStatus(.stopped)
+            }
         }
 
         return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
@@ -368,7 +379,8 @@ struct SandboxController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .reboot, on: sandbox, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
+            try await SandboxSuspensionService.admitWake(sandbox, on: db)
             sandbox.setDesiredStatus(.running)
         }
 
@@ -394,6 +406,18 @@ struct SandboxController: RouteCollection {
         let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:exec")
         let sandboxID = try sandbox.requireID()
 
+        if sandbox.status == .suspended || sandbox.desiredStatus == .suspended {
+            let accepted = try await req.resourceMutation.accept(
+                .boot, on: sandbox, actor: .user(try user.requireID()), dispatch: .stateSync,
+                on: req.db, app: req.application
+            ) { @Sendable db in
+                try await SandboxSuspensionService.admitWake(sandbox, on: db)
+                sandbox.setDesiredStatus(.running)
+            }
+            // No session is minted until a healthy restored guest is observed.
+            // The existing accepted-mutation contract provides a durable retry point.
+            return try await Self.acceptedResponse(for: sandbox, accepted, on: req)
+        }
         guard sandbox.isRunning else {
             throw Abort(
                 .badRequest,
@@ -421,7 +445,11 @@ struct SandboxController: RouteCollection {
             )
         }
 
+        let sessionID = UUID()
+        let admittedAt = try await SandboxActivityService.admitPending(
+            id: sandboxID, sessionID: sessionID, agentID: agentId, agentKey: agent.identity.key, on: req.db)
         let session = req.guestExecSessionManager.createPendingSession(
+            sessionId: sessionID.uuidString,
             resourceKind: .sandbox,
             resourceId: sandboxID.uuidString,
             agentKey: agent.identity.key,
@@ -432,7 +460,8 @@ struct SandboxController: RouteCollection {
             tty: execRequest.tty ?? false,
             rows: execRequest.rows,
             cols: execRequest.cols,
-            outputMode: execRequest.outputMode ?? .raw
+            outputMode: execRequest.outputMode ?? .raw,
+            now: admittedAt
         )
 
         let response = Response(status: .created)

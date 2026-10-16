@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 import StratoShared
 
@@ -81,9 +82,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         readTextFile: @escaping @Sendable (String) throws -> String = {
             try String(contentsOfFile: $0, encoding: .utf8)
         },
-        runSubprocess: @escaping SubprocessRunner = {
-            try await ProcessRunner.run(executableURL: $0, arguments: $1)
-        }
+        runSubprocess: @escaping SubprocessRunner = SubprocessBudget.run
     ) {
         self.rbdPath = rbdPath
         self.mappingStatePath = mappingStatePath
@@ -131,6 +130,14 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             try discardMapping(forKey: key)
         }
 
+        // A timed-out map can already own a kernel device without returning
+        // its path. Persist refusal before spawn, independently of credentials
+        // and access mode, so restart or another mode cannot duplicate it.
+        let marker = uncertainMappingMarker(for: attachment)
+        guard !FileManager.default.fileExists(atPath: marker) else {
+            throw KRBDMappingBlockedError(markerPath: marker)
+        }
+        try DurableFileWriter().write(Data(), to: marker, permissions: 0o600)
         var arguments = [
             "--conf", configPath,
             "--name", "client.\(user)",
@@ -139,8 +146,17 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             "--options", "ms_mode=secure",
         ]
         if readOnly { arguments.append("--read-only") }
-        let result = try await runSubprocess(URL(fileURLWithPath: rbdPath), arguments)
+        let result: ProcessResult
+        do {
+            result = try await runCommand(URL(fileURLWithPath: rbdPath), arguments)
+        } catch {
+            if !SubprocessBudget.preserveStaging(after: error) {
+                try? FileManager.default.removeItem(atPath: marker)
+            }
+            throw error
+        }
         guard result.terminationStatus == 0 else {
+            try? FileManager.default.removeItem(atPath: marker)
             throw StorageBackendError.hostMisconfiguration(
                 "rbd map exited with status \(result.terminationStatus)")
         }
@@ -156,12 +172,16 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             try persistMappings()
         } catch {
             mappings.removeValue(forKey: key)
-            _ = try? await runSubprocess(
+            _ = try? await runCommand(
                 URL(fileURLWithPath: rbdPath),
                 ["unmap", path])
             throw StorageBackendError.hostMisconfiguration(
                 "failed to persist the Firecracker krbd mapping inventory")
         }
+        // The durable mapping inventory now owns this device. A cleanup error
+        // must not discard its successful reference; a leftover refusal safely
+        // blocks a future fresh map until operator review.
+        try? FileManager.default.removeItem(atPath: marker)
         return FirecrackerRealizedDisk(
             canonical: attachment, realized: .blockDevice(path: path), readOnly: readOnly)
     }
@@ -216,7 +236,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             throw StorageBackendError.hostMisconfiguration(
                 "refusing to unmap a Firecracker RBD device whose live identity no longer matches")
         }
-        let result = try await runSubprocess(
+        let result = try await runCommand(
             URL(fileURLWithPath: rbdPath),
             ["unmap", mapping.path])
         guard result.terminationStatus == 0 else {
@@ -240,6 +260,15 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             pool, namespace, image,
             readOnly ? "ro" : "rw",
         ].joined(separator: "/")
+    }
+
+    private func uncertainMappingMarker(for attachment: DiskAttachment) -> String {
+        guard case .rbd(let pool, let image, let namespace, _, _, let clusterId, _, _) = attachment else {
+            preconditionFailure("Only RBD attachments have mapping markers")
+        }
+        let coordinate = [clusterId.uuidString.lowercased(), pool, namespace, image].joined(separator: "/")
+        let digest = SHA256.hash(data: Data(coordinate.utf8)).map { String(format: "%02x", $0) }.joined()
+        return mappingStatePath + ".building-" + digest
     }
 
     private func persistMappings() throws {
@@ -272,7 +301,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
             let deviceName = Self.deviceName(for: path)
         else { return false }
 
-        let listing = try await runSubprocess(
+        let listing = try await runCommand(
             URL(fileURLWithPath: rbdPath),
             ["device", "list", "--format", "json", "--device-type", "krbd"])
         guard listing.terminationStatus == 0 else {
@@ -357,5 +386,17 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         let suffix = path.dropFirst(prefix.count)
         guard !suffix.isEmpty, suffix.allSatisfy(\.isNumber) else { return nil }
         return "rbd\(suffix)"
+    }
+    private func runCommand(_ executable: URL, _ arguments: [String]) async throws -> ProcessResult {
+        try await runSubprocess(executable, arguments, .storage(executable: executable, arguments: arguments))
+    }
+
+}
+
+struct KRBDMappingBlockedError: Error, LocalizedError, ClassifiableError {
+    let markerPath: String
+    var failureClassification: FailureClassification { .blocked }
+    var errorDescription: String? {
+        "Kernel RBD map completion is unknown (\(markerPath)). Confirm the map process stopped, inspect rbd device list, and verify/recover the exact cluster, pool, namespace, and image mapping before removing this marker and retrying; process exit alone does not remove a kernel mapping."
     }
 }

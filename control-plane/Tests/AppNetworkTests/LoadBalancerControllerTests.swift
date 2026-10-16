@@ -6,7 +6,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Load Balancer Controller Tests", .serialized)
+@Suite("Load Balancer Controller Tests", .serialized, .postgresFixture)
 final class LoadBalancerControllerTests {
     private func withLoadBalancerTestApp(
         _ test: (Application, Organization, Project, String) async throws -> Void

@@ -13,7 +13,7 @@ import AppTestSupport
 /// engine — so they also prove the extended schema (three principal types,
 /// four grants sets per role, `is`-guarded permits) survives strict
 /// validation — plus the workload registry and the who-can surfaces.
-@Suite("Workload Principal Tests", .serialized)
+@Suite("Workload Principal Tests", .serialized, .postgresFixture)
 final class WorkloadPrincipalTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {
@@ -408,6 +408,9 @@ final class WorkloadPrincipalTests {
 
             // Registering (and re-requiring) the same agent identity is
             // idempotent…
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createAgent(
+                named: nodeB.name, organizationScope: .organization(try tree.org.requireID()))
             try await WorkloadRegistry.registerAgent(identity: nodeB, on: app.db)
             try await WorkloadRegistry.requireAgentRegistration(identity: nodeB, on: app.db)
             let rows = try await WorkloadRegistration.query(on: app.db)

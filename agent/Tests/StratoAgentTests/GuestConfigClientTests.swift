@@ -10,8 +10,12 @@ struct GuestConfigClientTests {
         var lines: [String]
         var writes: [Data] = []
         var closed = false
-        init(_ response: String) {
-            lines = [#"{"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4}"#, response]
+        init(
+            _ response: String,
+            ping: String =
+                #"{"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4,"capabilities":["guest_config_convergence"]}"#
+        ) {
+            lines = [ping, response]
         }
         func write(_ data: Data) { writes.append(data) }
         func nextLine(timeout: TimeInterval?) -> String? { lines.isEmpty ? nil : lines.removeFirst() }
@@ -19,10 +23,11 @@ struct GuestConfigClientTests {
     }
     private let placement = VMGuestExecPlacement(vmId: "vm", vsockCID: 42)
     private func response(
-        nonce: String = "boot", generation: Int = 7, status: String = "converged", error: String = "null"
+        nonce: String = "boot", generation: Int = 7, status: String = "converged", error: String = "null",
+        files: String = "[]"
     ) -> String {
         """
-        {"type":"guest_config_state","nonce":"\(nonce)","observation":{"generation":\(generation),"status":"\(status)","error":\(error),"packages":[],"files":[],"services":[],"sysctls":[]}}
+        {"type":"guest_config_state","nonce":"\(nonce)","observation":{"generation":\(generation),"status":"\(status)","error":\(error),"packages":[],"files":\(files),"services":[],"sysctls":[]}}
         """
     }
     private func client(_ connection: Connection) -> GuestConfigClient {
@@ -43,6 +48,84 @@ struct GuestConfigClientTests {
         #expect(request["type"] as? String == "converge_guest_config")
         #expect(request["generation"] as? Int == 7)
         #expect(request["guest_config"] is [String: Any])
+    }
+
+    @Test func olderGuestsAreUpgradeWaitsAndNeverReceiveConvergenceIntent() async {
+        for capabilities in ["", #","capabilities":[]"#, #","capabilities":["unrelated"]"#] {
+            let connection = Connection(
+                response(),
+                ping: """
+                    {"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4\(capabilities)}
+                    """)
+            let failure = await #expect(throws: GuestConfigurationFailure.self) {
+                try await client(connection).converge(
+                    placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+            }
+            #expect(failure?.failureClassification == .waitingOnDependency)
+            #expect(failure?.errorDescription?.contains(GuestAgentBootstrap.defaultRelease) == true)
+            #expect(await connection.writes.count == 1)
+            #expect(await connection.closed)
+        }
+    }
+
+    @Test func fileConvergenceRequiresTheHashOfExactDesiredUTF8Bytes() async throws {
+        let fixtures = [
+            ("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            ("hello\n", "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"),
+            ("caf\u{e9}\n", "7b49b9e063bd91a4f9252b413261f5557b9c570aa61516989499f64a62dbcdd6"),
+        ]
+        for (content, expected) in fixtures {
+            let config = GuestConfig(files: [GuestFile(path: "/etc/example", content: content, mode: "0644")])
+            for digest in [expected, String(repeating: "0", count: 64)] {
+                let connection = Connection(
+                    response(
+                        files: """
+                            [{"path":"/etc/example","sha256":"\(digest)","mode":"0644"}]
+                            """))
+                if digest == expected {
+                    let observation = try await client(connection).converge(
+                        placement: placement, config: config, generation: 7, placementIsCurrent: { true })
+                    #expect(observation.files.first?.sha256 == expected)
+                } else {
+                    await #expect(throws: GuestConfigObservationError.self) {
+                        try await client(connection).converge(
+                            placement: placement, config: config, generation: 7, placementIsCurrent: { true })
+                    }
+                }
+                #expect(await connection.closed)
+            }
+        }
+    }
+
+    @Test func maximumEscapedContentFitsConvergenceFrame() async throws {
+        let files = (0..<4).map { index in
+            GuestFile(
+                path: "/escaped-\(index)",
+                content: String(repeating: "\u{1}", count: GuestConfig.maxFileBytes),
+                mode: "0600")
+        }
+        let config = GuestConfig(files: files)
+        try config.validate()
+        let connection = Connection(response(status: "failed", error: #""observation failed""#))
+        _ = try await client(connection).converge(
+            placement: placement, config: config, generation: 7, placementIsCurrent: { true })
+        let writes = await connection.writes
+        let request = try #require(writes.last)
+        #expect(request.count > GuestControlProtocol.Limits.maxLineBytes)
+        #expect(request.count <= GuestConfigClient.maxFrameBytes)
+    }
+
+    @Test func convergenceFrameLimitDoesNotChangeGenericGuestFrames() throws {
+        let generic = HostVsockLineFrameDecoder()
+        try generic.validate(length: GuestControlProtocol.Limits.maxLineBytes)
+        #expect(throws: HostVsockConnectionError.self) {
+            try generic.validate(length: GuestControlProtocol.Limits.maxLineBytes + 1)
+        }
+        let convergence = HostVsockLineFrameDecoder(maximumLineLength: GuestConfigClient.maxFrameBytes)
+        try convergence.validate(length: GuestConfigClient.maxFrameBytes)
+        #expect(throws: HostVsockConnectionError.self) {
+            try convergence.validate(length: GuestConfigClient.maxFrameBytes + 1)
+        }
     }
     @Test func rejectsStaleIdentityAndGenerationAndCloses() async {
         for invalid in [response(nonce: "old-boot"), response(generation: 6), "malformed"] {

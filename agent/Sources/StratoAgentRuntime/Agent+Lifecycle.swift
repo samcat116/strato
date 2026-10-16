@@ -28,11 +28,19 @@ extension Agent {
             return
         }
 
+        try ManagedStatePermissions.migrate(at: configuration.vmStoragePath, legacyStagingRoot: NSTemporaryDirectory())
+
         // Recover the workload manifest from a previous incarnation of this agent.
         // These workloads are not re-adopted here — the reconciler re-adopts them
         // when the backend supports it — but they stay routable to the backend that
         // owns them and keep reserving capacity until deleted or re-created.
-        await applyManifestLoad(manifestStore.load())
+        let manifestLoad = manifestStore.load()
+        if case .loaded(let entries, _) = manifestLoad {
+            let qemuVMIds = Set(entries.compactMap { $0.value.hypervisorType == .qemu ? $0.key : nil })
+            try ManagedStatePermissions.migrate(
+                at: configuration.vmStoragePath, qemuVMIds: qemuVMIds, legacyStagingRoot: NSTemporaryDirectory())
+        }
+        await applyManifestLoad(manifestLoad)
         applySnapshotInventory(snapshotRecordStore.load())
 
         // Simulation mode drives no real network backend. `NetworkOrchestrator`
@@ -199,7 +207,8 @@ extension Agent {
             // Nothing here touches Firecracker itself.
             logger.info("Simulation mode: registering mock hypervisor backend(s)")
             for type in HypervisorType.allCases {
-                hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type)
+                hypervisorServices[type] = MockHypervisorService(
+                    logger: logger, hypervisorType: type, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             }
 
             // The mock sandbox runtime (issue #470), so simulated agents host
@@ -247,7 +256,8 @@ extension Agent {
                     "detail": .string(
                         "this host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only")
                 ])
-            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+            hypervisorServices[.qemu] = MockHypervisorService(
+                logger: logger, hypervisorType: .qemu, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             #endif
 
             #if os(Linux)
@@ -364,7 +374,7 @@ extension Agent {
                         try await snapshotDownloader.uploadFile(url: url, fromFile: source)
                     }
                 )
-                sandboxRuntime = FirecrackerSandboxRuntime(
+                sandboxRuntime = try FirecrackerSandboxRuntime(
                     logger: logger,
                     client: firecrackerClient,
                     imageService: SandboxImageService(
@@ -383,7 +393,21 @@ extension Agent {
                     jailerBlockedReason: sandboxJailCreationBlockedReason,
                     warmStartEnabled: configuration.sandboxWarmStart,
                     warmCacheBudgetBytes: configuration.sandboxWarmCacheMaxSizeBytes,
-                    snapshotTransfer: snapshotTransfer
+                    snapshotTransfer: snapshotTransfer,
+                    suspensionRestoreTimeoutSeconds: configuration.sandboxSuspensionRestoreTimeoutSeconds,
+                    idlePolicy: configuration.sandboxIdlePolicy,
+                    automaticSuspensionTransport: SandboxIdleFenceTransport(
+                        minimumQuietMilliseconds: UInt64(
+                            min(configuration.sandboxIdlePolicy.idleSeconds, 86_400) * 1000),
+                        exchange: { [weak self] context, request in
+                            guard let self else { throw SandboxSuspensionGuard.GateError.stale }
+                            return try await self.exchangeSandboxIdleFence(context, request: request)
+                        },
+                        validate: { context in
+                            try await snapshotDownloader.validateSandboxIdleAdmission(
+                                controlPlaneBaseURL: self.controlPlaneHTTPBase,
+                                sandboxId: context.sandboxId, fence: context.fence.request)
+                        })
                 )
             } else {
                 logger.info("Sandbox guest image path not configured; sandbox runtime disabled")
@@ -396,8 +420,10 @@ extension Agent {
         // ordering survives; the pump tasks below serialize the sends.
         if let sandboxRuntime {
             await sandboxRuntime.setSandboxLogHandler {
-                [continuation = sandboxLogLinesContinuation] sandboxId, streamName, line in
-                continuation.yield((sandboxId, streamName, line))
+                [queue = sandboxLogLines] sandboxId, streamName, line in
+                queue.append(
+                    (sandboxId, streamName, line),
+                    byteCount: sandboxId.utf8.count + streamName.utf8.count + line.utf8.count)
             }
         }
         startSandboxPumps()
@@ -532,6 +558,7 @@ extension Agent {
         while !shutdownRequested {
             _ = reconnectState.consumeStartupConnectionLoss()
             do {
+                try await prepareForWorkloadRegistration()
                 let generation = try await client.connect()
                 try await registerWithControlPlane()
                 guard
@@ -634,7 +661,7 @@ extension Agent {
         // Stop the sandbox exec/log pumps the same way.
         await sandboxRuntime?.controlPlaneDisconnected()
         sandboxExecEventsContinuation.finish()
-        sandboxLogLinesContinuation.finish()
+        sandboxLogLines.finish()
         sandboxExecPumpTask?.cancel()
         sandboxExecPumpTask = nil
         sandboxLogPumpTask?.cancel()

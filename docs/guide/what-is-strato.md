@@ -3,9 +3,10 @@
 Strato is a private cloud platform: a control plane, a fleet of hypervisor
 agents, and a web UI that together give you VMs, microVM sandboxes,
 software-defined networking, and fine-grained access control on your own
-hardware. It aims to be fast, secure by default, and genuinely easy to
-deploy — a fresh install generates its own secrets and is production-shaped
-from the first `docker compose up`.
+hardware. A fresh installation generates its own secrets. Operators still
+configure
+TLS, identity endpoints, networking, and durable storage for their deployment;
+see [Getting started](/guide/getting-started).
 
 ## How it's shaped
 
@@ -44,8 +45,8 @@ fast, isolated code execution alongside your longer-lived VMs.
 
 Production networking on Linux via OVN/OVS: multi-node overlay networks,
 security groups, floating IPs, IPv4/IPv6 dual-stack, DHCP, and routing —
-with the control plane doing IPAM and DNS zone modeling. macOS falls back to
-user-mode (SLIRP) networking for development.
+with the control plane doing IPAM and DNS zone modeling. Real hypervisor and
+OVN workloads require Linux; macOS is for control-plane and client development.
 
 ### Identity and access
 
@@ -54,8 +55,9 @@ user-mode (SLIRP) networking for development.
 - **Built-in Cedar-based IAM**: roles, guardrails, and decision logs over an
   organization → folder → project hierarchy — no external authorization
   service to run
-- **SPIFFE/SPIRE mTLS** as the only agent authentication path — no join
-  tokens or shared secrets
+- **SPIFFE/SPIRE mTLS** as the agent authentication path. Enrollment uses
+  short-lived bootstrap and SPIRE join tokens; ongoing connections use
+  automatically rotating SVIDs rather than a shared agent password.
 
 ### Scheduling
 

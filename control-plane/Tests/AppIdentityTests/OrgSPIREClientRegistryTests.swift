@@ -22,7 +22,7 @@ import AppTestSupport
 /// suites concurrently, so mutating it here would race
 /// `SPIRERegistrationFlowTests`, which asserts platform-domain behavior off the
 /// same two variables.
-@Suite("Org SPIRE Client Registry")
+@Suite("Org SPIRE Client Registry", .postgresFixture)
 struct OrgSPIREClientRegistryTests {
 
     /// Deliberately *not* the `SPIRE_TRUST_DOMAIN` default (`strato.local`).

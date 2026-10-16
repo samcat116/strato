@@ -8,7 +8,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("Storage Pool Tests", .serialized)
+@Suite("Storage Pool Tests", .serialized, .postgresFixture)
 struct StoragePoolTests {
     private let resources = AgentResources(
         totalCPU: 8, availableCPU: 8,

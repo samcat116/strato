@@ -115,6 +115,14 @@ extension Agent {
                 // guest-facing listeners below are driven from the same list,
                 // after the reconciler has run.
                 let derivations = DesiredStateDerivations(message: message)
+                // Invalidate a stale suspension admission before network or
+                // reconciliation work can suspend this message's caller.
+                for desired in message.sandboxes {
+                    await sandboxRuntime?.noteSandboxIdleControlPlane(desired)
+                    await sandboxRuntime?.noteSandboxIntent(
+                        sandboxId: desired.sandboxId.uuidString, generation: desired.generation,
+                        desiredRunning: desired.desiredStatus == .running)
+                }
                 do {
                     // DNS zones (STR-39): nil means this agent is not the
                     // topology authority — leave every managed `DNS` row
@@ -697,7 +705,9 @@ extension Agent {
     /// is re-evaluated on every sync and the current reason is reported back on
     /// observed-state reports; a failed artifact is not retried within this
     /// process lifetime.
-    func handleDesiredAgentUpdate(_ update: DesiredAgentUpdate?) async {
+    func handleDesiredAgentUpdate(
+        _ update: DesiredAgentUpdate?, reportWorkloadStatus: Bool = true, updater: AgentUpdater? = nil
+    ) async {
         guard let update else {
             // No opinion from the control plane (rollout not reached us,
             // auto-update off, or an older control plane). Clear any stale
@@ -744,7 +754,7 @@ extension Agent {
                         "targetVersion": .string(update.targetVersion),
                         "reason": .string(reason),
                     ])
-                await sendObservedStateReport()
+                if reportWorkloadStatus { await sendObservedStateReport() }
             }
             return
         }
@@ -761,7 +771,7 @@ extension Agent {
 
         let outcome: AgentUpdateOutcome
         do {
-            let updater = AgentUpdater(logger: logger, download: makeUpdateArtifactDownload())
+            let updater = updater ?? AgentUpdater(logger: logger, download: makeUpdateArtifactDownload())
             outcome = try await updater.applyUpdate(
                 artifactURL: update.artifactURL,
                 sha256: update.sha256,
@@ -783,7 +793,7 @@ extension Agent {
             )
             // Push the failure immediately so the rollout halts on the real
             // error instead of waiting out its health budget.
-            await sendObservedStateReport()
+            if reportWorkloadStatus { await sendObservedStateReport() }
             return
         }
 
@@ -1112,8 +1122,13 @@ extension Agent {
         if sandboxLogPumpTask == nil {
             let lines = sandboxLogLines
             sandboxLogPumpTask = Task { [weak self] in
-                for await (sandboxId, stream, line) in lines {
-                    await self?.sendSandboxLogLine(sandboxId: sandboxId, stream: stream, line: line)
+                for await _ in lines.notifications {
+                    // One active line outside the byte-bounded queue, even if
+                    // the WebSocket send stalls. Pressure sheds telemetry only.
+                    for (sandboxId, stream, line) in lines.drain(maxCount: 1) {
+                        guard !Task.isCancelled, let self else { return }
+                        await self.sendSandboxLogLine(sandboxId: sandboxId, stream: stream, line: line)
+                    }
                 }
             }
         }
@@ -1608,13 +1623,21 @@ extension Agent {
     /// Ship one assembled workload log line. Runs on the log pump, so lines
     /// arrive at the control plane in the order the guest emitted them.
     func sendSandboxLogLine(sandboxId: String, stream: String, line: String) async {
+        guard !Task.isCancelled else {
+            sandboxLogLines.recordDrop(reason: .shutdown)
+            return
+        }
+        guard let websocketClient else {
+            sandboxLogLines.recordDrop(reason: .deliveryFailure)
+            return
+        }
         let message = SandboxLogMessage(sandboxId: sandboxId, stream: stream, message: line)
         do {
-            try await websocketClient?.sendMessage(message)
+            try await websocketClient.sendMessage(message)
         } catch {
-            logger.error(
-                "Failed to send sandbox log line",
-                metadata: ["strato.sandbox.id": .string(sandboxId), "error": .string(error.localizedDescription)])
+            // Rate-limited reporting is owned by the queue's cumulative drop
+            // counter; a broken connection must not produce one error per line.
+            sandboxLogLines.recordDrop(reason: Task.isCancelled ? .shutdown : .deliveryFailure)
         }
     }
 

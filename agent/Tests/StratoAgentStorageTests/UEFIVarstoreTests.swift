@@ -61,7 +61,7 @@ struct UEFIVarstoreTests {
         }
 
         nonisolated var runner: SubprocessRunner {
-            { _, arguments in try await self.run(arguments) }
+            { _, arguments, _ in try await self.run(arguments) }
         }
     }
 
@@ -225,10 +225,9 @@ struct UEFIVarstoreTests {
         }
     }
 
-    /// A partial left by a crashed run is discarded rather than published: it
-    /// is not a resumable download, and its bytes are the previous attempt's.
-    @Test("A partial from a crashed run is discarded, not published")
-    func stalePartialIsDiscarded() async throws {
+    /// Unknown process ownership is not permission to reclaim old staging.
+    @Test("An unknown prior partial is retained and never published")
+    func stalePartialIsRetained() async throws {
         try await withTemporaryDirectory { directory in
             let recorder = Recorder()
             let varstore = UEFIVarstore(logger: logger, runSubprocess: recorder.runner)
@@ -239,7 +238,7 @@ struct UEFIVarstoreTests {
             try await varstore.materialize(at: path, from: "/vars.fd")
 
             #expect(FileManager.default.contents(atPath: path) == Data("varstore".utf8))
-            #expect(!FileManager.default.fileExists(atPath: path + ".partial"))
+            #expect(FileManager.default.contents(atPath: path + ".partial") == Data("half a varstore".utf8))
         }
     }
 

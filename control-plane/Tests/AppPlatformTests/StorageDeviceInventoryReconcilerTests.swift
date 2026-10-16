@@ -9,7 +9,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Storage device inventory reconciliation", .serialized)
+@Suite("Storage device inventory reconciliation", .serialized, .postgresFixture)
 struct StorageDeviceInventoryReconcilerTests {
     @Test("an empty snapshot retains rows and marks them missing")
     func emptySnapshotMarksRowsMissing() async throws {
@@ -205,6 +205,7 @@ struct StorageDeviceInventoryReconcilerTests {
             environment,
             .shared(PostgresTestDatabases.appEventLoopGroup))
         let databaseName = Environment.get("DATABASE_NAME") ?? "strato_test"
+        await (try PostgresFixtureScope.requireCurrent()).register(app)
         app.databases.use(
             .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
             as: .psql)

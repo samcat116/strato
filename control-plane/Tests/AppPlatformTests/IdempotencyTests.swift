@@ -7,7 +7,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("Mutation idempotency")
+@Suite("Mutation idempotency", .postgresFixture)
 struct IdempotencyTests {
     private actor Latch {
         private var open = false
@@ -345,6 +345,8 @@ struct IdempotencyTests {
                 method: .POST,
                 url: URI(path: "/api/vms/preflight-race"),
                 on: app.eventLoopGroup.next())
+            request.route = try #require(
+                app.routes.all.first { $0.method == .POST && $0.path.map(\.description) == ["api", "vms"] })
             request.auth.login(user)
             request.headers.replaceOrAdd(name: IdempotencyMiddleware.headerName, value: key)
 

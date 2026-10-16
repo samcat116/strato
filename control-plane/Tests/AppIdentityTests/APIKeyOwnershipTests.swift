@@ -12,7 +12,7 @@ import AppTestSupport
 /// row scoping to the calling user — another user's key is a 404, never
 /// visible, and never mutable. The default-deny middleware keeps these routes
 /// on login-only at cutover.
-@Suite("API Key Ownership Tests", .serialized)
+@Suite("API Key Ownership Tests", .serialized, .postgresFixture)
 final class APIKeyOwnershipTests {
 
     private func withTwoUsers(

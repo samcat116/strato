@@ -8,7 +8,7 @@ import AppTestSupport
 
 /// Covers the materialized-path prefix matching that replaced the folder-tree
 /// walk and the unindexable `LIKE '%<uuid>%'` descendant lookup (issue #692).
-@Suite("Folder Subtree Tests", .serialized)
+@Suite("Folder Subtree Tests", .serialized, .postgresFixture)
 struct FolderSubtreeTests {
 
     /// Boots an app with an admin user (bearer token) and an organization.

@@ -89,6 +89,16 @@ final class AgentWebSocketFrameProcessor: @unchecked Sendable {
         await task?.value
     }
 
+    /// Revocation drops queued frames. Wait for the already-running handler
+    /// before clearing claims, so it cannot publish presence after teardown.
+    func stopAndDiscard() -> Task<Void, Never>? {
+        lock.withLock {
+            acceptingFrames = false
+            buffer = BoundedAgentFrameBuffer(byteLimit: buffer.byteLimit)
+            return drainTask
+        }
+    }
+
     private func run() async {
         while let text = nextFrame() {
             await handler(text)

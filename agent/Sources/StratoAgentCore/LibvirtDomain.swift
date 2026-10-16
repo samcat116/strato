@@ -188,6 +188,8 @@ public enum LibvirtDomain {
     /// are not, and a domain that has been defined but never started is already
     /// in the state the create contract asks for.
     public static let startFlags: UInt32 = 0
+    /// VIR_DOMAIN_START_PAUSED: held until effective readback succeeds.
+    public static let startPausedFlags: UInt32 = 1 << 0
 
     /// `virDomainShutdownFlagValues.VIR_DOMAIN_SHUTDOWN_DEFAULT` — let libvirt
     /// pick, which tries the guest agent and falls back to the ACPI power
@@ -318,6 +320,8 @@ public enum LibvirtDomain {
     /// the VM is running — the reconciler only asks for one on a workload that
     /// is wanted running (STR-151).
     public static let snapshotRevertRunning: UInt32 = 1 << 0
+    /// VIR_DOMAIN_SNAPSHOT_REVERT_PAUSED: validate before guest execution.
+    public static let snapshotRevertPaused: UInt32 = 1 << 1
 
     /// `virDomainGetJobStatsFlags.VIR_DOMAIN_JOB_STATS_COMPLETED` — report the
     /// job that just finished rather than one in flight. Without it, a query

@@ -28,7 +28,7 @@ Platform notes for running VMs:
   The 11.5 floor covers local QEMU disks. Namespaced RBD attached through QEMU
   requires libvirt 11.6+; Firecracker/krbd-only Ceph clients do not require a
   reachable libvirt daemon.
-- **macOS**: macOS 14+, Xcode Command Line Tools, `brew install qemu` for
+- **macOS**: macOS 15+, Xcode Command Line Tools, `brew install qemu` for
   `qemu-img`. Best-effort only: no CI builds the agent for macOS, and without
   libvirt it registers a mock QEMU driver and reports the backend
   unavailable — control-plane and frontend development is the supported use;
@@ -90,6 +90,12 @@ suite. Frontend and other checks have their own workflow coverage; see
 `.github/workflows/README.md`. Report the actual package,
 platform, and test scope; a build or a macOS run cannot prove Linux VM behavior.
 
+To compare rootfs-cache verification under concurrent readers, run
+`STRATO_CACHE_BENCHMARK=1 swift test --package-path agent --filter concurrentLookupBenchmark`.
+It measures three passes of 16 concurrent lookups against a 64 MiB image on
+the local filesystem. Timing is informational; compare runs on the same host
+and toolchain. The benchmark is skipped in ordinary test runs.
+
 Tests use [swift-testing](https://github.com/swiftlang/swift-testing)
 (`@Test` / `#expect`), not XCTest. Keep control-plane tests in the template
 clone harness and point `DATABASE_*` at a disposable test server.
@@ -103,7 +109,7 @@ compile. Give builds a generous timeout rather than assuming they hung.
 
 ### The IAM symbolic-analysis suites
 
-The write-time guardrail report and the role-nesting subsumption proof
+The write-time guardrail report and conditioned-policy implication checks
 (`docs/architecture/iam.md`) drive an SMT solver, and their suites skip
 themselves when there is none. The rest of the suite is unaffected — the test
 harness installs a permissive analyzer, so writing a binding in an unrelated
@@ -227,9 +233,16 @@ To develop against the Helm chart, install it into a local cluster:
 minikube start --memory=4096 --cpus=2
 cd helm/strato-control-plane
 helm dependency build
-helm install strato .
-kubectl port-forward service/strato-strato-control-plane 8080:8080
+helm install strato . \
+  --set image.repository=ghcr.io/samcat116/strato-control-plane \
+  --set frontend.image.repository=ghcr.io/samcat116/strato-frontend \
+  --set image.tag=main --set frontend.image.tag=main
+kubectl port-forward service/strato-strato-control-plane-frontend 8080:3000
 ```
+
+Visit `http://localhost:8080` for the UI; forwarding the control-plane service
+provides the API only. The chart defaults to local image names, so select
+published images as above or load your own builds into the cluster.
 
 Iterating means rebuilding images and running `helm upgrade`. See the
 [Kubernetes deployment guide](/deployment/kubernetes) and
@@ -240,9 +253,16 @@ Iterating means rebuilding images and running `helm upgrade`. See the
 The docs are a [VitePress](https://vitepress.dev) site:
 
 ```bash
+npm ci              # docs toolchain uses npm; the frontend uses Bun
 npm run docs:dev     # from the repo root
 npm run docs:build
 ```
+
+VitePress checks page links during the build. Also check fragment targets and
+links in repository-only Markdown; the site build cannot verify external
+services or prove that deployment examples work on real infrastructure.
+Internal agent guidance under `docs/agents/` is excluded from the site.
+See the [documentation map](/documentation) for public entry points.
 
 ## Next steps
 

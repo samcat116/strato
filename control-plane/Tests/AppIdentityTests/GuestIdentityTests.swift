@@ -10,7 +10,7 @@ import AppTestSupport
 /// A VM's SPIFFE instance identity (STR-55): how the URI is composed, which
 /// trust domain it lands in, and that the row it writes really resolves to a
 /// principal the authorizer understands.
-@Suite("Guest Identity Tests", .serialized)
+@Suite("Guest Identity Tests", .serialized, .postgresFixture)
 final class GuestIdentityTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {

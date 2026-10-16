@@ -36,6 +36,13 @@ enum SecurityGroupService {
         do {
             try await group.save(on: db)
         } catch {
+            // PostgreSQL has aborted an enclosing transaction; querying here
+            // would mask the original SQLSTATE with 25P02. Its owner must retry
+            // the whole transaction. Only an autocommit unique-key race can be
+            // recovered by looking up the winner on this handle.
+            guard !db.inTransaction,
+                DatabaseTransactionFailure.uniqueConstraint(error) == "uq_security_groups_default"
+            else { throw error }
             // Lost a race with a concurrent creator: the partial unique index
             // refused the second default. Use theirs.
             if let existing = try await SecurityGroup.query(on: db)

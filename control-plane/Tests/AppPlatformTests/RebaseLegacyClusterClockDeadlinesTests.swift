@@ -6,7 +6,7 @@ import Testing
 
 @testable import App
 
-@Suite("Rebase legacy cluster-clock deadlines", .serialized)
+@Suite("Rebase legacy cluster-clock deadlines", .serialized, .postgresFixture)
 struct RebaseLegacyClusterClockDeadlinesTests {
     @Test("legacy convergence and retention deadlines receive a database-clock runway")
     func deadlinesReceiveDatabaseClockRunway() async throws {

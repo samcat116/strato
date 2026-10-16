@@ -22,7 +22,16 @@ extension AgentService {
     /// agent's own send order.
     @discardableResult
     func enqueueObservedStateReport(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) -> Task<Void, Never> {
-        let session = observedInventorySessions[agentKey]
+        enqueueObservedStateReport(
+            envelope, fromAgentKey: agentKey, inventorySession: observedInventorySessions[agentKey])
+    }
+
+    /// Network frames retain their socket's token even if enqueue is delayed
+    /// beyond a successor registration. Both actor and SQL ownership are checked.
+    @discardableResult
+    func enqueueObservedStateReport(
+        _ envelope: MessageEnvelope, fromAgentKey agentKey: String, inventorySession session: UUID?
+    ) -> Task<Void, Never> {
         return enqueueInventoryOperation(for: agentKey) { [weak self] in
             await self?.applyQueuedObservedStateReport(envelope, fromAgentKey: agentKey, inventorySession: session)
         }
@@ -127,6 +136,8 @@ extension AgentService {
             return nil
         }
 
+        guard !agent.administrativelyOffline else { return nil }
+
         let instant: ClusterInstant
         do {
             instant = try await ClusterClock.read(on: db)
@@ -166,6 +177,24 @@ extension AgentService {
             inventoryRefusal.map {
                 ObservedManifestStatus(inventoryComplete: false, quarantinedEntries: 0, reason: $0)
             } ?? report.manifestStatus
+        let admissionOutcome: ResourceAdmissionService.ReportOutcome
+        do {
+            admissionOutcome = try await ResourceAdmissionService.accept(
+                report, agentID: agentUUID, sessionID: inventorySession,
+                inventoryComplete: inventoryRefusal == nil && report.manifestStatus?.inventoryComplete != false,
+                on: db)
+            if case .refused = admissionOutcome { return nil }
+            if case .accepted(let released) = admissionOutcome {
+                // Durable net resources and claim removal committed first. A
+                // failed release only leaves conservative double charging.
+                for key in released {
+                    await app.coordination.releaseReservation(agentId: report.agentId, vmId: key)
+                }
+            }
+        } catch {
+            app.logger.warning("Resource admission report transaction failed; retaining claims: \(error)")
+            return nil
+        }
         var agentChanged = applyReportedManifestStatus(effectiveManifestStatus, to: agent, at: instant)
 
         // Reports carry the same resource snapshot as heartbeats; keep the
@@ -194,17 +223,20 @@ extension AgentService {
         }
         if agentChanged {
             do {
-                try await agent.save(on: db)
+                try await saveActiveAgent(agent, on: db)
             } catch {
                 app.logger.warning(
                     "Failed to persist agent resources from observed-state report: \(error)",
                     metadata: ["strato.agent.id": .string(report.agentId)])
+                return nil
             }
         }
 
         // The report arrived over this process's socket: refresh presence
-        // alongside, mirroring the heartbeat path.
-        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
+        // alongside, mirroring the heartbeat path. Reuse the inventory fence's
+        // pinned connection: an app.db checkout here waits on our own lease
+        // when the per-event-loop pool has only one connection.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey, on: db)
 
         // The guard covers the whole report, before any row deletion, error
         // transition, replica removal, network merge, or reservation release.
@@ -341,6 +373,11 @@ extension AgentService {
     func applyReportedManifestStatus(
         _ status: ObservedManifestStatus?, to agent: Agent, at instant: ClusterInstant
     ) -> Bool {
+        // Even a clean report must prove inventory arrived after the target
+        // registration. Registration and generic heartbeat alone cannot do so.
+        if agent.updateDesiredVersion != nil {
+            agent.updateInventoryReceivedAt = instant.date
+        }
         Telemetry.agentManifestUnreadable(
             agentName: agent.name, unreadable: status.map { !$0.inventoryComplete } ?? false)
 
@@ -348,7 +385,7 @@ extension AgentService {
             guard
                 agent.manifestStatusReason != nil || agent.manifestStatusAt != nil
                     || agent.manifestInventoryComplete != nil
-            else { return false }
+            else { return agent.updateDesiredVersion != nil }
             app.logger.notice(
                 "Agent workload inventory is healthy again",
                 metadata: ["strato.agent.name": .string(agent.name)])
@@ -362,9 +399,8 @@ extension AgentService {
             agent.manifestStatusReason != status.reason
                 || agent.manifestInventoryComplete != status.inventoryComplete
         else {
-            // Same condition, re-reported on a heartbeat: already logged,
-            // already on the row.
-            return false
+            // Persist assignment verification receipt even for unchanged status.
+            return agent.updateDesiredVersion != nil
         }
         app.logger.error(
             status.inventoryComplete
@@ -390,7 +426,7 @@ extension AgentService {
         guard let status else {
             // Nothing in the way (or nothing desired): clear a stale blocked
             // reason so the API stops surfacing it. Failures stay — they are
-            // rollout state, resolved by convergence or operator action.
+            // rollout state, resolved only by operator action or a new fleet target.
             agent.updateBlockedReason = nil
             return
         }

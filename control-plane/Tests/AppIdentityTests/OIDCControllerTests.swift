@@ -6,7 +6,7 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-@Suite("OIDC Controller Tests", .serialized)
+@Suite("OIDC Controller Tests", .serialized, .postgresFixture)
 final class OIDCControllerTests: BaseTestCase {
 
     private struct InvalidDefaultRoleRequest: Content {

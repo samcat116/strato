@@ -22,7 +22,7 @@ import AppTestSupport
 ///
 /// `cachedResolutionMatchesUncached` guards the other half — that all this
 /// caching and batching still produces the chain a lone uncached walk would.
-@Suite("VM List Scaling Tests", .serialized)
+@Suite("VM List Scaling Tests", .serialized, .postgresFixture)
 final class VMListScalingTests {
 
     private func withApp(_ test: (Application) async throws -> Void) async throws {
@@ -64,13 +64,13 @@ final class VMListScalingTests {
             /// request each time, so no memo carries between measurements.
             func queriesToList(expecting expected: Int) async throws -> Int {
                 let req = Request(
-                    application: app, method: .GET, url: URI(path: "/api/vms"),
+                    application: app, method: .GET, url: "/api/vms?limit=500",
                     on: app.eventLoopGroup.next())
                 req.auth.login(user)
                 req.fluent.history.start()
-                let vms = try await VMController().visibleVMs(req: req)
+                let page = try await VMController().index(req: req)
                 req.fluent.history.stop()
-                #expect(vms.count == expected)
+                #expect(page.items.count == expected)
                 return req.fluent.history.queries.count
             }
 

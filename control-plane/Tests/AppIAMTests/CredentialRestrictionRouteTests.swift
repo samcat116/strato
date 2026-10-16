@@ -11,7 +11,7 @@ import AppTestSupport
 /// Canonical credential restrictions exercised through production routes.
 /// These tests complement the evaluator-level suite by pinning route
 /// classification and the login-only restriction backstop.
-@Suite("Credential Restriction Routes", .serialized)
+@Suite("Credential Restriction Routes", .serialized, .postgresFixture)
 final class CredentialRestrictionRouteTests {
     private func withApp(_ test: (Application) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()

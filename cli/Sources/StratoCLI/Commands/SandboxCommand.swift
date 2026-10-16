@@ -88,6 +88,13 @@ struct SandboxCommand: AsyncParsableCommand {
         @Option(name: .long, help: "vCPU count.")
         var cpus: Int?
 
+        @Option(
+            name: .long, help: "Resource class site UUID; use with --resource-class-id. Omission selects guaranteed.")
+        var resourceClassSite: String?
+
+        @Option(name: .long, help: "Site-scoped class UUID. Burstable requires verified runtime enforcement.")
+        var resourceClassId: String?
+
         @Option(name: .long, help: "Guest memory in bytes.")
         var memory: Int64?
 
@@ -104,6 +111,8 @@ struct SandboxCommand: AsyncParsableCommand {
                 let accepted = try await client.createSandbox(
                     body: .json(
                         .init(
+                            resourceClass: try parseResourceClassReference(
+                                site: resourceClassSite, classID: resourceClassId),
                             name: name, image: image,
                             projectId: try resolveProject(project, environment: env),
                             environment: environment, cpus: cpus, memory: memory, ttlSeconds: ttl))

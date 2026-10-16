@@ -233,8 +233,8 @@ enum OperationFacade {
     ///
     /// Every other mutation is judged from the resource:
     ///
-    /// * `degraded` naming exactly the generation this mutation targeted →
-    ///   `failed`;
+    /// * `degraded` naming the target, or a newer failure while this target
+    ///   was never observed → `failed`;
     /// * convergence at or past that generation → `succeeded`, whether the
     ///   agent reached it or a later mutation superseded it, so a mutation the
     ///   reconciler has moved past is not left `pending` forever;
@@ -267,7 +267,10 @@ enum OperationFacade {
         // judged against the generation it was issued at.
         let target = event.targetGeneration ?? conditions.targetGeneration
 
-        if let degraded = conditions.degraded, degraded.sinceGeneration == target {
+        if let degraded = conditions.degraded,
+            degraded.sinceGeneration == target
+                || (degraded.sinceGeneration > target && conditions.observedGeneration < target)
+        {
             return Verdict(status: .failed, error: degraded.reason, completedAt: nil)
         }
         if event.mutation == .guestConfig {

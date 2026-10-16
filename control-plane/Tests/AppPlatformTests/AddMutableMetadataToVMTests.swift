@@ -7,7 +7,7 @@ import Vapor
 
 @testable import App
 
-@Suite("Add mutable metadata to VM migration", .serialized)
+@Suite("Add mutable metadata to VM migration", .serialized, .postgresFixture)
 struct AddMutableMetadataToVMTests {
     @Test("existing SSH keys are preserved and new metadata defaults empty")
     func existingRowsAreBackfilled() async throws {

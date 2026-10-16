@@ -439,6 +439,17 @@ struct QuotaEnforcementService {
         try await releaseWorkload(projectID: sandbox.$project.id, environment: sandbox.environment, on: db)
     }
 
+    /// Suspension/wake updates the durable row ledger before this locked recount.
+    static func refreshSandboxReservations(_ sandbox: Sandbox, on db: any Database) async throws {
+        let project = try await sandbox.project(on: db)
+        let quotas = try await applicableQuotas(for: project, environment: sandbox.environment, on: db)
+        try await lockQuotas(quotas, on: db)
+        for quota in quotas {
+            try await resyncReservations(quota, on: db)
+            try await quota.save(on: db)
+        }
+    }
+
     /// Volume counterpart (STR-181): call *after* the volume row is deleted.
     ///
     /// One call covers the volume's snapshots too, because deleting the row

@@ -9,7 +9,7 @@ import VaporTesting
 /// Organization membership remains relational so it can exist without a
 /// grant. Any role attached to that membership is a canonical UUID and its
 /// binding is the sole authorization representation.
-@Suite("Organization Member Role Tests", .serialized)
+@Suite("Organization Member Role Tests", .serialized, .postgresFixture)
 final class OrganizationMemberRoleTests {
     private struct AddRequest: Content {
         let userEmail: String

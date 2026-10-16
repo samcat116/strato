@@ -12,7 +12,7 @@ import MetricsTestKit
 /// shutdown hook the loop outlives the app and faults when the timer next fires after
 /// teardown — harmless as a production process exits, but a crash in the test suite,
 /// where CI runs long enough for the timer to fire mid-run against a shut-down app.
-@Suite("AgentService lifecycle", .serialized)
+@Suite("AgentService lifecycle", .serialized, .postgresFixture)
 final class AgentServiceLifecycleTests {
 
     @Test("heartbeat monitor durably marks stale agents offline")

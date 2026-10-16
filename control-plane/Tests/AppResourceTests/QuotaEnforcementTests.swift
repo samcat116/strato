@@ -11,7 +11,7 @@ import AppTestSupport
 /// delete via QuotaEnforcementService). Covers scope resolution, environment
 /// matching, reservation/release accounting, and the HTTP-level 403 that PR #300's
 /// frontend relies on (it links to /quotas whenever an error reason matches /quota/i).
-@Suite("Quota Enforcement Tests", .serialized)
+@Suite("Quota Enforcement Tests", .serialized, .postgresFixture)
 final class QuotaEnforcementTests {
 
     // Body mirroring VMController's private CreateVMRequest so tests can POST /api/vms.

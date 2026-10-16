@@ -85,9 +85,11 @@ into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
   the ordering guarantees the reconciler relies on.
 
   Most fetches carry `If-None-Match` so the control plane can park them and
-  answer `304`; that is a bandwidth optimization. Every
-  `desired_state_full_refetch_seconds` (default 300) the loop omits the
-  validator entirely and the control plane must answer with a full payload —
+  answer `304`; that is a bandwidth optimization. The loop samples its next
+  full-refetch threshold at 80–100% of `desired_state_full_refetch_seconds`
+  (default and maximum 300, minimum 1) after each successful unconditional
+  payload. Once due, the next attempt omits the validator entirely and the
+  control plane must answer with a full payload —
   the correctness invariant, and deliberately a rule rather than a tuning knob.
   Making *every* request conditional is the natural way to write an HTTP client
   and is exactly the bug: a wrong server-side "unchanged" would then strand the
@@ -96,8 +98,9 @@ into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
   Every unhappy path is paced (STR-291). A fetch that throws and a fetch that
   completes but returns something unusable — an undecodable payload, a wrong
   message type, a `304` answering an unconditional request, an unexpected
-  status — share one 1s → 30s doubling backoff, reset only by a response the
-  loop could actually use (a delivered `200`, or a conditional `304`). The
+  status — share one 1s → 30s doubling backoff with each delay sampled at 80–100%
+  of that capped ceiling, reset only by a response the loop could actually use
+  (a delivered `200`, or a conditional `304`). The
   unusable cases are the ones that matter: they drop the ETag, so every retry
   is an unconditional request the control plane must answer with a freshly
   assembled full payload, and their trigger is usually a property of the
@@ -555,6 +558,42 @@ supported case rather than a stale one.
 
 ## Guest provisioning (cloud-init)
 
+The workload manifest (including corrupt preservation copies), snapshot records,
+and metadata snapshots use `0600` from creation. The durable writer defaults to
+`0600` files and `0700` newly created directories. Startup tightens existing
+bookkeeping files and UUID directories identified by QEMU manifest entries, seed or NVRAM artifacts;
+only the seed ISO is chmod'ed inside those directories. Disk images, NVRAM, backing
+chains, sockets, sandbox directories, operator files, and existing ancestors retain
+their modes. Manifest staging leftovers (the legacy fixed name and UUID names) are also
+restricted without deleting their contents when owned by the agent; foreign-owned
+crash candidates retain their modes and contents. Legacy `cloud-init-<UUID>` directories
+in the system temporary directory are migrated only when owned by the current
+agent account; their known seed documents become `0600`, with other contents
+preserved. Foreign or linked legacy temporary entries are skipped without following
+them, even for known VMs, so shared temporary namespaces cannot block startup.
+Symlinks or hardlinks at canonical managed secret paths abort startup.
+Unmanaged UUID files and links are preserved.
+
+QEMU VM directories are created or tightened to `0700`. This relies on the
+supported installer contract that QEMU and the agent share an account, with
+libvirt DAC and AppArmor still enabled. The shared installation state root is
+`0711` for traversal by sandbox identities; it is never recursively chmod'ed.
+NoCloud generation leases `.cloud-init-staging` inside the private VM directory.
+A durable marker binds its VM, agent UID, and parent/stage device and inode identities.
+An interrupted stage is recovered only under an exclusive lease, with that exact
+identity and an allowlisted, agent-owned, unlinked tree. Unknown, replaced, foreign,
+linked, or concurrently leased stages are preserved and refused. Documents are
+created `0600`; the ISO tool writes into that private staging tree. A durable
+`.building` indicator is recorded before spawning and removed only after the tool
+returns. A stage retaining that indicator is refused even after the agent's lease
+is released: an orphaned ISO tool can survive an agent crash, so its exit cannot
+be inferred from age or a released lock. Crashes before provenance publication
+also remain refused. Completed/pre-build stages can be reclaimed automatically.
+The finished regular ISO is restricted to `0600`, synchronized, and renamed into
+place, preserving the previous ISO on generation failure. Cleanup validates the
+whole owned tree before descriptor-relative removal; it never recursively removes
+an unrelated or unknown tree.
+
 `StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO
 QEMU disk-boot VMs consume. `VMSpec.metadataSource` (wire v48) selects its
 shape at creation:
@@ -667,10 +706,12 @@ The create dialog and `strato vm create --guest-agent` disclose that this instal
 an exec-capable **root** systemd daemon. The setting changes vsock PCI topology;
 existing VMs require recreation, including changing it while stopped.
 
-First boot downloads `guest-agent-manifest.json` from the pinned published
-`v0.1.2` release, selects `x86_64` or `aarch64` from the guest, and verifies the
-native tarball's SHA-256 before publishing either file. It installs the packaged
-binary and unit, then enables/starts `strato-guest-agent.service`. The installer
+First boot downloads `guest-agent-manifest.json` from the pinned `v0.1.3`
+release, requires its `guest_config_convergence` capability, selects `x86_64` or
+`aarch64` from the guest, and verifies the native tarball's SHA-256 before
+publishing either file. The installer places the packaged binary and unit, then
+enables/starts `strato-guest-agent.service`. Publish the compatible v0.1.3
+artifacts and manifest before deploying the wire-v70 control plane/agent. The installer
 requires cloud-init, Python 3, systemd and HTTPS egress to GitHub. Download,
 manifest, architecture, checksum and startup errors fail the cloud-init script;
 an image without cloud-init cannot execute it at all. Opt-in does not prove
@@ -1630,7 +1671,10 @@ Southbound load-balancer health connects lazily on observation, with a separate
 failure. A Southbound startup failure does not permanently disable health.
 
 Console relays preserve order and allow at most 4 MiB or 1,024 chunks, including
-the write currently waiting on the client. Exceeding either budget closes that
+the write currently waiting on the client. Socket reads are demand-driven: one
+read is requested after the preceding chunk has reached the control-plane
+transport. This applies backpressure instead of filling the chunk budget with
+tiny serial reads during a short output burst. Exceeding either budget closes that
 console session; the client must reconnect. The relay never drops bytes and
 continues the same stream.
 
@@ -1640,6 +1684,26 @@ readable and live adoption preserves their existing identity. A legacy NIC with
 no MAC must receive one in desired state before network realization can proceed.
 The retired `enable_hvf` TOML key is rejected: macOS uses the mock hypervisor;
 Linux still supports `enable_kvm`.
+
+## Workload log pressure (issue #1366)
+
+The sandbox stdout/stderr handler writes synchronously to `BoundedLogQueue`,
+with the same 4 MiB byte budget, 4,096-entry ceiling, per-entry accounting, and
+oldest-first shedding as the control plane. Only one coalesced wakeup lives in
+AsyncStream; log payloads remain in the bounded FIFO. The serial outbound pump
+holds one active line outside the queue while awaiting the socket. The queue's
+cumulative dropped counter and pending byte count appear in a rate-limited
+warning (at most once per 30 seconds), and are directly available in its
+snapshot. Disconnected/failed active sends also increment the same loss counter without
+per-line errors. Stop discards pending telemetry and cancels the pump. This policy
+applies only to sandbox workload log lines; interactive terminal/session bytes
+retain their separate lossless delivery and overflow contracts (STR-89).
+
+## Host memory density policy
+
+The [opt-in bootstrap profile](../deployment/host-memory-profile.md) owns persistent
+compressed swap, THP, and tenant-safe KSM settings. Runtime observation is read-only
+and profile failures fence all hypervisor placement, including KSM unmerge transitions.
 
 ### Guest configuration convergence (STR-91)
 
@@ -1653,15 +1717,27 @@ realization until desired running state.
 
 `GuestConfigClient` checks placement before connection/request and after the
 reply, verifies the ping/reply boot nonce, and bounds and validates the hostile
-observation before retaining it. A guest-side busy pass is a dependency wait;
-a reported guest failure is permanent for that generation. Fixed host log
+observation before retaining it, including matching each converged file digest
+to the locally computed SHA-256 of its desired UTF-8 bytes. Before sending intent,
+the ping must advertise `guest_config_convergence`; older guests remain a
+dependency wait until an
+explicit guest upgrade. The first-boot pin is v0.1.3, whose compatible artifacts
+and capability-bearing manifest must be published before rollout; existing VMs
+are not automatically updated. A guest-side busy pass is also a dependency wait;
+a reported guest failure or terminal guest-channel error is permanent for that generation.
+The control plane returns its durable terminal guest generation with desired state
+(wire v71); a restarted agent adopts the VM but refuses that guest step before
+opening the channel. A newer generation permits retry. Host step failures carry
+no guest failure attribution. Fixed host log
 categories prevent guest-controlled diagnostic text from entering node logs.
 The full report includes `guestConfigObservation` alongside the existing VM
 failure fields. STR-92 owns detailed observation persistence/API projection.
+The dedicated exchange permits up to 4 MiB per line for worst-case escaped
+valid intent while every other guest-control client keeps the 1 MiB limit.
 
 The Linux guest uses a single serialized diff/apply/read-back engine, a shared
 180-second pass budget, 120-second package commands, and a durable metadata-only
 journal. Failed/interrupted generations survive restarts; successful replays
 measure current facts rather than trusting the journal as installed state.
-See [guest configuration details](../../sandbox-guest/README.md#managed-vm-guest-configuration-str-90--str-91)
+See [guest configuration details](https://github.com/samcat116/strato/blob/main/sandbox-guest/README.md#managed-vm-guest-configuration-str-90--str-91)
 for supported managers, observations, withdrawal semantics, and failure recovery.

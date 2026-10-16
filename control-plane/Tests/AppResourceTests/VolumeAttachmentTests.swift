@@ -46,7 +46,7 @@ private struct MutationHTTPResponse: Sendable {
 /// unattachable, invisible to every sweep — and two concurrent attaches could
 /// claim one device name, after which a detach resolved the disk by that name
 /// and could unplug the wrong one.
-@Suite("Volume Attachment Tests", .serialized)
+@Suite("Volume Attachment Tests", .serialized, .postgresFixture)
 struct VolumeAttachmentTests {
 
     /// A system admin, an org, a project, and a QEMU VM with no agent — which

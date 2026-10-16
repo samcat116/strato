@@ -7,7 +7,7 @@ import Vapor
 import AppTestSupport
 @testable import App
 
-@Suite("Captured VM command execution", .serialized)
+@Suite("Captured VM command execution", .serialized, .postgresFixture)
 struct VMCommandExecutionTests {
     private struct TransientFailure: Error {}
     private struct EOFDeliveryFailure: Error {}
