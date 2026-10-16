@@ -17,11 +17,11 @@ actor AppleVirtualizationService: HypervisorService {
     private var operations: Set<String> = []
     private var networks: [String: [ResolvedNetworkAttachment]] = [:]
 
-    init(logger: Logger, vmStoragePath: String) async {
+    init(logger: Logger, vmStoragePath: String, shutdownGracePeriod: Duration = .seconds(30)) async {
         self.logger = logger
         self.vmStoragePath = vmStoragePath
         self.provisioner = CloudInitProvisioner(logger: logger)
-        self.host = await AppleVirtualizationHost()
+        self.host = await AppleVirtualizationHost(shutdownGracePeriod: shutdownGracePeriod)
     }
 
     func support() async -> HypervisorSupport {
@@ -195,6 +195,12 @@ actor AppleVirtualizationService: HypervisorService {
 /// Sendable plans and observations cross back to the driver's actor.
 @MainActor
 final class AppleVirtualizationHost {
+    private let shutdownGracePeriod: Duration
+
+    init(shutdownGracePeriod: Duration = .seconds(30)) {
+        self.shutdownGracePeriod = shutdownGracePeriod
+    }
+
     private var machines: [String: VZVirtualMachine] = [:]
     private var started: Set<String> = []
 
@@ -331,9 +337,15 @@ final class AppleVirtualizationHost {
             throw HypervisorServiceError.invalidConfiguration("VM \(id) cannot request shutdown")
         }
         try vm.requestStop()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        let deadline = ContinuousClock.now.advanced(by: shutdownGracePeriod)
         while vm.state != .stopped {
-            guard ContinuousClock.now < deadline else { throw HypervisorServiceError.timeout("shutdown VM \(id)") }
+            if ContinuousClock.now >= deadline {
+                // A guest may ignore the power-button request. Await the forced
+                // stop so shutdown converges and reboot can safely start again.
+                try Task.checkCancellation()
+                try await vm.stop()
+                return
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
     }

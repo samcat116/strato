@@ -24,12 +24,13 @@ struct AppleVirtualizationRuntimeTests {
     }
 
     @Test(
-        "Native EFI VM starts, pauses, resumes, and stops",
+        "Native EFI VM starts, pauses, resumes, and force-stops for shutdown and reboot",
         .enabled(
             if:
-                ProcessInfo.processInfo.environment["STRATO_TEST_APPLE_VIRTUALIZATION"] == "1"))
+                ProcessInfo.processInfo.environment["STRATO_TEST_APPLE_VIRTUALIZATION"] == "1"),
+        arguments: [Duration.zero, .seconds(1)])
     @MainActor
-    func nativeLifecycle() async throws {
+    func nativeLifecycle(shutdownGracePeriod: Duration) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -41,7 +42,8 @@ struct AppleVirtualizationRuntimeTests {
             try file.close()
         }
         let service = await AppleVirtualizationService(
-            logger: Logger(label: "apple-native"), vmStoragePath: root.appendingPathComponent("vms").path)
+            logger: Logger(label: "apple-native"), vmStoragePath: root.appendingPathComponent("vms").path,
+            shutdownGracePeriod: shutdownGracePeriod)
         try #require(await service.support().available)
         let mac = "02:00:00:00:00:01"
         let spec = VMSpec(
@@ -70,6 +72,21 @@ struct AppleVirtualizationRuntimeTests {
             try await service.resumeVM(vmId: id)
             #expect(try await service.getVMStatus(vmId: id) == .running)
             await #expect(throws: HypervisorServiceError.self) { try await service.resizeVM(vmId: id, spec: spec) }
+            // A zero grace period expires before the guest processes the stop
+            // request, exercising the same fallback as an unresponsive guest.
+            try await service.shutdownVM(vmId: id)
+            #expect(try await service.getVMStatus(vmId: id) == .shutdown)
+            #expect(await service.hasLiveSession(vmId: id) == false)
+            // Shutdown is idempotent once stopped.
+            try await service.shutdownVM(vmId: id)
+            try await service.bootVM(vmId: id)
+            try await service.pauseVM(vmId: id)
+            try await service.shutdownVM(vmId: id)
+            #expect(try await service.getVMStatus(vmId: id) == .shutdown)
+            try await service.bootVM(vmId: id)
+            try await service.rebootVM(vmId: id)
+            #expect(try await service.getVMStatus(vmId: id) == .running)
+            #expect(await service.hasLiveSession(vmId: id))
         } catch {
             try await service.deleteVM(vmId: id)
             throw error
