@@ -1,0 +1,33 @@
+control-plane/Sources/App/Services/VMGuestConfigMutation.swift
+  s_a9f6438f8d49a4::t_f8065a6cbbbd48 33-61
+control-plane/Sources/App/Services/OperationFacade.swift
+  s_a9f6438f8d49a4::t_c747e3be213287 182
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_a9f6438f8d49a4::t_f8065a6cbbbd48 670-672
+docs/architecture/control-plane.md
+  s_a9f6438f8d49a4::t_f8065a6cbbbd48 899-903
+control-plane/Sources/App/Services/VMGuestConfigPresentation.swift
+  s_a9f6438f8d49a4::t_c747e3be213287 18-19
+control-plane/Sources/App/Models/ResourceEvent.swift
+  s_a9f6438f8d49a4::t_f8065a6cbbbd48 59-60
+control-plane/Tests/AppResourceTests/VMGuestConfigurationTests.swift
+  s_a9f6438f8d49a4::t_45396d33c0170e 540-542,558-627
+  s_a9f6438f8d49a4::t_c747e3be213287 162,164-168,535-537
+  s_a9f6438f8d49a4::t_644ce7f29d6973 509-534,538-539,543-557,628-630
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d71c352f3bf0340dae09dca5d5ac27705cbbf0b2",
+  "prompts": {},
+  "sessions": {
+    "s_a9f6438f8d49a4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a146ca-7c62-7f41-8781-3a2aa9e66f67",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
