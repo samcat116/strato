@@ -22,7 +22,10 @@ struct CurrentSchemaBaselineTests {
     // The combined catalog was measured from PostgreSQL, not inferred from migration text.
     // Historical catalogs and the frozen baseline remain
     // independently asserted below.
-    private static let expectedCurrentCatalogMD5 = "3f966e11e1dd9c53fd4c1702385efb93"
+    private static let expectedPreAppleCatalogMD5 = "3f966e11e1dd9c53fd4c1702385efb93"
+    // Apple Virtualization expands only ck_vms_hypervisor_type_enum. Measured
+    // on PostgreSQL and independently checked by the migration round trip below.
+    private static let expectedCurrentCatalogMD5 = "d59ff30d4d1b37b6f15782b41e2222f3"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -93,9 +96,23 @@ struct CurrentSchemaBaselineTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("The Apple backend constraint is the only change from the reviewed pre-Apple catalog")
+    func appleBackendCatalogRoundTrip() async throws {
+        try await withTestApp { app in
+            let migration = AddAppleVirtualizationBackend()
+            #expect(try await self.catalogMD5(on: app.db) == Self.expectedCurrentCatalogMD5)
+            try await migration.revert(on: app.db)
+            #expect(try await self.catalogMD5(on: app.db) == Self.expectedPreAppleCatalogMD5)
+            try await migration.prepare(on: app.db)
+            #expect(try await self.catalogMD5(on: app.db) == Self.expectedCurrentCatalogMD5)
+        }
+    }
+
     @Test("Update verification migration round trips without rewriting existing assignments")
     func updateHealthMigrationRoundTrip() async throws {
         try await withTestApp { app in
+            // This historical fixture predates the Apple backend constraint.
+            try await AddAppleVirtualizationBackend().revert(on: app.db)
             let migration = AddAgentUpdateHealthVerification()
             let builder = TestDataBuilder(db: app.db)
             let org = try await builder.createOrganization(name: "Migration fixture")
@@ -132,6 +149,7 @@ struct CurrentSchemaBaselineTests {
             app.registerForwardMigrations()
             try await app.autoMigrate()
             // Keep this historical round trip independent of later additions.
+            try await AddAppleVirtualizationBackend().revert(on: app.db)
             try await AddAgentUpdateHealthVerification().revert(on: app.db)
             let full = try await catalogMD5(on: app.db)
             let fences = AddSandboxIdleFences()
