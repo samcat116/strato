@@ -12,6 +12,7 @@ import StratoShared
 actor ConsoleSocketManager {
     private let logger: Logger
     private let eventLoopGroup: EventLoopGroup
+    private let receiveAllocator: any RecvByteBufferAllocator
 
     /// Active console connections keyed by sessionId
     private var connections: [String: ConsoleConnection] = [:]
@@ -44,9 +45,13 @@ actor ConsoleSocketManager {
         let relay: OrderedByteRelay
     }
 
-    init(logger: Logger, eventLoopGroup: EventLoopGroup) {
+    init(
+        logger: Logger, eventLoopGroup: EventLoopGroup,
+        receiveAllocator: any RecvByteBufferAllocator = AdaptiveRecvByteBufferAllocator()
+    ) {
         self.logger = logger
         self.eventLoopGroup = eventLoopGroup
+        self.receiveAllocator = receiveAllocator
     }
 
     /// Sets the callback for console data output
@@ -97,6 +102,7 @@ actor ConsoleSocketManager {
 
         // Connect to Unix socket
         let bootstrap = ClientBootstrap(group: eventLoopGroup)
+            .channelOption(ChannelOptions.recvAllocator, value: receiveAllocator)
             // Serial devices can produce one-byte reads. Eager reading can fill
             // the relay's chunk budget with only a few KiB while its sink is
             // waiting on the control plane. Request the next read only after

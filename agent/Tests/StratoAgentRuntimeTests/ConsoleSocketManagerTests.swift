@@ -10,6 +10,22 @@ import Testing
 
 @Suite("Console socket flow control")
 struct ConsoleSocketManagerTests {
+    private final class ReadSizes: Sendable {
+        let values = Mutex<[Int]>([])
+    }
+
+    private struct OneByteReads: RecvByteBufferAllocator {
+        let sizes: ReadSizes
+
+        func buffer(allocator: ByteBufferAllocator) -> ByteBuffer { allocator.buffer(capacity: 1) }
+        func nextBufferSize() -> Int? { 1 }
+
+        mutating func record(actualReadBytes: Int) -> Bool {
+            if actualReadBytes > 0 { sizes.values.withLock { $0.append(actualReadBytes) } }
+            return false
+        }
+    }
+
     private final class InputRecorder: ChannelInboundHandler, Sendable {
         typealias InboundIn = ByteBuffer
         let bytes = Mutex(Data())
@@ -34,11 +50,17 @@ struct ConsoleSocketManagerTests {
                 channel.pipeline.addHandler(input).map { peers.continuation.yield(channel) }.map { _ in }
             }
             .bind(unixDomainSocketPath: path).get()
-        let manager = ConsoleSocketManager(logger: Logger(label: "console-test"), eventLoopGroup: group)
+        let loop = group.next()
+        let readSizes = ReadSizes()
+        let manager = ConsoleSocketManager(
+            logger: Logger(label: "console-test"), eventLoopGroup: loop,
+            receiveAllocator: OneByteReads(sizes: readSizes))
+        let entered = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let received = Mutex(Data())
         let closed = Mutex(false)
         await manager.setOnConsoleData { _, _, data in
+            entered.continuation.finish()
             for await _ in release.stream {}
             received.withLock { $0.append(data) }
         }
@@ -49,20 +71,24 @@ struct ConsoleSocketManagerTests {
 
         let paste = Data("networkctl status enp1s0 --no-pager\r".utf8)
         try await manager.write(sessionId: "session", data: paste)
-        // QEMU serial output can arrive one byte at a time. Hold the control-plane
-        // sink while sending more than the relay's 1024-chunk budget, but only 2 KiB.
+        // Force one-byte reads at the receiving socket: Unix streams can coalesce
+        // writes regardless of how they are paced. Hold the first chunk in the
+        // sink, then queue the rest of the burst in a single write.
         let output = Data(String(repeating: "\u{1b}[32m● enp1s0\u{1b}[0m\r\n", count: 100).utf8)
         do {
-            for byte in output {
-                try await peer.writeAndFlush(ByteBuffer(bytes: [byte])).get()
-                try await Task.sleep(for: .milliseconds(1))
-            }
+            try await peer.writeAndFlush(ByteBuffer(bytes: output.prefix(1))).get()
+            for await _ in entered.stream {}
+            try await peer.writeAndFlush(ByteBuffer(bytes: output.dropFirst())).get()
+            let readsWhileHeld = try await loop.submit { readSizes.values.withLock { $0.count } }.get()
+            #expect(readsWhileHeld == 1)
             #expect(!closed.withLock { $0 })
             release.continuation.finish()
             for _ in 0..<500 where received.withLock({ $0.count }) < output.count {
                 try await Task.sleep(for: .milliseconds(10))
             }
             #expect(received.withLock { $0 } == output)
+            #expect(readSizes.values.withLock { $0.count } == output.count)
+            #expect(readSizes.values.withLock { $0.allSatisfy { $0 == 1 } })
             #expect(input.bytes.withLock { $0 } == paste)
             #expect(!closed.withLock { $0 })
             try await peer.close().get()
