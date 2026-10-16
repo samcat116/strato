@@ -1,0 +1,20 @@
+control-plane/Sources/App/Services/AdvisoryLock.swift
+  h_a84d4ff76cadd1 6,217-219,227,273-278,282,372-379
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  h_a84d4ff76cadd1 30-31
+control-plane/Tests/AppResourceTests/VMPlacementRetryTests.swift
+  h_a84d4ff76cadd1 5,356-413
+docs/architecture/scheduler.md
+  h_a84d4ff76cadd1 301-305
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a10be294697ea12fbc58e0028c6f3a4f156e942",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
