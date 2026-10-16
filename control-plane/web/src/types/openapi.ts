@@ -203,6 +203,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/retry-placement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry placement of a failed, unplaced virtual machine
+         * @description Requires vm:start. Retries a failed create only when the VM has no assigned host and exactly one existing boot volume with no physical placement and no active convergence deadline. Metadata-only generation advances before or during queued placement do not cancel it. Reuses its NICs, addresses, identity and boot volume, and preserves its desired power state. The existing boot volume receives a new generation and provisioning budget. A pending or already placed VM is refused with 409. Completion is reported through the new generation's conditions; a VM whose desired state is shutdown can then be started.
+         */
+        post: operations["retryVMPlacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/interfaces": {
         parameters: {
             query?: never;
@@ -11407,6 +11430,29 @@ export interface operations {
         };
     };
     startVM: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["AcceptedVMMutation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    retryVMPlacement: {
         parameters: {
             query?: never;
             header?: {
