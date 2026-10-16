@@ -1,0 +1,19 @@
+sandbox-guest/init/src/convergence_linux.rs
+  s_c353912d75372b::t_ceb15452992b37 77-86,139,303-309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "beaed899c39c8f29152d845f24c1945f47ec4c50",
+  "prompts": {},
+  "sessions": {
+    "s_c353912d75372b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14682-7857-7951-95c8-43f48c308c4a",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
