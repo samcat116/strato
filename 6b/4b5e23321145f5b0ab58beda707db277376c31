@@ -1,0 +1,57 @@
+agent/Sources/StratoAgentCore/OCI/Ext4ImageBuilder.swift
+  s_ca9470a7e1539d::t_7a00efa8105652 1-126
+agent/Sources/StratoAgentCore/OCI/LayerDecompressor.swift
+  s_ca9470a7e1539d::t_b6525848128374 1-81
+agent/Sources/StratoAgentCore/OCI/OCIModels.swift
+  s_ca9470a7e1539d::t_53b980ceb53fe1 1-220
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_ca9470a7e1539d::t_49773e165ae7d9 1-226
+agent/Tests/StratoAgentTests/OCIRegistryClientTests.swift
+  s_ca9470a7e1539d::t_94d121e64097bf 1-390
+agent/Sources/StratoAgentCore/OCI/OCIError.swift
+  s_ca9470a7e1539d::t_036f89f7ae8ef4 1-100
+agent/Sources/StratoAgentCore/OCI/OCIHTTPTransport.swift
+  s_ca9470a7e1539d::t_bca15b4e62437e 1-133
+agent/Sources/StratoAgentCore/OCI/OCIImageFlattener.swift
+  s_ca9470a7e1539d::t_d24c3d3905ab14 1-274
+agent/Sources/StratoAgentCore/OCI/OCIRegistryClient.swift
+  s_ca9470a7e1539d::t_5af07ae79254e9 1-583
+agent/Sources/StratoAgentCore/OCI/SandboxImageService.swift
+  s_ca9470a7e1539d::t_44c237669bbc1f 1-268
+agent/Sources/StratoAgentCore/OCI/TarArchiveReader.swift
+  s_ca9470a7e1539d::t_e12406890198f4 1-343
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_ca9470a7e1539d::t_21f7b1f58978a2 81-121
+agent/Tests/StratoAgentTests/Ext4ImageBuilderTests.swift
+  s_ca9470a7e1539d::t_b98bfae808c920 1-150
+agent/Tests/StratoAgentTests/LayerDecompressorTests.swift
+  s_ca9470a7e1539d::t_8f64c232f76aaf 1-128
+agent/Tests/StratoAgentTests/OCIImageFlattenerTests.swift
+  s_ca9470a7e1539d::t_6ffe2cb23d0cb0 1-209
+agent/Tests/StratoAgentTests/OCIRootfsCacheTests.swift
+  s_ca9470a7e1539d::t_79dce06311b41a 1-168
+agent/Tests/StratoAgentTests/OCITestSupport.swift
+  s_ca9470a7e1539d::t_bee66b6c12b342 1-190
+agent/Tests/StratoAgentTests/SandboxImageServiceTests.swift
+  s_ca9470a7e1539d::t_4dc37d23a2892c 1-318
+agent/Tests/StratoAgentTests/TarArchiveReaderTests.swift
+  s_ca9470a7e1539d::t_a2e497d06a9f16 1-147
+docs/architecture/sandboxes.md
+  s_ca9470a7e1539d::t_4c999fcdc57070 14-18,162-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6b4b5e23321145f5b0ab58beda707db277376c31",
+  "prompts": {},
+  "sessions": {
+    "s_ca9470a7e1539d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "19c30a57-8e11-4290-a5b3-3a4c75872a6b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

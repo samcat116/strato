@@ -1,0 +1,19 @@
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_da4e347f23388a::t_75edf3577a631e 1304-1309,1312-1315
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "61875150480dc9a3232a7f72c36f0ffa9322885f",
+  "prompts": {},
+  "sessions": {
+    "s_da4e347f23388a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b33bf486-54e0-4d3f-b497-f458636ea932",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

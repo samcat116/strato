@@ -1,0 +1,49 @@
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_a5b8ccedc35df5::t_207af0edc2db91 1507-1510,1513-1514,1581-1584,1591,1593
+control-plane/web/src/types/openapi.ts
+  s_a5b8ccedc35df5::t_11f24b3df62525 145,5386,9767
+agent/Sources/StratoAgentCore/LibvirtDomain.swift
+  s_a5b8ccedc35df5::t_207af0edc2db91 272-291
+agent/Tests/StratoAgentTests/LibvirtDomainTests.swift
+  s_a5b8ccedc35df5::t_207af0edc2db91 155-177
+docs/deployment/agents.md
+  s_a5b8ccedc35df5::t_dc1b3d2faef076 523-527
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_a5b8ccedc35df5::t_e66202e436c84b 210-212,370-371
+control-plane/Sources/App/openapi.yaml
+  s_a5b8ccedc35df5::t_dc1b3d2faef076 373-379,403-405,9104-9105
+control-plane/web/src/types/api.ts
+  s_a5b8ccedc35df5::t_dc1b3d2faef076 1159
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a5b8ccedc35df5::t_03800bd8bdbfdd 1068-1073,1269-1278,1318-1323,1354-1359
+  s_a5b8ccedc35df5::t_64060902dcbb7c 1360-1361
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_a5b8ccedc35df5::t_e8bb38ab56e5d0 12-14
+  s_a5b8ccedc35df5::t_03800bd8bdbfdd 288-289,295,302-330,410-411,414
+  s_a5b8ccedc35df5::t_e66202e436c84b 9-10
+docs/development/e2e-testing.md
+  s_a5b8ccedc35df5::t_dc3ff285c246b2 135-152
+docs/architecture/agent.md
+  s_a5b8ccedc35df5::t_dc1b3d2faef076 271-274,704-709
+docs/architecture/control-plane.md
+  s_a5b8ccedc35df5::t_dc1b3d2faef076 228-235
+deploy/compose/vcpu-shrink-test.sh
+  s_a5b8ccedc35df5::t_dc3ff285c246b2 1-7,9-48,54-191
+  s_a5b8ccedc35df5::t_e66202e436c84b 8,49-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3a349787ca55fa59423fac3e4a9aed5f62b9f64c",
+  "prompts": {},
+  "sessions": {
+    "s_a5b8ccedc35df5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee74-d982-7572-a421-9be9c3f6390a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

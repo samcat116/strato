@@ -1,0 +1,21 @@
+helm/strato-control-plane/templates/prometheus-configmap.yaml
+  s_a9a9290d19ffe0::t_1d6118d636938c 39-42,44-48
+helm/strato-control-plane/templates/spire-server-service.yaml
+  s_a9a9290d19ffe0::t_f463827fd13c63 29-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "c8e9b274d02a14e2956bb08077d31ccded38d66d",
+  "prompts": {},
+  "sessions": {
+    "s_a9a9290d19ffe0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e0c267c-ad5e-48e4-a95b-a988b7014764",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

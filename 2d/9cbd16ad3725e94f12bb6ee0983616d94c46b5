@@ -1,0 +1,21 @@
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_b7aa8b7679a04b::t_3f2aa58f933dfb 737
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_b7aa8b7679a04b::t_e3dd6e04c1e9d4 138-140,142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2d9cbd16ad3725e94f12bb6ee0983616d94c46b5",
+  "prompts": {},
+  "sessions": {
+    "s_b7aa8b7679a04b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b37436d7-1284-4fbc-b3d4-82b79756d7c2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+control-plane/web/src/components/layout/command-palette.tsx
+  s_41c5ac11ea7573::t_1b8f1e18d79edc 78
+  s_41c5ac11ea7573::t_49f8e5c00737aa 10
+  s_41c5ac11ea7573::t_b453231890b891 26
+  s_41c5ac11ea7573::t_68a996b0e1d96b 51-52,54-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "17a1a62440912dfdd074c647b2c2e49447683a31",
+  "prompts": {},
+  "sessions": {
+    "s_41c5ac11ea7573": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5e7da32-f9c9-4e02-9985-b7f02cf47ed6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

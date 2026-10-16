@@ -1,0 +1,14 @@
+docs/architecture/frontend.md
+  h_a84d4ff76cadd1 136-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8719e385dd8fc4ac881c5cc3d35f4f5b0f154e88",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

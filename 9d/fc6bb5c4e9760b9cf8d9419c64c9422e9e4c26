@@ -1,0 +1,21 @@
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_8c1e5f09a9358c::t_d45ee272d107f3 151-158
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_8c1e5f09a9358c::t_b2258ba8b8e4b5 10-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "9dfc6bb5c4e9760b9cf8d9419c64c9422e9e4c26",
+  "prompts": {},
+  "sessions": {
+    "s_8c1e5f09a9358c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2199962c-7ed0-4955-b63e-26e5b989a4bc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

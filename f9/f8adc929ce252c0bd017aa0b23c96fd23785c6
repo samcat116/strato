@@ -1,0 +1,179 @@
+control-plane/Sources/App/configure.swift
+  s_4fdae838d0c2ea::t_1db948ff3168e8 949-952
+control-plane/Sources/App/Models/ResourceFinalizer.swift
+  s_4fdae838d0c2ea::t_10ecfa32a5f5b1 35-39
+shared/Sources/StratoShared/WireProtocol.swift
+  s_4fdae838d0c2ea::t_24a3f85badc8c4 17
+  s_4fdae838d0c2ea::t_7e1bfd92431d8b 14-16
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_4fdae838d0c2ea::t_f2d82f8e65be5a 675-704
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_4fdae838d0c2ea::t_10ecfa32a5f5b1 170,179,182
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_4fdae838d0c2ea::t_ea71730b8a0b29 134,136,178,180,202,204
+  s_4fdae838d0c2ea::t_10fdc50e0e4f25 135,137,179,181,203,205
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_4fdae838d0c2ea::t_5152c30db4b7ba 156
+  s_4fdae838d0c2ea::t_815a14670a4ca5 681,683,685,691,708-714,757
+agent/Sources/StratoAgent/Agent.swift
+  s_4fdae838d0c2ea::t_f6f5fc8c5f4b74 4382-4386,4389,4533,4573
+  s_4fdae838d0c2ea::t_c235bcb8b1807c 3706-3708,3746,3748
+  s_4fdae838d0c2ea::t_5ab96cf8536d6a 3781-3782
+  s_4fdae838d0c2ea::t_42fe2aee36ea55 4103-4105,4107,4109-4110,4370-4372,4374-4377
+  s_4fdae838d0c2ea::t_b8d1c9cfe54973 4350,4378,4614-4638,4646,4654,4687,4695,4699,4719
+  s_4fdae838d0c2ea::t_ef3a39b7607577 4106,4373
+  s_4fdae838d0c2ea::t_38adb2cb47784a 353-356,3709-3710,3715,3733-3745,3747,3749-3770,4347-4349
+  s_4fdae838d0c2ea::t_052bf3342ee6b5 4108
+  s_4fdae838d0c2ea::t_9274f430efe841 3716-3732
+  s_4fdae838d0c2ea::t_f6bde8bbd9202b 3711-3714
+  s_4fdae838d0c2ea::t_5df921755f694b 3780
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_4fdae838d0c2ea::t_3c776193a7f582 79
+  s_4fdae838d0c2ea::t_5ab96cf8536d6a 56-57
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_4fdae838d0c2ea::t_845036d1b3c3e2 433-434
+  s_4fdae838d0c2ea::t_911e109f53995c 66-70,97-103
+control-plane/Tests/AppPlatformTests/MigrationEnumSafetyTests.swift
+  s_4fdae838d0c2ea::t_e6de8be4ba2ae9 20,26,66
+  s_4fdae838d0c2ea::t_d598ae9deba3a3 11-18,21-24,29-41,44-46,49-57,71-85
+  s_4fdae838d0c2ea::t_99eea1d5e856af 19,25,27-28,42-43,47-48,58-65,67-70
+  s_4fdae838d0c2ea::t_93e0d9bdbac2c5 2
+  s_4fdae838d0c2ea::t_064c0a75ef70e8 90-93,100-103
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_4fdae838d0c2ea::t_5ab96cf8536d6a 116-117
+  s_4fdae838d0c2ea::t_2d270cdf602aab 67-69,102-115,118,120,122,155,188-193
+agent/Sources/StratoAgentCore/MockStorageBackend.swift
+  s_4fdae838d0c2ea::t_f6f5fc8c5f4b74 133-135,138,145
+  s_4fdae838d0c2ea::t_600f82354c96a8 168-177
+control-plane/Sources/App/Services/AgentService.swift
+  s_4fdae838d0c2ea::t_f7636c209902e1 2334,2336-2346,2348-2349,2363,2385-2402
+  s_4fdae838d0c2ea::t_2d5ced9dd716f9 2333,2335
+  s_4fdae838d0c2ea::t_5edd011249624b 2347
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_4fdae838d0c2ea::t_0169fa3dfbc0ae 84-87
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_4fdae838d0c2ea::t_ec15bf0b15552f 582-586,632,636-637
+  s_4fdae838d0c2ea::t_052bf3342ee6b5 679-683
+  s_4fdae838d0c2ea::t_c235bcb8b1807c 587-589,633-635,1079-1081
+  s_4fdae838d0c2ea::t_9274f430efe841 1082-1083
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_4fdae838d0c2ea::t_9b7a03e4a0817c 241
+  s_4fdae838d0c2ea::t_2bb8abe845f35f 228-240,242-273
+docs/operations/vm-boot-volume-cutover.md
+  s_4fdae838d0c2ea::t_46fc6222909d95 22,29,33,37-38,43,47-48,50-58
+  s_4fdae838d0c2ea::t_b4ffb869ce5a92 36,39-42,44-46,49
+  s_4fdae838d0c2ea::t_e55d9fce91a014 66-75,84-89
+  s_4fdae838d0c2ea::t_4c27e5c74b8613 4-7
+  s_4fdae838d0c2ea::t_6d87df668d6c99 59
+  s_4fdae838d0c2ea::t_be830d0b008955 1-3,8-18,20-21,23-28,30-32,34-35,60-65,76-83,90-110
+  s_4fdae838d0c2ea::t_4477517c7fceef 19
+control-plane/Sources/App/Services/ResourceFinalizerService.swift
+  s_4fdae838d0c2ea::t_10ecfa32a5f5b1 257-259,272,349,351,385-391
+  s_4fdae838d0c2ea::t_2b942b3762923e 361-378
+  s_4fdae838d0c2ea::t_6b82916708ca0d 148-169,235,241-242
+shared/Tests/StratoSharedTests/VolumeIOLimitsTests.swift
+  s_4fdae838d0c2ea::t_f90b35da216d4e 131,142-144
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_4fdae838d0c2ea::t_d5eb38ba45ef57 327,329,362
+  s_4fdae838d0c2ea::t_f6f5fc8c5f4b74 157-159,174
+  s_4fdae838d0c2ea::t_600f82354c96a8 97-100,273-312,321-326,328,330-334,347-361,363-364
+  s_4fdae838d0c2ea::t_b79a03e9b43d96 365
+control-plane/Sources/App/Models/Volume.swift
+  s_4fdae838d0c2ea::t_42fe2aee36ea55 341-346,356,379
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_4fdae838d0c2ea::t_afe754b1bc7b54 256-259
+  s_4fdae838d0c2ea::t_24a3f85badc8c4 272,278,283-284
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_4fdae838d0c2ea::t_064c0a75ef70e8 207-208,211,214,221-223,225,229-232,235-236
+shared/Tests/StratoSharedTests/VolumeDeviceNameTests.swift
+  s_4fdae838d0c2ea::t_f90b35da216d4e 67
+  s_4fdae838d0c2ea::t_3c776193a7f582 79,83
+shared/Sources/StratoShared/VMSpec.swift
+  s_4fdae838d0c2ea::t_24a3f85badc8c4 59-60,278-279,301
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_4fdae838d0c2ea::t_5ace6b728b82b7 334,342,348,444,446,588,648
+  s_4fdae838d0c2ea::t_a7db718f06cb7b 331,339,345,352,390,393,416,420,425-426,437-440,443,450,594,654
+  s_4fdae838d0c2ea::t_37e76ecf9f7533 451
+  s_4fdae838d0c2ea::t_5a6ba2eac95d70 13-14
+  s_4fdae838d0c2ea::t_aa4a3c339035d3 174-175
+  s_4fdae838d0c2ea::t_1ca6c834b06a2a 6-12,15-36,38-55
+  s_4fdae838d0c2ea::t_1dc360cbe45f92 37,239,669,687,716,733
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_4fdae838d0c2ea::t_eb225246db890e 383-384,610-611
+  s_4fdae838d0c2ea::t_5d7215ffc83984 166-187
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_4fdae838d0c2ea::t_34e36ff702916c 162-164,170,178-179,191,198,204-206,209-215,226-227,245,273,290-291,302-306,309,311
+  s_4fdae838d0c2ea::t_5ab96cf8536d6a 223-224
+  s_4fdae838d0c2ea::t_90c634a0836fbf 167
+  s_4fdae838d0c2ea::t_f5307a36362372 202-203,208,218-220,222,225
+  s_4fdae838d0c2ea::t_603d243fa515ec 207,216,221
+control-plane/Tests/AppResourceTests/ResourceEventTests.swift
+  s_4fdae838d0c2ea::t_d598ae9deba3a3 132-143,154
+  s_4fdae838d0c2ea::t_bb7a06d169a7f1 155-159
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_4fdae838d0c2ea::t_cf6186a5b97905 241-247
+  s_4fdae838d0c2ea::t_9b7a03e4a0817c 258-261
+  s_4fdae838d0c2ea::t_9274f430efe841 226-240,248-257,262-277
+agent/Tests/StratoAgentTests/MockStorageBackendTests.swift
+  s_4fdae838d0c2ea::t_eb225246db890e 40-41,63-64,144-146,202-203
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_4fdae838d0c2ea::t_24a3f85badc8c4 20
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_4fdae838d0c2ea::t_911e109f53995c 42-45,169,258-260,285,288
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_4fdae838d0c2ea::t_f6f5fc8c5f4b74 95-97
+  s_4fdae838d0c2ea::t_28184772938cd6 100-103
+  s_4fdae838d0c2ea::t_600f82354c96a8 108-115,146-151
+  s_4fdae838d0c2ea::t_02cee12648faf0 152-153
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_4fdae838d0c2ea::t_3e21dcaa2e05ac 141-142,146-147,352,417-418
+  s_4fdae838d0c2ea::t_d49d52a1473aa9 404-406
+  s_4fdae838d0c2ea::t_43f2270ee01835 374-382
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_4fdae838d0c2ea::t_83fbd8de4841d6 158-161
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_4fdae838d0c2ea::t_31d20f9ae44364 434-439
+  s_4fdae838d0c2ea::t_81de592a98d831 124-128,599-603
+  s_4fdae838d0c2ea::t_42fe2aee36ea55 820-834,856,945,962-964
+  s_4fdae838d0c2ea::t_59877c8d73b2ac 604
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_4fdae838d0c2ea::t_06508ee1ab23a9 2153-2156,2158-2160,2162,2164-2166,2174,2183-2184,2187,2189
+control-plane/Sources/App/Migrations/MakeVMBootVolumesAuthoritative.swift
+  s_4fdae838d0c2ea::t_e60f576d017ef2 260-283
+  s_4fdae838d0c2ea::t_99dd34c211f2f8 39,82,88-91,96,101-102
+  s_4fdae838d0c2ea::t_e55d9fce91a014 15,288,291-300,333-335
+  s_4fdae838d0c2ea::t_dc5446b3bbecfa 60
+  s_4fdae838d0c2ea::t_96c793cf2eee92 130-133
+  s_4fdae838d0c2ea::t_f91430017999e5 338,347,352-354
+  s_4fdae838d0c2ea::t_ec53f362e50a91 162,164,169-181
+  s_4fdae838d0c2ea::t_4580793a9e87fd 40-42,48,55,58
+  s_4fdae838d0c2ea::t_2aeb1f7becbfc0 348-351
+  s_4fdae838d0c2ea::t_29153e5a5b0f4e 212-214,217-238,249
+  s_4fdae838d0c2ea::t_1db948ff3168e8 1-14,16-38,43-47,49-54,56-57,59,70-72,74-81,83-85,92-95,97-98,103-129,134-161,163,165-168,182-211,215-216,239-248,250-259,284-287,289-290,301-332,336-337,339-346,355-361
+  s_4fdae838d0c2ea::t_7b0422a0451f4b 61-69,73,86-87,99-100
+control-plane/Sources/App/Controllers/VMController.swift
+  s_4fdae838d0c2ea::t_4519dd82ee9b85 1567-1568,1597-1626
+  s_4fdae838d0c2ea::t_02d59f31b804be 731-732,832,835-870
+  s_4fdae838d0c2ea::t_ef0bf538e0dfb3 719-728
+  s_4fdae838d0c2ea::t_bfdaf2de36125f 729,871
+control-plane/Sources/App/Models/vm.swift
+  s_4fdae838d0c2ea::t_e55d9fce91a014 208
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  s_4fdae838d0c2ea::t_b1fe8ec0da01c2 562,584-588
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f9f8adc929ce252c0bd017aa0b23c96fd23785c6",
+  "prompts": {},
+  "sessions": {
+    "s_4fdae838d0c2ea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec77-c54c-7c61-a1d3-058bb12398f3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

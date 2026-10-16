@@ -1,0 +1,19 @@
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_10f0712e07cbcc::t_4b1967b4d561ea 22-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "0c2f4bfecffc4e771718fd674261d7fd33580550",
+  "prompts": {},
+  "sessions": {
+    "s_10f0712e07cbcc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b4a6165-fe5d-448f-83c6-794955dda319",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

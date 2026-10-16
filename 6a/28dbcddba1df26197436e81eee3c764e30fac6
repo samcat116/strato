@@ -1,0 +1,27 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_6b5bf147e3675c::t_846935b05477d6 1444-1445
+  s_6b5bf147e3675c::t_b5d2aaa8dd4188 1413-1416
+  s_6b5bf147e3675c::t_f8e660a08df6d9 1485-1496
+control-plane/Sources/App/Services/RegistryClientService.swift
+  s_6b5bf147e3675c::t_060a6c8f9b2e5e 199
+  s_6b5bf147e3675c::t_026c1d076a3249 45-63
+control-plane/Tests/AppTests/RegistryPullSecretTests.swift
+  s_6b5bf147e3675c::t_ab1953b28ff877 508,510-520,529-531,533-559
+  s_6b5bf147e3675c::t_e5ba8977ff87ca 573,576,578-581,585,592-595,614-618
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6a28dbcddba1df26197436e81eee3c764e30fac6",
+  "prompts": {},
+  "sessions": {
+    "s_6b5bf147e3675c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d36210c-ff03-491d-a48a-709bcf3690e1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

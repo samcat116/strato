@@ -1,0 +1,66 @@
+SwiftFirecracker/Tests/SwiftFirecrackerTests/ProcessSupervisionTests.swift
+  s_f95e8fcd668989::t_abe8356c60ab9d 181-190,192-195,200,209,217-224,226-228,232-233
+  s_f95e8fcd668989::t_61094bbaa14c8e 210-212,229-231
+  s_f95e8fcd668989::t_bb78fe206ebc26 1-180,196-199,205-208,213-216,234-268
+  s_f95e8fcd668989::t_466eb12df6f7a9 191,201-204,225
+SwiftFirecracker/Tests/SwiftFirecrackerTests/VsockConnectionTests.swift
+  s_f95e8fcd668989::t_4fcf3222881271 46,69
+  s_f95e8fcd668989::t_bd1fdd49b81832 40-41,61-62
+SwiftFirecracker/Sources/SwiftFirecracker/ProcessSupervision.swift
+  s_f95e8fcd668989::t_2b0b963802c283 17-21,25-26,28,31-34,36-37,39,48-52,54-65,69,72-75,78-88,105-111,119,123-125,127-130,137-144,150,153,171,184,215-217
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_f95e8fcd668989::t_23952993b60d8d 158
+  s_f95e8fcd668989::t_4ae58888e63a57 173
+  s_f95e8fcd668989::t_be78cda9060883 146,155-157,159-162
+  s_f95e8fcd668989::t_bbaf55afc06cc1 124
+  s_f95e8fcd668989::t_48e22b23e65e10 76-80,82
+  s_f95e8fcd668989::t_3e28259048086e 163
+SwiftFirecracker/Tests/SwiftFirecrackerTests/HTTPConcurrencyTests.swift
+  s_f95e8fcd668989::t_3e2c6556fe0b1b 52,120-133,135-145,147-150,153
+  s_f95e8fcd668989::t_2b37a389544d8d 244-246
+  s_f95e8fcd668989::t_f0908c724b2798 67-74,76-80
+  s_f95e8fcd668989::t_46e8b4741ec0e7 164,171,174,277-279
+  s_f95e8fcd668989::t_1692c9d621f7da 104-106
+  s_f95e8fcd668989::t_47129bde43a3f1 23-28,35-51
+  s_f95e8fcd668989::t_f915fba9c01084 53
+SwiftFirecracker/Package.resolved
+  s_f95e8fcd668989::t_542575e1f0958c 2
+SwiftFirecracker/Sources/SwiftFirecracker/UnixSocketHTTPClient.swift
+  s_f95e8fcd668989::t_e46b48234e84e5 25-32,36,43-44,49
+  s_f95e8fcd668989::t_49a3cb367316dd 164-169,182,193-206,218-226,228
+  s_f95e8fcd668989::t_6671a52f39f131 52-56,64-65
+  s_f95e8fcd668989::t_76ec09fa38afb4 138-139
+  s_f95e8fcd668989::t_bd2809f0c33224 250-252,260-262,267
+  s_f95e8fcd668989::t_2b4170e458fe18 66-67
+  s_f95e8fcd668989::t_35e76d547efc73 227
+  s_f95e8fcd668989::t_7625e31ae110ac 229
+SwiftFirecracker/Sources/SwiftFirecracker/UDSChannel.swift
+  s_f95e8fcd668989::t_4296f013d69379 26-52
+  s_f95e8fcd668989::t_9def04a92c71f4 69-83,85-86,88-99
+.github/workflows/build.yaml
+  s_f95e8fcd668989::t_77930d403d836f 364-380
+SwiftFirecracker/Sources/SwiftFirecracker/LineFrameDecoder.swift
+  s_f95e8fcd668989::t_7b80652d390d2f 1-56
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_f95e8fcd668989::t_c5570d2e0c4eda 222-223,225-227
+  s_f95e8fcd668989::t_f4b374f7a8c7e7 704-708
+  s_f95e8fcd668989::t_1ee0953abe5335 460,466
+  s_f95e8fcd668989::t_8156a77fd86476 254-260,269,280-284
+  s_f95e8fcd668989::t_36ac03f9a6a860 278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "d792f2b406a763f3f6fc81d5a3f4552dc97e0f44",
+  "prompts": {},
+  "sessions": {
+    "s_f95e8fcd668989": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "addb30ca-35ef-49d4-b260-2b566561b188",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

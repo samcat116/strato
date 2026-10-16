@@ -1,0 +1,22 @@
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_0b0c2b9bd67cb5::t_ee6647b3b996b8 42-53,59-67,69-73,75-76,78-123,125-126
+agent/Tests/StratoAgentTests/HypervisorHangResilienceTests.swift
+  s_0b0c2b9bd67cb5::t_c9f45bf7b4e0e3 43-65,145-173
+  s_0b0c2b9bd67cb5::t_0a8fdb143b0178 174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "df5a3b5c6a9c2f65cc1a82b2e5b5f5ceee303f47",
+  "prompts": {},
+  "sessions": {
+    "s_0b0c2b9bd67cb5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0567f44-f1ed-44e8-8ae6-5647dcc96e6a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

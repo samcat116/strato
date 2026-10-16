@@ -1,0 +1,45 @@
+docs/development/troubleshooting-k8s.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 422-423,431,436
+.github/workflows/helm-test.yml
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 183
+docs/development/skaffold.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 168,175-176,179-182,190-194,199,202-204
+docs/architecture/overview.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 10,115,117-120,123-124,128-130,154-155,224,241-242
+skaffold.yaml
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 69-70,74-75
+docs/.vitepress/config.mts
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 51-53,78
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_06bf323f5520ac::t_e4369204c2af2c 111
+package.json
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 20
+docs/guide/what-is-strato.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 102
+.github/workflows/README.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 45-48
+CLAUDE.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 64-67,80-81,91,96-97,105,147,152-155,246
+helm/strato-control-plane/README.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 184,187-191,194-195,364
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 24
+DEV-SETUP.md
+  s_06bf323f5520ac::t_3f277ceb5bfbb3 347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "166e7fba69aa5e22be136a4eccac8fedf2209769",
+  "prompts": {},
+  "sessions": {
+    "s_06bf323f5520ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "432e2f03-c5be-44b6-b08c-3f8845c22fbd",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+.github/workflows/release.yaml
+  s_cdb4adf4d83223::t_f02281ec39c807 101,205-209,212-218,247,252-260,264-273,277-281,283-285,287-310,321-326,360-404
+  s_cdb4adf4d83223::t_b3c548f1b46c8c 91-100,102-109,111,113,115-117,122-204,210-211,219-240,261-263,274-276
+  s_8175a76a1576f0::t_58094cacfc497a 241-246,248-251
+.github/workflows/README.md
+  s_cdb4adf4d83223::t_894391df05a6ff 112,114-115
+  s_cdb4adf4d83223::t_783168007d1dee 58-60
+  s_cdb4adf4d83223::t_b8b059d9753818 99-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "9e8c480461ebea6389e562216da0f6d5447644da",
+  "prompts": {},
+  "sessions": {
+    "s_8175a76a1576f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1080cc85-15d2-47f7-a8fa-3e986c31849d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_cdb4adf4d83223": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92d7c2a9-28e3-4271-ad02-4a9fbb060b9f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

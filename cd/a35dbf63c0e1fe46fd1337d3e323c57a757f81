@@ -1,0 +1,35 @@
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_f2a69f41c8a787::t_e38be1c70d4597 1111-1113,1116-1121,1126-1129,1131-1134,1137-1138
+  s_f2a69f41c8a787::t_ac7ad40e5382d7 1122-1123
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_f2a69f41c8a787::t_2f8b8727f74a14 73
+  s_f2a69f41c8a787::t_e38be1c70d4597 39-43,45-49,51-52,55-60,62-72
+agent/Sources/StratoAgent/Agent.swift
+  s_f2a69f41c8a787::t_91e3ff28b220bd 4044-4048
+  s_f2a69f41c8a787::t_e38be1c70d4597 4043,4049-4059
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_f2a69f41c8a787::t_565a2730c9fc6d 160-177
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_f2a69f41c8a787::t_91e3ff28b220bd 218
+  s_f2a69f41c8a787::t_e38be1c70d4597 217,219-222,226-232,236-238
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_f2a69f41c8a787::t_565a2730c9fc6d 175-191
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_f2a69f41c8a787::t_e38be1c70d4597 120-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "cda35dbf63c0e1fe46fd1337d3e323c57a757f81",
+  "prompts": {},
+  "sessions": {
+    "s_f2a69f41c8a787": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-e995-7761-b686-9931cfb9a2a2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

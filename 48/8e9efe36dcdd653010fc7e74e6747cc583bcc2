@@ -1,0 +1,61 @@
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_66f25871c0dca2::t_c4bbb79f586302 121-125
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_5167272097345f::t_47f22956ee0b9c 51,404,475-491,493,495-527
+control-plane/Sources/App/Models/OrganizationalUnit.swift
+  s_2e3e1c39ed2053::t_f9fb8a45bc3712 150-152,156
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_5167272097345f::t_c915720ed16576 540-541,545-547,551
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_2e3e1c39ed2053::t_b0aa75641241cf 47-49,51-52
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_f9af33ee4de262::t_25f13749124bf9 73-78,485-488,490-493
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_2e3e1c39ed2053::t_dd8401d6bf3d68 47-52,54-59,61-62,64
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_f9af33ee4de262::t_c4c8b00a30b25f 68-73,77-78,81-84
+control-plane/Sources/App/Extensions/Model+GroupedCounts.swift
+  s_f9af33ee4de262::t_4f01f07cdb9ede 1-81
+control-plane/Tests/AppTests/ListCountBatchingTests.swift
+  s_f9af33ee4de262::t_77219a73a71230 1-398
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "488e9efe36dcdd653010fc7e74e6747cc583bcc2",
+  "prompts": {},
+  "sessions": {
+    "s_2e3e1c39ed2053": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "477d5b5e-f65e-4f34-ad6a-e26462246b3b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_5167272097345f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bcab2644-b7db-4346-9fa6-b12515572b94",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_66f25871c0dca2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74b5abc3-c902-47e6-a30c-05d97ec86096",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_f9af33ee4de262": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1da41df9-ada0-4814-a35a-1eec8d431d18",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

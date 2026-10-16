@@ -1,0 +1,163 @@
+control-plane/Tests/AppPlatformTests/ClusterClockTestSupport.swift
+  s_d5e22336a13eea::t_a00fb3e7c8895b 1
+  s_d5e22336a13eea::t_face2b839e8aa6 13-27
+  s_d5e22336a13eea::t_eca6caf447d26a 2,4-12,28-44
+  s_d5e22336a13eea::t_3d2d5926c4d0dd 3
+docs/architecture/multi-replica.md
+  s_d5e22336a13eea::t_abf065272d142d 57-77
+docs/deployment/observability.md
+  s_d5e22336a13eea::t_abf065272d142d 227
+control-plane/Tests/AppPlatformTests/ClusterClockTests.swift
+  s_d5e22336a13eea::t_5283316cae197f 1-63,67-68,70-75,77,80-89,94-95
+  s_d5e22336a13eea::t_e0c30bb2a52512 78-79
+  s_d5e22336a13eea::t_ca6571680c3586 64-66,69,76
+  s_d5e22336a13eea::t_8a43c109ab6fae 90-93
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_d5e22336a13eea::t_5b33e81fbdeb93 281-284,291,293
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_d5e22336a13eea::t_5b33e81fbdeb93 212-215,222,224
+control-plane/Sources/App/Services/ClusterClock.swift
+  s_d5e22336a13eea::t_0de53f1cadf2b4 27-30
+  s_d5e22336a13eea::t_ca6571680c3586 13-16
+  s_d5e22336a13eea::t_8869df38e30bc9 12
+  s_d5e22336a13eea::t_ce13a12117c2e7 1-11,17-26,31-82
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_d5e22336a13eea::t_7c8898ff306322 232,237-241,743,747-748,1000,1012,1017-1024,1116,1122-1124
+helm/strato-control-plane/README.md
+  s_d5e22336a13eea::t_abf065272d142d 10-13
+control-plane/Sources/App/Services/Sweeps/StrandedVolumeAttachmentSweep.swift
+  s_d5e22336a13eea::t_26ed83c938c8d4 9,46
+control-plane/Tests/AppPlatformTests/AgentServiceLifecycleTests.swift
+  s_d5e22336a13eea::t_d0b16710f8368a 61-62
+helm/strato-control-plane/values.yaml
+  s_d5e22336a13eea::t_abf065272d142d 12-15
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_d5e22336a13eea::t_7a68344ba5bae2 641-661
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_d5e22336a13eea::t_7c8898ff306322 83,99,106-113
+control-plane/Sources/App/Services/WorkloadObservedMerge.swift
+  s_d5e22336a13eea::t_e838c594bf7e00 14,381,439,538
+  s_d5e22336a13eea::t_2b22163dee252e 174,524
+  s_d5e22336a13eea::t_89704e2dc84358 54,316-318,327
+  s_d5e22336a13eea::t_bba3afd067d57c 75-76,119,180,405,420,452-453,478,527,559,573
+control-plane/Sources/App/Models/vm.swift
+  s_d5e22336a13eea::t_ac0ffdbd5668fa 456,458
+  s_d5e22336a13eea::t_dc0324aba18622 546,549
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_d5e22336a13eea::t_bba3afd067d57c 1317-1321
+  s_d5e22336a13eea::t_89704e2dc84358 1434
+control-plane/Sources/App/Services/Sweeps/OrphanedTerminatingSweep.swift
+  s_d5e22336a13eea::t_26ed83c938c8d4 25,27-36,43
+control-plane/Sources/App/Controllers/VMController.swift
+  s_d5e22336a13eea::t_083850f98888b1 1174-1186
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_d5e22336a13eea::t_ce13a12117c2e7 261-273
+control-plane/Tests/AppPlatformTests/SteadyStateDivergenceTests.swift
+  s_d5e22336a13eea::t_d0b16710f8368a 34,56,61-62,71,75,77,83,89
+control-plane/Sources/App/Services/AgentMaintenanceLoop.swift
+  s_d5e22336a13eea::t_d5ce51da281f50 67,80-137,148-151,159,247,261,278-280,287
+  s_d5e22336a13eea::t_2b22163dee252e 433,456
+  s_d5e22336a13eea::t_5b33e81fbdeb93 435
+  s_d5e22336a13eea::t_3f2510bbfa4e65 252-257
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_d5e22336a13eea::t_b51ceded8da10f 213-216,395,400,411,417
+  s_d5e22336a13eea::t_2b22163dee252e 351-352,433-434,436-437,439-440
+  s_d5e22336a13eea::t_dc0324aba18622 42,79
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_d5e22336a13eea::t_a0c189394a9ed6 749
+  s_d5e22336a13eea::t_26ed83c938c8d4 734-735
+control-plane/Sources/App/Models/Sandbox.swift
+  s_d5e22336a13eea::t_dc0324aba18622 338-340,342
+  s_d5e22336a13eea::t_ac0ffdbd5668fa 270,272
+  s_d5e22336a13eea::t_87410e2d00cb65 262,264
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_d5e22336a13eea::t_ac0ffdbd5668fa 185,195
+  s_d5e22336a13eea::t_dc0324aba18622 307-309,559-561
+  s_d5e22336a13eea::t_5b33e81fbdeb93 317-319,434-437,468-471,508-511
+  s_d5e22336a13eea::t_87410e2d00cb65 420-421
+docs/deployment/kubernetes.md
+  s_d5e22336a13eea::t_abf065272d142d 22-26
+control-plane/Tests/AppPlatformTests/AgentMetadataServiceCapabilityTests.swift
+  s_d5e22336a13eea::t_1ca6952b9ed988 25,32
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_d5e22336a13eea::t_732b4cc28e8907 136,156,179
+  s_d5e22336a13eea::t_b0834d51f46251 231-233
+  s_d5e22336a13eea::t_dc0324aba18622 360,363,456,466,485-486,538,584,589
+  s_d5e22336a13eea::t_52be89ce75da54 193,228-229
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_d5e22336a13eea::t_87410e2d00cb65 156,163-164,177,191
+control-plane/Sources/App/Services/SnapshotRetentionSweep.swift
+  s_d5e22336a13eea::t_26ed83c938c8d4 28-38
+  s_d5e22336a13eea::t_5b33e81fbdeb93 46-48,55,57
+control-plane/Sources/App/Services/ResourceFinalizerService.swift
+  s_d5e22336a13eea::t_b0834d51f46251 115-140,160-173,175,177
+  s_d5e22336a13eea::t_420d1fa58800db 174,176
+  s_532b37be23fdb2::t_4302ce002ad6bc 178-179
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  s_d5e22336a13eea::t_ab3c01745aa20c 336
+  s_d5e22336a13eea::t_c6c7d3beeb7519 381-383,415-416
+  s_d5e22336a13eea::t_a6929a6472ab3c 65,258-259,289-290,309-310,335,669-670,695-697
+control-plane/Sources/App/Workflows/SandboxCreationWorkflow.swift
+  s_d5e22336a13eea::t_8db29cab2f7e5b 421-424
+  s_d5e22336a13eea::t_52be89ce75da54 382,419-420
+control-plane/Tests/AppResourceTests/ClusterClockTestSupport.swift
+  s_d5e22336a13eea::t_364fbfb6118037 1
+  s_d5e22336a13eea::t_3d2d5926c4d0dd 3-4
+  s_d5e22336a13eea::t_eca6caf447d26a 2,5-11,45-125
+  s_d5e22336a13eea::t_face2b839e8aa6 12-44
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_d5e22336a13eea::t_7c8898ff306322 89,101,108-115
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  s_d5e22336a13eea::t_b51ceded8da10f 544,572-573,591-592,595
+  s_d5e22336a13eea::t_07d84d4c24da79 74,106,152,298
+control-plane/Sources/App/Models/SnapshotArtifact.swift
+  s_d5e22336a13eea::t_5b33e81fbdeb93 84
+  s_d5e22336a13eea::t_dc0324aba18622 135-137
+  s_d5e22336a13eea::t_87410e2d00cb65 176,193
+docs/deployment/docker-compose.md
+  s_d5e22336a13eea::t_abf065272d142d 15-19
+control-plane/Tests/AppResourceTests/SandboxExpiryTests.swift
+  s_d5e22336a13eea::t_7a68344ba5bae2 356-374
+control-plane/Sources/App/Services/Sweeps/AgentAutoUpdateSweep.swift
+  s_d5e22336a13eea::t_26ed83c938c8d4 49,57
+  s_d5e22336a13eea::t_bba3afd067d57c 219
+control-plane/Sources/App/Models/VMSnapshot.swift
+  s_d5e22336a13eea::t_5b33e81fbdeb93 203-206,213,215
+control-plane/Sources/App/Services/Sweeps/SandboxExpirySweep.swift
+  s_d5e22336a13eea::t_26ed83c938c8d4 56,60-69,76,87
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  s_d5e22336a13eea::t_52be89ce75da54 379,399-400,524-525
+control-plane/Sources/App/Services/AgentService+ObservedState.swift
+  s_d5e22336a13eea::t_b51ceded8da10f 78-87,94-95,103,133,142
+  s_d5e22336a13eea::t_89704e2dc84358 105,108,182,210,228,265
+control-plane/Sources/App/Services/StorageObservedMerge.swift
+  s_d5e22336a13eea::t_2b22163dee252e 17,284,317,332,354,427
+  s_d5e22336a13eea::t_083850f98888b1 190,192-193
+control-plane/Sources/App/Models/Agent.swift
+  s_d5e22336a13eea::t_ac0ffdbd5668fa 363,368
+  s_d5e22336a13eea::t_1ca6952b9ed988 441,444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "43d8bcb4382f6eac999b4618c08025adcb2cbf4a",
+  "prompts": {},
+  "sessions": {
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

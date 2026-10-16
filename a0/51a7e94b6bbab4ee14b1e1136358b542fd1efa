@@ -1,0 +1,27 @@
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_7fd9b55b2a3f1e::t_abc2cf7e55e164 356-360
+control-plane/Sources/App/Controllers/UserController.swift
+  s_7fd9b55b2a3f1e::t_c6eada2280d314 196-199,259-266
+control-plane/Sources/App/Middleware/UserSecurityMiddleware.swift
+  s_7fd9b55b2a3f1e::t_08078a4ac3db14 95-105
+control-plane/Sources/App/Services/SSFSignalProcessor.swift
+  s_7fd9b55b2a3f1e::t_2df185a27811b7 191-196,198-206,226-242
+control-plane/Tests/AppTests/SSFTests.swift
+  s_7fd9b55b2a3f1e::t_9501f774755f68 222-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a051a7e94b6bbab4ee14b1e1136358b542fd1efa",
+  "prompts": {},
+  "sessions": {
+    "s_7fd9b55b2a3f1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53c35a4a-65e8-4363-8020-6eed993bf100",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

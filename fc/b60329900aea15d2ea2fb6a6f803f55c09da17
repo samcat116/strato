@@ -1,0 +1,31 @@
+docs/architecture/agent.md
+  s_c0da28fd6c98a8::t_f59a1c764f721e 105-110
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_c0da28fd6c98a8::t_f59a1c764f721e 178-180,182-183,352
+docs/architecture/wire-protocol.md
+  s_c0da28fd6c98a8::t_f59a1c764f721e 401-405
+control-plane/Sources/App/Controllers/AgentGuestIdentityController.swift
+  s_c0da28fd6c98a8::t_f59a1c764f721e 58-69
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_c0da28fd6c98a8::t_f59a1c764f721e 201
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_c0da28fd6c98a8::t_f59a1c764f721e 41-44,51,81
+control-plane/Tests/AppIdentityTests/GuestJWTSVIDMintTests.swift
+  s_c0da28fd6c98a8::t_f59a1c764f721e 198-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fcb60329900aea15d2ea2fb6a6f803f55c09da17",
+  "prompts": {},
+  "sessions": {
+    "s_c0da28fd6c98a8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe382-c79c-7c53-b27a-d5f33ec468ed",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

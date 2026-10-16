@@ -1,0 +1,22 @@
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_06bf323f5520ac::t_ee84d76e5fea9e 92-93
+  s_06bf323f5520ac::t_9c08174ab0377c 125-132,137-148
+control-plane/Tests/AppTests/AgentModelTests.swift
+  s_06bf323f5520ac::t_8f89a1b95de8ba 268-287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c3f6e5cfff6d59e06f1198cffb70989e951077ab",
+  "prompts": {},
+  "sessions": {
+    "s_06bf323f5520ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "432e2f03-c5be-44b6-b08c-3f8845c22fbd",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

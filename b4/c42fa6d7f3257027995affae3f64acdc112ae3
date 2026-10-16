@@ -1,0 +1,24 @@
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_3af79fd703f9fa::t_6b9e1746dc9a62 472-499
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  s_3af79fd703f9fa::t_739830a08b71db 452-463,514-525
+agent/Tests/StratoAgentRuntimeTests/VolumeMaterializationAdmissionTests.swift
+  s_3af79fd703f9fa::t_739830a08b71db 63,65-70
+  s_3af79fd703f9fa::t_6b9e1746dc9a62 1-62,64,71-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "b4c42fa6d7f3257027995affae3f64acdc112ae3",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

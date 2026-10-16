@@ -1,0 +1,39 @@
+control-plane/Tests/AppResourceTests/VMSpecBuilderImageInfoTests.swift
+  s_b46c3107f6ba4b::t_ab58ae15fcdbf0 77-101
+control-plane/Sources/App/Models/Image.swift
+  s_b46c3107f6ba4b::t_22ea200fe395a2 126-148,333-334,359-360
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_b46c3107f6ba4b::t_22ea200fe395a2 381-392
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_b46c3107f6ba4b::t_22ea200fe395a2 688
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_b46c3107f6ba4b::t_22ea200fe395a2 146-151
+control-plane/Tests/AppResourceTests/ImageCompatibilityTests.swift
+  s_b46c3107f6ba4b::t_ab58ae15fcdbf0 115-129,144-156,158
+  s_b46c3107f6ba4b::t_4347c2c8952204 157
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_b46c3107f6ba4b::t_4ad37d105fa273 295-296,302-303
+  s_b46c3107f6ba4b::t_06d32de16c85cd 281-294,297-301,304-322,756-780,1782
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_b46c3107f6ba4b::t_06d32de16c85cd 281-285
+  s_b46c3107f6ba4b::t_03ea347a1ee665 191-192,194-214,299,308,464-465
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_b46c3107f6ba4b::t_ab58ae15fcdbf0 158-200,212-223
+  s_b46c3107f6ba4b::t_8d9afdb9ed7d9a 201-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e1aead8d24cc984c8c71ac70371a5ed577b7e7e3",
+  "prompts": {},
+  "sessions": {
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_7391c6943770dc::t_34d784b0332152 29-37
+  s_7391c6943770dc::t_0aaecb2b6877fe 168-170,179-182,185-210,216-224
+  s_7391c6943770dc::t_16ce7abd2e7926 112-138
+spicedb/schema.zed
+  s_7391c6943770dc::t_870e7843ea02e2 231-235
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_7391c6943770dc::t_10f32d9b1726ea 219-237
+control-plane/Sources/App/Services/SandboxSnapshotService.swift
+  s_7391c6943770dc::t_2199cffbbf44dd 127
+  s_7391c6943770dc::t_e835bed660383d 39-42,49,55-64
+  s_7391c6943770dc::t_eed8dbb432e4a4 143-144
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_7391c6943770dc::t_7562d69c4bb094 135-136
+  s_7391c6943770dc::t_a174042052a3c7 122-134,137-147
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_7391c6943770dc::t_999b252e57f183 231-235
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_7391c6943770dc::t_e4403bbc572c08 893-905
+  s_7391c6943770dc::t_c2fb9282a6e93c 767-770
+  s_7391c6943770dc::t_7b42fc7115468e 665-672
+  s_7391c6943770dc::t_d9bada5f154414 448-455
+  s_7391c6943770dc::t_9d8b0a3d50a0b7 1196-1199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1f8175828a31d4325fc8dd3f489ee2292d28b2af",
+  "prompts": {},
+  "sessions": {
+    "s_7391c6943770dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "668055d3-3aae-4452-8e0f-47d1396e2604",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

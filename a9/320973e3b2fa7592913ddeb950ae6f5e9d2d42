@@ -1,0 +1,21 @@
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_311e4d09212c99::t_f94924eaf292d2 95,108,113-114,150-151
+control-plane/web/src/components/api-keys/create-api-key-dialog.tsx
+  s_311e4d09212c99::t_b0b716459f7444 108,121,124-125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a9320973e3b2fa7592913ddeb950ae6f5e9d2d42",
+  "prompts": {},
+  "sessions": {
+    "s_311e4d09212c99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b6dd57a-adf6-4dc0-8fd6-ae1126922c9b",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

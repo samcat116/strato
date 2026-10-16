@@ -1,0 +1,63 @@
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_a587f81d483352::t_3eb5f891a59dbe 39-43,55-59,64-67,79-81
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_a587f81d483352::t_6517b8f57afdb7 135-140,161-168,186,191,371-373,375-377,563-568,595-596,603,781-824
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_a587f81d483352::t_0c6cf5d0f81a7a 45-53,57-58,65-68
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_a587f81d483352::t_bdb1f0da3cb2d4 162-165,167-169,176,178,185-200,204-207
+agent/Sources/StratoAgentCore/DHCPOptions.swift
+  s_a587f81d483352::t_a9174d424e2156 1-42
+agent/Sources/StratoAgentCore/NetworkAttachment.swift
+  s_a587f81d483352::t_a270e255824855 19-25,44-50,59-61,70-71
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_a587f81d483352::t_926831f234486a 79-123
+agent/Tests/StratoAgentTests/DHCPOptionsTests.swift
+  s_a587f81d483352::t_1f6adbd901c4cd 1-51
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_a587f81d483352::t_b7ce7afe1ac22a 108-109,116-120,222-236,243-249,359-380,453-456
+control-plane/Sources/App/Migrations/AddDHCPConfigToLogicalNetwork.swift
+  s_a587f81d483352::t_641ce7b93c099d 1-39
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_a587f81d483352::t_fe7127d68aabc5 40-60,84-88,96-120,136-160,170-188,199-202,214-217
+control-plane/Sources/App/Services/AgentService.swift
+  s_a587f81d483352::t_1338a783919afe 882-890,899-900
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_a587f81d483352::t_0047d47a706c4d 58-65,69-70,76-80,123-126,143,156-157,180
+control-plane/Sources/App/configure.swift
+  s_a587f81d483352::t_e50195d94a453b 266-268
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_a587f81d483352::t_9969706373d1a6 341-373
+control-plane/web/src/app/(dashboard)/networks/page.tsx
+  s_a587f81d483352::t_10e9216b57f4af 7-11,14,18,58,68-76
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_a587f81d483352::t_0eaff01c54dde3 19-24,46,54,79,160
+control-plane/web/src/components/networks/dhcp-fields.tsx
+  s_a587f81d483352::t_d3db8dce68c6f6 1-126
+control-plane/web/src/components/networks/edit-network-dialog.tsx
+  s_a587f81d483352::t_e58294320b25d7 1-162
+control-plane/web/src/components/networks/index.ts
+  s_a587f81d483352::t_b7ef520befcb4b 3
+control-plane/web/src/components/networks/network-table.tsx
+  s_a587f81d483352::t_1790e8f669447b 4,24,31,79,120-140,148-157
+control-plane/web/src/types/api.ts
+  s_a587f81d483352::t_7e859ad4caa7a9 752-759,769-772,779-782
+shared/Sources/StratoShared/VMSpec.swift
+  s_a587f81d483352::t_60b94e1cd25f27 139-151,158-162,170-195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a201a1c09311d39cc8d797ce897131efc93f001d",
+  "prompts": {},
+  "sessions": {
+    "s_a587f81d483352": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc6066aa-332b-4561-b79f-cda35143be82",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

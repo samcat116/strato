@@ -1,0 +1,22 @@
+clients/swift/Tests/StratoAPIClientTests/AgentClientTests.swift
+  h_a84d4ff76cadd1 1-100
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 16271,16284-16286
+control-plane/web/src/components/agents/agent-detail-page.test.tsx
+  h_a84d4ff76cadd1 1-46
+control-plane/web/src/components/agents/agent-detail-page.tsx
+  h_a84d4ff76cadd1 49
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 9133-9134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4796f1aef1eca76f0d3325e1fc6f82c529289175",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

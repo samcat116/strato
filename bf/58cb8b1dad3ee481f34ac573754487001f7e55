@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "bf58cb8b1dad3ee481f34ac573754487001f7e55",
+  "prompts": {
+    "ce644d635b0c1df6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "54c7c595-b213-4439-a64e-ba89dc2d041a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Sam Schmitt",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 2,
+      "accepted_lines": 12407,
+      "overriden_lines": 0
+    }
+  }
+}

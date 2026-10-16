@@ -1,0 +1,23 @@
+agent/Sources/StratoAgentCore/DHCPOptions.swift
+  s_eb8d88f42f560f::t_4e611462528dc7 23-24,49-50
+control-plane/Sources/App/Controllers/VMController.swift
+  s_eb8d88f42f560f::t_4e611462528dc7 560-569,571-615,617-618,620,622-645,647-650,652
+shared/Tests/StratoSharedTests/IPAddressingTests.swift
+  s_eb8d88f42f560f::t_4e611462528dc7 25-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b915b1bc48897feac2139f8d1d69c1a69b7e2c90",
+  "prompts": {},
+  "sessions": {
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

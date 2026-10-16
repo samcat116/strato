@@ -1,0 +1,19 @@
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_144087aeeecff0::t_fa788eb60b9127 414-420,426,443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1499342a99855a74a9a6b1c8d16ef73de5b99aa2",
+  "prompts": {},
+  "sessions": {
+    "s_144087aeeecff0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f63b6a09-71d4-4dc3-b928-75c8caa3da8d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

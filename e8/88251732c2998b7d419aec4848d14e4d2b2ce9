@@ -1,0 +1,49 @@
+helm/strato-control-plane/values.yaml
+  s_79b58ce4a67d33::t_8d978f37d24705 211-229,247-267
+  s_79b58ce4a67d33::t_a96beb4102426e 268
+docs/deployment/docker-compose.md
+  s_79b58ce4a67d33::t_1104d2b7afbbfa 127-133
+control-plane/Sources/App/ReadinessState.swift
+  s_79b58ce4a67d33::t_3b3e32b53be0a6 1-5,7,9-22,24-45,53-132
+  s_79b58ce4a67d33::t_3269d53f76c860 23
+  s_79b58ce4a67d33::t_0dcabbb3c5d70c 6,8
+  s_79b58ce4a67d33::t_c857a1f15cc321 46-52
+control-plane/Sources/App/configure.swift
+  s_79b58ce4a67d33::t_6e028c3dd19daa 673-676,682-687
+  s_79b58ce4a67d33::t_e1e55b4cba0776 688
+deploy/compose/docker-compose.yml
+  s_79b58ce4a67d33::t_abfddb314dc482 428-441
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_79b58ce4a67d33::t_424406cbc5b950 2,9-10,13-14,21-24,32,41-59,61-62,64-78,80-83,86-87,90-97,99-128,133-135,140-148
+helm/strato-control-plane/templates/deployment.yaml
+  s_79b58ce4a67d33::t_4865f055ad0dd4 368-385
+  s_79b58ce4a67d33::t_77422a1d35a423 40-42
+docs/.vitepress/config.mts
+  s_79b58ce4a67d33::t_4e256646eb748a 69
+control-plane/Dockerfile
+  s_79b58ce4a67d33::t_794c1b774915cc 109,111-114
+control-plane/Tests/AppTests/HealthControllerTests.swift
+  s_79b58ce4a67d33::t_de46094600c57c 198-335
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_79b58ce4a67d33::t_62626c4b0087b4 523-532
+docs/deployment/health-checks.md
+  s_79b58ce4a67d33::t_6ce2d7c39fa945 1-148
+docs/deployment/kubernetes.md
+  s_79b58ce4a67d33::t_65afb2310f08e2 112-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "e888251732c2998b7d419aec4848d14e4d2b2ce9",
+  "prompts": {},
+  "sessions": {
+    "s_79b58ce4a67d33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eaad77ad-6309-406a-9d7e-31e429c1afe8",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

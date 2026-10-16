@@ -1,0 +1,23 @@
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_e64eb3da2ecde9::t_0bd72ad89ef9ed 65-68,75
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_e64eb3da2ecde9::t_0bd72ad89ef9ed 23-24,105,109,117
+control-plane/web/src/types/api.ts
+  s_e64eb3da2ecde9::t_0bd72ad89ef9ed 1806-1807
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b25ebe0e67a669d8086df4169530982aed7e0740",
+  "prompts": {},
+  "sessions": {
+    "s_e64eb3da2ecde9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ea-91f4-7053-818a-8085597f43aa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

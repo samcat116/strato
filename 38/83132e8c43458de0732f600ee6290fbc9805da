@@ -1,0 +1,19 @@
+control-plane/web/src/types/api.ts
+  s_162d14514af173::t_81eccd510e0bbf 339
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3883132e8c43458de0732f600ee6290fbc9805da",
+  "prompts": {},
+  "sessions": {
+    "s_162d14514af173": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d057987-40e4-47b6-afc4-07e363895496",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

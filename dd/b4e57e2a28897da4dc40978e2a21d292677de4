@@ -1,0 +1,41 @@
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_7bf36251baaeb0::t_d762299dc33a4b 20
+shared/Tests/StratoSharedTests/VolumeIOLimitsTests.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 135
+shared/Sources/StratoShared/VMSpec.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 307-310,325,332
+shared/Tests/StratoSharedTests/VolumeObservedSizeWireTests.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 23,60-61
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 1275,1289-1292,1341,1352
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 54-55,58,78,82
+shared/Sources/StratoShared/WireProtocol.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 14-17,21
+shared/Tests/StratoSharedTests/VolumeDeviceNameTests.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 69
+shared/Tests/StratoSharedTests/MessageEnvelopeTests.swift
+  s_7bf36251baaeb0::t_54059fdb8d7358 28-29,31-34
+shared/Sources/StratoShared/DiskAttachment.swift
+  s_7bf36251baaeb0::t_db54b17b4aa47c 1-35
+shared/Tests/StratoSharedTests/DiskAttachmentTests.swift
+  s_7bf36251baaeb0::t_63aff67f287423 12-16,24-28
+  s_7bf36251baaeb0::t_b81f7fe7af338f 40-41
+  s_7bf36251baaeb0::t_d762299dc33a4b 1-11,17-23,29-39,42-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ddb4e57e2a28897da4dc40978e2a21d292677de4",
+  "prompts": {},
+  "sessions": {
+    "s_7bf36251baaeb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00653-14e3-7c81-8bae-df58c921d869",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

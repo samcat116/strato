@@ -1,0 +1,68 @@
+control-plane/web/src/types/api.ts
+  s_6e0ee509203f02::t_72edf63fd06b60 224-252
+control-plane/web/src/lib/api/iam-roles.ts
+  s_6e0ee509203f02::t_0be50211466bf9 1-21
+control-plane/web/src/components/project-members/add-member-dialog.tsx
+  s_6e0ee509203f02::t_194609c250f4da 23-27,42-48,50-51,62,74,81
+  s_6e0ee509203f02::t_10f293e6471f0c 124
+  s_6e0ee509203f02::t_f70e8e4b7d6981 52-56
+  s_6e0ee509203f02::t_204d9a002cbeb9 73,77-78,80
+  s_6e0ee509203f02::t_03a8b3176b2fde 125-126,130,132,135,137-138,141-149
+  s_6e0ee509203f02::t_03223dfffec0ca 75-76
+control-plane/web/src/components/organization-members/members-table.tsx
+  s_6e0ee509203f02::t_cae2bf0a0d6e37 24
+  s_6e0ee509203f02::t_3674f6826627ee 51-63,66-73
+  s_6e0ee509203f02::t_49d072f794dff1 176,192-200
+  s_6e0ee509203f02::t_49492be9ca4cdb 105-108
+  s_23e999cd01a81a::t_89e11fccccaf0f 74
+control-plane/web/src/components/organization-members/add-member-dialog.tsx
+  s_6e0ee509203f02::t_0a2bb82b8908c9 124,141-149
+  s_6e0ee509203f02::t_0c153345a503c0 23-27,42-51
+control-plane/web/src/lib/hooks/use-project-members.ts
+  s_6e0ee509203f02::t_40592f7e94e633 22
+  s_6e0ee509203f02::t_8b4802e5d2e033 48
+  s_6e0ee509203f02::t_3fd80eb9290280 31
+control-plane/web/src/lib/hooks/use-bindable-roles.ts
+  s_6e0ee509203f02::t_fc4588502879f3 1-15
+control-plane/web/src/components/project-members/add-group-dialog.tsx
+  s_6e0ee509203f02::t_78b752b2e60fb6 81,86
+  s_6e0ee509203f02::t_e8ebf21d22c48b 59-63
+  s_6e0ee509203f02::t_b55dc0146ce104 151
+  s_6e0ee509203f02::t_0d33ef788dc6dd 152-153,159,162,164-165,168
+  s_6e0ee509203f02::t_7bcf6b8d27ead9 23,49-55,57-58,71,82
+  s_6e0ee509203f02::t_2ae2bf844e80c3 83-84
+control-plane/web/src/lib/api/index.ts
+  s_6e0ee509203f02::t_6f985058aa2575 13
+control-plane/web/src/lib/hooks/index.ts
+  s_6e0ee509203f02::t_7f5d012b2c94a0 142
+control-plane/web/src/components/project-members/members-table.tsx
+  s_6e0ee509203f02::t_282aa9b12fc96c 76-79,82-85
+  s_6e0ee509203f02::t_b8766d64c67901 154-155,157,161,163-164,167
+  s_6e0ee509203f02::t_9c59f21194f281 24,30,47-54
+control-plane/web/src/lib/api/project-members.ts
+  s_6e0ee509203f02::t_bfaf6e834ef9fb 4,6-8,14,21,33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "d435cb5e70dfc166c237d3f507fa3e7764ef59e5",
+  "prompts": {},
+  "sessions": {
+    "s_23e999cd01a81a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b02c051-da07-4eb7-b48f-5714856b9887",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_6e0ee509203f02": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "86ee15fb-c5b9-4d42-a21a-61939aaedb72",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

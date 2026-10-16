@@ -1,0 +1,137 @@
+agent/Tests/StratoAgentPlatformTests/NodeDependencyManagerTests.swift
+  s_6fa1273796521a::t_10ce21acf7f869 65-69,233
+agent/Sources/StratoAgentCore/OrderedByteRelay.swift
+  s_6fa1273796521a::t_779791a73ee9c3 2,4-6,8-17,20-21,23-31,33-34,37,39-42,47-50,54-55,57-60,62,67,69,73,75
+  s_6fa1273796521a::t_b20e18eb9ab381 51-53
+  s_6fa1273796521a::t_79bd9a16070887 56
+  s_6fa1273796521a::t_f779203b688156 61
+  s_6fa1273796521a::t_6831378ca44bd2 63-64
+agent/Sources/StratoAgentCore/NodeDependencyManager.swift
+  s_6fa1273796521a::t_10ce21acf7f869 62,73,96-102,107,110-115,144
+  s_6fa1273796521a::t_652f0514c5a89f 116-123,125-136,141-143,146-152
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux.swift
+  s_6fa1273796521a::t_ee51ac6bc646d6 78-80
+agent/Sources/StratoAgentRuntime/Agent+Heartbeat.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 469,474
+  s_2c33adbae3e9a4::t_8eaf6a7619eb08 340,462
+agent/Sources/StratoAgentRuntime/Agent+ResourceTelemetry.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 64
+  s_2c33adbae3e9a4::t_c913c3b6c7c776 38
+agent/Sources/StratoAgentRuntime/Agent.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 60,361,390-391,395-396,404,408,414
+  s_6fa1273796521a::t_7801230ce3f6c7 96
+agent/Sources/StratoAgentRuntime/ConsoleSocketManager.swift
+  s_6fa1273796521a::t_779791a73ee9c3 320-324
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_6fa1273796521a::t_115104d8bdecd7 1227-1235
+agent/Sources/StratoAgentRuntime/Agent+DependencyObservation.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 44-45,91
+agent/Sources/StratoAgentRuntime/Agent+Messages.swift
+  s_6fa1273796521a::t_79a296f9b1142c 336-337
+  s_6fa1273796521a::t_06d4bab156dcd3 334,479-480,511,517,721
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+Connection.swift
+  s_6fa1273796521a::t_ee51ac6bc646d6 16,23-28,51,71,77,82,90,92,101,103-113,123-127,131-184
+  s_6fa1273796521a::t_af0b475c27bc3c 34,39
+agent/Tests/StratoAgentStorageTests/FileSystemStorageBackendTests.swift
+  s_6fa1273796521a::t_79a296f9b1142c 535-537,677-678,699-700,705-706,744-747,760-762,780-782,803-804,831-834,836-842
+agent/Sources/StratoAgentCore/ConnectionDeadline.swift
+  s_6fa1273796521a::t_779791a73ee9c3 1-32,34-58
+  s_6fa1273796521a::t_af0b475c27bc3c 33
+agent/Sources/StratoAgentRuntime/Agent+Reconciliation.swift
+  s_6fa1273796521a::t_7801230ce3f6c7 543
+agent/Tests/StratoAgentStorageTests/MockStorageBackendTests.swift
+  s_6fa1273796521a::t_79a296f9b1142c 43-44,68-69,81-83,86-89,92-94,97-98,106-110,119-121,125-126,131-132,171-172,176-178,180-181,183-185,188-189,193-195,216-217,255-256
+agent/Sources/StratoAgentRuntime/AgentRuntimeConfiguration.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 1-78
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_6fa1273796521a::t_79a296f9b1142c 138
+  s_6fa1273796521a::t_5831a564a26fd3 118-137,139-140
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+LoadBalancers.swift
+  s_6fa1273796521a::t_ee51ac6bc646d6 109
+agent/Sources/StratoAgentRuntime/Agent+Identity.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 136,207,214,234,269,488
+  s_6fa1273796521a::t_79a296f9b1142c 496-497
+agent/Sources/StratoAgentRuntime/StratoAgent.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 271,300,308-310
+  s_6fa1273796521a::t_115104d8bdecd7 205
+  s_6fa1273796521a::t_3dc717d24ecd83 311
+agent/Tests/StratoAgentRuntimeTests/OVNConnectionDeadlineTests.swift
+  s_6fa1273796521a::t_c34efc22b05914 1-2,6-11,52-55
+  s_6fa1273796521a::t_79a296f9b1142c 3-5,12-21,23-25,27-30,32-33,36,38-41,44-46,48-51
+  s_6fa1273796521a::t_fa9f467c197b62 22,26,31,34-35,37,42-43,47
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_6fa1273796521a::t_7801230ce3f6c7 17,28,36,50,52-53
+  s_6fa1273796521a::t_5cba176d4178a2 45
+  s_6fa1273796521a::t_af0b475c27bc3c 48-49
+  s_6fa1273796521a::t_5802dee8ebae8c 46-47,51,54-55
+agent/Sources/StratoAgentRuntime/Agent+Metadata.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 40,83,107
+agent/Sources/StratoAgentRuntime/Agent+StorageReconciliation.swift
+  s_6fa1273796521a::t_7801230ce3f6c7 514-515,517,590-608
+  s_6fa1273796521a::t_06d4bab156dcd3 666,805
+agent/Sources/StratoAgentRuntime/Agent+HostPreflight.swift
+  s_6fa1273796521a::t_06d4bab156dcd3 61,89,100-102,112-113,124-125
+  s_2c33adbae3e9a4::t_6b09d841c0e0d2 54
+agent/Tests/StratoAgentTests/ConnectionDeadlineTests.swift
+  s_6fa1273796521a::t_5cba176d4178a2 9-53
+  s_6fa1273796521a::t_a21f0e5e55c4f5 1-8,54-63
+agent/Sources/StratoAgentRuntime/Agent+Lifecycle.swift
+  s_6fa1273796521a::t_79a296f9b1142c 104-105,271-272
+  s_6fa1273796521a::t_7801230ce3f6c7 577-578,583-591
+  s_6fa1273796521a::t_06d4bab156dcd3 52,79,81,96,106,110,154,165,167,174,215-216,232-234,258-259,267-269,291-293,299,306-307,316-317,319,372-373,375-376,378,381,384-385,415,433,727
+  s_6fa1273796521a::t_cf83f6793297b9 282
+agent/Sources/StratoAgentRuntime/LibvirtService.swift
+  s_6fa1273796521a::t_79a296f9b1142c 1527-1553
+  s_6fa1273796521a::t_0306ee40667e4a 1521-1522,1526,1554-1559
+agent/Sources/StratoAgentRuntime/Agent+NetworkConnection.swift
+  s_6fa1273796521a::t_ee51ac6bc646d6 22-24,26
+  s_6fa1273796521a::t_43fb49ebcc4051 27
+agent/Sources/StratoAgentCore/HypervisorServiceError.swift
+  s_6fa1273796521a::t_a7063fa96feba4 6-7
+agent/Tests/StratoAgentRuntimeTests/NetworkIdentityTests.swift
+  s_6fa1273796521a::t_0c0c4475d3295e 1-31
+agent/Tests/StratoAgentRuntimeTests/RuntimeTestConfiguration.swift
+  s_6fa1273796521a::t_34578110efa481 1-40
+agent/Tests/StratoAgentRuntimeTests/VolumeDeletionTests.swift
+  s_6fa1273796521a::t_6fb5d658b5c5ae 1-109
+docs/architecture/agent-dependency-management.md
+  s_6fa1273796521a::t_e00ab590ae54dc 34-35
+docs/architecture/agent.md
+  s_6fa1273796521a::t_f528dd23dc41d1 12-27,31-33,70,1127,1552-1582
+agent/Sources/StratoAgentCore/AgentConfigSections.swift
+  s_2c33adbae3e9a4::t_3397b5f3173dfc 3
+agent/Sources/StratoAgentRuntime/NetworkOrchestrator.swift
+  s_2c33adbae3e9a4::t_f017c611d5bee1 88-91,103
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+WorkloadPorts.swift
+  s_2c33adbae3e9a4::t_d6c6960c6a5038 30-31,214
+agent/Sources/StratoAgentRuntime/NetworkServiceMacOS.swift
+  s_2c33adbae3e9a4::t_ea28ac573f5b77 47
+agent/Sources/StratoAgentRuntime/NetworkServiceProtocol.swift
+  s_2c33adbae3e9a4::t_303372157dec8c 118,170
+agent/Tests/StratoAgentTests/OrderedByteRelayTests.swift
+  s_2c33adbae3e9a4::t_cae5d6f8bca727 72,88-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e330723c6c2fafcf9f1f72058a085e0e2e56c5bb",
+  "prompts": {},
+  "sessions": {
+    "s_2c33adbae3e9a4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0b230-9166-7652-a6c2-c20a23b69088",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_6fa1273796521a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06e4d-f7aa-72d3-a3e2-91811cfee6ad",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 60-61,64-67,91-96,100-102,106-119
+  s_0226cff00d1a8c::t_455218fc18368c 120-121
+control-plane/web/src/types/api.ts
+  s_0226cff00d1a8c::t_3711877c19ad1b 34-40,45,49-50,793-795,817-821,833-836
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 57-59,72-73,81-87
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 164-173,178-179,181-196,199-201,209-210,213-216,223-224,227-230
+shared/Sources/StratoShared/VMSpec.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 145-153,176-178,191-193,203,218-220
+shared/Tests/StratoSharedTests/IPAddressingTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 1-144
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 114-146
+docs/deployment/agents.md
+  s_0226cff00d1a8c::t_3711877c19ad1b 28-31,167-194
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_0226cff00d1a8c::t_3711877c19ad1b 12-28,59,83-87,90-94
+control-plane/Sources/App/Migrations/CreateVMInterfaceAddresses.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 1-167
+control-plane/Tests/AppTests/DesiredStateReconciliationTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 285-288
+control-plane/Sources/App/Services/IPAMService.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 3,18-24,51,53,55,92-93,99-157,169-171,173-174,178,182
+control-plane/Tests/AppTests/IPAMServiceTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 89-155
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 188,216-218,232-235,237-243,249-262,265-270,278,290-291,296-297,311-312,424-425,434-435,709-730,736,740-741,743,900-905,907,911,923-944,948,950-960,963-997,1010,1012-1041,1116-1163,1258-1259,1321,1323,1421-1423,1425-1426,1431,1433-1434,1437-1445,1449
+control-plane/Tests/AppTests/NetworkControllerTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 146-328
+agent/Sources/StratoAgent/NetworkServiceProtocol.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 61-66,69,71-72,81-82,91-94,114-130
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_0226cff00d1a8c::t_3711877c19ad1b 150-151
+control-plane/Tests/AppTests/VMNetworkSelectionTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 60-63,88-121,215-218
+deploy/compose/docker-compose.yml
+  s_0226cff00d1a8c::t_3711877c19ad1b 12-14,123-162,197-201,297-300,354-357,415-416
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 124-221
+shared/Sources/StratoShared/IPAddressing.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 1-307
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 1-96
+control-plane/Dockerfile
+  s_0226cff00d1a8c::t_3711877c19ad1b 35-38
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 40-50,116-117,132-133,197-203,223-224,231-233,251-259,270,277-279,293-294,312-313
+control-plane/web/src/components/networks/edit-network-dialog.tsx
+  s_0226cff00d1a8c::t_3711877c19ad1b 81,92-94,136-158
+control-plane/Sources/App/configure.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 315-318
+  s_0226cff00d1a8c::t_da6e3d674cee1f 319
+control-plane/web/src/components/networks/dhcp-fields.tsx
+  s_0226cff00d1a8c::t_3711877c19ad1b 91-92
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 82-83,91-108
+deploy/compose/prometheus.yml
+  s_0226cff00d1a8c::t_3711877c19ad1b 1-14
+helm/strato-control-plane/values.yaml
+  s_0226cff00d1a8c::t_3711877c19ad1b 440-443
+control-plane/Sources/App/Services/AgentService.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 1064,1152-1153,1156-1159
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 96-105,107-110,115-116,313-316,322-334,341-342,424-433
+  s_0226cff00d1a8c::t_3b6f5d0060791f 434
+agent/Tests/StratoAgentTests/DHCPOptionsTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 36-68
+agent/Tests/StratoAgentTests/NetworkReconcilerTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 15-16,27-28,116-162
+  s_0226cff00d1a8c::t_ec5b1f300d85f4 163
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 186-190,193-197,199-203,215-217,221-229
+agent/Package.resolved
+  s_0226cff00d1a8c::t_3711877c19ad1b 189
+control-plane/Sources/App/Controllers/VMController.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 25-44,300-302,338-340,553-625,627-655,657-660,662-663
+control-plane/Sources/App/Migrations/AddIPv6ToLogicalNetwork.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 1-110
+agent/Package.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 107-113
+agent/Sources/StratoAgentCore/NetworkAttachment.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 2-6,48-52,69-71,82-84,105-112,114
+control-plane/Sources/App/Models/vm.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 301-314,319-320,324,333-340
+control-plane/Sources/App/Models/VMNetworkInterface.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 23-26,34,38-41
+  s_0226cff00d1a8c::t_e5a3bef80c92ef 42
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 90-95,99
+agent/Tests/StratoAgentTests/NetworkAttachmentTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 58-67
+agent/Sources/StratoAgentCore/DHCPOptions.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 2,11-13,23-26,36-58
+  s_0226cff00d1a8c::t_3328491c27bfae 59-61
+control-plane/Tests/AppTests/VMInterfaceAddressMigrationTests.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 1-136
+control-plane/web/src/components/networks/network-table.tsx
+  s_0226cff00d1a8c::t_3711877c19ad1b 115-120,123-128
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 39-41,60-63,87-89
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 129-132,134-135
+deploy/compose/README.md
+  s_0226cff00d1a8c::t_3711877c19ad1b 39-45,69-73
+deploy/compose/spiffe/bootstrap.sh
+  s_0226cff00d1a8c::t_3711877c19ad1b 17-20,23,39,45,51-67
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_0226cff00d1a8c::t_3711877c19ad1b 2,109-112,114,132-133,227-228,263-329,331-332,344-345,448-452,454-461,469,471-472,487-497,542-607,613-618
+deploy/agent/install.sh
+  s_0226cff00d1a8c::t_3711877c19ad1b 17-23,28,32,36-52,54-55,69-81,88-96,112-120,131-141,157-158,167-178,192,252-333,353-356,375-380,434-440,442-443,448,450,467-722,745-756,798-800
+deploy/compose/spiffe/envoy.yaml
+  s_0226cff00d1a8c::t_3711877c19ad1b 67-114,125-132,190-219
+  s_0226cff00d1a8c::t_89f291ecd6b201 220
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_0226cff00d1a8c::t_3711877c19ad1b 34-36,48,50,58-59,78-83,90-92,175-207
+  s_0226cff00d1a8c::t_1fed92cb3a5d28 208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "c0932edbfc81b751dab242426d4df91d344ced93",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

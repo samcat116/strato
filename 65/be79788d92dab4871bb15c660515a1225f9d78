@@ -1,0 +1,45 @@
+control-plane/Tests/AppTests/FolderMemberTests.swift
+  s_9bd7c323ebfd92::t_4190c84969f998 378-399,405,410,422-433,440
+  s_9bd7c323ebfd92::t_13a7bab27fc698 416,453
+  s_9bd7c323ebfd92::t_9c9b02620b19ab 15-43
+  s_9bd7c323ebfd92::t_60203d6826b8aa 447
+  s_9bd7c323ebfd92::t_640560afbd081d 376-377,400-404,406-409,411-415,417-421,434-439,441-446,448-452,454-536
+control-plane/Sources/App/IAM/RoleBindingService.swift
+  s_9bd7c323ebfd92::t_638f0893d55d06 207-226
+control-plane/Sources/App/Controllers/OrganizationalUnitMemberController.swift
+  s_9bd7c323ebfd92::t_1b0a6f6a860a8e 235-236
+  s_9bd7c323ebfd92::t_a67315876957a5 324
+  s_9bd7c323ebfd92::t_4f65d6cd7b9712 211-213
+  s_9bd7c323ebfd92::t_9ee0dbc57fb7ae 259-261,263-265
+  s_9bd7c323ebfd92::t_b70724918cea59 345-346
+  s_9bd7c323ebfd92::t_46b4c77b94533b 371-404,412-414,419-428,449-461,472
+  s_9bd7c323ebfd92::t_69a97564f18717 463-464,466-467,469-471,482-506
+  s_9bd7c323ebfd92::t_e6956b578874cf 513
+  s_9bd7c323ebfd92::t_9e5331245f9d34 3
+  s_9bd7c323ebfd92::t_66ac9b25425df0 526-528
+  s_918416530aede1::t_e5daffe3dee49f 462,465,468,473
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "65be79788d92dab4871bb15c660515a1225f9d78",
+  "prompts": {},
+  "sessions": {
+    "s_918416530aede1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d7cd7c5-d540-42bb-9b8e-8503b7b6aa68",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_9bd7c323ebfd92": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2c0fa009-7951-4783-ac13-54a63e9d6b7f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

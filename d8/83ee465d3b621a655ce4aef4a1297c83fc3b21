@@ -1,0 +1,19 @@
+control-plane/Sources/App/openapi.yaml
+  s_647124dd747362::t_604b664b4feb23 15120-15121,15124,15159-15160,15163,15268-15269,15272,15300-15301,15304,15543-15544,15547,15592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d883ee465d3b621a655ce4aef4a1297c83fc3b21",
+  "prompts": {},
+  "sessions": {
+    "s_647124dd747362": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffd75-c748-7272-8f21-d12e3dee5467",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

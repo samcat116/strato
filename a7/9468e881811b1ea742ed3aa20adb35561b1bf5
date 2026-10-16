@@ -1,0 +1,48 @@
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_c327d906dd3137::t_4f39927def9a99 355,357-361,363,368,371-396
+  s_c327d906dd3137::t_cfc6b20ab52586 943-953
+  s_c327d906dd3137::t_cdfe4459937747 397,399-412,495-504,506
+  s_c327d906dd3137::t_40812b0bf6e9c1 505
+  s_c327d906dd3137::t_2d79d069b75a98 890,893,914,924,927-929,935-942,955-958,966
+  s_7294947885b0e6::t_55038f8362765e 398,507
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_c327d906dd3137::t_2d79d069b75a98 100-105
+docs/adr/0005-agent-drives-libvirt-not-qemu.md
+  s_c327d906dd3137::t_cdfe4459937747 112-113,149,233-235
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_c327d906dd3137::t_2d79d069b75a98 1016-1020,1024,1026-1027,1030
+  s_c327d906dd3137::t_4f39927def9a99 198-282,574,712-714,974-995
+  s_060255e25a3ff5::t_745503f4142787 996-997
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a79468e881811b1ea742ed3aa20adb35561b1bf5",
+  "prompts": {},
+  "sessions": {
+    "s_060255e25a3ff5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe806-52b1-76f2-b4a4-c6461ebde37a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7294947885b0e6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe806-ccf1-7ac1-b0a2-7d0172d18b58",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_c327d906dd3137": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe805-3d12-7b12-b80f-d9df8123bf23",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

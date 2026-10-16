@@ -1,0 +1,49 @@
+control-plane/Sources/App/Extensions/Request+Authorization.swift
+  s_5293f3e5aa34d6::t_7a6ea982cb8128 18,20
+control-plane/Sources/App/routes.swift
+  s_5293f3e5aa34d6::t_5330c37c10d361 56-58
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_5293f3e5aa34d6::t_d5bc81781ed5e7 358,365-366
+control-plane/Tests/AppTests/AuditLoggingTests.swift
+  s_5293f3e5aa34d6::t_d26f953672b53f 1-266
+docs/deployment/audit-logging.md
+  s_5293f3e5aa34d6::t_57ded104dd6b20 1-82
+control-plane/Sources/App/configure.swift
+  s_5293f3e5aa34d6::t_a9197659ff1f37 295-297
+  s_5293f3e5aa34d6::t_4c827c2505700a 126-133
+control-plane/Sources/App/Controllers/AuditEventController.swift
+  s_5293f3e5aa34d6::t_7e1733242bf1ff 1-76,79-156
+  s_5293f3e5aa34d6::t_4f1ed05a9c82d2 77-78
+control-plane/Sources/App/Middleware/AuditMiddleware.swift
+  s_5293f3e5aa34d6::t_3b2c939a13cee5 1-139
+control-plane/Sources/App/Migrations/CreateAuditEvent.swift
+  s_5293f3e5aa34d6::t_2f10e5d2bfee2d 1-51
+control-plane/Sources/App/Controllers/UserController.swift
+  s_5293f3e5aa34d6::t_08a634bf9ae7f5 198
+  s_5293f3e5aa34d6::t_62803c4d57ddd1 278,280-282
+  s_5293f3e5aa34d6::t_f99ddbb7228f52 242-252,256
+control-plane/Sources/App/Models/AuditEvent.swift
+  s_5293f3e5aa34d6::t_6ff894ac552de2 1-96
+docs/.vitepress/config.mts
+  s_5293f3e5aa34d6::t_78aad499ce7a18 54
+control-plane/Sources/App/Services/AuditService.swift
+  s_5293f3e5aa34d6::t_2490939e188eea 1-350
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_5293f3e5aa34d6::t_a9f68ecbbda22e 51-53,56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7fbe1b18d95f64eec509bf57fd9ec852a5783f11",
+  "prompts": {},
+  "sessions": {
+    "s_5293f3e5aa34d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7388a3fe-8a29-450d-9368-936e457603a6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

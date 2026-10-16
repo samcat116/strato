@@ -1,0 +1,35 @@
+control-plane/Sources/App/Controllers/UserController.swift
+  s_410b83026746bf::t_b16285b590ed04 37-38,40-48,54-58,60-63
+control-plane/Tests/AppTests/ListAuthorizationScalingTests.swift
+  s_410b83026746bf::t_d5ec4b647b39f8 98-101,104,109
+  s_410b83026746bf::t_52415f25c31fe5 61-68
+  s_410b83026746bf::t_5c4e554c62f1e5 1-60,69-97,102-103,105-108,110-265,277,279-284,286-295,297,350-352
+  s_410b83026746bf::t_8f152c819a7268 266-276,278,285,296,298-349
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_410b83026746bf::t_85db45b8b34eb6 355-368
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_410b83026746bf::t_53deee6f117d65 112-119,121,123,125-138,146-150,152-154,158-162
+  s_410b83026746bf::t_e5467b1514a15e 2
+  s_410b83026746bf::t_75bafe20c04fbe 65-68
+  s_410b83026746bf::t_14918f1bb0eb68 140-145,151,155-157
+control-plane/Sources/App/IAM/UserDirectoryVisibility.swift
+  s_410b83026746bf::t_37830131a9f932 1-147
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_410b83026746bf::t_ee429f2251b687 26-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "709a320976de8601a9fd8e5e49a01d5ec921778b",
+  "prompts": {},
+  "sessions": {
+    "s_410b83026746bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5486d294-0d5f-42d4-a0f5-7de3e33822f2",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

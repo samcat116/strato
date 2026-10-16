@@ -1,0 +1,49 @@
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 96
+control-plane/Sources/App/Migrations/AddSSHPublicKeyToVM.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 1-18
+control-plane/Sources/App/Models/Organization.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 116-118
+control-plane/web/src/lib/hooks/use-console.ts
+  s_79e524c6806817::t_c814c3c0ebcd52 32-44,81,97,108,126
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 103-104,129-130,165-166
+shared/Sources/StratoShared/VMSpec.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 33-36,47-48,59-78
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 137-142,144
+control-plane/Sources/App/configure.swift
+  s_79e524c6806817::t_a2177a652a08ec 231-235
+control-plane/Sources/App/Controllers/VMController.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 338-339,538-541
+  s_79e524c6806817::t_f5612fb8c72e1d 542
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_79e524c6806817::t_c814c3c0ebcd52 50,121,137,279-297
+  s_79e524c6806817::t_d785be0d3a4fee 298-299
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 14-19,28-29,34-35,41-42,65-74,91-104,106
+agent/Sources/StratoAgentCore/StageBudget.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 22-26
+control-plane/Sources/App/Models/vm.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 106-109
+control-plane/web/src/types/api.ts
+  s_79e524c6806817::t_c814c3c0ebcd52 300-301
+agent/Sources/StratoAgent/QEMUService.swift
+  s_79e524c6806817::t_c814c3c0ebcd52 447-460,895-896
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "efcfae41f58d09de8dbbc076c8dd8a02de54ab28",
+  "prompts": {},
+  "sessions": {
+    "s_79e524c6806817": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ac12cf4-64db-450e-b882-8b616c8cdc67",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

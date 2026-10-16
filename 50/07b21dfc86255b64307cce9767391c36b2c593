@@ -1,0 +1,30 @@
+control-plane/Sources/App/Services/SandboxSpecBuilder.swift
+  s_336279d963d125::t_dc6a892c774e21 32
+  s_336279d963d125::t_a65c8e3c6def13 6-7
+control-plane/Sources/App/Models/NetworkAddressable.swift
+  s_336279d963d125::t_7c01349d40f917 1-51
+control-plane/Sources/App/Services/NetworkSpecFactory.swift
+  s_336279d963d125::t_0856784236eb16 1-37
+control-plane/Sources/App/Models/SandboxInterfaceAddress.swift
+  s_336279d963d125::t_e925d7bd54b407 73,75-78
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_336279d963d125::t_877465f3c9fd4c 75,77-80
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_336279d963d125::t_2331f5b9a304c1 88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5007b21dfc86255b64307cce9767391c36b2c593",
+  "prompts": {},
+  "sessions": {
+    "s_336279d963d125": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67207ac4-f05d-4b5e-9f97-c204ce84d26a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

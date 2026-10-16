@@ -1,0 +1,34 @@
+control-plane/web/src/app/(dashboard)/projects/page.test.tsx
+  s_0d687d4de3826a::t_4434b292e02213 108,132,136-138
+  s_0d687d4de3826a::t_69f76760de0f01 5-6,32,63,78-107,109-131,133-135,139
+  s_0d687d4de3826a::t_8b472530f8f00c 7-8
+  s_0d687d4de3826a::t_6319c94fe70048 1-2,60-61
+  s_0d687d4de3826a::t_afe78b8a9fe929 3-4,9-11,20-31,33-59,62,64-77,140-141
+  s_0d687d4de3826a::t_96026056747d86 12-19
+control-plane/web/src/components/projects/transfer-project-dialog.test.tsx
+  s_0d687d4de3826a::t_830cd3332d337e 1-66
+control-plane/web/src/app/(dashboard)/projects/page.tsx
+  s_0d687d4de3826a::t_6319c94fe70048 32-33,41-59,161-165
+  s_0d687d4de3826a::t_546427c529d857 17-21,34-40,60,100,130,132
+control-plane/web/src/components/projects/transfer-project-dialog.tsx
+  s_0d687d4de3826a::t_4fb550057b77aa 22,42-56
+control-plane/web/src/components/projects/projects-table.tsx
+  s_0d687d4de3826a::t_6319c94fe70048 41-45,55,102-106,115,123-127,189,192-198,200-206,216-219,221-241,246-247
+  s_0d687d4de3826a::t_52bf67590c1951 128,207-215,245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d2efe023e160d8af62f9d608ba850af43c5b2f32",
+  "prompts": {},
+  "sessions": {
+    "s_0d687d4de3826a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0064f-f730-7011-9930-0bf2ed8b4ddf",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

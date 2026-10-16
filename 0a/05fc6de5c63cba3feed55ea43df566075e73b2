@@ -1,0 +1,72 @@
+agent/Sources/StratoAgent/QEMUService.swift
+  s_409c13d74fe5b1::t_bf7020d0b6da4a 85-86,94-97,130,132,136,140-145,190-191,194-195
+  s_409c13d74fe5b1::t_dcf214998c3752 561-563,566-568,575,578
+  s_409c13d74fe5b1::t_fadecd9bc71b4c 616-617
+  s_409c13d74fe5b1::t_99c31b120cf107 64
+  s_409c13d74fe5b1::t_21a9092156381d 754-760,764-773,778,788-789,792-793,796-802,806-817,819,823,826-832,837,839-840,842,860,866
+  s_409c13d74fe5b1::t_f37497b3618225 946,951,953,959-960,962-964
+  s_409c13d74fe5b1::t_4cbde3d4895efb 412,420,422,429-433,437,439
+  s_409c13d74fe5b1::t_2bdf9be95f9146 225,228
+  s_409c13d74fe5b1::t_4d85818c781177 21,25,28,36
+  s_409c13d74fe5b1::t_f3d36993e784ee 363
+  s_409c13d74fe5b1::t_fe2f414e5e892b 383
+control-plane/Sources/App/Services/AgentService.swift
+  s_409c13d74fe5b1::t_e0ff4660b5f69b 535
+  s_409c13d74fe5b1::t_89bcc9b51ae981 521
+  s_409c13d74fe5b1::t_c4c800485a9ce6 490,494
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_409c13d74fe5b1::t_fc20cb21419bd1 230
+  s_409c13d74fe5b1::t_93a943127b9fa8 24
+  s_409c13d74fe5b1::t_b9c2096e102a1b 131-132
+  s_409c13d74fe5b1::t_fbec779ca3abb7 238,245,247
+  s_409c13d74fe5b1::t_3e90bab5807625 50,54,71-73,101,110-115,117-118,126-127,134-135,140,142-144,161
+  s_409c13d74fe5b1::t_94b329f04a8a46 279-281,288,301-303
+  s_409c13d74fe5b1::t_79ce548b22306d 359
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_409c13d74fe5b1::t_515b4eae8e9103 96-97,99-100
+  s_409c13d74fe5b1::t_50b5f42b57eaf0 146-147,149
+agent/Sources/StratoAgent/Agent.swift
+  s_409c13d74fe5b1::t_631fdbba8a3b83 938
+control-plane/Sources/App/Controllers/VMController.swift
+  s_409c13d74fe5b1::t_8b9bd4c67f71c3 302,306,309,316
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_409c13d74fe5b1::t_7470390658aaf6 147
+agent/Sources/StratoAgent/VMManifestStore.swift
+  s_409c13d74fe5b1::t_de74fe9e1c33cd 21,25-35,43,57-86
+  s_06bf323f5520ac::t_a08d08a2fa901f 87
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_409c13d74fe5b1::t_a9e40cf537ad0c 211,218,224
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_409c13d74fe5b1::t_f17c2e1d09bc4b 5-188,239
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_409c13d74fe5b1::t_085cbe1fe146b2 6-427
+shared/Sources/StratoShared/VMSpec.swift
+  s_409c13d74fe5b1::t_54bb65cbe7ea33 1-157
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_409c13d74fe5b1::t_f07265d6e8c2ee 11-12,15,17
+  s_409c13d74fe5b1::t_4831aebad6220f 62-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0a05fc6de5c63cba3feed55ea43df566075e73b2",
+  "prompts": {},
+  "sessions": {
+    "s_06bf323f5520ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "432e2f03-c5be-44b6-b08c-3f8845c22fbd",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_409c13d74fe5b1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4427225c-96ea-403d-bf8f-f216d73917d7",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

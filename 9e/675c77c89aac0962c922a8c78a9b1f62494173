@@ -1,0 +1,88 @@
+deploy/compose/README.md
+  s_eb8d88f42f560f::t_c11864d3da7232 29-32
+control-plane/Sources/App/Controllers/SSFStreamController.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-268
+.github/workflows/build.yaml
+  s_eb8d88f42f560f::t_c11864d3da7232 442-444,453-458,466-467
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 356-360,363
+control-plane/Sources/App/Migrations/AddSecurityStateToUser.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-31
+control-plane/Sources/App/Migrations/CreateSSFStream.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-41
+deploy/compose/.env.example
+  s_eb8d88f42f560f::t_c11864d3da7232 45-47
+control-plane/Sources/App/configure.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 136-141,202-206,531-534
+  s_eb8d88f42f560f::t_720f18f4d204f3 312-314
+  s_0226cff00d1a8c::t_e2d63bc5141b67 535
+docs/deployment/shared-signals.md
+  s_eb8d88f42f560f::t_c11864d3da7232 1-59
+agent/Tests/StratoAgentTests/CustomLogHandlerTests.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 3-4,10-11,14-20,22,25-26,28-39
+control-plane/Tests/AppTests/SSFTests.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-691
+control-plane/Sources/App/routes.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 41-43
+control-plane/Sources/App/Services/SSFSignalProcessor.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-297
+docs/deployment/docker-compose.md
+  s_eb8d88f42f560f::t_c11864d3da7232 80-81,84,87-88
+  s_eb8d88f42f560f::t_df2c238b7a4c56 89
+control-plane/Package.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 29-33,88
+deploy/compose/docker-compose.yml
+  s_eb8d88f42f560f::t_c11864d3da7232 254-256,335
+control-plane/Sources/App/Models/SSFStream.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-275
+deploy/compose/setup.sh
+  s_eb8d88f42f560f::t_c11864d3da7232 137-140
+control-plane/Sources/App/Models/User.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 40-49,91-92
+control-plane/Sources/App/Services/SSFService.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-400
+agent/Dockerfile
+  s_eb8d88f42f560f::t_c11864d3da7232 6-9,42-50,55-76,111-113
+agent/Sources/StratoAgentCore/CustomLogHandler.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 34-50,63
+docs/deployment/agents.md
+  s_eb8d88f42f560f::t_c11864d3da7232 83-88,94
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 36-37,40
+control-plane/Sources/App/Middleware/UserSecurityMiddleware.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 1-105
+control-plane/Package.resolved
+  s_eb8d88f42f560f::t_c11864d3da7232 2,445-450
+  s_eb8d88f42f560f::t_95c54883a7a52f 451-452
+control-plane/Sources/App/Controllers/UserController.swift
+  s_eb8d88f42f560f::t_c11864d3da7232 186-197,208-211,214,271-278,281
+.github/workflows/main-build.yaml
+  s_eb8d88f42f560f::t_c11864d3da7232 96-113,176,193-207
+  s_eb8d88f42f560f::t_a973934e09b086 208
+docs/.vitepress/config.mts
+  s_eb8d88f42f560f::t_c11864d3da7232 55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9e675c77c89aac0962c922a8c78a9b1f62494173",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

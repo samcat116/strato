@@ -1,0 +1,21 @@
+agent/Tests/StratoAgentTests/MetadataRouterTests.swift
+  s_75267c98733006::t_d6be524a7b8fcb 97,99,101,103,111-112
+agent/Sources/StratoAgentCore/MetadataService/MetadataRouter.swift
+  s_75267c98733006::t_d6be524a7b8fcb 261-265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "df278485e8bafc86b764a36e23a7165d0f0a385c",
+  "prompts": {},
+  "sessions": {
+    "s_75267c98733006": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fedf2-124f-7002-b4bb-a09663423b8f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

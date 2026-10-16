@@ -1,0 +1,32 @@
+docs/architecture/networking.md
+  s_f7e464120e1099::t_1e0de4bca19b59 363-370
+  s_f7e464120e1099::t_f04ccee3d231e1 266-278
+agent/Sources/StratoAgentCore/GatewayChassisPlan.swift
+  s_f7e464120e1099::t_867d9a9850b7ab 1-56
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_f7e464120e1099::t_2f6c0b34edef94 51-55
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_f7e464120e1099::t_1a195002248d6d 1336,1338-1339
+  s_f7e464120e1099::t_acd196b7d67683 1140-1145
+  s_f7e464120e1099::t_29768edb06602c 1397-1398
+  s_f7e464120e1099::t_9be6ba9b90dae6 533-539,541-552,555-556
+  s_f7e464120e1099::t_2fea7118180fab 1285-1310,1312-1316,1318-1335,1337,1340-1396,1400
+agent/Tests/StratoAgentTests/GatewayChassisPlanTests.swift
+  s_f7e464120e1099::t_dc6b0a500d6180 1-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "99a51083f67318a2e07575ad5c8a1a00fef078b8",
+  "prompts": {},
+  "sessions": {
+    "s_f7e464120e1099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06ab7421-3ec6-45ae-b53e-21edc1e8220f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

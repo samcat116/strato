@@ -1,0 +1,49 @@
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 444
+.github/workflows/README.md
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 3,9-18,47-50,54-56,59,63,65-68,74-76
+control-plane/Sources/App/Extensions/Application+LazyService.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 1-29
+.github/workflows/build.yaml
+  s_6b79f3234a0fa6::t_a62c08b11a9d6e 143-149,152-160,162
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 12-18,21-65,68-72,95-97,170-173
+  s_6b79f3234a0fa6::t_df2485a19cf9bf 111-114,116
+control-plane/Sources/App/Services/ConsoleSessionManager.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 255,261
+control-plane/Sources/App/Services/URLSigningService.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 224,231
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 111-175
+control-plane/Sources/App/Services/AgentService.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 903,909,916,922
+control-plane/Sources/App/Services/VolumeService.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 389,395
+control-plane/Sources/App/Services/LokiService.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 223,229
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 153
+.github/workflows/claude-code-review.yml
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 13-17
+.github/workflows/helm-test.yml
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 24-28,31,58,186,337,365-368,370-371,376,401
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 301,307
+.github/workflows/main-build.yaml
+  s_6b79f3234a0fa6::t_9a18e7682c41d6 13-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "14eb6004a83f96e4d6c3c656df4f911517d5139f",
+  "prompts": {},
+  "sessions": {
+    "s_6b79f3234a0fa6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ee0b4a12-ecbf-4742-92d3-87fdc50825fa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+control-plane/Tests/AppTests/AgentServiceLifecycleTests.swift
+  s_8175a76a1576f0::t_36aa453a2ba2f0 84-112
+control-plane/Sources/App/Services/AgentService.swift
+  s_8175a76a1576f0::t_db97aa630f9076 175-183,185
+  s_8175a76a1576f0::t_a1caa4f1669428 722-725
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "3ea17304b09dbfc6a08aa3e9239640e0aaeeac99",
+  "prompts": {},
+  "sessions": {
+    "s_8175a76a1576f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1080cc85-15d2-47f7-a8fa-3e986c31849d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

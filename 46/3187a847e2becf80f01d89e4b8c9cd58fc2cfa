@@ -1,0 +1,41 @@
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_45f5bd5bc03fe4::t_27a6a0ebe32445 694-695,698-699
+  s_45f5bd5bc03fe4::t_fa7c4ee32a7921 43-46,82-83,94-95,136-139,141,149,152,244-246,248,250-261
+  s_45f5bd5bc03fe4::t_62668ad9d55e4c 133-134
+  s_45f5bd5bc03fe4::t_64e5069db150ec 627-630,649-651,653-667,679-693,696-697
+control-plane/Tests/AppPlatformTests/CoordinationServiceTests.swift
+  s_45f5bd5bc03fe4::t_7cef41c598e23e 81-93
+control-plane/Sources/App/Services/AgentService.swift
+  s_45f5bd5bc03fe4::t_62668ad9d55e4c 36
+  s_45f5bd5bc03fe4::t_623ae74bec918e 37-39
+  s_45f5bd5bc03fe4::t_7076f9882dbd08 912-913,917-918
+  s_45f5bd5bc03fe4::t_ebe17d724a7087 21,35,45-48,50-53
+  s_45f5bd5bc03fe4::t_7f864e23e1e083 118-121,640,686,732,906-908,911,914-916,919-920,922,924-929
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_45f5bd5bc03fe4::t_7f864e23e1e083 115-116
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_45f5bd5bc03fe4::t_7cef41c598e23e 356-357,368,374-377,381-383
+  s_45f5bd5bc03fe4::t_7f864e23e1e083 591,595,601,606
+  s_45f5bd5bc03fe4::t_a7b5eb800f856d 384-385
+control-plane/Sources/App/Services/AgentWebSocketFrameProcessor.swift
+  s_45f5bd5bc03fe4::t_1e6700e8323282 1-107
+control-plane/Tests/AppPlatformTests/AgentWebSocketFrameProcessorTests.swift
+  s_45f5bd5bc03fe4::t_27a6a0ebe32445 37-42,45-46,48-53
+  s_45f5bd5bc03fe4::t_2b6a63fd700866 1-36,43-44,47,54-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "463187a847e2becf80f01d89e4b8c9cd58fc2cfa",
+  "prompts": {},
+  "sessions": {
+    "s_45f5bd5bc03fe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdff-9a39-74b3-8ce3-c403f19183b6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

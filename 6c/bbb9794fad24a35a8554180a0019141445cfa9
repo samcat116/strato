@@ -1,0 +1,24 @@
+agent/Package.resolved
+  s_4715211951d042::t_924bb4fb13c392 2,225
+docs/architecture/agent.md
+  s_4715211951d042::t_fa1431a31d4146 274
+  s_4715211951d042::t_12ce2a4b099874 121-144
+agent/Sources/StratoAgent/QEMUService.swift
+  s_4715211951d042::t_c3cb0d7cf09430 237-244
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "6cbbb9794fad24a35a8554180a0019141445cfa9",
+  "prompts": {},
+  "sessions": {
+    "s_4715211951d042": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aac9bc20-d7b3-4e75-8966-562e2ae904dd",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+control-plane/Sources/App/Services/StorageObservedMerge.swift
+  s_aeadc33ad2c139::t_34389dcabb743f 218-225,227
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_aeadc33ad2c139::t_e18c297f91773c 283,285-287,291-293,308-309,324-325
+  s_aeadc33ad2c139::t_34389dcabb743f 332-399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c7f40c3de5d49289511ab4b60b3390f08f8a8efe",
+  "prompts": {},
+  "sessions": {
+    "s_aeadc33ad2c139": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-590c-7111-ab67-964d351744c2",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

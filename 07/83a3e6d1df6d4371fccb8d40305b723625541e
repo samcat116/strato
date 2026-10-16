@@ -1,0 +1,33 @@
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_79e524c6806817::t_636520c7445d5d 19-21
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_311e4d09212c99::t_db5e93db81f3cd 1-72
+control-plane/Sources/App/Extensions/Request+Authorization.swift
+  s_311e4d09212c99::t_06b089119fe6d7 1-44
+control-plane/Tests/AppTests/AuthorizationCheckTests.swift
+  s_311e4d09212c99::t_b42499b4b2a401 1-136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0783a3e6d1df6d4371fccb8d40305b723625541e",
+  "prompts": {},
+  "sessions": {
+    "s_311e4d09212c99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b6dd57a-adf6-4dc0-8fd6-ae1126922c9b",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_79e524c6806817": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ac12cf4-64db-450e-b882-8b616c8cdc67",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,58 @@
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  h_a84d4ff76cadd1 49-51,54-55,66,70-71,78
+control-plane/Sources/App/Bootstrap/HTTPPipelineBootstrap.swift
+  h_a84d4ff76cadd1 36-38
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  h_a84d4ff76cadd1 75-76,119-120,162-163
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  h_a84d4ff76cadd1 87,138,163-164,168,176,204-205,225,243-245,271-272,289,294-295
+control-plane/Sources/App/Controllers/NetworkController.swift
+  h_a84d4ff76cadd1 214-216,455,711-712,715-719
+control-plane/Sources/App/Controllers/VMController.swift
+  h_a84d4ff76cadd1 212-214
+control-plane/Sources/App/DatabaseSessionTimeouts.swift
+  h_a84d4ff76cadd1 1-47
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  h_a84d4ff76cadd1 38-41,45,74,91-92,107,109,113,119,148,151,153,170-172,183,286-298,403,420-430
+control-plane/Sources/App/Middleware/DatabaseTransientErrorMiddleware.swift
+  h_a84d4ff76cadd1 1-15
+control-plane/Sources/App/Models/SCIMExternalID.swift
+  h_a84d4ff76cadd1 103-107,114-119
+control-plane/Sources/App/SchemaMigrator.swift
+  h_a84d4ff76cadd1 101,190,201,455
+control-plane/Sources/App/Services/AdvisoryLock.swift
+  h_a84d4ff76cadd1 167-181
+control-plane/Sources/App/Services/DatabaseTransactionRetry.swift
+  h_a84d4ff76cadd1 1-111
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  h_a84d4ff76cadd1 39-45
+control-plane/Sources/App/Workflows/SandboxCreationWorkflow.swift
+  h_a84d4ff76cadd1 374-376,380
+control-plane/Sources/App/Workflows/VMCreationWorkflow.swift
+  h_a84d4ff76cadd1 385-387,394
+control-plane/Tests/AppPlatformTests/ControlPlaneConfigurationTests.swift
+  h_a84d4ff76cadd1 9-25
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  h_a84d4ff76cadd1 138-143,148-153,167-172
+control-plane/Tests/AppPlatformTests/DatabaseTransactionRetryTests.swift
+  h_a84d4ff76cadd1 1-207
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  h_a84d4ff76cadd1 2-3,131-244
+docs/deployment/docker-compose.md
+  h_a84d4ff76cadd1 247-248,258-276
+helm/strato-control-plane/templates/deployment.yaml
+  h_a84d4ff76cadd1 190-193
+helm/strato-control-plane/values.yaml
+  h_a84d4ff76cadd1 343-345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c9919fb69b98e2e253a30c0f7bfb99930a03d3a9",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

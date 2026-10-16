@@ -1,0 +1,45 @@
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_94b693d0eb6d6a::t_8b5609ad7844e3 144-146,149,157-159,243
+  s_94b693d0eb6d6a::t_f102699974d112 122-125,127,129-139,244,606,610,614,628-638
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_94b693d0eb6d6a::t_9bf7c3e9350d95 15,17-29
+control-plane/web/src/types/api.ts
+  s_94b693d0eb6d6a::t_f102699974d112 1224-1226
+docs/guide/getting-started.md
+  s_94b693d0eb6d6a::t_f102699974d112 201-204
+docs/adr/0006-imds-session-auth.md
+  s_94b693d0eb6d6a::t_f102699974d112 116-118
+control-plane/Sources/App/openapi.yaml
+  s_94b693d0eb6d6a::t_f102699974d112 9173-9176
+docs/guide/instance-metadata.md
+  s_94b693d0eb6d6a::t_f102699974d112 3-5,17
+control-plane/Sources/App/Controllers/VMController.swift
+  s_94b693d0eb6d6a::t_9bf7c3e9350d95 67,755-757
+  s_94b693d0eb6d6a::t_f102699974d112 68,73,574-577
+docs/architecture/agent.md
+  s_94b693d0eb6d6a::t_f102699974d112 546-547
+control-plane/Sources/App/Models/vm.swift
+  s_94b693d0eb6d6a::t_f102699974d112 159-162
+control-plane/web/src/types/openapi.ts
+  s_94b693d0eb6d6a::t_8b06264179e90e 5430
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  s_94b693d0eb6d6a::t_f102699974d112 108
+docs/architecture/networking.md
+  s_94b693d0eb6d6a::t_f102699974d112 1213-1216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "afd490cda52b3341c8aaa6cf638d201469a2e305",
+  "prompts": {},
+  "sessions": {
+    "s_94b693d0eb6d6a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f3-149c-7b23-8032-f2fefbae7e6d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+helm/strato-control-plane/templates/spire-entry-bootstrap-job.yaml
+  s_55dbfcc7cf0fa2::t_b6e11a00c8aabe 121-124,130,154-183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1d65325b5d8de195e268a92ab978388c1843b69d",
+  "prompts": {},
+  "sessions": {
+    "s_55dbfcc7cf0fa2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53a55717-7f12-4794-ad1b-dfd24f98dd70",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,38 @@
+shared/Sources/StratoShared/VMSpec.swift
+  s_3ecb8d529faba3::t_15f6d9e78eaa20 59
+  s_3ecb8d529faba3::t_b3a6df6c2346fc 20-24
+  s_3ecb8d529faba3::t_989d5802d9b192 69-73,79
+  s_3ecb8d529faba3::t_9db8d4926fff23 47
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_3ecb8d529faba3::t_a52db7d2873689 123
+  s_3ecb8d529faba3::t_683e28dab6afb4 161
+config.toml.example
+  s_3ecb8d529faba3::t_a325cc4344a726 249-252,254-258
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_3ecb8d529faba3::t_6e427e5ed1a3d0 47,49-76
+  s_3ecb8d529faba3::t_bb63e0f496b067 48
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_3ecb8d529faba3::t_e7b15d0dfecbd3 100-119
+agent/Sources/StratoAgent/Agent.swift
+  s_3ecb8d529faba3::t_c42f249da27818 1497-1506,1511-1513
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_3ecb8d529faba3::t_aa5932f69b674b 53-63
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_3ecb8d529faba3::t_2469d2dbb530f2 162-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "9d96fe9b3cd10ca85d8687ac6a5ca28d326f8d39",
+  "prompts": {},
+  "sessions": {
+    "s_3ecb8d529faba3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a32e60b6-52a4-4633-a2c2-fa8a7e6f5782",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

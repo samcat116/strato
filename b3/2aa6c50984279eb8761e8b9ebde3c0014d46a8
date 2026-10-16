@@ -1,0 +1,35 @@
+control-plane/Sources/App/Services/SpiceDBSchemaBootstrap.swift
+  s_ebe2940e7f7415::t_99cab8414a7530 1-56
+docker-compose.yml
+  s_ebe2940e7f7415::t_795b9cdedc5ad2 73-75
+  s_ebe2940e7f7415::t_69d70c09671b9b 91-92,97
+  s_ebe2940e7f7415::t_a517b7431ff60b 35-38,42
+deploy/compose/docker-compose.yml
+  s_ebe2940e7f7415::t_366ded5ab0cc74 52-56
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_ebe2940e7f7415::t_4db02a1d3648e9 377-384
+  s_ebe2940e7f7415::t_ad2f747dcbc3fc 264-267
+  s_ebe2940e7f7415::t_044196f225beed 5-6
+  s_ebe2940e7f7415::t_e1729a702251f9 73-95,97
+  s_ebe2940e7f7415::t_76f1b910fc1091 363
+spicedb/init-schema.sh
+  s_ebe2940e7f7415::t_638df591c19000 21
+control-plane/Sources/App/configure.swift
+  s_ebe2940e7f7415::t_3d1692c28bd43f 148-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b32aa6c50984279eb8761e8b9ebde3c0014d46a8",
+  "prompts": {},
+  "sessions": {
+    "s_ebe2940e7f7415": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5acb7aad-6bc8-454a-a27f-44b80185a82e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,137 @@
+docs/architecture/wire-protocol.md
+  s_0a6f49dab719ee::t_333b4c9cdb286d 126-130
+control-plane/Sources/App/Migrations/AddNetworkFabricObservations.swift
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 22-23,32-33
+  s_0a6f49dab719ee::t_816a615c23eca0 1-21,24-31,34-40
+agent/Sources/StratoAgentCore/NetworkReconciler.swift
+  s_0a6f49dab719ee::t_6d43c10a15209c 850,856,858,867-868,870,876-877,879,885-886,897-898,908,919,930,936-939,946,957,961-965,974,1001,1004
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 861-866,871-875,880-884,891-896,902-907,913-918,924-929,940-945,951-956,968-973,980-1000
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_0a6f49dab719ee::t_cc04ab32243b91 474-481,614,620-628
+  s_0a6f49dab719ee::t_84f5237af4b5a6 210
+shared/Sources/StratoShared/WireProtocol.swift
+  s_0a6f49dab719ee::t_333b4c9cdb286d 14-16,33
+control-plane/Sources/App/Models/SandboxNetworkInterface.swift
+  s_0a6f49dab719ee::t_eef073bbb346d7 40-48,79-81
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux+Reconciliation.swift
+  s_0a6f49dab719ee::t_8e59cbe1d069de 254-294,296-318,700-702,707,744-746,749
+  s_0a6f49dab719ee::t_b026916ab89226 155-159
+  s_0a6f49dab719ee::t_bea6c21957ab4a 176-181,295
+  s_0a6f49dab719ee::t_2b4b15d62aa1fe 27,33-41,68,70-71,102,104,112-115,131-135,170,173,175,186-188,211-215,220-224,227,229-247
+  s_0a6f49dab719ee::t_065706997471c7 126-129
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_0a6f49dab719ee::t_9e82224625d4eb 1035-1040
+  s_0a6f49dab719ee::t_9e144770efc264 875-878
+  s_0a6f49dab719ee::t_816a615c23eca0 583-588,1332-1335
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_0a6f49dab719ee::t_76975d0b292003 575
+  s_0a6f49dab719ee::t_31305ff379b7aa 524,563,592,595-596
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 514-516,540-543,553-555
+  s_0a6f49dab719ee::t_70437d7cd33115 593-594,597-598
+  s_0a6f49dab719ee::t_bea6c21957ab4a 510-513,517-518,549-552,556-557
+  s_0a6f49dab719ee::t_d7776a3f4f8be8 220-230,495-509,519-523,525-539,544-548,558-562,564-569,571-574,576,578-586,588-591,599-657
+  s_0a6f49dab719ee::t_b2a45a10feb51a 570,577,587
+  s_0a6f49dab719ee::t_6a203313519a9b 658
+control-plane/Sources/App/openapi.yaml
+  s_0a6f49dab719ee::t_ae058c25a08c87 10536-10547
+  s_0a6f49dab719ee::t_1c204c6d72fe8e 10841-10852
+  s_0a6f49dab719ee::t_5e7a8c1c38c504 11822,11891-11892,12354,12378-12379
+agent/Sources/StratoAgentRuntime/NetworkServiceProtocol.swift
+  s_0a6f49dab719ee::t_c31f0696b4163c 79-81,87,100-109
+  s_0a6f49dab719ee::t_491d9e59f355f2 110-111
+agent/Sources/StratoAgentRuntime/NetworkServiceMacOS.swift
+  s_0a6f49dab719ee::t_7099952c69176c 94,97,114
+agent/Sources/StratoAgentCore/DesiredStateDerivations.swift
+  s_0a6f49dab719ee::t_3e70a3c9eda47f 15
+agent/Sources/StratoAgentRuntime/Agent+Messages.swift
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 123-130
+control-plane/Sources/App/Models/vm.swift
+  s_0a6f49dab719ee::t_62ab7367b4cc67 627-629,652-654
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_0a6f49dab719ee::t_b2a45a10feb51a 338-347
+agent/Sources/StratoAgentCore/SecurityGroupReconciler.swift
+  s_0a6f49dab719ee::t_2ea0f85a33ad5b 771-783,793,796,798-801,806-809,812,819-821,829,839-840,843,864,879,883-896,899-900,905-916
+  s_0a6f49dab719ee::t_e5bcc331c01c23 833-838
+  s_0a6f49dab719ee::t_fcf381a1ee4baa 797,824-826,841-842,865-872,875-878,880-882
+  s_0a6f49dab719ee::t_3e70a3c9eda47f 580-584,603-609,636
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 810-811,822-823,827-828,873-874,897-898,901-904
+  s_0a6f49dab719ee::t_74ca9896535797 938,943,945-968,977,980,997,1003,1024,1034-1040,1042
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_0a6f49dab719ee::t_6fd152e447c396 1616-1621,1623-1713,1833-1842,1863-1865,1881-1883
+  s_0a6f49dab719ee::t_bea6c21957ab4a 1622
+agent/Tests/StratoAgentPlatformTests/SecurityGroupReconcilerTests.swift
+  s_0a6f49dab719ee::t_d5fec0fd99ffd5 636,640-641,647,654-657,670,683
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 684-688
+  s_0a6f49dab719ee::t_51a4d7c499a4bf 690-704,727,731,736,756
+  s_0a6f49dab719ee::t_84b9e00c70a3ae 689
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_0a6f49dab719ee::t_31305ff379b7aa 91-93,117-118,136-137,139
+  s_0a6f49dab719ee::t_503b48392d16f3 141-159,211,232-237,482,511,516,518
+  s_0a6f49dab719ee::t_b2a45a10feb51a 517
+  s_532b37be23fdb2::t_f52cf821ea2ff8 519
+agent/Sources/StratoAgentRuntime/NetworkServiceLinux.swift
+  s_0a6f49dab719ee::t_bea6c21957ab4a 67-70
+control-plane/Tests/AppNetworkTests/NetworkControllerTests.swift
+  s_0a6f49dab719ee::t_bb5d9da7fa6261 1388
+  s_0a6f49dab719ee::t_2a08192b7cc3a9 684-685,693-694,733-734,766-767,779,783-784,828-829,839
+control-plane/Sources/App/Services/DesiredStateGenerationWriter.swift
+  s_0a6f49dab719ee::t_84f5237af4b5a6 42-51,54,63-70
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 52-53,71-72
+agent/Sources/StratoAgentRuntime/Agent+SandboxReconciliation.swift
+  s_0a6f49dab719ee::t_c31f0696b4163c 554-556
+control-plane/Sources/App/Models/Sandbox.swift
+  s_0a6f49dab719ee::t_62ab7367b4cc67 391-393,409-411
+control-plane/Sources/App/Services/AgentMaintenanceLoop.swift
+  s_0a6f49dab719ee::t_70437d7cd33115 248-251,473-497,500-507,509
+  s_0a6f49dab719ee::t_6fd7bef8b5ed48 498-499
+  s_0a6f49dab719ee::t_4f748b886f424f 508,510-511
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_0a6f49dab719ee::t_816a615c23eca0 197-200
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_0a6f49dab719ee::t_333b4c9cdb286d 20
+agent/Sources/StratoAgentCore/BestEffort.swift
+  s_0a6f49dab719ee::t_25cf013b872f75 25-58
+control-plane/Sources/App/Models/SecurityGroup.swift
+  s_0a6f49dab719ee::t_62fc4fa72ff50d 58-75,104-109,269,281,286,288
+  s_0a6f49dab719ee::t_b2a45a10feb51a 287
+  s_532b37be23fdb2::t_50f3768cce957f 289
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_0a6f49dab719ee::t_29d0e2a494d1fb 12-13,34,67
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_0a6f49dab719ee::t_f354efd8416444 210-252
+control-plane/Tests/AppNetworkTests/FloatingIPControllerTests.swift
+  s_0a6f49dab719ee::t_bb5d9da7fa6261 997
+agent/Sources/StratoAgentRuntime/Agent.swift
+  s_0a6f49dab719ee::t_c31f0696b4163c 120-123
+control-plane/Sources/App/Models/VMNetworkInterface.swift
+  s_0a6f49dab719ee::t_eef073bbb346d7 68-76,103-105
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_0a6f49dab719ee::t_de0260e56ef369 102-106,115-119,489-555,592-640,642-644
+  s_0a6f49dab719ee::t_fe2d10dff3723c 641
+  s_0a6f49dab719ee::t_62996bf73c3dd5 556-591
+  s_532b37be23fdb2::t_3881a24ce6ae53 645
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "146a0a4b37313715a6328c41869571c10a04bd4a",
+  "prompts": {},
+  "sessions": {
+    "s_0a6f49dab719ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-e343-7a82-84b8-e6c64e601878",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

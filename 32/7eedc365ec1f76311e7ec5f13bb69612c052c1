@@ -1,0 +1,21 @@
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_21a889dc5d67dd::t_2b9ecc8ca0bed9 1811,1820,1826-1829
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_21a889dc5d67dd::t_2b9ecc8ca0bed9 520-547
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "327eedc365ec1f76311e7ec5f13bb69612c052c1",
+  "prompts": {},
+  "sessions": {
+    "s_21a889dc5d67dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff338-9c88-74a0-ba59-110daead872d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+docs/deployment/agents.md
+  s_b1fd57a7028f8c::t_621c31c86849f5 245-247
+control-plane/Tests/AppTests/AgentUpdateEndpointTests.swift
+  s_b1fd57a7028f8c::t_c63ec0875f7a1c 194-225
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b1fd57a7028f8c::t_60e98dec915d05 760
+  s_b1fd57a7028f8c::t_b929e2d180a83d 755-759,761-766
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "1dd76325c959875f3c00d2e37895016ce892ca97",
+  "prompts": {},
+  "sessions": {
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

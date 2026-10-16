@@ -1,0 +1,19 @@
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_4a9839362dd3ee::t_3028f375432631 521
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "800718613de958186c793b98440b121b1a08f36c",
+  "prompts": {},
+  "sessions": {
+    "s_4a9839362dd3ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff36d-a3e8-7553-aeb9-5c06e5482b10",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_7391c6943770dc::t_ad241bcade0312 141-145,147,363-367
+agent/Tests/StratoAgentTests/MockSandboxRuntimeTests.swift
+  s_f78144f69f7e4b::t_159dd5b54f2ddf 403-404
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a6960bdfaf883a9f8e67fb3f797ef95444993080",
+  "prompts": {},
+  "sessions": {
+    "s_7391c6943770dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "668055d3-3aae-4452-8e0f-47d1396e2604",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_f78144f69f7e4b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c5351509-b6f3-416a-8996-2d5218417c36",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

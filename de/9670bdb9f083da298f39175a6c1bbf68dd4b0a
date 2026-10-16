@@ -1,0 +1,19 @@
+control-plane/Dockerfile
+  s_ee2475bc8061b6::t_14ae8e5d87c0a8 35-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "de9670bdb9f083da298f39175a6c1bbf68dd4b0a",
+  "prompts": {},
+  "sessions": {
+    "s_ee2475bc8061b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1978ffbe-c0b8-4895-b628-d78524b75c8b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

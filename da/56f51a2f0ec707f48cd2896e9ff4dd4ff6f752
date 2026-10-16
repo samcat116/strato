@@ -1,0 +1,22 @@
+.github/workflows/release.yaml
+  s_cdb4adf4d83223::t_6e6506a477b575 94-103,116-119
+.github/workflows/README.md
+  s_cdb4adf4d83223::t_0ca3a383671298 92-94
+  s_cdb4adf4d83223::t_6eb0bf83de1706 115-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "da56f51a2f0ec707f48cd2896e9ff4dd4ff6f752",
+  "prompts": {},
+  "sessions": {
+    "s_cdb4adf4d83223": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92d7c2a9-28e3-4271-ad02-4a9fbb060b9f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

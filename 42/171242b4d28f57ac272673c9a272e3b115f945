@@ -1,0 +1,28 @@
+control-plane/Tests/AppTests/SiteTests.swift
+  s_32489a5bc16f1b::t_10ec5de7a36c4a 217-269
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_32489a5bc16f1b::t_355bcf77259b06 237-250
+  s_32489a5bc16f1b::t_92e76abddb2201 84-108
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_32489a5bc16f1b::t_6ef1327a7be633 281,283-294,299,304,306-307,310
+  s_32489a5bc16f1b::t_c7268806689b98 535
+  s_32489a5bc16f1b::t_4c317060bb7d67 675-683,687-693,696-702
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_32489a5bc16f1b::t_2e50fb2de8d81e 401-479
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "42171242b4d28f57ac272673c9a272e3b115f945",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

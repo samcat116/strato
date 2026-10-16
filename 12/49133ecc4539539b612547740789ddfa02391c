@@ -1,0 +1,33 @@
+docs/deployment/rate-limiting.md
+  s_2f5305cac3414b::t_23e7518894de23 74-85
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_2f5305cac3414b::t_8da305e5ff337d 32-36
+control-plane/Sources/App/Services/AuditService.swift
+  s_2f5305cac3414b::t_f55a7615dc33c4 449-457,459
+control-plane/Tests/AppTests/RateLimitTests.swift
+  s_2f5305cac3414b::t_0af008c58575e1 63-64
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_2f5305cac3414b::t_b660c78ae75974 240-243,245-246
+  s_2f5305cac3414b::t_40f31794b29974 63
+  s_2f5305cac3414b::t_6db61e2229fc95 32-34,36-43
+control-plane/Sources/App/Services/ProxyClientIP.swift
+  s_2f5305cac3414b::t_9e4682d3db2c1d 1-86
+control-plane/Tests/AppTests/ProxyClientIPTests.swift
+  s_2f5305cac3414b::t_68cede49e9e306 1-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1249133ecc4539539b612547740789ddfa02391c",
+  "prompts": {},
+  "sessions": {
+    "s_2f5305cac3414b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c9241dd5-110e-431c-8b9b-10aef2b07717",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

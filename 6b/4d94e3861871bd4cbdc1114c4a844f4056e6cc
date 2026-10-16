@@ -1,0 +1,29 @@
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_7391c6943770dc::t_db826946e83303 67-76,192,197-205,235,237-239,266-267,285,299-302,315
+agent/Tests/StratoAgentTests/MockSandboxRuntimeTests.swift
+  s_e16a4ec9df5266::t_189a30670628b1 204-211,240-247,307-313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6b4d94e3861871bd4cbdc1114c4a844f4056e6cc",
+  "prompts": {},
+  "sessions": {
+    "s_7391c6943770dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "668055d3-3aae-4452-8e0f-47d1396e2604",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e16a4ec9df5266": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fe59ea85-dc7b-4774-b310-e12a6a51fc11",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+control-plane/Sources/App/Controllers/HierarchyController.swift
+  s_d6607d2496a941::t_54f7e43579ae80 153
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_d6607d2496a941::t_56f2a2fb095abe 444
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_d6607d2496a941::t_5f3af8654b757d 111-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "64c035ef60a3cec7780726189f6d517b2c2fd032",
+  "prompts": {},
+  "sessions": {
+    "s_d6607d2496a941": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57bd168d-8a67-4bd7-ba4d-37a26b368407",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

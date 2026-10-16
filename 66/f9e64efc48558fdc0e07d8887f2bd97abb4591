@@ -1,0 +1,71 @@
+agent/Sources/StratoAgentCore/OCI/OCIRegistryClient.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-583
+agent/Sources/StratoAgentCore/OCI/OCIImageFlattener.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-274
+SwiftFirecracker/Tests/SwiftFirecrackerTests/SwiftFirecrackerTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 77-131
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-226
+agent/Sources/StratoAgentCore/OCI/OCIHTTPTransport.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-133
+docs/architecture/sandboxes.md
+  s_dcd496c937e3d0::t_260cacc940a452 15-19
+  s_dcd496c937e3d0::t_d3088ab8c387c9 220,231-257
+agent/Sources/StratoAgentCore/OCI/OCIModels.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-220
+agent/Sources/StratoAgentCore/OCI/SandboxImageService.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-268
+SwiftFirecracker/Tests/SwiftFirecrackerTests/VsockConnectionTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-242
+agent/Tests/StratoAgentTests/TarArchiveReaderTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-147
+agent/Sources/StratoAgentCore/OCI/Ext4ImageBuilder.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-126
+agent/Sources/StratoAgentCore/OCI/LayerDecompressor.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-81
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-263
+agent/Tests/StratoAgentTests/OCITestSupport.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-190
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 81-121
+agent/Tests/StratoAgentTests/OCIImageFlattenerTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-209
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerManager.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 104-156,255-256,272-275
+  s_dcd496c937e3d0::t_4b0ad547eafd60 276
+agent/Tests/StratoAgentTests/SandboxImageServiceTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-318
+agent/Tests/StratoAgentTests/LayerDecompressorTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-128
+agent/Sources/StratoAgentCore/OCI/TarArchiveReader.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-343
+SwiftFirecracker/Sources/SwiftFirecracker/Models/MMDS.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-45
+agent/Tests/StratoAgentTests/OCIRegistryClientTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-390
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Vsock.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-35
+agent/Tests/StratoAgentTests/OCIRootfsCacheTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-168
+agent/Tests/StratoAgentTests/Ext4ImageBuilderTests.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-150
+agent/Sources/StratoAgentCore/OCI/OCIError.swift
+  s_dcd496c937e3d0::t_d3088ab8c387c9 1-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "66f9e64efc48558fdc0e07d8887f2bd97abb4591",
+  "prompts": {},
+  "sessions": {
+    "s_dcd496c937e3d0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f88344f9-1e80-44cc-94cb-a047d1266c62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

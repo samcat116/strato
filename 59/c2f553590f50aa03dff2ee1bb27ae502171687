@@ -1,0 +1,51 @@
+control-plane/Sources/App/Models/SandboxNetworkInterface.swift
+  s_907b5a28c5d144::t_4ab1ecd45df45f 1-63
+control-plane/Sources/App/Migrations/CreateSandboxInterfaceAddresses.swift
+  s_907b5a28c5d144::t_7f57a8e232e1e4 1-47
+control-plane/Sources/App/Services/IPAMService.swift
+  s_907b5a28c5d144::t_ec8eb0ae00fd2e 72
+  s_907b5a28c5d144::t_0af654dec9540c 114-121,131
+  s_907b5a28c5d144::t_e59e5e693cc663 51-56,61-66
+control-plane/Sources/App/Models/Sandbox.swift
+  s_907b5a28c5d144::t_9471f6119ad44e 212-216,226
+  s_907b5a28c5d144::t_89fdaf9cccccdc 68-73
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_907b5a28c5d144::t_cc427c2bc01d89 429-485
+  s_907b5a28c5d144::t_b55ce9df770c43 334-389
+docs/architecture/sandboxes.md
+  s_907b5a28c5d144::t_db82bddfd9e86e 13-17
+  s_907b5a28c5d144::t_ddf9c2c4cba55d 43-45
+control-plane/Sources/App/Services/AgentService.swift
+  s_907b5a28c5d144::t_8a7c8c62222c53 1558,1560-1563
+  s_907b5a28c5d144::t_e14ab729414ab9 1401-1407,1411
+  s_907b5a28c5d144::t_a202345e3bdc80 1337-1345,1351-1352
+  s_907b5a28c5d144::t_62c4bd666ce18c 1611-1617
+  s_907b5a28c5d144::t_7e86622d1cd6c3 1375-1378
+control-plane/Tests/AppTests/SandboxTests.swift
+  s_907b5a28c5d144::t_9fe027673fc62e 503-504,513-542,545-551,558-582,585-595,597-604,606-608,610-615,617-625,627-633,635,637-676
+  s_907b5a28c5d144::t_ca325bdb92a8d8 505-512,543-544,552-557,583-584,596,605,609,616,626,634,636
+control-plane/Sources/App/Services/SandboxSpecBuilder.swift
+  s_907b5a28c5d144::t_8ac35e21aa0099 1-44
+control-plane/Sources/App/configure.swift
+  s_907b5a28c5d144::t_994d608654597f 399-404
+control-plane/Sources/App/Migrations/CreateSandboxNetworkInterface.swift
+  s_907b5a28c5d144::t_a8d85cbb147b84 1-37
+control-plane/Sources/App/Models/SandboxInterfaceAddress.swift
+  s_907b5a28c5d144::t_0a7687500aeb52 1-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "59c2f553590f50aa03dff2ee1bb27ae502171687",
+  "prompts": {},
+  "sessions": {
+    "s_907b5a28c5d144": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e7c52df-3c87-4a8a-ab18-2329d70286ed",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

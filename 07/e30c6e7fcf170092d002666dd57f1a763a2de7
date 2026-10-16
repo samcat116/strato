@@ -1,0 +1,40 @@
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_a3dae0ec5adbe5::t_4bf107138475c8 309-311,314
+  s_a3dae0ec5adbe5::t_2d90f359dbcabb 284-289,291
+  s_a3dae0ec5adbe5::t_69911329023792 337-345,347-350
+  s_a3dae0ec5adbe5::t_3555dc16b04731 1-5
+  s_a3dae0ec5adbe5::t_52d66e3aa0dc5a 280-283,290,292-293
+  s_a3dae0ec5adbe5::t_0687895daf3032 323,325-336,346,351-354
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_a3dae0ec5adbe5::t_d1a29b46ac3b9f 277-280,288-297
+  s_a3dae0ec5adbe5::t_237e71b77d95e3 281-287
+  s_a3dae0ec5adbe5::t_23e21256f60229 369-371
+agent/Sources/StratoAgent/Agent.swift
+  s_a3dae0ec5adbe5::t_c8b3f5b6b2fa83 731,736-745
+  s_a3dae0ec5adbe5::t_ee1bd9e7115b85 746
+docs/architecture/agent.md
+  s_a3dae0ec5adbe5::t_f2c2ee1863d632 77-78
+  s_a3dae0ec5adbe5::t_1456da6b2d9c22 63-76,79-82
+docs/deployment/agents.md
+  s_a3dae0ec5adbe5::t_9c3556d6b6b33d 234-238
+  s_a3dae0ec5adbe5::t_af16b2308e11bf 218-220,226-232
+  s_a3dae0ec5adbe5::t_251905cd518732 233
+deploy/agent/install.sh
+  s_a3dae0ec5adbe5::t_3c85e2cf990e35 513-525
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "07e30c6e7fcf170092d002666dd57f1a763a2de7",
+  "prompts": {},
+  "sessions": {
+    "s_a3dae0ec5adbe5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60848ae5-9c44-4bdc-bf9c-c300df015134",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

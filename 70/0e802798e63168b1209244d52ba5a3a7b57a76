@@ -1,0 +1,22 @@
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_7391c6943770dc::t_ff94d74fbe94bd 453-457
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_7391c6943770dc::t_eed41255a66945 80
+  s_7391c6943770dc::t_d0741f20231af9 61-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "700e802798e63168b1209244d52ba5a3a7b57a76",
+  "prompts": {},
+  "sessions": {
+    "s_7391c6943770dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "668055d3-3aae-4452-8e0f-47d1396e2604",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

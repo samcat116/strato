@@ -1,0 +1,19 @@
+docs/superpowers/specs/2026-08-15-vm-guest-execution-audit-design.md
+  s_520488629e6d9c::t_6273f816c5805e 1-320
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "935e8993d18d105a576b26fa75a4a69b5c745250",
+  "prompts": {},
+  "sessions": {
+    "s_520488629e6d9c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00654-b224-70c1-aa0d-238949f0facd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

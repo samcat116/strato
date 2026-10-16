@@ -1,0 +1,36 @@
+control-plane/Tests/AppTests/OrgMemberSpiceDBMirrorTests.swift
+  s_311e4d09212c99::t_ba7364536bd341 129-138
+  s_311e4d09212c99::t_19395f0d2d3321 90-109
+  s_311e4d09212c99::t_12d348801e7884 1-89,110-128,139-159
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_311e4d09212c99::t_67b56f876e0673 589-590,592-593,597-598,602-603,607-608
+  s_311e4d09212c99::t_d9202f75dfc1bb 22-57
+  s_311e4d09212c99::t_f1f9e301acd0e1 12-13
+  s_311e4d09212c99::t_637e1876fb233b 58-111,155-156
+  s_311e4d09212c99::t_9ab1390a3e53fb 112-154,537
+  s_311e4d09212c99::t_4a4b3157866336 527-529,534-536
+  s_311e4d09212c99::t_74096583669282 578-586
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_311e4d09212c99::t_a035d4e1d3ba4d 115-122
+  s_311e4d09212c99::t_45ab4dc5726501 138,142
+  s_311e4d09212c99::t_60107b69ea56ca 416,419-425
+  s_311e4d09212c99::t_1e6f9563228bd0 360-365
+  s_311e4d09212c99::t_54bd3bca4ce58b 481,485-491
+  s_311e4d09212c99::t_6e70cff2fca314 426
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "75fc93f1dfae133cf899aad3e9e4681a459c440f",
+  "prompts": {},
+  "sessions": {
+    "s_311e4d09212c99": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b6dd57a-adf6-4dc0-8fd6-ae1126922c9b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

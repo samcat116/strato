@@ -1,0 +1,96 @@
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 529-530
+docs/architecture/storage.md
+  s_ddeb586e218912::t_228513995c60a8 44-45
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_ddeb586e218912::t_19a711e6251fc1 398
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_ddeb586e218912::t_81179ba912b7a5 16-35,290,292-294,301-316
+  s_ddeb586e218912::t_19a711e6251fc1 1
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 311-313
+agent/Sources/StratoAgentCore/DesiredStatePoller.swift
+  s_ddeb586e218912::t_81179ba912b7a5 24-25,47-48,70-73,126-132,136,146-154,175,182,186,194
+  s_ddeb586e218912::t_91696010f07a00 28
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_ddeb586e218912::t_a32cefc812f75d 164
+docs/architecture/control-plane.md
+  s_ddeb586e218912::t_228513995c60a8 203-207,623-624
+agent/Sources/StratoAgentCore/CoalescingTrigger.swift
+  s_ddeb586e218912::t_a32cefc812f75d 26-27
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_ddeb586e218912::t_a32cefc812f75d 1607-1608
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_ddeb586e218912::t_19a711e6251fc1 15-18,24-28,43-44,48,50-51,109-110
+control-plane/Sources/App/Services/AgentService.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 1871,2259,2347,2357,2541
+  s_ddeb586e218912::t_19a711e6251fc1 1861-1862,1898-1899,1917-1920
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 55-56
+control-plane/Sources/App/Services/RegistryClientService.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 90
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 958
+docs/deployment/observability.md
+  s_ddeb586e218912::t_228513995c60a8 190-191,248-249,330-331,354-357,377-409,463-467
+agent/Sources/StratoAgent/Agent.swift
+  s_ddeb586e218912::t_91696010f07a00 1501,1525-1527
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_ddeb586e218912::t_19a711e6251fc1 285-286,467,469-473
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 502,636,789-790
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 1171-1172
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_ddeb586e218912::t_19a711e6251fc1 7-8,14-16
+docs/architecture/scheduler.md
+  s_ddeb586e218912::t_228513995c60a8 55,61-63
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_ddeb586e218912::t_a32cefc812f75d 62,1433,1650,1703-1704,1837-1838
+docs/deployment/docker-compose.md
+  s_ddeb586e218912::t_228513995c60a8 211-213
+docs/deployment/health-checks.md
+  s_ddeb586e218912::t_228513995c60a8 66-67
+control-plane/Sources/App/Controllers/AgentDesiredStateController.swift
+  s_ddeb586e218912::t_81179ba912b7a5 22-24,35-39,97,123-127,136,140,148,164
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_ddeb586e218912::t_19a711e6251fc1 508-510
+docs/architecture/agent.md
+  s_ddeb586e218912::t_228513995c60a8 75,88-89
+docs/architecture/multi-replica.md
+  s_ddeb586e218912::t_228513995c60a8 67,69,155-156
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_ddeb586e218912::t_a32cefc812f75d 394-395
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_ddeb586e218912::t_a32cefc812f75d 319,497,535
+agent/Tests/StratoAgentTests/DesiredStatePollerTests.swift
+  s_ddeb586e218912::t_7d02fcd1dcc93f 272,279-280
+  s_ddeb586e218912::t_81179ba912b7a5 92,173-190,204,233,248,275,281-294
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  s_ddeb586e218912::t_81179ba912b7a5 55-72
+docs/development/code-review.md
+  s_ddeb586e218912::t_228513995c60a8 326-327,329
+control-plane/Tests/AppResourceTests/SandboxExecAttachIntegrationTests.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 283
+docs/adr/0001-declarative-agent-protocol.md
+  s_ddeb586e218912::t_228513995c60a8 37-38
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 609,612-613
+control-plane/Sources/App/Migrations/SeedDefaultNetworkDNS.swift
+  s_ddeb586e218912::t_fc5c6f7d3fdcde 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9461c72a13776597601ff513baf5676d4b4a2a70",
+  "prompts": {},
+  "sessions": {
+    "s_ddeb586e218912": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed8c-b388-7472-916c-7ec3516112a6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

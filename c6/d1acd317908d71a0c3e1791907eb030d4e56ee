@@ -1,0 +1,27 @@
+docs/deployment/observability.md
+  s_4d2915c4bfb015::t_04651a0b40153f 314-316
+  s_4d2915c4bfb015::t_3862ca2695147a 246-278
+control-plane/Sources/App/Middleware/ServiceContextRestoringMiddleware.swift
+  s_4d2915c4bfb015::t_7439d52a05d940 1-42
+control-plane/Sources/App/configure.swift
+  s_4d2915c4bfb015::t_d4e5a54f20eee9 164-172,174
+  s_4d2915c4bfb015::t_3d25f5f143c130 173
+control-plane/Tests/AppTests/TracingContextPropagationTests.swift
+  s_4d2915c4bfb015::t_c992a94b8af12f 1-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c6d1acd317908d71a0c3e1791907eb030d4e56ee",
+  "prompts": {},
+  "sessions": {
+    "s_4d2915c4bfb015": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8d00ace-d719-43b1-9af1-ca0c13323acc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

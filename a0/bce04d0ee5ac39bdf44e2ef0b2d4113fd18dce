@@ -1,0 +1,28 @@
+control-plane/Sources/App/Services/ResourceOperationCoordinator.swift
+  s_ecc7cc3c8e4c07::t_5e140763611ac8 80-88
+control-plane/Sources/App/Controllers/VMController.swift
+  s_ecc7cc3c8e4c07::t_c18d987fe7d750 885-892
+control-plane/Sources/App/Services/AgentService.swift
+  s_ecc7cc3c8e4c07::t_823232ea508d12 1051-1057
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_ecc7cc3c8e4c07::t_31712bb64049d3 823-830
+control-plane/Tests/AppTests/ResourceOperationCoordinatorTests.swift
+  s_ecc7cc3c8e4c07::t_7aff45996d1f0b 62-83
+  s_ecc7cc3c8e4c07::t_6d5f08202cd40e 299-376
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a0bce04d0ee5ac39bdf44e2ef0b2d4113fd18dce",
+  "prompts": {},
+  "sessions": {
+    "s_ecc7cc3c8e4c07": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3708062d-1350-4720-8fdf-3758ada9a165",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

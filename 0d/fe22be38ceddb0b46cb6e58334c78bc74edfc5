@@ -1,0 +1,70 @@
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_7bf36251baaeb0::t_4a5a052ebba73c 1
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_7bf36251baaeb0::t_2840859cbffe34 47,114-116,122,130,136,463,555,568,580
+agent/Tests/StratoAgentTests/FirecrackerDiskAttachmentTests.swift
+  s_7bf36251baaeb0::t_02bd4a95e3b46b 1-27
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_7bf36251baaeb0::t_a1e72295d6cb61 116,121,125-127,664-667
+  s_7bf36251baaeb0::t_1b96c6cd2e9071 122-124
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_7bf36251baaeb0::t_a1e72295d6cb61 235-238
+agent/Sources/StratoAgentCore/MockStorageBackend.swift
+  s_7bf36251baaeb0::t_686b73c605bc1b 127,147,165,175,232,243
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_7bf36251baaeb0::t_aca01364ce5649 182,308,454,469
+  s_7bf36251baaeb0::t_e1103e14043277 204-205,222-223,228,333,353,405,423,505-506
+agent/Tests/StratoAgentTests/DiskAttachmentTestSupport.swift
+  s_7bf36251baaeb0::t_aca01364ce5649 1-6,8-13,15-20
+  s_7bf36251baaeb0::t_e1103e14043277 7,14
+agent/Sources/StratoAgent/Agent.swift
+  s_7bf36251baaeb0::t_3f0687feac2fd7 4042-4047,4050-4051,4102,4516-4519,4521,4771-4774,4790,4807-4809,4814,4827-4830,4842,4848,4906,4951,4969,5033,5035,5047,5062,5342,6124
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_7bf36251baaeb0::t_eb1342a023dde0 167-168,192,198-227,289-290
+agent/Sources/StratoAgentCore/ResolvedDisk.swift
+  s_7bf36251baaeb0::t_5f5c13bd07791e 2,4,7-9,15,37,40
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_7bf36251baaeb0::t_686b73c605bc1b 292-295,306-314
+agent/Tests/StratoAgentTests/EdgeNonceReconciliationTests.swift
+  s_7bf36251baaeb0::t_2840859cbffe34 194-198
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_7bf36251baaeb0::t_a3f9ff12d1dc45 66-67,169-173,176-177,226-230,233-234,562-565,590-592,647-649,808-811
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_7bf36251baaeb0::t_45f619cf8b8a4a 449,523,528,601-602,728
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_7bf36251baaeb0::t_686b73c605bc1b 117,152,192,268,281,307,509,553,635
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_7bf36251baaeb0::t_2840859cbffe34 118,126,131,859-861
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_7bf36251baaeb0::t_a8b7a674933d6e 319-320
+  s_7bf36251baaeb0::t_2840859cbffe34 303-304,329-330,338
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_7bf36251baaeb0::t_a1e72295d6cb61 140-143,149
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_7bf36251baaeb0::t_a1e72295d6cb61 1435-1438,1454,1462-1463,2210,2212,2214,2216,2218,2220,2222-2231,2235
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_7bf36251baaeb0::t_5f5c13bd07791e 588-589,598,862,865-892,895-896,915,919,923-940
+  s_7bf36251baaeb0::t_8c90630cd65611 941-942
+agent/Sources/StratoAgentCore/FirecrackerDiskAttachment.swift
+  s_7bf36251baaeb0::t_1b96c6cd2e9071 1-21
+agent/Tests/StratoAgentTests/MockStorageBackendTests.swift
+  s_7bf36251baaeb0::t_e1103e14043277 42-43,45,53-54,57,67,96-97,105-106,108-110,115,154,158-160,162-163,165,190,210,228,238-239
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_7bf36251baaeb0::t_5f5c13bd07791e 46,49-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0dfe22be38ceddb0b46cb6e58334c78bc74edfc5",
+  "prompts": {},
+  "sessions": {
+    "s_7bf36251baaeb0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00653-14e3-7c81-8bae-df58c921d869",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

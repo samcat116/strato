@@ -1,0 +1,21 @@
+agent/Sources/StratoAgentCore/OCI/OCIImageFlattener.swift
+  s_b46e1e8521f8aa::t_580499af20a1fe 36-37,46-63,67-68,76-83,154,156,161,198-200,290-311
+agent/Tests/StratoAgentTests/OCIImageFlattenerTests.swift
+  s_b46e1e8521f8aa::t_8c36b492b77b27 58-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1e173b38606ffc8e176f76b4e7d175ccf6af5c87",
+  "prompts": {},
+  "sessions": {
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

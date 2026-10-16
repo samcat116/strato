@@ -1,0 +1,40 @@
+control-plane/Sources/App/Models/OrgTrustDomain.swift
+  s_b8a95666dc0476::t_4d62ee6cfdfd41 49
+  s_b8a95666dc0476::t_dba5007d051706 137,139-149,153-154
+control-plane/Tests/AppTests/OrgTrustDomainTests.swift
+  s_b8a95666dc0476::t_9c8355e6897dda 54-114,118-128,130-132,478
+  s_b8a95666dc0476::t_66615ce551858b 470-471,474
+  s_b8a95666dc0476::t_8c75798ff87401 43,45-53,115-117,129,133-134,450-469,472-473,475-477
+  s_b8a95666dc0476::t_6b054a62f99bc5 479
+docs/architecture/control-plane.md
+  s_b8a95666dc0476::t_32c1cf07c0dbe4 242-244
+control-plane/Sources/App/Services/AgentService.swift
+  s_b8a95666dc0476::t_66615ce551858b 662-667
+  s_b8a95666dc0476::t_6eb9c4e62d44f6 659-661
+  s_b8a95666dc0476::t_fc0287b9fa7e19 668
+control-plane/Sources/App/Migrations/CreateOrgTrustDomain.swift
+  s_b8a95666dc0476::t_4d62ee6cfdfd41 2,27-33
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b8a95666dc0476::t_66615ce551858b 627,665
+  s_b8a95666dc0476::t_6eb9c4e62d44f6 462-464,467,638
+control-plane/Sources/App/Services/SPIFFE/OrgTrustDomainProvisioning.swift
+  s_b8a95666dc0476::t_fac85784b47a67 7-12,61-67
+  s_b8a95666dc0476::t_dba5007d051706 3,31-33,35-51,82-96
+  s_b8a95666dc0476::t_bf780070f4ee62 97-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "18f37f4505f3020fa8a65a1d1c4d7c92f0c6624c",
+  "prompts": {},
+  "sessions": {
+    "s_b8a95666dc0476": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15c44b7f-6928-4d7b-9f9a-a551cd5d72a7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

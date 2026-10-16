@@ -1,0 +1,46 @@
+.github/workflows/helm-test.yml
+  s_32f3c42ee7034c::t_a55d41e1eac3d1 11-13,19-21,90-100
+  s_32f3c42ee7034c::t_bea0d50ec12ab6 101-106
+  s_060255e25a3ff5::t_a896efb177e2e4 107
+control-plane/web/next.config.ts
+  s_32f3c42ee7034c::t_a55d41e1eac3d1 3,97-100
+helm/strato-control-plane/values.yaml
+  s_32f3c42ee7034c::t_c56b0730f5a2ed 130-131
+deploy/compose/docker-compose.yml
+  s_32f3c42ee7034c::t_c56b0730f5a2ed 482-483
+control-plane/web/src/middleware.ts
+  s_32f3c42ee7034c::t_a55d41e1eac3d1 3
+control-plane/web/src/lib/control-plane-routes.ts
+  s_32f3c42ee7034c::t_a55d41e1eac3d1 1-9
+helm/strato-control-plane/templates/NOTES.txt
+  s_32f3c42ee7034c::t_a55d41e1eac3d1 62,65-69
+.github/scripts/test-control-plane-route-parity.py
+  s_32f3c42ee7034c::t_a55d41e1eac3d1 1-77,81-86,90-94
+  s_32f3c42ee7034c::t_80f4001eddee85 78-80,87-89
+control-plane/web/src/lib/control-plane-route-prefixes.json
+  s_32f3c42ee7034c::t_a55d41e1eac3d1 1-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2b57509be9754617ed5e4d3a83c8037281c159e8",
+  "prompts": {},
+  "sessions": {
+    "s_060255e25a3ff5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe806-52b1-76f2-b4a4-c6461ebde37a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_32f3c42ee7034c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe804-9ec2-7111-b6ff-cdeb9ace565d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

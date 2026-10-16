@@ -1,0 +1,24 @@
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_32489a5bc16f1b::t_d5b64cdb3b40df 380-395
+  s_32489a5bc16f1b::t_9251e0cd6a380e 512-525
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_32489a5bc16f1b::t_d389e3c3c55758 341-442
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_32489a5bc16f1b::t_18d9e0a18bc715 196-199,201-212
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "302971993aae025ada49daf761f26ea52e229470",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,39 @@
+control-plane/Tests/AppPlatformTests/ObservabilityBootstrapTests.swift
+  s_35c55f9a0192fc::t_7235b3de2b9407 1-124
+docs/deployment/logging.md
+  s_35c55f9a0192fc::t_7235b3de2b9407 10-23
+control-plane/Sources/App/configure.swift
+  s_35c55f9a0192fc::t_7235b3de2b9407 9-26
+helm/strato-control-plane/values.yaml
+  s_35c55f9a0192fc::t_7235b3de2b9407 510-511
+control-plane/Package.swift
+  s_35c55f9a0192fc::t_7235b3de2b9407 181
+control-plane/Sources/App/entrypoint.swift
+  s_35c55f9a0192fc::t_7235b3de2b9407 1,10-18,20-23,26,36-39
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_35c55f9a0192fc::t_7235b3de2b9407 1011-1012
+control-plane/Sources/App/Bootstrap/FoundationBootstrap.swift
+  s_35c55f9a0192fc::t_7235b3de2b9407 11,14-25,42
+control-plane/Sources/App/Telemetry/ObservabilityBootstrap.swift
+  s_35c55f9a0192fc::t_7235b3de2b9407 1-2,4-5,8-14,16-18,20-61,64-130,139,146,148-149,152,155-157,159-160,163-165,168-170,173-193,197-200,203-218
+helm/strato-control-plane/README.md
+  s_35c55f9a0192fc::t_7235b3de2b9407 165-168
+docs/deployment/observability.md
+  s_35c55f9a0192fc::t_7235b3de2b9407 24,33-36,338-341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "a2f916006d9ecd5fe6cb8b9ddcb77a03f86f4aea",
+  "prompts": {},
+  "sessions": {
+    "s_35c55f9a0192fc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04f87-1fa8-7272-9749-c657774e7b3a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

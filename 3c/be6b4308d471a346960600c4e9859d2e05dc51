@@ -1,0 +1,33 @@
+control-plane/Tests/AppTests/AgentOrganizationScopeTests.swift
+  s_0226cff00d1a8c::t_2957b329748542 419-421,423-436,445-484
+  s_0c61d9bb6bd790::t_746fb4dbfdadfc 485-487
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_0226cff00d1a8c::t_fdf3a57868edbd 570-581
+  s_0226cff00d1a8c::t_aca9f564d1cd19 78-87,92-93,95,108-119
+  s_0226cff00d1a8c::t_26031544a4b55a 509,602
+  s_0c61d9bb6bd790::t_f0fcef5ed82aca 120-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "3cbe6b4308d471a346960600c4e9859d2e05dc51",
+  "prompts": {},
+  "sessions": {
+    "s_0226cff00d1a8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da9cd801-49ec-4180-8b17-f0414c12a6a4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_0c61d9bb6bd790": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7266e5ec-8a5a-4809-a7bb-e0bb1f2eba12",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

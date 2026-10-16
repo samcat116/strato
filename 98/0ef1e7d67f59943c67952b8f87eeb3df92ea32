@@ -1,0 +1,75 @@
+deploy/compose/setup.sh
+  s_71afb653d80489::t_2d1ab6f95c6347 107-108
+  s_71afb653d80489::t_e2daade92c1d97 113,115-116
+  s_71afb653d80489::t_60b8d68bb08bd9 111-112
+control-plane/Tests/AppIdentityTests/SecretsEncryptionServiceTests.swift
+  s_71afb653d80489::t_e221eb233671a9 108
+  s_71afb653d80489::t_f8462b46e43c09 90-91
+  s_71afb653d80489::t_4419f8e8b5a841 338-341
+  s_71afb653d80489::t_7bb5d8fe09b200 13,19-24,54-77,88-89,92,122-131,161-175,283-337,342-429
+control-plane/Sources/App/configure.swift
+  s_71afb653d80489::t_0a58cd82e4bb3d 185-188,193,487-490
+control-plane/Sources/App/Services/WebhookDeliveryService.swift
+  s_71afb653d80489::t_c62f1df9d987fb 232-264,269-270,305-309,312
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_71afb653d80489::t_e950d4795afa66 22
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  s_71afb653d80489::t_50e77cb80541fd 237,271-272,297
+deploy/compose/.env.example
+  s_71afb653d80489::t_e2daade92c1d97 14-17
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_71afb653d80489::t_7d0acfcb819bf7 754-792,796-816
+  s_71afb653d80489::t_4419f8e8b5a841 793-795
+control-plane/Tests/AppPlatformTests/HealthControllerTests.swift
+  s_71afb653d80489::t_f8462b46e43c09 216-249
+docs/deployment/docker-compose.md
+  s_71afb653d80489::t_e2daade92c1d97 177-178,182-189,193,197,208-213,217-221
+  s_71afb653d80489::t_e3088f0e1e7966 190-192
+  s_71afb653d80489::t_e221eb233671a9 194-196,198-207,214-216
+docs/deployment/observability.md
+  s_71afb653d80489::t_e2daade92c1d97 164
+control-plane/Sources/App/Models/RegistryPullSecret.swift
+  s_71afb653d80489::t_e950d4795afa66 35-36
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_71afb653d80489::t_46d539aa5efe13 191,229-232,256,313,371-381
+  s_71afb653d80489::t_375dba623eae69 4-5,10-16,18-22,24-25,27-30,32-35,37-40,43-119,122-131,135-140,149,155,161,163-174,176-180,182-183,186-189,192-228,233-238,241-255,257-303,305-312,314-370,382-385,388,390-398,401,406-418,420-446,448,450-458,460-467,469-492,494-525,527-534,536-537,539-556,558-600,602
+deploy/compose/docker-compose.yml
+  s_71afb653d80489::t_e2daade92c1d97 319-320
+helm/strato-control-plane/values.yaml
+  s_71afb653d80489::t_e2daade92c1d97 368-373,377
+docs/deployment/kubernetes.md
+  s_71afb653d80489::t_e221eb233671a9 149
+helm/strato-control-plane/README.md
+  s_71afb653d80489::t_e2daade92c1d97 150-152
+helm/strato-control-plane/templates/deployment.yaml
+  s_71afb653d80489::t_e2daade92c1d97 194,200-207
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_71afb653d80489::t_0a58cd82e4bb3d 228-237
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_71afb653d80489::t_0a58cd82e4bb3d 67-69,161-170
+  s_b46e1e8521f8aa::t_9bcd3e777759d3 171-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "980ef1e7d67f59943c67952b8f87eeb3df92ea32",
+  "prompts": {},
+  "sessions": {
+    "s_71afb653d80489": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05093-623b-7ed0-bd64-b53ebb288fda",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b46e1e8521f8aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414e-5729-7bc0-95bd-59e771c733f9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

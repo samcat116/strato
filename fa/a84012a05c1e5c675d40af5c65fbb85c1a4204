@@ -1,0 +1,58 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 317,2818
+control-plane/Sources/App/Migrations/AddAgentMetadataServiceCapability.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 1-18
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  s_e300b0a73c2a9f::t_632e6d7db07264 557
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 44,64,565,567,574-578,583-606
+  s_e300b0a73c2a9f::t_4380fb684ad0c1 556
+control-plane/web/src/types/openapi.ts
+  s_e300b0a73c2a9f::t_9e20b539226a04 5381,7689-7690
+control-plane/Sources/App/openapi.yaml
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 9090-9091,13536,13589-13594
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 202-207,230,249
+control-plane/Sources/App/Models/Agent.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 144-151,288,312,439,646-648,748
+shared/Sources/StratoShared/WireProtocol.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 14-19
+control-plane/Sources/App/configure.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 402-405
+docs/architecture/agent.md
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 564-567
+docs/architecture/wire-protocol.md
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 53,80-83
+  s_e300b0a73c2a9f::t_d9d8dceaaf7219 92-95,145
+  s_e300b0a73c2a9f::t_632e6d7db07264 96-97
+control-plane/Tests/AppPlatformTests/AgentMetadataServiceCapabilityTests.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 1-62
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 140-159
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 41-43,75,95,152,179-181,223,236,252,282-284,373,653-661,666
+  s_e300b0a73c2a9f::t_4380fb684ad0c1 285-286,360-362
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 57
+agent/Sources/StratoAgent/Agent.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 1459-1463
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 20
+control-plane/web/src/types/api.ts
+  s_e300b0a73c2a9f::t_cf2aa258f4b8ae 625-627
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "faa84012a05c1e5c675d40af5c65fbb85c1a4204",
+  "prompts": {},
+  "sessions": {
+    "s_e300b0a73c2a9f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-7353-7161-b6ab-b306d13023e4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

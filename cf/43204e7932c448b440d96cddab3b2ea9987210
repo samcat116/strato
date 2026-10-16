@@ -1,0 +1,34 @@
+cli/Sources/StratoCLI/Commands/VMCommand.swift
+  h_a84d4ff76cadd1 12
+cli/Sources/StratoCLI/Commands/VMExecCommand.swift
+  h_a84d4ff76cadd1 1-101
+cli/Sources/StratoCLICore/Exec/GuestExecSession.swift
+  h_a84d4ff76cadd1 38-43,48,60,71,82-100,103,200-210,238-239,502-505,520,523,534,541,559,568,571,587,589,636-640,649-653
+cli/Sources/StratoCLICore/Exec/TerminalIO.swift
+  h_a84d4ff76cadd1 47-50,171,173-174,179,200
+cli/Sources/StratoCLICore/Exec/VMExecPlan.swift
+  h_a84d4ff76cadd1 1-23
+cli/Tests/Integration/vm_exec.py
+  h_a84d4ff76cadd1 1-228
+cli/Tests/StratoCLITests/GuestExecSessionTests.swift
+  h_a84d4ff76cadd1 67-70,73,95,119-120,124,134-137,140,155,163-166,169,188,196-199,202,221,239-242,245,266,277-280,299,310-313,331,340-343,346,362,383-384,387,403,411-450,465-474,478
+cli/Tests/StratoCLITests/VMExecPlanTests.swift
+  h_a84d4ff76cadd1 1-46
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 117,119-120,700-726
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 409-431,11347-11379
+docs/architecture/control-plane.md
+  h_a84d4ff76cadd1 795-814
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cf43204e7932c448b440d96cddab3b2ea9987210",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

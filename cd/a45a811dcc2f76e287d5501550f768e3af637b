@@ -1,0 +1,23 @@
+control-plane/web/src/types/openapi.ts
+  s_d67c324c6e1ac6::t_f48a09a12a5e68 7949-7950
+control-plane/Sources/App/openapi.yaml
+  s_d67c324c6e1ac6::t_89572d1c82b8bd 14069-14074
+control-plane/web/src/types/api.ts
+  s_d67c324c6e1ac6::t_89572d1c82b8bd 616
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cda45a811dcc2f76e287d5501550f768e3af637b",
+  "prompts": {},
+  "sessions": {
+    "s_d67c324c6e1ac6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff5f4-f585-7181-8147-316937d752f7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

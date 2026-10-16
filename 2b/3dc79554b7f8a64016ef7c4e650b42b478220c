@@ -1,0 +1,29 @@
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_c9a8dbace3b7c5::t_25060f527c6e00 278-282
+control-plane/Sources/App/configure.swift
+  s_c9a8dbace3b7c5::t_493e9ddde9fe26 577-579
+control-plane/Tests/AppTests/SiteTests.swift
+  s_c9a8dbace3b7c5::t_b9f29bf381a588 216-233
+control-plane/Sources/App/Migrations/EnforceSiteStatusEnum.swift
+  s_c9a8dbace3b7c5::t_7725b0f4873e82 1-29
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_c9a8dbace3b7c5::t_93fa32351f306c 297,300,312
+  s_c9a8dbace3b7c5::t_a1e49695d1e6d8 100-112
+  s_c9a8dbace3b7c5::t_170a5661134f21 219,222,232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "2b3dc79554b7f8a64016ef7c4e650b42b478220c",
+  "prompts": {},
+  "sessions": {
+    "s_c9a8dbace3b7c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08c093c7-2158-4f88-82af-5ecdd04e6e38",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

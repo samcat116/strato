@@ -1,0 +1,49 @@
+control-plane/Sources/App/Services/FilesystemImageObjectStore.swift
+  s_91e60da5df6443::t_3f40a5ce6213c9 193-196
+  s_91e60da5df6443::t_fc073fe7b3525a 57
+  s_91e60da5df6443::t_b74f247685116a 76-108
+control-plane/Tests/AppTests/ImageControllerTests.swift
+  s_91e60da5df6443::t_134cbf342a23d5 1691-1724,1727-1728,1736-1775
+  s_91e60da5df6443::t_bd72c010686d52 1725-1726,1729-1735
+control-plane/Sources/App/Services/ImageObjectStoreFactory.swift
+  s_91e60da5df6443::t_deb8f4fbb846fe 20-32,34
+  s_91e60da5df6443::t_92b9ed090725ab 100,105
+  s_91e60da5df6443::t_0cfe4aff33859f 93
+  s_91e60da5df6443::t_8f1bd7c8e71453 55
+  s_91e60da5df6443::t_e4ad43ce61c033 61,69-70,74
+control-plane/Sources/App/Services/StreamingMultipartReceiver.swift
+  s_91e60da5df6443::t_f4c6366dfbec34 197-206
+  s_91e60da5df6443::t_d1cad5866f5809 230-237
+  s_91e60da5df6443::t_110aae829c8b93 25-31
+deploy/compose/docker-compose.yml
+  s_91e60da5df6443::t_2c049b396084aa 372-376,380,383
+helm/strato-control-plane/templates/deployment.yaml
+  s_91e60da5df6443::t_c82b491e5b2359 145-146,148
+control-plane/Sources/App/Services/S3ImageObjectStore.swift
+  s_91e60da5df6443::t_4e9b72926fb884 66-79
+  s_91e60da5df6443::t_bd72c010686d52 84,105,122
+  s_91e60da5df6443::t_da3f94e7f30fda 196-201
+  s_91e60da5df6443::t_2cfda917c1b3b7 123
+  s_91e60da5df6443::t_624559f0959d66 98-104,106-107
+control-plane/Tests/AppTests/ImageObjectStoreTests.swift
+  s_91e60da5df6443::t_94fd8b4109dcba 167-194
+docs/architecture/storage.md
+  s_91e60da5df6443::t_0f51591c81ac30 61-64
+  s_91e60da5df6443::t_195af6206e128b 77-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1df9cf83689f6fc69a7b0a962ae7ae107582a028",
+  "prompts": {},
+  "sessions": {
+    "s_91e60da5df6443": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a8f8a5fe-16b9-416a-8d86-4b3c2b75703e",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

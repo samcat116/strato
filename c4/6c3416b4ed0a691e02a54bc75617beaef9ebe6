@@ -1,0 +1,26 @@
+agent/Package.swift
+  h_a84d4ff76cadd1 283-287
+agent/Sources/StratoAgentRuntime/Agent+Identity.swift
+  h_a84d4ff76cadd1 154-157,163-172,174-177,179
+agent/Sources/StratoAgentRuntime/Agent+Messages.swift
+  h_a84d4ff76cadd1 708-710,774
+agent/Sources/StratoAgentRuntime/Agent+NetworkConnection.swift
+  h_a84d4ff76cadd1 66,73-88
+agent/Tests/StratoAgentRuntimeTests/AgentUpdateBridgeLifecycleTests.swift
+  h_a84d4ff76cadd1 1-184
+agent/Tests/StratoAgentRuntimeTests/RuntimeTestConfiguration.swift
+  h_a84d4ff76cadd1 8,42
+docs/architecture/agent-updates.md
+  h_a84d4ff76cadd1 193-195,207-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c46c3416b4ed0a691e02a54bc75617beaef9ebe6",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+control-plane/Sources/App/Services/AuditService.swift
+  s_532b37be23fdb2::t_fb696dd2b7caf7 547-556
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_532b37be23fdb2::t_fb696dd2b7caf7 249-257
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "055a3fbafc9a153f44b1a2b8410c034bfe7066b9",
+  "prompts": {},
+  "sessions": {
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

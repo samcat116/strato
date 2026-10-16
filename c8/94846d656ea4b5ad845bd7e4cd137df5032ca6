@@ -1,0 +1,19 @@
+control-plane/web/src/middleware.ts
+  s_bf31020fa8ebfe::t_f3b9cbe7ad3ea9 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "c894846d656ea4b5ad845bd7e4cd137df5032ca6",
+  "prompts": {},
+  "sessions": {
+    "s_bf31020fa8ebfe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7311-f2e7-7270-8251-882a13ca8e59",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

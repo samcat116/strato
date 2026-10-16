@@ -1,0 +1,43 @@
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_8175a76a1576f0::t_1f94d9b22e2cc7 65-72,84-88,155-170,370-374,378,390,392-408,594-604,609-610,708-724,726-729,733,735-738,741-748
+control-plane/Sources/App/Migrations/AddClaimMappingToOIDCProvider.swift
+  s_8175a76a1576f0::t_5a3a63867182a5 1-40
+control-plane/Sources/App/Models/OIDCDTOs.swift
+  s_8175a76a1576f0::t_5b8f615e7b3e8b 79-81
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_8175a76a1576f0::t_a0add1b737ad65 44-55,80-84,98-101,105-115,140-144,147,152-181,233-236,250-253,267-270,286-289
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_e0b1e17df68c8e::t_98716ac19148b6 1-268
+control-plane/Sources/App/configure.swift
+  s_8175a76a1576f0::t_b800b49aa34769 336-339
+control-plane/Tests/AppTests/OIDCIdentityMappingTests.swift
+  s_8175a76a1576f0::t_d80d3ef5071fee 1-363
+control-plane/Tests/AppTests/OIDCValidationTests.swift
+  s_8175a76a1576f0::t_7885ec7a719cc4 31-32
+docs/deployment/iam.md
+  s_8175a76a1576f0::t_7b9de8da7d3942 5-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "b0a0d871af5390b24046ebf9e5a02cb0a12e7e84",
+  "prompts": {},
+  "sessions": {
+    "s_8175a76a1576f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1080cc85-15d2-47f7-a8fa-3e986c31849d",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e0b1e17df68c8e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57e29999-10c5-44c8-9fc6-9bacfff84b89",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

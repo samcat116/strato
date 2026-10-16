@@ -1,0 +1,26 @@
+control-plane/Tests/AppTests/UserCreationAndClaimTests.swift
+  s_b36c12691fceda::t_7ab93d4e6033be 173-199
+control-plane/web/src/lib/api/organizations.ts
+  s_b36c12691fceda::t_6c40bf317adeee 16-20
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_b36c12691fceda::t_63e0a041370298 26-43
+  s_b36c12691fceda::t_9a04117d0bcf2d 9
+control-plane/web/src/components/users/create-user-dialog.tsx
+  s_b36c12691fceda::t_dcf02323e311a9 51-53,55-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "e1a7cdf6c6dddbd8c4ca14e53ed06b97a1a56019",
+  "prompts": {},
+  "sessions": {
+    "s_b36c12691fceda": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1c63ca92-0784-45e8-9097-491fccf4ebcb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

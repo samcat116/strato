@@ -1,0 +1,51 @@
+control-plane/web/src/types/api.ts
+  s_2a55536377745d::t_5aa3aa896d6f80 363-425
+control-plane/web/src/lib/hooks/use-oidc-providers.ts
+  s_2a55536377745d::t_4e5de9d07f32b0 1-66
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_2a55536377745d::t_24bb2380e8128f 38-39,42
+control-plane/web/src/components/auth/login-form.tsx
+  s_2a55536377745d::t_8b92a179ba226f 4,6,19-20,28-36,76-120,132-138,200-281
+control-plane/web/src/components/oidc-providers/oidc-provider-dialog.tsx
+  s_2a55536377745d::t_eeb18efeb003db 1-2,4-39,65-69,72,87-158,189-190,200,216,344-345
+  s_2a55536377745d::t_e1ff83dcc63cb4 3,40-64,70-71,73-86,159-188,191-199,201-215,217-343
+control-plane/web/src/lib/hooks/index.ts
+  s_2a55536377745d::t_289811721fcdf1 46-52
+  s_2a55536377745d::t_25f4b55a891593 45
+control-plane/web/src/lib/api/index.ts
+  s_2a55536377745d::t_972b9cb4e76d7c 16
+control-plane/web/src/lib/api/oidc-providers.ts
+  s_2a55536377745d::t_5480b54056e67e 1-55
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_2a55536377745d::t_885fd4e721e5b0 187,206,209-212,214-215,218-224
+  s_2a55536377745d::t_23aa27cd9ef5d6 242-283
+  s_2a55536377745d::t_b32939b3f52bf4 30-33
+control-plane/web/src/app/(dashboard)/organizations/settings/page.tsx
+  s_2a55536377745d::t_b7ab7888c0f427 280
+  s_2a55536377745d::t_1f113ad1d26846 19
+control-plane/web/src/components/oidc-providers/index.ts
+  s_2a55536377745d::t_670b99113b27ae 1-2
+control-plane/Tests/AppTests/OIDCControllerTests.swift
+  s_2a55536377745d::t_c6bc939708b83a 253,269,288,295,309
+  s_2a55536377745d::t_cb7b8f1a392f9c 1-252,254-268,270-287,289-294,296-308,310-314
+control-plane/web/src/components/oidc-providers/oidc-providers-section.tsx
+  s_2a55536377745d::t_e0a6e5bb12fa9f 1-324
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_2a55536377745d::t_c54eeab5e00010 225-238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "64acbb9fcb536709a141fea8722f32c3eaf8bb0c",
+  "prompts": {},
+  "sessions": {
+    "s_2a55536377745d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "799fb350-ca1f-46de-9fc6-3506f8c10760",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

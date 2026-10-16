@@ -1,0 +1,20 @@
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_a36dd7ef4412d5::t_6b66b16fc2f4a9 177-180,183
+  s_a36dd7ef4412d5::t_94b152cf737cb5 80-91,93-110,112-116,118-127,129,134-137,141,148,169-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "d4962b952684a696a6693fbf232e9fde134bcb6b",
+  "prompts": {},
+  "sessions": {
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+docs/adr/0002-ceph-for-distributed-block-storage.md
+  s_c559303310d93f::t_832b25df9eadec 98-105,109-122
+  s_c559303310d93f::t_a4e0c6d6960fa5 3-6,8,10-11,14-19,22-31
+  s_c559303310d93f::t_48de19095f974e 165-189
+  s_c559303310d93f::t_f30d505492c1f6 32
+docs/architecture/distributed-storage.md
+  s_c559303310d93f::t_2bb1945fc0709b 298-336
+  s_c559303310d93f::t_8b672a90aa1704 4-6
+  s_c559303310d93f::t_4807e7c1155fb8 466-469,472-475
+  s_c559303310d93f::t_2fe773e8ff2fb0 109-135,138-159
+  s_c559303310d93f::t_f525bb13ed53fd 76-78,82
+  s_c559303310d93f::t_8c3d61684613ed 184-189
+  s_c559303310d93f::t_73ce08da9ecb95 194-199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "49b59c92bb092a823308202db878de58385d8378",
+  "prompts": {},
+  "sessions": {
+    "s_c559303310d93f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "328ebc7e-c1df-4ccd-be09-2e5a06f94436",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

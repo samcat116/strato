@@ -1,0 +1,19 @@
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_a3dae0ec5adbe5::t_c8bdc33f219f5b 352-355
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "80d09605cd6b98fe063264f9757d6568a21ae330",
+  "prompts": {},
+  "sessions": {
+    "s_a3dae0ec5adbe5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60848ae5-9c44-4bdc-bf9c-c300df015134",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

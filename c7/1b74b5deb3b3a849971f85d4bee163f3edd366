@@ -1,0 +1,39 @@
+control-plane/Sources/App/openapi.yaml
+  s_9bd7c323ebfd92::t_99ef4c2cbed893 2955-3113
+  s_9bd7c323ebfd92::t_4e80266ffa7c06 10058-10176
+control-plane/Sources/App/routes.swift
+  s_9bd7c323ebfd92::t_c3b750f79591d6 34
+control-plane/Sources/App/Controllers/OrganizationalUnitController.swift
+  s_9bd7c323ebfd92::t_b4ade191854692 270-276
+control-plane/Tests/AppTests/FolderMemberTests.swift
+  s_9bd7c323ebfd92::t_1f189098b32933 262,268-273,276-278,294-296,301
+  s_9bd7c323ebfd92::t_74f098a19ec7d8 1-44,47-48,50-261,263-267,274-275,279-293,297-300,302-422
+  s_9bd7c323ebfd92::t_ce8b1e43b0accc 45-46,49
+control-plane/Sources/App/Controllers/OrganizationalUnitMemberController.swift
+  s_9bd7c323ebfd92::t_8f32f579029c7a 1-121,142-262,267-530
+  s_9bd7c323ebfd92::t_5be750d2c8c05d 122-141
+  s_9bd7c323ebfd92::t_ee574655fc3104 263-266
+control-plane/web/src/types/openapi.ts
+  s_9bd7c323ebfd92::t_c191bff235f5c4 2191-2302,6021-6083,12305-12479
+docs/architecture/iam.md
+  s_9bd7c323ebfd92::t_577d19cfb4284f 299-306
+control-plane/Sources/App/IAM/MemberRoleResolver.swift
+  s_9bd7c323ebfd92::t_b263c52990e18d 192-198
+  s_9bd7c323ebfd92::t_3669523e69d102 225-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "c71b74b5deb3b3a849971f85d4bee163f3edd366",
+  "prompts": {},
+  "sessions": {
+    "s_9bd7c323ebfd92": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2c0fa009-7951-4783-ac13-54a63e9d6b7f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

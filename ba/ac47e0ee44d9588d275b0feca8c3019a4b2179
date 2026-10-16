@@ -1,0 +1,23 @@
+control-plane/Tests/AppTests/WebAuthnChallengeTests.swift
+  s_c6fa306b094830::t_17bcd6deb943de 42,53,74,100
+  s_c6fa306b094830::t_2ad1df33cd33c0 130-186
+control-plane/Sources/App/Services/WebAuthnService.swift
+  s_c6fa306b094830::t_c32efaccffde05 167-169
+  s_c6fa306b094830::t_9d0850ec63b061 116-121,124-155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "baac47e0ee44d9588d275b0feca8c3019a4b2179",
+  "prompts": {},
+  "sessions": {
+    "s_c6fa306b094830": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3781f8bd-b695-4899-b678-3095bff212c3",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

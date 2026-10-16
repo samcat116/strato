@@ -1,0 +1,50 @@
+control-plane/Sources/App/routes.swift
+  s_a36dd7ef4412d5::t_4d52a10fb049ff 60-62
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_a36dd7ef4412d5::t_bf4265b78d74f8 649-699
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_a36dd7ef4412d5::t_629caa3d837a20 1-243
+control-plane/Tests/AppTests/SandboxExecTests.swift
+  s_a36dd7ef4412d5::t_f6e6301807104a 1-470
+control-plane/Sources/App/Services/LokiService.swift
+  s_a36dd7ef4412d5::t_4092ec4fb24749 105
+  s_a36dd7ef4412d5::t_3062e9291a07a7 133-141
+  s_a36dd7ef4412d5::t_7208ef608ca14e 82-83
+  s_a36dd7ef4412d5::t_9ff1b5aee40f1c 38-74,148-149
+  s_a36dd7ef4412d5::t_de04dc8ab7144b 75
+  s_a36dd7ef4412d5::t_d5ba9ab237d03d 142-147
+  s_a36dd7ef4412d5::t_631f7f774b657a 150
+control-plane/Sources/App/Middleware/SpiceDBAuthMiddleware.swift
+  s_a36dd7ef4412d5::t_f892b66aef3159 94
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_a36dd7ef4412d5::t_1c1d4fce193c37 605-696
+  s_a36dd7ef4412d5::t_2b97deb1abbb30 25
+  s_a36dd7ef4412d5::t_2dc8f0bbf987e1 697-698
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_a36dd7ef4412d5::t_8bf4ce62317da1 79-131,136,140
+  s_a36dd7ef4412d5::t_38b3da868992fa 10-15
+  s_a36dd7ef4412d5::t_b4a649184d08f2 132-135
+  s_a36dd7ef4412d5::t_f601068370e090 137-139
+  s_a36dd7ef4412d5::t_897dd55783e67e 141
+control-plane/Sources/App/Services/AgentService.swift
+  s_a36dd7ef4412d5::t_1fb3db79fdeef7 533-546
+control-plane/Sources/App/Services/SandboxExecSessionManager.swift
+  s_a36dd7ef4412d5::t_baefa8a2db125f 151
+  s_a36dd7ef4412d5::t_ce90b13b15c0db 1-150,152-452
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "e69119f049e13dc04129edb2f0c54a8d69b0e772",
+  "prompts": {},
+  "sessions": {
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

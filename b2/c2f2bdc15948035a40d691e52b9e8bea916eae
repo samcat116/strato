@@ -1,0 +1,97 @@
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_a587f81d483352::t_7dbc8b155a4c30 101-132,136,139-146,156,159,185-208,268-289
+control-plane/Sources/App/Models/AgentRegistrationToken.swift
+  s_cfe661b849c7e9::t_2184c3e09462a8 65-72,87-120
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/server/agent/v1/agent.proto
+  s_a587f81d483352::t_05632e9bd3e608 1-235
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/server/entry/v1/entry.proto
+  s_a587f81d483352::t_6721cc8c440a71 1-249
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/agent.proto
+  s_a587f81d483352::t_0666e0b172c707 1-56
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/attestation.proto
+  s_a587f81d483352::t_72d08e9cfc0129 1-12
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/entry.proto
+  s_a587f81d483352::t_ecc7e25ba2ea08 1-130
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/federateswith.proto
+  s_a587f81d483352::t_f59325618e4d88 1-68
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/jointoken.proto
+  s_a587f81d483352::t_3d45e27764ad43 1-11
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/selector.proto
+  s_a587f81d483352::t_faf26e092b8435 1-78
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/spiffeid.proto
+  s_a587f81d483352::t_5ee45cbc43a1f3 1-15
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/status.proto
+  s_a587f81d483352::t_6683b38785188f 1-29
+control-plane/Sources/SPIREServerAPI/Generated/proto/spire/api/types/x509svid.proto
+  s_a587f81d483352::t_3bc783fae9cfdd 1-25
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_server_agent_v1_agent.pb.swift
+  s_a587f81d483352::t_aa12e871e6ec08 1-1316
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_server_entry_v1_entry.pb.swift
+  s_a587f81d483352::t_d794f4def5e0d4 1-1501
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_agent.pb.swift
+  s_a587f81d483352::t_86fa2529ae71fa 1-228
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_attestation.pb.swift
+  s_a587f81d483352::t_5ca1cdcda5bd5c 1-82
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_entry.pb.swift
+  s_a587f81d483352::t_933aa558746750 1-541
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_federateswith.pb.swift
+  s_a587f81d483352::t_0319fb1ec1c03b 1-173
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_jointoken.pb.swift
+  s_a587f81d483352::t_f562626a51e91b 1-76
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_selector.pb.swift
+  s_a587f81d483352::t_73d0d64e516319 1-225
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_spiffeid.pb.swift
+  s_a587f81d483352::t_42760e22fa1529 1-80
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_status.pb.swift
+  s_a587f81d483352::t_46712db68024b4 1-184
+control-plane/Sources/SPIREServerAPI/Generated/spire_api_types_x509svid.pb.swift
+  s_a587f81d483352::t_3a14fdf2a149fe 1-116
+deploy/agent/strato-node-bootstrap.sh
+  s_a587f81d483352::t_105a53b003b18a 1-233
+Taskfile.yml
+  s_a587f81d483352::t_543dbf1979341c 13,325-326,332,348-370,731,836,847,851,968-969
+control-plane/Package.swift
+  s_a587f81d483352::t_4a5d860f903fb7 7-9,43-49,52-67,71,101,104-107
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_a587f81d483352::t_a174805e481879 2,7-21,25-26,31-49,52-53,55,57-76,78-79,82,86-87,90-92,94-96,100-113,115,117-122,125,129,133-141,144,146,148-157,163-164,166-168,170-171,173-174,176-177,180-184,187-190,193-216,218-230,232-238,245-246,250-254,271-281,285-286,289,292
+control-plane/Sources/App/configure.swift
+  s_a587f81d483352::t_faec5bcf29e85a 421-424
+control-plane/Sources/SPIREServerAPI/Generated/README.md
+  s_a587f81d483352::t_6b0dfb4faaf1c4 1-25
+control-plane/Sources/SPIREServerAPI/SPIREServerAPIClient.swift
+  s_a587f81d483352::t_39230ef71d6f77 1-350
+control-plane/Tests/AppTests/SPIRERegistrationFlowTests.swift
+  s_a587f81d483352::t_b9f31bf61dc89c 1-405
+control-plane/Tests/AppTests/SPIREServerAPIClientTests.swift
+  s_a587f81d483352::t_97b4b9a25ae901 1-360
+control-plane/web/src/components/agents/create-token-dialog.tsx
+  s_a587f81d483352::t_b62c8d540071e6 35-37,70,72-78,85-87,119-149,152-154
+control-plane/web/src/types/api.ts
+  s_a587f81d483352::t_b3795780938f62 244-256
+docs/deployment/agents.md
+  s_a587f81d483352::t_703128df5bb975 101-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b2c2f2bdc15948035a40d691e52b9e8bea916eae",
+  "prompts": {},
+  "sessions": {
+    "s_a587f81d483352": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc6066aa-332b-4561-b79f-cda35143be82",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_cfe661b849c7e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72a931f5-a31b-47d9-9bf8-f821c524c05e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

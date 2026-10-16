@@ -1,0 +1,21 @@
+control-plane/web/src/middleware.ts
+  s_2d493391de3833::t_e053e229a03215 1-26
+control-plane/web/next.config.ts
+  s_2d493391de3833::t_1863a9b8890c9a 15-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2f09d3c40fa9f2549fc550faaa22e1bb330fb1ef",
+  "prompts": {},
+  "sessions": {
+    "s_2d493391de3833": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "02826c83-f11c-46e9-92a1-3bea16bd80bd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

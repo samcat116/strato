@@ -1,0 +1,193 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_20a800b1a6731c::t_ebb925a7d411f9 757-759,767-778,780,790,810-811,816,819-836,846-847,850-869
+  s_20a800b1a6731c::t_d14a40ffa24de4 837-845
+  s_20a800b1a6731c::t_7561a4a3b29d06 7-24,422,466-474,477-481,524,528-549
+  s_20a800b1a6731c::t_00b96d4dcc4e2a 196-197,207-208,216-217,242-246,272-276,475-476,760-766,848-849
+  s_20a800b1a6731c::t_dbf13d4e121cf2 254-256,258-260
+  s_20a800b1a6731c::t_a0abc88f114834 87-92,114-128,130-138,140,142-158,164-170,172-175,177-195,198-206,209-215,218-240,247-253,257,261-270,277-291
+  s_20a800b1a6731c::t_d8a3563fcc44e5 139,159-163,271,1702,1715
+  s_20a800b1a6731c::t_61d3b6dcc79c8c 814
+  s_20a800b1a6731c::t_39cc723005fa24 1361
+  s_20a800b1a6731c::t_5e69ee0e8786e8 550,779
+  s_20a800b1a6731c::t_63a7fff1e07d53 129,141,171,176,241,292,1701,1703-1714,1716-1726
+  s_20a800b1a6731c::t_fe5ede5e87eed7 293
+control-plane/web/src/components/security-groups/nic-security-groups.tsx
+  s_20a800b1a6731c::t_fee792a54de233 100,105,154
+shared/Sources/StratoShared/VMSpec.swift
+  s_20a800b1a6731c::t_5302f3cea55f8c 145-168,321-330,427-429,449-451,473,487-489
+  s_20a800b1a6731c::t_0a4ee7fc16baa8 169-190
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_20a800b1a6731c::t_18996fdb009465 6,94
+  s_20a800b1a6731c::t_5b6bc5413cdf50 314-315,346-347
+  s_20a800b1a6731c::t_bd66196b899e26 152,372-373,378-399,410-434,439-463,469-471,475-480,485-494,500-515
+  s_20a800b1a6731c::t_a501e9693fc86b 3,5,7,9-18,32-40,63-66,70-73,80-89,95-103,107-149,237-239,241-243,245-247,289,293-298,300-308,313,331,348-349
+  s_20a800b1a6731c::t_2583e516c67039 67-69,90-93,104-106,153-176,376-377,400-409,435-438,464-468,472-474,481-484,495-499
+  s_20a800b1a6731c::t_41c72f0256ccd0 177-192,290-292,316-330,332-333,336-345
+  s_20a800b1a6731c::t_fee792a54de233 311,334-335
+  s_3805ddcc2bf4a3::t_31db61f6cc9b65 150
+agent/Sources/StratoAgent/NetworkOrchestrator.swift
+  s_20a800b1a6731c::t_16688d6b2c3dd5 49,54,62-65,79-160,163-168,170,172-173,175,180,187-225
+  s_20a800b1a6731c::t_00b96d4dcc4e2a 42-47
+  s_20a800b1a6731c::t_fbd5f80f611e82 226
+control-plane/Sources/App/Migrations/AddVMNetworkInterfaceLifecycle.swift
+  s_20a800b1a6731c::t_6b6ca13409709f 64-68,71-74
+  s_20a800b1a6731c::t_742a2f345de72f 1-8,10-12,14-18,20-22,48-56,58-62,69,76-96
+  s_20a800b1a6731c::t_d3929da587a217 13,19,57
+  s_20a800b1a6731c::t_56ab07966785a3 9,23-47,63,70,75
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_20a800b1a6731c::t_a31a38790fc49f 1310
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_20a800b1a6731c::t_3055425ec3af03 1253,1257,1284-1285,1288
+  s_20a800b1a6731c::t_460f93be20ab0c 1233-1252,1254-1256,1258-1283,1286-1287,1289-1292
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_20a800b1a6731c::t_93288e27f9ad3c 124,126,138,142,601-614
+  s_20a800b1a6731c::t_6f030b683b15e7 615-616
+control-plane/Sources/App/Models/VMInterfaceAddress.swift
+  s_20a800b1a6731c::t_2232c179dd30d5 83-85
+control-plane/web/src/lib/api/vms.ts
+  s_20a800b1a6731c::t_aff7f3c0cebab6 15-16,44-65
+  s_3284517dab6df7::t_867aa7e2f36d5e 66
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_20a800b1a6731c::t_a7d2d7c4ccae4c 194-203,338-349
+control-plane/Sources/App/configure.swift
+  s_20a800b1a6731c::t_742a2f345de72f 875-878
+control-plane/Sources/App/openapi.yaml
+  s_20a800b1a6731c::t_0b0eb6818eef4c 432-502,9059-9068,9123-9152,9423,9459-9464
+  s_20a800b1a6731c::t_3c5b305d2cd81a 7936-7943
+  s_20a800b1a6731c::t_5b6bc5413cdf50 9224-9225
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_20a800b1a6731c::t_a7d2d7c4ccae4c 17-31
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_20a800b1a6731c::t_8a1a3c26f4c8b1 30-45,116-150,165-212
+  s_20a800b1a6731c::t_33a127269fbafd 213-214,216-243
+  s_20a800b1a6731c::t_f1a8a925b70bae 151-153
+  s_20a800b1a6731c::t_4e86466aeb6127 154-164
+  s_20a800b1a6731c::t_3d4f8723728daf 215
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_20a800b1a6731c::t_84c11025f9d76b 12-30
+  s_20a800b1a6731c::t_30245b0d9dbcb7 211
+  s_20a800b1a6731c::t_0b76bed63bc52c 425-480,483-484
+  s_20a800b1a6731c::t_217b98372d68ef 31-72
+  s_20a800b1a6731c::t_b90557d3543304 481-482
+agent/Sources/StratoAgentCore/DomainNetworkInventory.swift
+  s_20a800b1a6731c::t_460f93be20ab0c 1-59
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  s_20a800b1a6731c::t_30245b0d9dbcb7 70
+shared/Sources/StratoShared/WireProtocol.swift
+  s_20a800b1a6731c::t_51457acb60411e 832-836,841
+  s_20a800b1a6731c::t_5302f3cea55f8c 825-827,850-853,860-861
+  s_5d7717eeeb4bf1::t_3c11c73fb7d6e3 862-863
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_20a800b1a6731c::t_30245b0d9dbcb7 124-125
+control-plane/web/src/types/api.ts
+  s_20a800b1a6731c::t_14a989a75423df 1090
+  s_20a800b1a6731c::t_aff7f3c0cebab6 133-138,147-153,1094-1095
+  s_20a800b1a6731c::t_38f10f8cca61fe 1092-1093
+  s_20a800b1a6731c::t_6880eb020cb3e9 132
+  s_20a800b1a6731c::t_5b6bc5413cdf50 162
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_20a800b1a6731c::t_530048826dfb36 254-271
+control-plane/Sources/App/Models/VMNetworkInterface.swift
+  s_20a800b1a6731c::t_742a2f345de72f 56-65,90-91,101-102
+  s_3284517dab6df7::t_a23c83f36b3512 103-104
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_20a800b1a6731c::t_2232c179dd30d5 101
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_20a800b1a6731c::t_731c1c10261e1e 115,124
+  s_20a800b1a6731c::t_00b96d4dcc4e2a 125-126
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_20a800b1a6731c::t_530048826dfb36 302-318
+agent/Tests/StratoAgentTests/DomainNetworkInventoryTests.swift
+  s_20a800b1a6731c::t_0b76bed63bc52c 1-35,37-41,43-51
+  s_20a800b1a6731c::t_e2dd8fef162cd7 36,42
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_20a800b1a6731c::t_530048826dfb36 63-71
+control-plane/Tests/AppResourceTests/VMNetworkInterfaceLifecycleMigrationTests.swift
+  s_20a800b1a6731c::t_56ab07966785a3 1-32
+agent/Tests/StratoAgentTests/MetadataStoreTests.swift
+  s_20a800b1a6731c::t_731c1c10261e1e 66
+control-plane/Sources/App/Models/vm.swift
+  s_20a800b1a6731c::t_742a2f345de72f 534-541,563-564,566,585-605,714
+  s_20a800b1a6731c::t_5b6bc5413cdf50 618,701
+  s_5d7717eeeb4bf1::t_6e0927c4cc02ff 606
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_20a800b1a6731c::t_539699c5c846d0 306,436-461,463-496,498-549,551-552,554,556-557
+  s_20a800b1a6731c::t_684137e057a8a6 5,32-45,75-77,91-108,168-181,197-204,247
+control-plane/Sources/App/Services/NetworkSpecFactory.swift
+  s_20a800b1a6731c::t_2232c179dd30d5 40-42
+control-plane/web/src/types/openapi.ts
+  s_20a800b1a6731c::t_ef0e6252bd94ea 5436
+  s_20a800b1a6731c::t_ea20aa313c0304 179-249,5369-5370,5398-5407,5562-5565,9328-9329,9779-9870
+agent/Tests/StratoAgentTests/EdgeNonceReconciliationTests.swift
+  s_20a800b1a6731c::t_731c1c10261e1e 429
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_20a800b1a6731c::t_cc2e815dba05ee 365-432
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_20a800b1a6731c::t_5ed82a114847d2 197,199-213,220-225,228-253,256-263
+  s_20a800b1a6731c::t_dbf13d4e121cf2 214-219
+  s_20a800b1a6731c::t_00b96d4dcc4e2a 144-145,226-227,254-255
+  s_20a800b1a6731c::t_303205184ace9c 24-29,131-143,146-196
+  s_20a800b1a6731c::t_b8ca0631dd6b0a 198
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_20a800b1a6731c::t_5302f3cea55f8c 1105-1108,1118-1119,1129
+control-plane/Sources/App/Models/NetworkAddressable.swift
+  s_20a800b1a6731c::t_2232c179dd30d5 29-31,37-40
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_20a800b1a6731c::t_a49b7f7abb3621 187-189,567-568,737-738,1120-1121,1709,1730-1731,1739-1741,1745-1784
+  s_20a800b1a6731c::t_84c11025f9d76b 215-230
+  s_20a800b1a6731c::t_217b98372d68ef 231-269,1785
+  s_3805ddcc2bf4a3::t_65a280cd2576fc 1786
+agent/Sources/StratoAgent/Agent.swift
+  s_20a800b1a6731c::t_0a4ee7fc16baa8 4586,4594-4613,4615-4616,4618-4622,4624-4629,4631-4654
+  s_20a800b1a6731c::t_8f2689397f67f6 4983
+  s_20a800b1a6731c::t_01c474ce9128d3 4617
+  s_20a800b1a6731c::t_40076b2fb25a1a 4539-4540,4719,4746,4895,4926,4941
+  s_20a800b1a6731c::t_84c11025f9d76b 4984-4985,5005-5006
+  s_20a800b1a6731c::t_217b98372d68ef 4614,4623,4630
+  s_20a800b1a6731c::t_30245b0d9dbcb7 3955-3956,3973-3974,4782
+  s_20a800b1a6731c::t_a49b7f7abb3621 3528-3531,3853-3854,4655
+  s_20a800b1a6731c::t_b9585a16212127 4995,5004
+  s_3805ddcc2bf4a3::t_8490dd3d45601a 4656
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_20a800b1a6731c::t_a7d2d7c4ccae4c 816
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b684e9faf3a640fe755006b9a0f3e076e4068b84",
+  "prompts": {},
+  "sessions": {
+    "s_20a800b1a6731c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-973d-7190-8574-beee3fbb2d7d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_3284517dab6df7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-a9de-7ab2-9f84-e853467c449b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_3805ddcc2bf4a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-e6d0-7543-9224-3e5f392b4ed8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_5d7717eeeb4bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-40ef-7863-978f-c926590eb759",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

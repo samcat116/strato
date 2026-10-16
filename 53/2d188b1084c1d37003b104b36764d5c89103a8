@@ -1,0 +1,59 @@
+docs/guide/what-is-strato.md
+  s_5dbe9ac49d55b0::t_402064884763f8 102
+docs/development/troubleshooting-k8s.md
+  s_5dbe9ac49d55b0::t_f71203343c87e8 431
+  s_5dbe9ac49d55b0::t_9005c31e9b0e85 422-423
+  s_5dbe9ac49d55b0::t_f2a2094ded056e 436
+DEV-SETUP.md
+  s_5dbe9ac49d55b0::t_787ffa16b4432e 347
+skaffold.yaml
+  s_5dbe9ac49d55b0::t_4aef27353c7c39 69-70,74-75
+.github/workflows/helm-test.yml
+  s_5dbe9ac49d55b0::t_e2401c566ff103 183
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_5dbe9ac49d55b0::t_99e9963e0f9c72 24
+docs/development/skaffold.md
+  s_5dbe9ac49d55b0::t_ae273447015b93 168,175-176,179-182,190-194,199,202-204
+docs/.vitepress/config.mts
+  s_5dbe9ac49d55b0::t_6aaaf710e1bc08 78
+  s_5dbe9ac49d55b0::t_46afd49de97fc4 51-53
+package.json
+  s_5dbe9ac49d55b0::t_655a96e0e46c2d 20
+docs/architecture/overview.md
+  s_5dbe9ac49d55b0::t_8fba5f53242a6a 10
+  s_5dbe9ac49d55b0::t_e297e3ce304d8a 241-242
+  s_5dbe9ac49d55b0::t_2ea4b4a6d92f64 128-130
+  s_5dbe9ac49d55b0::t_1300b9e93b8923 224
+  s_5dbe9ac49d55b0::t_387f03126c2966 115,117-120,123-124
+  s_5dbe9ac49d55b0::t_ee34666428d072 154-155
+helm/strato-control-plane/README.md
+  s_5dbe9ac49d55b0::t_b6a217d3ef2a22 184,187-191,194-195
+  s_5dbe9ac49d55b0::t_dd893b86ece85f 364
+.github/workflows/README.md
+  s_5dbe9ac49d55b0::t_aa41cf26df87c4 45-48
+CLAUDE.md
+  s_5dbe9ac49d55b0::t_169af8582cf8a7 64-67
+  s_5dbe9ac49d55b0::t_213c91d5c448fe 80-81
+  s_5dbe9ac49d55b0::t_9e916f77c0ed49 246
+  s_5dbe9ac49d55b0::t_0c636fbefef8e0 147
+  s_5dbe9ac49d55b0::t_4b47d010bc82f8 96-97
+  s_5dbe9ac49d55b0::t_197b51d8aab5c0 105
+  s_5dbe9ac49d55b0::t_0f27ab98e3d91d 152-155
+  s_5dbe9ac49d55b0::t_44a2269b9dadbd 91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "532d188b1084c1d37003b104b36764d5c89103a8",
+  "prompts": {},
+  "sessions": {
+    "s_5dbe9ac49d55b0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "945a6096-544a-43ca-9f90-2f54f5c2d87c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_59723017fddc2a::t_0e76e3e8ab9ee6 201-204
+agent/Sources/StratoAgentCore/WarmSandboxSnapshotCache.swift
+  s_59723017fddc2a::t_0e76e3e8ab9ee6 313-315,317,322
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "95f1b4c0113bf91554a4c6b7b7a0d5cf141d6ee1",
+  "prompts": {},
+  "sessions": {
+    "s_59723017fddc2a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-6732-74c0-8607-f3e1c9124e78",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

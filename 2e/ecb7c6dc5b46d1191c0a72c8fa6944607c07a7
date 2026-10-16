@@ -1,0 +1,19 @@
+control-plane/Tests/AppTests/SandboxExpiryTests.swift
+  s_c02bbef0078526::t_5c5dc64ed12223 84-99,151,202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "2eecb7c6dc5b46d1191c0a72c8fa6944607c07a7",
+  "prompts": {},
+  "sessions": {
+    "s_c02bbef0078526": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4118d4f8-bede-4ed3-94a7-addb32c05cd4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

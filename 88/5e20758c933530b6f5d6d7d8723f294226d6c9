@@ -1,0 +1,23 @@
+.github/workflows/main-build.yaml
+  s_e0b1e17df68c8e::t_913a18cf6f5773 13-14,134-144,146,148,165,184,200-244,259-287,296-297
+control-plane/Dockerfile
+  s_e0b1e17df68c8e::t_718fe833b6b3bc 9-17,32-37
+agent/Dockerfile
+  s_e0b1e17df68c8e::t_d9110a294d6cc0 10-18,40-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "885e20758c933530b6f5d6d7d8723f294226d6c9",
+  "prompts": {},
+  "sessions": {
+    "s_e0b1e17df68c8e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57e29999-10c5-44c8-9fc6-9bacfff84b89",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

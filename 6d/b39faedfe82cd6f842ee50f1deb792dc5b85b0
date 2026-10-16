@@ -1,0 +1,47 @@
+control-plane/Sources/App/IAM/IAMActionCatalog.swift
+  s_c29b45d9812e1b::t_932ac81611cee6 1-64
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_c29b45d9812e1b::t_6701c4a1b823c4 269-274,278-279,283-287,289-292
+control-plane/Sources/App/Controllers/RoleController.swift
+  s_c29b45d9812e1b::t_89ba696ec8acb4 1-226,228-282,288-289,291-441
+  s_c29b45d9812e1b::t_2db3696baf25d1 227
+  s_c29b45d9812e1b::t_f6abeb12821868 283-287,290
+control-plane/Sources/App/IAM/Cedar/CedarPolicyInspector.swift
+  s_c29b45d9812e1b::t_0f4e9cc46b5be3 1-142,155-158,163,166,172,174-230
+  s_c29b45d9812e1b::t_88e5e31fde2878 143-154,159-162,164-165,167-171,173
+docs/architecture/iam.md
+  s_c29b45d9812e1b::t_14f4e0d4f20dd3 298-349
+  s_c29b45d9812e1b::t_b2b70af3585e84 412,414-418
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_c29b45d9812e1b::t_b5c40fbdd6bf97 180-184,187-195
+control-plane/Tests/AppTests/RoleEndpointTests.swift
+  s_c29b45d9812e1b::t_f82d17556ddbb9 89-92
+  s_c29b45d9812e1b::t_a02ab79942e765 155-157,265-268
+  s_c29b45d9812e1b::t_45a3bb867ef085 606
+  s_c29b45d9812e1b::t_c2bba64fade4b7 200-249
+  s_c29b45d9812e1b::t_98cf941a3b259e 1-88,93-154,158-199,250-264,269-605,607-690
+control-plane/Sources/App/IAM/RoleStore.swift
+  s_c29b45d9812e1b::t_ef8183fbe1251a 1-280
+control-plane/Sources/App/openapi.yaml
+  s_c29b45d9812e1b::t_c6114bd2df25b9 6417-6454
+  s_c29b45d9812e1b::t_aa3c43f599b8c0 4462-4652
+  s_c29b45d9812e1b::t_186a8a5760c445 10794-11008
+control-plane/Sources/App/routes.swift
+  s_c29b45d9812e1b::t_632d401f0d1d6f 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6db39faedfe82cd6f842ee50f1deb792dc5b85b0",
+  "prompts": {},
+  "sessions": {
+    "s_c29b45d9812e1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d64ce9aa-2e62-43ac-b482-529ba837befc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_e24a73b3527826::t_56d8d639f43a50 320-321
+control-plane/Sources/App/Services/DesiredStateGenerationWriter.swift
+  s_e24a73b3527826::t_56d8d639f43a50 4,66-82
+  s_62da691d76daf9::t_08f7114af94697 83-84
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_e24a73b3527826::t_56d8d639f43a50 538-539,584-585,665-666
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_e24a73b3527826::t_56d8d639f43a50 172-173,447-448
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "a6a3d175892e7ebe85169b96214546b2aa14ac46",
+  "prompts": {},
+  "sessions": {
+    "s_62da691d76daf9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02696-d837-7e41-a51d-fc37acab3e9b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e24a73b3527826": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a02697-63ac-7fb1-aee1-f0f4a9f5325c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

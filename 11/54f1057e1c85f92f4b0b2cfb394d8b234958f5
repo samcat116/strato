@@ -1,0 +1,122 @@
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 815
+agent/Sources/StratoAgent/Agent+Reconciliation.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 388-390,566,583-584,604-607,678,687-695,740-754
+  s_3c8cb79c69ff83::t_4893e4f1605f8f 755-756
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 224
+control-plane/Sources/App/Controllers/VMController.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 1447
+agent/Sources/StratoAgent/Agent.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 404-407
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 493
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 190
+.github/workflows/main-tests.yaml
+  s_3c8cb79c69ff83::t_2dd332bc34de85 280-281,283-286,304
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 158
+control-plane/Sources/App/Migrations/AddRunResourceEventMutation.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 1-33
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 187,216
+agent/Sources/StratoAgentCore/DomainDeviceXML.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 36-40
+control-plane/Sources/App/Bootstrap/StartupReconciliation.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 50-54,67-68
+agent/Tests/StratoAgentTests/DomainBootOrderTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 1-158
+agent/Sources/StratoAgentCore/DomainRedefinition.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 73-161
+control-plane/Sources/App/Migrations/CurrentSchema.sql
+  s_3c8cb79c69ff83::t_2dd332bc34de85 772
+control-plane/Tests/AppResourceTests/QuotaUsageAggregatorTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 51-53,55-58,88-94,99-101,106-108,119-122,125,142
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 91,98,352,381,383,389,402,615,617,623,631
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 87-94,709-710,712-713,733,735,744,762-786,955,957-964,966-970,1485-1488,1491,1498,1503-1507,1509-1536,1538-1562,1565,1567-1568
+control-plane/Tests/AppIAMTests/CrossProjectContainmentTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 180-181,188
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 181-185
+agent/Tests/StratoAgentTests/DomainDiskInventoryTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 182-183
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 98-114,244,250,252-255
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 12,68-75
+  s_3c8cb79c69ff83::t_b73c765f67b51b 76-86
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 370
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 1664-1668,1670
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_3c8cb79c69ff83::t_0b6a968f64b5e7 235-240,243
+  s_3c8cb79c69ff83::t_2dd332bc34de85 160-164,427,435-441,458,467-515
+  s_3c8cb79c69ff83::t_6125989e162f58 290
+  s_3c8cb79c69ff83::t_7c5d6c2208eab7 43-44
+  s_3c8cb79c69ff83::t_6e42f2393bedf0 516-517
+control-plane/Tests/AppIdentityTests/ServiceAccountAPITests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 416-431
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 58-60,67,71,78,122-126
+control-plane/Tests/AppPlatformTests/SiteTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 288-290,797-798
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 273-286
+control-plane/Tests/AppPlatformTests/ResourceFinalizerTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 104,107,121-125,132,307,330
+control-plane/Tests/AppPlatformTests/IdempotencyTests.swift
+  s_3c8cb79c69ff83::t_58b202bce3fd02 228-233
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 142,151
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 92
+docs/architecture/agent.md
+  s_3c8cb79c69ff83::t_2dd332bc34de85 330-332,337-345
+agent/Tests/StratoAgentTests/DomainXMLLibvirtTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 16-18,661-819
+control-plane/Tests/AppResourceTests/ResourceEventTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 237
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 415
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 270-271
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 129-130,137-138,145-153,240-243,248,489
+  s_3c8cb79c69ff83::t_55ca961f350e24 490
+control-plane/Tests/AppIdentityTests/SecretsEncryptionServiceTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 284,328-334
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 439-440,442-445
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 494,1291
+control-plane/Tests/AppIAMTests/VolumeAuthorizationTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 69
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 402,436
+docs/adr/0005-agent-drives-libvirt-not-qemu.md
+  s_3c8cb79c69ff83::t_2dd332bc34de85 102-105
+agent/Sources/StratoAgent/Agent+StorageReconciliation.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 18-54,594,610-611,641-650,657
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_3c8cb79c69ff83::t_2dd332bc34de85 382
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "1154f1057e1c85f92f4b0b2cfb394d8b234958f5",
+  "prompts": {},
+  "sessions": {
+    "s_3c8cb79c69ff83": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eec77b7e-2d11-4a9b-8f6f-5437cc9446bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

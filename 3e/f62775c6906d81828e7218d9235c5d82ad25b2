@@ -1,0 +1,26 @@
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_3d8fde8278f186::t_426ead371aca72 982-992
+  s_3d8fde8278f186::t_323bd0a3a31fce 1075-1089
+  s_3d8fde8278f186::t_2191b04e4cda36 1158,1171-1196
+agent/Sources/StratoAgentCore/HostUplink.swift
+  s_3d8fde8278f186::t_e8d58d5cd251cb 15-18,20,24
+  s_3d8fde8278f186::t_f7a7f0c77010a9 36,38-40,49-50
+agent/Tests/StratoAgentTests/HostUplinkTests.swift
+  s_3d8fde8278f186::t_834d7ac00d17ff 8,16-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3ef62775c6906d81828e7218d9235c5d82ad25b2",
+  "prompts": {},
+  "sessions": {
+    "s_3d8fde8278f186": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d30d495-5bbb-422b-acbe-a23c52d97028",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

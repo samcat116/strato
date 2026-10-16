@@ -1,0 +1,43 @@
+control-plane/Tests/AppPlatformTests/AgentUpdateEndpointTests.swift
+  s_d5e22336a13eea::t_366d66695d8cba 20-29,251-252,254-255,268-271
+  s_d5e22336a13eea::t_c3cbddc056a7f7 33-38,244-250,253,256-267
+  s_9d764f706ace50::t_d8897c6d677cb2 272
+control-plane/Tests/AppPlatformTests/ClusterClockTests.swift
+  s_d5e22336a13eea::t_7a6761ba0277b4 137-141
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_d5e22336a13eea::t_c3cbddc056a7f7 323,329
+control-plane/Tests/AppPlatformTests/AgentServiceLifecycleTests.swift
+  s_d5e22336a13eea::t_c3cbddc056a7f7 55
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  s_d5e22336a13eea::t_c3cbddc056a7f7 298-299,614-615
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_d5e22336a13eea::t_c3cbddc056a7f7 184-185,187-188,206-223
+  s_9d764f706ace50::t_f232f32348ff55 224-225
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_d5e22336a13eea::t_c3cbddc056a7f7 1322,1328-1329,1334
+  s_d5e22336a13eea::t_88e1060844aa94 1323-1327,1330,1335,1341-1342
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5dd9f7bcc5e2c68a3b20680c4814537d6527d547",
+  "prompts": {},
+  "sessions": {
+    "s_9d764f706ace50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06a26-dda9-7730-90f4-480f55b6b230",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

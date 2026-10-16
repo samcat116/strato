@@ -1,0 +1,21 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  s_eb8d88f42f560f::t_176ea96104c92c 558,560-569
+control-plane/Sources/App/Migrations/AddIPv6ToLogicalNetwork.swift
+  s_eb8d88f42f560f::t_0e65cce04fd4f4 53-55,57-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6fdd90f540addc1dcf9a0a1256dadb83ca9c235e",
+  "prompts": {},
+  "sessions": {
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

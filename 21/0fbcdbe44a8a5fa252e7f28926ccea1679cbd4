@@ -1,0 +1,33 @@
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_b1fd57a7028f8c::t_996ce4f20e2185 293-311
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_b1fd57a7028f8c::t_3a6c37a35df0d1 119-135
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b1fd57a7028f8c::t_b66a520d678661 833-835
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_b1fd57a7028f8c::t_93a9c5a40ee75c 193-196
+  s_b1fd57a7028f8c::t_5e5ea9c5221e4e 170-172
+  s_b1fd57a7028f8c::t_873e050adb5e0a 315-330,340-341
+agent/Tests/StratoAgentTests/AgentUpdaterTests.swift
+  s_b1fd57a7028f8c::t_21d29dabb08c39 347-391
+agent/Sources/StratoAgent/Agent.swift
+  s_b1fd57a7028f8c::t_1ab0aeaf7c8434 1580-1581
+docs/deployment/agents.md
+  s_b1fd57a7028f8c::t_a6096bbf4aed63 251-252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "210fbcdbe44a8a5fa252e7f28926ccea1679cbd4",
+  "prompts": {},
+  "sessions": {
+    "s_b1fd57a7028f8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24d3be9f-19d3-48c9-8583-12204042473f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

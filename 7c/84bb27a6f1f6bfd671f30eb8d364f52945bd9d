@@ -1,0 +1,39 @@
+.claude/settings.json
+  s_e96ba4ae06c4bf::t_2e772d9cb602fb 7-48,51,56-70,74-89
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_54bd923d657c30::t_55f475405f4d38 308,361
+control-plane/Sources/App/Services/DNSZoneService.swift
+  s_54bd923d657c30::t_55f475405f4d38 150,168,345
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_54bd923d657c30::t_e6de575f9616a4 17-20,680-683,685-713,716-723,726-734,737-741,1197-1230,1233-1240,1243-1252,1254
+  s_54bd923d657c30::t_c39868ba47885e 684,714-715,1231-1232
+  s_54bd923d657c30::t_36d0cc769261e4 724-725,735-736,1241-1242
+  s_54bd923d657c30::t_c4affc655003c0 1253
+  s_54bd923d657c30::t_c6378ea6244bed 1255
+control-plane/Sources/App/Models/DNSRecord.swift
+  s_54bd923d657c30::t_55f475405f4d38 20-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "7c84bb27a6f1f6bfd671f30eb8d364f52945bd9d",
+  "prompts": {},
+  "sessions": {
+    "s_54bd923d657c30": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ae2-ace8-7050-92f7-f02d8f6039ff",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e96ba4ae06c4bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01c11-f4dd-70d3-b494-f3a755bc4814",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

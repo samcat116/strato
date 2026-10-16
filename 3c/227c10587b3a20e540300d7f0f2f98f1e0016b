@@ -1,0 +1,27 @@
+control-plane/Tests/AppResourceTests/VolumeSnapshotListTests.swift
+  s_ad70cfcbbd12be::t_cefc8b387356e5 78-119
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_ad70cfcbbd12be::t_cefc8b387356e5 1073-1081
+control-plane/web/src/components/layout/sidebar.tsx
+  s_ad70cfcbbd12be::t_cefc8b387356e5 23,27-35,43,63-69,107-112,145,178,201-207,223-225,231-235,237-241,248
+control-plane/web/src/components/layout/project-switcher.tsx
+  s_ad70cfcbbd12be::t_cefc8b387356e5 16,25,68
+control-plane/web/src/components/layout/header.tsx
+  s_ad70cfcbbd12be::t_cefc8b387356e5 31-34,39-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3c227c10587b3a20e540300d7f0f2f98f1e0016b",
+  "prompts": {},
+  "sessions": {
+    "s_ad70cfcbbd12be": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffe02-ce7b-7dc3-b453-d02621103a2c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

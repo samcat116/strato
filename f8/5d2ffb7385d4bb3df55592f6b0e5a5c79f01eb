@@ -1,0 +1,36 @@
+control-plane/web/src/components/networks/network-table.tsx
+  s_eb8d88f42f560f::t_2730b7e29a6609 115-120,123-128
+control-plane/web/src/components/vms/vm-network-card.tsx
+  s_eb8d88f42f560f::t_3ccdcd4198c8ff 12-28
+  s_eb8d88f42f560f::t_374422c9f613e1 83-87,90-94
+  s_eb8d88f42f560f::t_0f0b8873472ed4 59
+control-plane/web/src/types/api.ts
+  s_eb8d88f42f560f::t_737e13e4d68e65 792-796,808-811
+  s_eb8d88f42f560f::t_d38852642bd3a5 34-40,45,49-50
+  s_eb8d88f42f560f::t_82e9c31cd3ede4 768-770
+control-plane/web/src/components/networks/dhcp-fields.tsx
+  s_eb8d88f42f560f::t_ab4862d8ff82a3 91-92
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_eb8d88f42f560f::t_cec96cf1315c97 175-208
+  s_eb8d88f42f560f::t_3971ddc122b408 34-36
+  s_eb8d88f42f560f::t_2678e261bd3798 48,50,58-59,78-83,90-92
+control-plane/web/src/components/networks/edit-network-dialog.tsx
+  s_eb8d88f42f560f::t_87266faf6a455a 81,92-94
+  s_eb8d88f42f560f::t_b0a158dd515887 136-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f85d2ffb7385d4bb3df55592f6b0e5a5c79f01eb",
+  "prompts": {},
+  "sessions": {
+    "s_eb8d88f42f560f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "100f01e6-cb6f-4ea1-acb7-8737af15ef62",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

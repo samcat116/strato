@@ -1,0 +1,21 @@
+sandbox-guest/init/src/guest_agent/vsock.rs
+  s_bb7e6e545a0e3f::t_60c7e194ef88a8 5,25-27,33-39,41,78-79,105-134,253-254,265-297,303-304
+  s_bb7e6e545a0e3f::t_1539204d395de1 298-302
+  s_bb7e6e545a0e3f::t_18fc47522a094d 305
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e061362405c642afd45910e762fc8da212fea766",
+  "prompts": {},
+  "sessions": {
+    "s_bb7e6e545a0e3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-0ea2-7e01-97ae-80ada0783554",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

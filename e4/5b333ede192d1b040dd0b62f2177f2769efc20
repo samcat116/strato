@@ -1,0 +1,57 @@
+control-plane/Sources/App/Models/RegistryPullSecret.swift
+  s_6b5bf147e3675c::t_93d0ccbc8a0240 1-73
+control-plane/Sources/App/Services/SecretsEncryptionService.swift
+  s_6b5bf147e3675c::t_f364b44b347878 159-169
+  s_6b5bf147e3675c::t_f13dcd6391d8f1 128
+shared/Tests/StratoSharedTests/OCIImageReferenceTests.swift
+  s_6b5bf147e3675c::t_fe9eec38c7e3bb 1-96
+control-plane/Sources/App/configure.swift
+  s_6b5bf147e3675c::t_be20ea85d5b5d8 108-116
+  s_6b5bf147e3675c::t_301749d6e9787a 386-389
+control-plane/Sources/App/Services/RegistryClientService.swift
+  s_6b5bf147e3675c::t_f03630e02ba67d 3
+  s_6b5bf147e3675c::t_de7dd1e61027ed 231-233,235-236
+  s_6b5bf147e3675c::t_2803c561705bd8 202-210
+  s_6b5bf147e3675c::t_dae240163b41c6 1-2,4-201,211-230,234,237-306
+control-plane/Tests/AppTests/RegistryPullSecretTests.swift
+  s_6b5bf147e3675c::t_ea205dc132bf91 316-317
+  s_6b5bf147e3675c::t_3b1ef01ca8a6bd 170-171
+  s_6b5bf147e3675c::t_4437a982316bd5 1-136,140-169,172-315,318-592
+  s_6b5bf147e3675c::t_f52d3fa99a01f6 137-139
+docs/architecture/sandboxes.md
+  s_6b5bf147e3675c::t_70099f41a1c572 12-16
+  s_6b5bf147e3675c::t_6048c5a4699339 72,74-94
+  s_6b5bf147e3675c::t_f82215b6cb77b0 34-38
+control-plane/Sources/App/Controllers/RegistryPullSecretController.swift
+  s_6b5bf147e3675c::t_8b3d5a93523364 1-190
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_6b5bf147e3675c::t_e833e645b167a9 46-47
+  s_6b5bf147e3675c::t_e56516c7ff9d6a 73-82
+control-plane/Sources/App/Migrations/CreateRegistryPullSecret.swift
+  s_6b5bf147e3675c::t_a2d19c64b0aace 1-24
+shared/Sources/StratoShared/SandboxModels.swift
+  s_6b5bf147e3675c::t_aefff35ece40fa 82-87,89-91,96
+shared/Sources/StratoShared/OCIImageReference.swift
+  s_6b5bf147e3675c::t_811edbaf230dd3 1-111
+control-plane/Sources/App/routes.swift
+  s_6b5bf147e3675c::t_1c78c4f33ee5c7 26-27
+control-plane/Sources/App/Services/AgentService.swift
+  s_6b5bf147e3675c::t_36776a261f1738 1397-1501
+  s_6b5bf147e3675c::t_65507f734645d2 1352-1355,1359-1389
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "e45b333ede192d1b040dd0b62f2177f2769efc20",
+  "prompts": {},
+  "sessions": {
+    "s_6b5bf147e3675c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d36210c-ff03-491d-a48a-709bcf3690e1",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,38 @@
+control-plane/Tests/AppIAMTests/AuditLoggingTests.swift
+  s_532b37be23fdb2::t_60069f5a6f7877 647-649
+  s_532b37be23fdb2::t_0dbe8f3cf6164c 707-733
+  s_532b37be23fdb2::t_d682c7f0a8117d 921-935
+  s_532b37be23fdb2::t_f0616c46ff2945 829,832,839
+control-plane/Sources/App/Services/AuditService.swift
+  s_532b37be23fdb2::t_2efa977b971c39 786-788,791,803,805-855,857,859,861-863,883-906,987
+  s_532b37be23fdb2::t_1da0f2ca011f91 7,61-64,199-221,270-273,275-294,321,432
+  s_532b37be23fdb2::t_7611a8f38b1284 926,930-935,938-949,951-967,972-976,981-986
+  s_532b37be23fdb2::t_b067774c726d53 612-616,629,642,674-676,707-715,726
+  s_532b37be23fdb2::t_9b97b4d895c46c 907
+  s_532b37be23fdb2::t_4f8fee3c624273 988
+control-plane/Sources/App/Models/AuditEvent.swift
+  s_532b37be23fdb2::t_6cf791be4d3a2b 74
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_532b37be23fdb2::t_f1d23b19c21f33 418-433
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_532b37be23fdb2::t_c68807f350060e 533-534,538,548-550
+  s_532b37be23fdb2::t_24e3d23eeabe01 5,48-76,79-84
+  s_532b37be23fdb2::t_04bda4319b6ade 108-111,113-129
+  s_532b37be23fdb2::t_1b63f4e95658c1 536
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "324365fd8762333b6862a1476d448d3fd8e7f418",
+  "prompts": {},
+  "sessions": {
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

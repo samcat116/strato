@@ -1,0 +1,89 @@
+control-plane/Sources/App/Controllers/UserController.swift
+  s_f7889c4d94528d::t_044a087bf3138d 192-205
+control-plane/Sources/App/Controllers/ProjectController.swift
+  s_f7889c4d94528d::t_398bb4ed19b871 802-818
+control-plane/Sources/App/IAM/RoleBindingBackfill.swift
+  s_f7889c4d94528d::t_a62dac2f7237ba 1-141
+control-plane/Sources/App/IAM/RoleRegistrySync.swift
+  s_f7889c4d94528d::t_2a017739ff403d 1-71
+control-plane/Sources/App/Migrations/CreateRoleBinding.swift
+  s_f7889c4d94528d::t_6f57ab8b197551 1-41
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_f7889c4d94528d::t_8ac13e746b94f4 369-391
+  s_f7889c4d94528d::t_8f31129b35f111 186-199
+control-plane/Sources/App/configure.swift
+  s_f7889c4d94528d::t_5fcb5e8de740b7 561-582
+  s_f7889c4d94528d::t_73a54547db2cd9 455-462
+  s_f7889c4d94528d::t_0c34f91c16fe80 419-423,426-429
+  s_f7889c4d94528d::t_f6a304a9ec298b 430
+control-plane/Sources/App/Migrations/CreateIAMRoleRegistry.swift
+  s_f7889c4d94528d::t_9f58b4a43a0298 1-28
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_f7889c4d94528d::t_fc3687e373ff53 404-455
+  s_f7889c4d94528d::t_51470fa6239858 877-878
+  s_f7889c4d94528d::t_1beed56217bfbb 837-849
+  s_f7889c4d94528d::t_b7cdd8617e28bc 700-702
+  s_f7889c4d94528d::t_3646dd473724e5 764-769
+  s_f7889c4d94528d::t_29ab66dd76f414 542-576
+  s_f7889c4d94528d::t_c16d096edab591 656
+  s_f7889c4d94528d::t_6d4e2cb0a8b27f 16
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_f7889c4d94528d::t_3945a2815361fb 167,169-192
+  s_f7889c4d94528d::t_ee77ef8fd3927e 310-319
+  s_f7889c4d94528d::t_0b67d051ac94e5 223-232
+  s_f7889c4d94528d::t_4b2b6e15f18dd7 121-135
+  s_f7889c4d94528d::t_74867836002bac 268-281
+control-plane/Sources/App/IAM/RoleBindingService.swift
+  s_f7889c4d94528d::t_7f41cb8d34b3c7 1-97
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_f7889c4d94528d::t_983ae43adb9055 170-181
+  s_f7889c4d94528d::t_45e39e216004e5 402-418
+  s_f7889c4d94528d::t_e8ebfcbd356ea0 553-580
+  s_f7889c4d94528d::t_b87240eb26543f 120-122,128-139
+  s_f7889c4d94528d::t_33d26893a8d62b 477-487
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_f7889c4d94528d::t_9287c1e03acd3e 228-239
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_f7889c4d94528d::t_1b6e2d5106ebf2 394-405
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_f7889c4d94528d::t_61454b73941a66 473-479
+  s_f7889c4d94528d::t_003710f8da67ea 179-190
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_f7889c4d94528d::t_22947256c86eb6 670-680
+  s_f7889c4d94528d::t_570b8d1c14b8d4 778-788
+  s_f7889c4d94528d::t_d9c7f31379091f 930-935
+  s_f7889c4d94528d::t_ea88da36c772bf 183-194
+  s_f7889c4d94528d::t_fcc63f4556ab78 323-328
+  s_f7889c4d94528d::t_afd0b205438f23 348-354
+control-plane/Sources/App/Models/RoleBinding.swift
+  s_f7889c4d94528d::t_c8a1d333c0ac5e 1-86,88-140
+  s_f7889c4d94528d::t_d523d0251d6121 87
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_f7889c4d94528d::t_1da076042270f4 1-143
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_f7889c4d94528d::t_dc2adfdc25a2ef 491
+  s_f7889c4d94528d::t_bff8638cfdd281 215,217-218
+  s_f7889c4d94528d::t_40ee0e68a6705e 296-298,302-310
+  s_f7889c4d94528d::t_82e1fd231fadcb 484-486
+  s_f7889c4d94528d::t_d87b2052108325 216
+control-plane/Tests/AppTests/IAMRoleBindingTests.swift
+  s_f7889c4d94528d::t_6e69a6d85b52b0 1-361
+control-plane/Sources/App/Controllers/VMController.swift
+  s_f7889c4d94528d::t_7c70cb89f3502a 671-684
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "74423921b580cd9522b4f2be8b402535cb62edf7",
+  "prompts": {},
+  "sessions": {
+    "s_f7889c4d94528d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1521141c-e609-417d-ac74-31da1f1766d9",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

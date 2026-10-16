@@ -1,0 +1,67 @@
+agent/Tests/StratoAgentTests/SandboxControlProtocolTests.swift
+  s_a36dd7ef4412d5::t_3a566aae669dda 28-33
+  s_a36dd7ef4412d5::t_ad2295d499d247 124-130,132,134
+  s_a36dd7ef4412d5::t_4ef03b8de00351 1-27,34-123,131,133,135-210
+agent/Sources/StratoAgent/SandboxRuntimeProtocol.swift
+  s_a36dd7ef4412d5::t_446db81daacf64 43-77
+  s_a36dd7ef4412d5::t_50dd25a81f4463 7-10,14-16
+  s_a36dd7ef4412d5::t_a30e68f06007ba 96-99,105
+  s_a36dd7ef4412d5::t_c22eb7ac435690 120-121
+agent/Sources/StratoAgentCore/SandboxExecTypes.swift
+  s_a36dd7ef4412d5::t_e871d23ff70596 1-53
+agent/Sources/StratoAgentCore/SandboxLogLineAssembler.swift
+  s_a36dd7ef4412d5::t_0a4ada937ab752 75
+  s_a36dd7ef4412d5::t_e3b7fa9b592294 1-74,76-78
+agent/Tests/StratoAgentTests/SandboxLogLineAssemblerTests.swift
+  s_a36dd7ef4412d5::t_a6c4d6ecf14132 1-83,85-86,88,91,93-120
+  s_a36dd7ef4412d5::t_8ac02d9067fe32 84,87,89-90,92
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_a36dd7ef4412d5::t_dcf384f48870ce 176
+  s_58ea99da84eeb2::t_ef8f899aba87ca 143-148
+agent/Tests/StratoAgentTests/SandboxConfigDriveTests.swift
+  s_a36dd7ef4412d5::t_f1231fbbf601e4 130-131
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_a36dd7ef4412d5::t_0e4164c210a6c0 3,6-10,12-23,27-61,67-118,122,124-147,149-154,170-180,199-215,230-238,247-249,256
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_a36dd7ef4412d5::t_c9e807d568ad5d 370-779
+  s_a36dd7ef4412d5::t_069334b4751d5e 837-858,865
+  s_a36dd7ef4412d5::t_5b696171542f52 67-108
+  s_a36dd7ef4412d5::t_4479b1bccad7b2 955-977
+  s_a36dd7ef4412d5::t_3e3609df30f148 259-263,270-276,289-294
+  s_a36dd7ef4412d5::t_89e807164ca91a 340-346
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_a36dd7ef4412d5::t_0fac3fb82dccaa 326-364
+agent/Sources/StratoAgent/Agent.swift
+  s_a36dd7ef4412d5::t_23fec73d7d2ed4 2503-2673
+  s_a36dd7ef4412d5::t_405f8685a36a72 266-273
+  s_a36dd7ef4412d5::t_e240e44b475e83 139
+  s_a36dd7ef4412d5::t_df4f83dded240d 132-138,140-143
+  s_a36dd7ef4412d5::t_87512049f4ac1f 540-547
+  s_a36dd7ef4412d5::t_31b57b85bcb02c 1444-1456
+  s_a36dd7ef4412d5::t_5999703505be1a 408-417
+  s_a36dd7ef4412d5::t_3651a45881474f 418,2674
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "85b9150b654883d9b0c17222e2d6642e47f1a29c",
+  "prompts": {},
+  "sessions": {
+    "s_58ea99da84eeb2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b8981f0-ac67-4dff-a3b7-ec65f8c5f700",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a36dd7ef4412d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c139a913-0184-4109-9812-bbb47da69e4c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

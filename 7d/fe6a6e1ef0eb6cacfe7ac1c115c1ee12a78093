@@ -1,0 +1,56 @@
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_d5e22336a13eea::t_cc781378db62b5 38-42,60-61,78-79,82-98,103,108,126,157-158
+  s_d5e22336a13eea::t_6a9c81a1023fec 33-37,104-107
+control-plane/Tests/AppPlatformTests/ClusterClockTests.swift
+  s_d5e22336a13eea::t_a0ecc86d1d2dab 96-100
+  s_d5e22336a13eea::t_febf735c1fbaba 101-103
+control-plane/Sources/App/Controllers/VMController.swift
+  s_d5e22336a13eea::t_00feac2e0d778f 1605-1613
+  s_d5e22336a13eea::t_762f6dfd52e419 1504,1508
+control-plane/Sources/App/Models/Agent.swift
+  s_d5e22336a13eea::t_dfe5b2a22330c9 492,498,508,511,537,539,542-543,546-547,556,568,775,777
+control-plane/Sources/App/Services/AgentService+Registration.swift
+  s_d5e22336a13eea::t_9f1b5ee07fee6c 255,257
+control-plane/Sources/App/Services/VolumeService.swift
+  s_d5e22336a13eea::t_0d59c9a2fa76d5 164,179,199,327-329,331,339-341,345-348
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_d5e22336a13eea::t_7b6fb878258341 54,60-62,67,71-72,80-81,86-87,90-91,93,96,98-102
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_d5e22336a13eea::t_00feac2e0d778f 238-239
+control-plane/Sources/App/Models/StoragePool.swift
+  s_d5e22336a13eea::t_0d59c9a2fa76d5 170-175,187
+control-plane/Sources/App/Services/SiteNetworkAuthority.swift
+  s_d5e22336a13eea::t_02b1f80b6b8a1c 137,156-157,162-163,286,288,351,360,371
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_d5e22336a13eea::t_00feac2e0d778f 275,280
+control-plane/Sources/App/Services/ClusterClock.swift
+  s_d5e22336a13eea::t_f62c07b1f46e06 6-8
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_d5e22336a13eea::t_7e9d649e1e725a 285,293,309-310,646,659
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  s_d5e22336a13eea::t_dbac07cdff56a8 420-421
+  s_d5e22336a13eea::t_6d8887b4adaa57 83,94,366,368-369,418-419,448,450,454
+control-plane/Tests/AppResourceTests/VolumeAgentSelectionTests.swift
+  s_d5e22336a13eea::t_102aed38ff421d 62,73,83,93,102,112,117,125-127
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_d5e22336a13eea::t_72de68a3a27100 242,260,400,406,411
+control-plane/Sources/App/Services/ResolverCapability.swift
+  s_d5e22336a13eea::t_f05ad33d6a4615 32,46
+  s_d5e22336a13eea::t_244ad0cbb5bdb3 31,35,45,49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "7dfe6a6e1ef0eb6cacfe7ac1c115c1ee12a78093",
+  "prompts": {},
+  "sessions": {
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,142 @@
+control-plane/Tests/AppTests/AgentSchedulableTransformTests.swift
+  s_6b0250078518c7::t_cca8a984dc0257 108-145
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_6b0250078518c7::t_64088ca99644dd 513-542
+agent/Sources/StratoAgent/QEMUService.swift
+  s_6b0250078518c7::t_5efee0d53c6bc8 18-23,49-50,56-57,215,306-313,411-416,446-454,943,945-951,953-969,971-973,986,990-1005,1009-1011,1015-1016,1018,1028-1034,1041,1043,1115-1141,1143,1145-1147,1150-1154,1156-1160,1162-1163,1168-1193
+  s_6b0250078518c7::t_52b907b58c6bea 1194
+control-plane/Sources/App/openapi.yaml
+  s_6b0250078518c7::t_63341eda88ceed 6654-6668,9621,9657-9662
+  s_6b0250078518c7::t_2766a28ac6c690 6728-6733
+control-plane/Tests/AppTests/SchedulerServiceTests.swift
+  s_6b0250078518c7::t_bb8be8e70132f8 719-849
+  s_6b0250078518c7::t_8de6a344fa0c37 44-46,62-64
+agent/Sources/StratoAgent/Agent.swift
+  s_6b0250078518c7::t_53003ae91932c4 223-228,302-303,335-336,525-526,982-985,1009-1014,1019,1074-1079,1091,1376-1387,1397
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_6b0250078518c7::t_c5c80d4674e536 132-135,137,139,141-148,214-216,272-273
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_6b0250078518c7::t_31573963ddd877 273-276,279-292,353-357,396-400,437-441,557-573,808-812,984-995
+agent/Sources/StratoAgentCore/FirmwareResolver.swift
+  s_6b0250078518c7::t_83b35e713b4de4 1-222
+agent/Sources/StratoAgentCore/HostPreflight.swift
+  s_6b0250078518c7::t_9aed66ddf10fd9 33,79-81,83-87,113,128,176-181,243,343-357
+agent/Sources/StratoAgentCore/SwtpmSupervisor.swift
+  s_b8cfff041f0853::t_f4ed3c3430d25e 1-207
+agent/Tests/StratoAgentTests/FirmwareResolverTests.swift
+  s_678a17198c0285::t_359c2719f916f8 1-150
+agent/Tests/StratoAgentTests/HostPreflightTests.swift
+  s_678a17198c0285::t_5c014cfb503fab 25,235-264
+agent/Tests/StratoAgentTests/SwtpmSupervisorTests.swift
+  s_678a17198c0285::t_63c97d7910b8e8 1-107
+config.toml.example
+  s_678a17198c0285::t_4df87b7d423d8f 107-137
+control-plane/Sources/App/Controllers/VMController.swift
+  s_6b0250078518c7::t_e8a2e6063f4c90 391-394,579-581,616-626
+control-plane/Sources/App/Migrations/AddMachineProfileToVM.swift
+  s_be53a3ac1bdcc4::t_243b5e952de249 1-39
+control-plane/Sources/App/Models/Agent.swift
+  s_6b0250078518c7::t_da06e443b04224 102-109,168,187,234,324-326,368
+control-plane/Sources/App/Models/vm.swift
+  s_6b0250078518c7::t_19bd857882bafa 145-154,194-196,218-219,366-369,407-408
+control-plane/Sources/App/Services/AgentService.swift
+  s_6b0250078518c7::t_62c61f1d7fb917 327,3175-3181
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_6b0250078518c7::t_646a8e4c180237 55-62,80-82,100-101,155-157,188-197,207-209,219-220,232-233,262-269,336-338,517-537,542,547
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_6b0250078518c7::t_662c2612b75ea6 126,166
+control-plane/Sources/App/configure.swift
+  s_6b0250078518c7::t_264c1483737063 528-531
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_678a17198c0285::t_007eccc6f9ae00 277-287
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_b8cfff041f0853::t_45437d61ea8a28 49-52,68-77,129-132,150-151,368-413
+control-plane/web/src/types/api.ts
+  s_678a17198c0285::t_8e972f1f9f7dd4 128-136,349-352,662-673
+docs/architecture/agent.md
+  s_b30fd29dab0f59::t_c9e6695f196d53 121-166
+docs/architecture/wire-protocol.md
+  s_678a17198c0285::t_44e6f17d50fe8f 45,67,86-98,201-202
+shared/Sources/StratoShared/VMSpec.swift
+  s_6b0250078518c7::t_7d74ce43b001ba 31-35,62,76,84-90,103,112-151
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_6b0250078518c7::t_27d17a6b9028ee 132-139,167,184
+shared/Sources/StratoShared/WireProtocol.swift
+  s_6b0250078518c7::t_0e2dcad0ec100f 207-218,361-377
+shared/Tests/StratoSharedTests/AgentMessageTests.swift
+  s_678a17198c0285::t_a531231284aa94 62-87
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_b43197b9370391::t_2048e3ab21614b 174-208
+docs/.vitepress/config.mts
+  s_22da4de903f3fe::t_7bd5bf12b48549 30-35
+docs/architecture/scheduler.md
+  s_22da4de903f3fe::t_f64647a4a16788 128-129,159-169,179-180,226-227
+docs/deployment/agents.md
+  s_22da4de903f3fe::t_eb630feb630cc3 318-323
+docs/guide/windows-guests.md
+  s_678a17198c0285::t_ee78d60a832e09 1-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ad7fa8847dbf1b878cabb3752212ce5491902a83",
+  "prompts": {},
+  "sessions": {
+    "s_22da4de903f3fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a5bbc47c491ccaa2d",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_678a17198c0285": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dbf28cde-0dc8-4853-8580-387b35f7703f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_6b0250078518c7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64f1cd41-77da-4576-9f0d-71f7b1188e44",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b30fd29dab0f59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a2093022-b992-43bb-aba7-73d0878ef281",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b43197b9370391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ea664118-a025-4def-b6cb-d0af529be8d8",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b8cfff041f0853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53c13793-5dc7-4e02-a4e1-962d9f381ce1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_be53a3ac1bdcc4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1261a5e0-7d45-43b8-8987-7cd83dd411e7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

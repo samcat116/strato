@@ -1,0 +1,93 @@
+control-plane/web/src/lib/api/audit-events.test.ts
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-31
+control-plane/Sources/App/Models/AuditEvent.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 64-68,75-80
+control-plane/Sources/App/Middleware/AuditMiddleware.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 12-70,90-91,94-99,103-108,112,114-122,124-129,131-138,140,172-176
+control-plane/Tests/AppResourceTests/VMCommandExecutionTests.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 14,27-64,73-83,119-126,203,211,228-231,233,243,245,250-304,315-318,320-333,336-346,349-350,353-526,547-1041
+control-plane/Sources/App/openapi.yaml
+  s_97aa0ae9838634::t_73c6f4224f5c4a 6824-6825,6860-6861,8960-8973
+control-plane/Sources/App/Services/VMGuestExecutionAudit.swift
+  s_97aa0ae9838634::t_0f292ffa992c63 93-94
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-92,95-287
+control-plane/Sources/App/Services/GuestExecSessionManager.swift
+  s_97aa0ae9838634::t_a7b9905c40eeb3 310-311
+  s_97aa0ae9838634::t_2f3884c19598d9 398-402,406-410,486-490,524-528,635-636,638-639,669-672
+  s_97aa0ae9838634::t_73c6f4224f5c4a 71-74,86-88,101,113,117,129,208-210,237-253,277-286,289-297,303-306,314-319,375-397,403-405,411-417,468-485,491-496,502-523,529-534,549-634,637,640-668,673-675,741-753
+  s_14cd71c8010725::t_b4c2a217a247ab 754
+control-plane/Sources/App/Bootstrap/DatabaseBootstrap.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 122-124
+control-plane/Tests/AppPlatformTests/AuditLoggingTests.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 2,17-37,282-326,371,373-376,432-493,520-549,580-663,686-719,753-754,785-817,841,859-867
+control-plane/Sources/App/Controllers/AuditEventController.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 21-22,65-77
+control-plane/web/src/app/(dashboard)/admin/audit/page.tsx
+  s_97aa0ae9838634::t_73c6f4224f5c4a 19-22,37-41,62,65-67,75-76,80,85,88-95,97-102,110,192-211,276-295,314,319-320
+  s_97aa0ae9838634::t_7b14f9233758e2 321-322
+control-plane/web/src/types/openapi.ts
+  s_97aa0ae9838634::t_73c6f4224f5c4a 10159-10162,18220-18223,18261-18264
+docs/deployment/audit-logging.md
+  s_97aa0ae9838634::t_73c6f4224f5c4a 38-42,45-68,79,81,83,115-132,157,164-169
+  s_97aa0ae9838634::t_073522a84100aa 170
+control-plane/web/src/lib/api/audit-events.ts
+  s_97aa0ae9838634::t_73c6f4224f5c4a 10-12,27-28
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 20-45,156-165,193,202-206,212-223,258-261,292-295,398-414,429-433,440-444,464-468,479-485
+control-plane/Sources/App/Controllers/VMController.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1864-1870,1872,1876-1881,1885-1886,1978-1984,1986,1997-1998,2000-2001
+control-plane/Tests/AppPlatformTests/VMGuestExecutionAuditTests.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-214
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 22-238,261-264,269,326-327,334-336,349-377,381-390,415-416,419-433,440-452,525-538,578-581,583-587
+control-plane/Sources/App/Migrations/AddVMGuestExecutionAudit.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-64
+control-plane/Tests/AppResourceTests/GuestExecTests.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 91-92,94,116-134,232,234,240-249,269-343,446-447,454-464,479-480,484-488,500-519,536,540,544,555,560-587,611-619,640-641,756-759,767-861,866-873,883-886,890-1162,1208-1209
+control-plane/web/src/components/audit/audit-event-table.tsx
+  s_97aa0ae9838634::t_73c6f4224f5c4a 21-54,100,148-150,157-205,235-247,250-259
+control-plane/Sources/App/Models/VMCommandExecution.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 15-22,26-28,37-42,48-52,55
+docs/superpowers/specs/2026-08-15-vm-guest-execution-audit-design.md
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-316
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 90,92,127,129,156-157
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 481,504,514,667,693
+control-plane/Sources/App/Services/AuditService.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 41-51,76-109,124-127,147,151,168-170,231-236,265-268,276,284-288,397-402,409-414,418,420-422,443-448,450,452,456-467,469,471-472,492-503,505,525-526,565-568,626-641,643,651,653-654,730,732-737
+control-plane/Sources/App/Services/VMCommandExecutionService.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 12-14,16-29,33,38-45,47,54,63-78,82,86,90-107,112,114-119,126,132,148-151,157-167,172-182,184-186,192-195,205-209,212,215-223,227-240,242-247,249-254,262-273,275,283-289,309-311,330-333,335-375,379-381,388-393,395,397-409,413-420,422-423,427-428,430-431,433-436,438-446,449-452,457-463,467-574,595-612,614,616,618,623,629-635,650,652,654,656-661,667,675-743
+control-plane/web/src/components/audit/audit-event-table.test.tsx
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-83
+control-plane/Sources/App/Services/AgentService.swift
+  s_97aa0ae9838634::t_73c6f4224f5c4a 636-637,682-683
+control-plane/web/src/app/(dashboard)/admin/audit/page.test.ts
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-24
+control-plane/web/src/components/audit/audit-event-model.ts
+  s_97aa0ae9838634::t_73c6f4224f5c4a 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "94bf48ca749f5a10e9958be6eee02d35165289ff",
+  "prompts": {},
+  "sessions": {
+    "s_14cd71c8010725": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04f88-bfb7-7ad1-a1e8-14771fb6a857",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_97aa0ae9838634": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05538-8017-7a21-aac4-876e35e96be4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

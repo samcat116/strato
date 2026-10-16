@@ -1,0 +1,25 @@
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  s_cc7d6a0c5fc541::t_e93fbcd8ebc7ac 216
+  s_cc7d6a0c5fc541::t_cbbfa2c1af057b 211-215,217-222
+control-plane/Sources/App/Middleware/AuditMiddleware.swift
+  s_cc7d6a0c5fc541::t_cbbfa2c1af057b 91,94-99,128-140
+control-plane/Tests/AppResourceTests/GuestExecAttachIntegrationTests.swift
+  s_cc7d6a0c5fc541::t_cbbfa2c1af057b 419-433,578-581,583-587
+  s_cc7d6a0c5fc541::t_e93fbcd8ebc7ac 120,221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "8c47845a8828d5689c9993be8987d1acc58aadd4",
+  "prompts": {},
+  "sessions": {
+    "s_cc7d6a0c5fc541": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05532-9121-7fe1-b52b-796472beab2e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

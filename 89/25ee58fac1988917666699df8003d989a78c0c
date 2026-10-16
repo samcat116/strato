@@ -1,0 +1,27 @@
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_071366b7d1e1c2::t_a0b90197ceb0e0 2,58-70,237-248,291,317,324-336
+  s_071366b7d1e1c2::t_908fe742b5c66f 337-338
+shared/Sources/StratoShared/WireProtocol.swift
+  s_071366b7d1e1c2::t_606d3b11bbb525 255-266
+  s_071366b7d1e1c2::t_a0b90197ceb0e0 459-464
+control-plane/Tests/AppTests/SecurityGroupControllerTests.swift
+  s_071366b7d1e1c2::t_a0b90197ceb0e0 588-723
+control-plane/Sources/App/Migrations/CreateSecurityGroup.swift
+  s_071366b7d1e1c2::t_a0b90197ceb0e0 70,78-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "8925ee58fac1988917666699df8003d989a78c0c",
+  "prompts": {},
+  "sessions": {
+    "s_071366b7d1e1c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6c8d2edb-f9f6-4c81-bef3-3d415daceadb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

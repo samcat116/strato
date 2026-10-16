@@ -1,0 +1,33 @@
+control-plane/web/src/components/ui/switch.tsx
+  s_1dd9ddf4b6d7c1::t_a33a6fd664936a 1-34
+control-plane/web/src/components/storage-devices/storage-device-inventory.test.tsx
+  s_1dd9ddf4b6d7c1::t_4471f44c39450d 70,89-90
+  s_1dd9ddf4b6d7c1::t_5ac6685038fc3f 73
+  s_1dd9ddf4b6d7c1::t_e2a7c60c930ccb 1-2,46-47,69,71-72
+  s_1dd9ddf4b6d7c1::t_efa9861d694bf6 3-45,48-68,74-88,91-159
+control-plane/web/src/components/storage-devices/storage-device-inventory.tsx
+  s_1dd9ddf4b6d7c1::t_a33a6fd664936a 1-234
+control-plane/web/src/components/layout/nav.test.ts
+  s_1dd9ddf4b6d7c1::t_efa9861d694bf6 35-45
+control-plane/web/src/app/(dashboard)/storage/devices/page.tsx
+  s_1dd9ddf4b6d7c1::t_a33a6fd664936a 1-29,34-45
+  s_1dd9ddf4b6d7c1::t_4be4a1c68af582 30-33
+control-plane/web/src/components/layout/nav.ts
+  s_1dd9ddf4b6d7c1::t_a33a6fd664936a 84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7767f0b87a7e6b5d979afc0679061f77334d38c9",
+  "prompts": {},
+  "sessions": {
+    "s_1dd9ddf4b6d7c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a006b7-8a6c-79c2-965b-1ae759428c83",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,53 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_53168cace5d67d::t_a7f4889781f293 717-732
+  s_53168cace5d67d::t_e08034aa34efc1 1329-1341
+  s_53168cace5d67d::t_f045696a9d6d33 313-317,319-323,325-337,339-343,345-347,349-353,355-362
+  s_53168cace5d67d::t_03507c3c2ca23c 1378-1398,1406-1407
+  s_53168cace5d67d::t_864c36d3b2eb45 265
+  s_53168cace5d67d::t_5c467bb81229d7 1049-1065
+  s_53168cace5d67d::t_9e602100771a51 318,324
+  s_53168cace5d67d::t_c02c8e284fd895 240
+  s_53168cace5d67d::t_507d7947a08cfa 184-192
+  s_53168cace5d67d::t_49cc0f9ea3f4f1 382-401,403-412,414-417,419,421-439
+config.toml.example
+  s_53168cace5d67d::t_3af560d9c467c3 192-214
+agent/Tests/StratoAgentTests/SimulationConfigTests.swift
+  s_53168cace5d67d::t_aca0be39af95b4 1-102
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_53168cace5d67d::t_3b897bdf5a5b65 6-13,16-22,30-50,53-54,56,66,71-72,77-78,83-84,89,94,99,103,107-109,114,117,121,125,153-165,167-173
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_53168cace5d67d::t_4d49de78c0adb4 266-279
+  s_53168cace5d67d::t_3213c85cd4e86a 311,314-322
+  s_53168cace5d67d::t_f274e51d73a0c0 354
+  s_53168cace5d67d::t_aa77dfe7ab4778 49-60
+  s_53168cace5d67d::t_63ba951508d49e 323
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_53168cace5d67d::t_5f1dc4f458fc5c 442-444,446
+  s_53168cace5d67d::t_e8d6a8b1ea0151 11-55
+  s_53168cace5d67d::t_b670405ff50aed 257-258
+  s_53168cace5d67d::t_2d6b3dc208728a 231
+  s_53168cace5d67d::t_f4fe2710fc27ae 499-500
+  s_53168cace5d67d::t_5cc7dc6a11536a 283
+  s_53168cace5d67d::t_71b7ea7055a6aa 441,445,447-464
+  s_53168cace5d67d::t_90ee0b376a7507 203-205
+agent/scripts/spawn-sim-fleet.sh
+  s_53168cace5d67d::t_f77d14b6f4b2a1 1-25,28-131,133-207
+  s_53168cace5d67d::t_b64bdfde621d57 26-27
+  s_53168cace5d67d::t_c9f8385dcfac31 132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "dc8a7c23894128aa037b61ef1599b967aa2f8d60",
+  "prompts": {},
+  "sessions": {
+    "s_53168cace5d67d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17217173-2f91-45c2-9999-559543ac6261",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

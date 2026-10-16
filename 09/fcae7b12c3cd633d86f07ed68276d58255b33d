@@ -1,0 +1,83 @@
+docs/development/e2e-testing.md
+  s_6f74095c1c77ed::t_e4c7148db55e24 32-33,36
+deploy/compose/e2e-agent.sh
+  s_6f74095c1c77ed::t_e4c7148db55e24 95
+.github/workflows/main-build.yaml
+  s_6f74095c1c77ed::t_91ceab3af65b99 26,66-67
+  s_6f74095c1c77ed::t_e4c7148db55e24 32,76,78
+.github/scripts/check-swift-version.sh
+  s_6f74095c1c77ed::t_0cc8842ffb429e 1-7,9-14
+  s_6f74095c1c77ed::t_2db5e8e4d31900 8
+.github/scripts/install-swift-macos.sh
+  s_6f74095c1c77ed::t_b53924ba844112 1-11
+.github/workflows/release.yaml
+  s_6f74095c1c77ed::t_e4c7148db55e24 122,144,504,518,527,532
+  s_6f74095c1c77ed::t_91ceab3af65b99 123,125,142,533-535,541-546
+  s_6f74095c1c77ed::t_5ca0dbfcb4d3ef 120,126-127,505
+  s_6f74095c1c77ed::t_4d94953e0ba334 547
+control-plane/Tests/AppPlatformTests/StorageDeviceInventoryReconcilerTests.swift
+  s_6f74095c1c77ed::t_4a1633a22d351e 33-35
+control-plane/Tests/AppNetworkTests/VMNetworkSelectionTests.swift
+  s_6f74095c1c77ed::t_176264ea4ad1e1 80
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_6f74095c1c77ed::t_4a1633a22d351e 1029-1032
+SwiftFirecracker/Package.swift
+  s_6f74095c1c77ed::t_e4c7148db55e24 1
+clients/swift/Package.swift
+  s_6f74095c1c77ed::t_e4c7148db55e24 1
+shared/Package.swift
+  s_6f74095c1c77ed::t_e4c7148db55e24 1
+control-plane/Tests/AppResourceTests/CephStorageTests.swift
+  s_6f74095c1c77ed::t_176264ea4ad1e1 640
+agent/Dockerfile
+  s_6f74095c1c77ed::t_e4c7148db55e24 4
+.github/scripts/claim-build-scratch.sh
+  s_6f74095c1c77ed::t_e4c7148db55e24 11
+control-plane/Package.swift
+  s_6f74095c1c77ed::t_e4c7148db55e24 1
+README.md
+  s_6f74095c1c77ed::t_aa3c684026b7a2 5
+.github/workflows/README.md
+  s_6f74095c1c77ed::t_91ceab3af65b99 164-169
+  s_6f74095c1c77ed::t_80d767c806e880 173-174
+  s_6f74095c1c77ed::t_e4c7148db55e24 126,179,195,199
+  s_6f74095c1c77ed::t_5ca0dbfcb4d3ef 188,200-201
+.github/workflows/build.yaml
+  s_6f74095c1c77ed::t_62ec6119eade5d 601
+  s_6f74095c1c77ed::t_5ca0dbfcb4d3ef 431
+  s_6f74095c1c77ed::t_e4c7148db55e24 161,430,608
+  s_6f74095c1c77ed::t_91ceab3af65b99 429,595-597,602,609-612
+agent/Package.swift
+  s_6f74095c1c77ed::t_e4c7148db55e24 1
+docs/development/local-development.md
+  s_6f74095c1c77ed::t_e4c7148db55e24 12-14
+control-plane/Dockerfile
+  s_6f74095c1c77ed::t_e4c7148db55e24 4
+.github/actions/swift-build-env/action.yml
+  s_6f74095c1c77ed::t_0cc8842ffb429e 25-28
+.claude/hooks/startup.sh
+  s_6f74095c1c77ed::t_e4c7148db55e24 17-18
+cli/Package.swift
+  s_6f74095c1c77ed::t_e4c7148db55e24 1
+deploy/compose/e2e-up.sh
+  s_6f74095c1c77ed::t_e4c7148db55e24 381
+agent/Sources/StratoAgentCore/AgentUpdater.swift
+  s_6f74095c1c77ed::t_dd0b12f9bdd2f2 150,160
+  s_6f74095c1c77ed::t_d544400560808a 148,155,157-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "09fcae7b12c3cd633d86f07ed68276d58255b33d",
+  "prompts": {},
+  "sessions": {
+    "s_6f74095c1c77ed": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a578-9b41-7e83-950a-0ccd963fca8a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

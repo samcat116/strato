@@ -1,0 +1,81 @@
+docs/development/code-review.md
+  s_bbadc6e2e9e7af::t_92688840d1f262 308-316
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 383-387
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 70-72
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 463-468
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 135-145
+control-plane/Sources/App/Controllers/VMController.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 294-307
+control-plane/Sources/App/Middleware/APIKeyAuthenticator.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 93-97,103-109,119-125,134-144
+  s_bbadc6e2e9e7af::t_01604810cc45e1 145
+control-plane/Sources/App/Services/ProjectContainment.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 1-54
+control-plane/Tests/AppTests/APIKeyAuthenticatorTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 481-527
+control-plane/Tests/AppTests/CrossProjectContainmentTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 1-492
+control-plane/Tests/AppTests/FloatingIPControllerTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 360-361,371
+control-plane/Tests/AppTests/IAMShadowTranslationTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 123-219
+docs/architecture/authorization-edge-audit.md
+  s_bbadc6e2e9e7af::t_d76a6d3d016c94 127,129-133,135-156,159-170
+  s_bbadc6e2e9e7af::t_92688840d1f262 1-126,128,134,157-158,171-202
+docs/architecture/iam.md
+  s_bbadc6e2e9e7af::t_f6e5585e4fd7ce 986
+  s_bbadc6e2e9e7af::t_92688840d1f262 567-594
+  s_bbadc6e2e9e7af::t_797b004a7cb3d7 951-965
+control-plane/Sources/App/openapi.yaml
+  s_bbadc6e2e9e7af::t_92688840d1f262 287-293,306,1216-1219,1621-1624,1766-1769,1808-1811,2082-2085,2115-2118
+control-plane/Sources/App/IAM/ProjectVisibility.swift
+  s_bbadc6e2e9e7af::t_15f860336c7d56 71,79,83,171-174,178,202
+control-plane/Tests/AppTests/ProjectListVisibilityTests.swift
+  s_bbadc6e2e9e7af::t_8d4f8ab8c879fd 420-423
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 59-73,276-285,385-397
+  s_bbadc6e2e9e7af::t_29aa16ec576838 398
+control-plane/Tests/AppTests/DNSZoneTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 311-313
+control-plane/Tests/AppTests/ProjectTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 365-436
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_bbadc6e2e9e7af::t_15f860336c7d56 27-29,230,232,234,237-246,306-309
+  s_bbadc6e2e9e7af::t_92688840d1f262 31-54,56,249,311,556-595
+  s_bbadc6e2e9e7af::t_4263bda6171dee 30,596-597
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 463-468
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 492-497
+control-plane/Tests/AppTests/ResourceQuotaTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 331-364
+control-plane/Tests/AppTests/SecurityGroupControllerTests.swift
+  s_bbadc6e2e9e7af::t_92688840d1f262 399-400,410,524-527,539
+control-plane/web/src/types/openapi.ts
+  s_bbadc6e2e9e7af::t_92688840d1f262 122,899-902,1163-1166,1251,1294-1297,1462,1488,9097
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_bbadc6e2e9e7af::t_254255d3946606 52-62,74-85,91,114-118,120-132
+  s_bbadc6e2e9e7af::t_15f860336c7d56 70,72,94-95,106,109-110
+  s_bbadc6e2e9e7af::t_92688840d1f262 137,140-170,173-190,193-202
+  s_bbadc6e2e9e7af::t_f2bb09e284f367 73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "0beba12047b913d006329148e3fc2ded067c52d0",
+  "prompts": {},
+  "sessions": {
+    "s_bbadc6e2e9e7af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c924e89-82e1-4443-a274-c45681fa52ec",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

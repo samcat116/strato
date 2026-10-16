@@ -1,0 +1,105 @@
+control-plane/web/src/components/vms/operation-watcher.tsx
+  s_486b1e97177752::t_a30688224649ca 21
+control-plane/web/src/types/api.ts
+  s_486b1e97177752::t_b90e8f4a9a54c7 613-618
+  s_486b1e97177752::t_66860b5eda28be 630-632
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_486b1e97177752::t_1e96081cf2fe16 88
+agent/Sources/StratoAgentCore/ProcessRunner.swift
+  s_486b1e97177752::t_67a90120fa4b30 123-125
+  s_486b1e97177752::t_75dde9f8fc6aa8 189-200,207-221
+  s_486b1e97177752::t_15dca13df1983e 275-282,296-313
+  s_486b1e97177752::t_dc2a230d2fab04 65-73,76-77,94-96,100-107,111-114,134-137
+  s_486b1e97177752::t_05b943f85e3f0d 97-99,108-110,117-122,128-129
+  s_486b1e97177752::t_ab7843cd5972d4 31-42,314
+  s_705e121911b57e::t_6ba1a9928e403d 138
+control-plane/Sources/App/Services/SandboxSnapshotMobilityService.swift
+  s_486b1e97177752::t_fcd5a5709f0c0b 95-96
+control-plane/Sources/App/Services/SpiceDBService.swift
+  s_486b1e97177752::t_554c939b34c1b5 867-881
+  s_486b1e97177752::t_8bc9ade40babce 755
+  s_486b1e97177752::t_94fa7020228f09 933
+  s_486b1e97177752::t_b8c30537a85a9a 732-735
+  s_486b1e97177752::t_31731f36d38d8f 835
+control-plane/Tests/AppTests/SandboxSnapshotTests.swift
+  s_486b1e97177752::t_25bfb0df3a6494 781-784
+  s_486b1e97177752::t_bbb69f2f5755ad 1010
+  s_486b1e97177752::t_53c9457bfbb803 915-918
+  s_486b1e97177752::t_26fa5d64c6bb85 957-1009,1011-1036,1038-1074,1080-1088
+  s_486b1e97177752::t_4f4da6c3a07fd3 1075-1079
+  s_486b1e97177752::t_e276fdde6d901e 1037
+agent/Tests/StratoAgentTests/HypervisorProbeTests.swift
+  s_486b1e97177752::t_e0c7c195e3bc1f 140-161
+control-plane/Sources/App/Models/ResourceOperation.swift
+  s_486b1e97177752::t_80a9de5ab944e4 65-67,69-74,77-79
+helm/strato-control-plane/files/spicedb-schema.zed
+  s_486b1e97177752::t_bb60173ba811d8 237-242
+control-plane/web/src/components/sandboxes/sandbox-status-badge.tsx
+  s_486b1e97177752::t_70b11ffa8e351b 54
+agent/Sources/StratoAgentCore/HypervisorProbe.swift
+  s_486b1e97177752::t_22be98b16be4c6 126-128,132-133
+  s_486b1e97177752::t_4dd31974e4aa67 112-119,124-125
+control-plane/Sources/App/Services/SandboxSnapshotService.swift
+  s_486b1e97177752::t_2a24783dce5c56 112-115,119-121
+  s_486b1e97177752::t_68c7c22e5a45cd 30-36
+  s_486b1e97177752::t_f7e9eaf262ae73 19-29
+  s_486b1e97177752::t_d1d331b409caa8 131
+control-plane/web/src/components/vms/vm-actions.tsx
+  s_486b1e97177752::t_7ef03649b6ff6c 59-60
+spicedb/schema.zed
+  s_486b1e97177752::t_3b221600576c5e 237-242
+control-plane/web/src/components/vms/vm-status-badge.tsx
+  s_486b1e97177752::t_68fb9925d16da7 60
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_486b1e97177752::t_0496f0b27aab97 210-213
+  s_486b1e97177752::t_28c05e5f011c32 195-200
+control-plane/web/src/components/sandboxes/sandbox-actions.tsx
+  s_486b1e97177752::t_f2b5d428e79484 58-59
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_486b1e97177752::t_fb6440178ce46b 1586-1599
+  s_486b1e97177752::t_94f85d038b1dda 1704-1707,1711,1714,1720-1728
+  s_486b1e97177752::t_b769406668756e 1734-1740,1744,1747
+  s_486b1e97177752::t_d00493693997e4 1672-1677,1679-1680,1682-1683
+  s_7754dde20e33f2::t_23c17e13938384 1729-1730
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_486b1e97177752::t_aa1a911c47522e 38-42,44,47
+  s_486b1e97177752::t_cc66034e59a1b1 189-199
+  s_486b1e97177752::t_ef5e5da2ebc8fa 93,105-117
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_486b1e97177752::t_ba60e191549343 122-131
+  s_705e121911b57e::t_9a9dda684be4e9 113-121
+agent/Tests/StratoAgentTests/ProcessRunnerTests.swift
+  s_486b1e97177752::t_78e775cec7c595 38-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "a37be597071b2be46443d64fa14e1d9ae3b376ec",
+  "prompts": {},
+  "sessions": {
+    "s_486b1e97177752": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "98e898e9-d980-4617-a72e-e308ef33fb2d",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_705e121911b57e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "169d3792-0c79-43ff-99f4-e09430f4fdbb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_7754dde20e33f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c70d8b4-a724-446c-ad9a-e40cc0a7f2af",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

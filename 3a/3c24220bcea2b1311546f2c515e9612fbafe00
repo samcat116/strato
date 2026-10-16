@@ -1,0 +1,65 @@
+docs/deployment/observability.md
+  s_532b37be23fdb2::t_61aa8af874da80 303
+  s_532b37be23fdb2::t_b11c66dad3a4d5 293-302,304-315
+  s_d5e22336a13eea::t_706e31027edf6a 316
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_532b37be23fdb2::t_61aa8af874da80 38-41
+  s_532b37be23fdb2::t_93a5d3806e723a 17-37,42-59
+control-plane/Package.swift
+  s_532b37be23fdb2::t_9d435c5ef903f5 194
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_532b37be23fdb2::t_e834dce9b6d858 3,60-97,183,227,232,234,249-252,278-280,291-297,301-303,350-355,386-387,397-404,408,411-426,438-441,451,458-466,468-472,636-637
+  s_532b37be23fdb2::t_2fc552e9c5df3a 405-407,409-410,446-450
+control-plane/Tests/AppIAMTests/AuditLoggingTests.swift
+  s_532b37be23fdb2::t_86dbcb3f182536 443,479,481,667-674,693-700,822,827
+  s_532b37be23fdb2::t_2fc552e9c5df3a 575-576
+  s_532b37be23fdb2::t_b11c66dad3a4d5 3,551-552,554-574,577-591,625-666,675-692,701-704
+  s_532b37be23fdb2::t_4c537b64288a02 499,511-512,515,518,541,548,550,929,932
+  s_3af79fd703f9fa::t_1fd4597e805889 553,705
+control-plane/Sources/App/Services/SecurityRecordDelivery.swift
+  s_532b37be23fdb2::t_93a5d3806e723a 1-59
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  s_532b37be23fdb2::t_b11c66dad3a4d5 145-184
+control-plane/Sources/App/Services/AuditService.swift
+  s_532b37be23fdb2::t_2fc552e9c5df3a 792-797
+  s_532b37be23fdb2::t_d4cb25271d70dd 239,658-661
+  s_532b37be23fdb2::t_8ee4b6e572f2bc 4,178-179,183-185,188-189,193-194,196,198,218,225-226,232-233,244,248,257,269,272,300,313,324,350,352,355,368,379,390,392,395,448,525,530,532,547-551,572-573,587-593,597-598,682-692,732-733,747,749,752-769,784-787,798,806-813,967-968
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_532b37be23fdb2::t_8bc366f8ada83b 3-4,18-30,33-46,369-406,415-416
+  s_532b37be23fdb2::t_86dbcb3f182536 407-414
+  s_532b37be23fdb2::t_4c537b64288a02 364
+  s_532b37be23fdb2::t_2fc552e9c5df3a 31-32
+  s_3af79fd703f9fa::t_8872aeaa2f3e5d 417
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3a3c24220bcea2b1311546f2c515e9612fbafe00",
+  "prompts": {},
+  "sessions": {
+    "s_3af79fd703f9fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06519-9481-7433-adc3-7ccd9d83432d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_532b37be23fdb2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651a-b075-7481-9c4d-3ae11ded4d51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_d5e22336a13eea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0651b-1954-74b2-9196-e5816321f2a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

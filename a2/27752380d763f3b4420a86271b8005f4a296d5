@@ -1,0 +1,25 @@
+agent/Tests/StratoAgentTests/MockSandboxRuntimeTests.swift
+  s_223cf433eba0c9::t_3c924ee0fe4bfe 90-104
+agent/Sources/StratoAgent/Agent.swift
+  s_223cf433eba0c9::t_3c924ee0fe4bfe 6139-6140,6144-6161,6185-6187
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_223cf433eba0c9::t_3c924ee0fe4bfe 18-22,190
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_223cf433eba0c9::t_3c924ee0fe4bfe 36-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "a227752380d763f3b4420a86271b8005f4a296d5",
+  "prompts": {},
+  "sessions": {
+    "s_223cf433eba0c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05537-204c-7800-825f-35ed5aed5e74",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

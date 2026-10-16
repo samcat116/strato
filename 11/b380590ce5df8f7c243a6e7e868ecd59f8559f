@@ -1,0 +1,26 @@
+agent/Package.swift
+  h_a84d4ff76cadd1 214
+agent/Sources/StratoAgentCore/MTLSArtifactDownloader.swift
+  h_a84d4ff76cadd1 312
+agent/Sources/StratoAgentRuntime/Agent+Identity.swift
+  h_a84d4ff76cadd1 167-176
+agent/Sources/StratoAgentSPIFFE/SPIFFEUpdateBridge.swift
+  h_a84d4ff76cadd1 1-172
+agent/Tests/StratoAgentSPIFFETests/SPIFFEUpdateBridgeTests.swift
+  h_a84d4ff76cadd1 1-216
+agent/Tests/StratoAgentSPIFFETests/SPIFFEWebSocketPinningTests.swift
+  h_a84d4ff76cadd1 315,322,331,350,356,385
+docs/architecture/agent-updates.md
+  h_a84d4ff76cadd1 207-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "11b380590ce5df8f7c243a6e7e868ecd59f8559f",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

@@ -1,0 +1,55 @@
+control-plane/Sources/App/IAM/IAMPolicyGate.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-34,36-79
+  s_32489a5bc16f1b::t_0e5e5a887a6dfb 35
+docs/architecture/iam.md
+  s_32489a5bc16f1b::t_5d98a8cbab082b 121-171,304-317,382-384
+control-plane/Tests/AppTests/IAMGuardrailTests.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-523
+control-plane/Sources/App/Controllers/GuardrailController.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-328
+control-plane/Sources/App/IAM/RoleRegistrySync.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 10-16,19-32,39-41,47,50-51,57,73-74,89-109
+control-plane/Sources/App/Migrations/CreateGuardrail.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-57
+control-plane/Sources/App/Models/Guardrail.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-150
+control-plane/Sources/App/Migrations/CreatePolicySetVersion.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-33
+control-plane/Sources/App/configure.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 429-433,464-471
+  s_32489a5bc16f1b::t_c4c612d77072d7 472
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 116-129
+control-plane/Tests/AppTests/GuardrailEndpointTests.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-243
+control-plane/Sources/App/IAM/GuardrailVocabulary.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-213
+control-plane/Sources/App/Models/PolicySetVersion.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-62
+control-plane/Sources/App/IAM/GuardrailStore.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-307
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 188,192,194-199
+control-plane/Sources/App/IAM/PolicySetVersionService.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-200
+control-plane/Sources/App/routes.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 14-15
+control-plane/Tests/AppTests/IAMPolicySetVersionTests.swift
+  s_32489a5bc16f1b::t_5d98a8cbab082b 1-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1327dc88e9dc946b7ffa5bde93c9db806e4e2026",
+  "prompts": {},
+  "sessions": {
+    "s_32489a5bc16f1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c39f58be-db1c-4959-a86f-f6419cb8470f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

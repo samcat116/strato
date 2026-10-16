@@ -1,0 +1,110 @@
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_256b817512560e::t_f477e0900d8783 234-235
+  s_256b817512560e::t_33b2dd6c23991b 192-195,203
+agent/Tests/StratoAgentTests/SandboxControlProtocolTests.swift
+  s_256b817512560e::t_a3a003d6f90065 117-181
+agent/Sources/StratoAgentCore/SandboxControlProtocol.swift
+  s_256b817512560e::t_3597ff6da731ae 263-265
+  s_256b817512560e::t_42579bc827def6 112-119
+  s_256b817512560e::t_c2ea53f519afe9 62-88
+  s_256b817512560e::t_33156a5be9d403 305-306
+  s_256b817512560e::t_08593255e53a8e 217-219
+  s_256b817512560e::t_486d61ebdbb2d4 152-172,175-187
+  s_256b817512560e::t_2731afcd146b32 235-238
+sandbox-guest/init/src/protocol.rs
+  s_256b817512560e::t_d3d52b581d2630 205-208
+  s_256b817512560e::t_592d5478d972ef 41-42
+  s_256b817512560e::t_e0311747eb710c 151-154
+  s_256b817512560e::t_c3d3ba8a7c442f 308-309
+  s_256b817512560e::t_017b4342d964be 275-300,303-307,310-331,336-337
+  s_256b817512560e::t_ffff2c7cd9c7f4 301-302,332-335
+  s_256b817512560e::t_efbf74229c9a3a 127-128,130,133
+  s_256b817512560e::t_df0a76db9dd264 113-126,129,131-132,134-138
+sandbox-guest/init/src/config.rs
+  s_256b817512560e::t_1c723c76ae7465 459-468
+  s_256b817512560e::t_befbc2cf3c7d90 205-207,209-229,232,234-237,239-275
+  s_256b817512560e::t_07d32cefe4037a 350
+  s_256b817512560e::t_eb374c32a12c80 47-53
+  s_256b817512560e::t_34a44fb7c4cb9e 458
+agent/Tests/StratoAgentTests/WarmSandboxSnapshotCacheTests.swift
+  s_256b817512560e::t_6ca8a5a08f970a 1-185
+sandbox-guest/init/src/linux/vsock.rs
+  s_256b817512560e::t_ffff2c7cd9c7f4 261-268,308-311
+  s_256b817512560e::t_e1cf54577737f6 54-57,62-64
+  s_256b817512560e::t_17ac56c3bcfa20 214,216,226-231,233,246,287-299,302-307,312-366
+  s_256b817512560e::t_223485d4f9de2e 300-301
+  s_256b817512560e::t_a15ffa25a0a977 159-164
+  s_256b817512560e::t_b36ba67f1c3d7e 247-249,255-260,269-277,280-286
+  s_256b817512560e::t_36269b41f31380 27,30,35
+agent/Tests/StratoAgentTests/SandboxConfigDriveTests.swift
+  s_256b817512560e::t_b3f7b8849c616b 176-178
+  s_256b817512560e::t_026a75296c1183 140-175,179-186
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_256b817512560e::t_701128bb6b46d2 377-378
+sandbox-guest/init/src/linux/reaper.rs
+  s_256b817512560e::t_09334e6969e4bd 157-164,177,181,185-190,197-198,207-210,214,218-219,225-228,230-232
+  s_256b817512560e::t_997a250213005e 102-116
+  s_256b817512560e::t_ffff2c7cd9c7f4 165-169
+  s_256b817512560e::t_f1974742e38d1c 22
+  s_256b817512560e::t_90d88de3e9c645 37-43
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_256b817512560e::t_1bb9a24de675b9 432,436,438-439,453,486,493-496,498-594
+  s_256b817512560e::t_96eb38a95e89a7 266-269,274-348,350-361,375,386,388
+  s_256b817512560e::t_afc46886fe8ea2 1014-1016
+  s_256b817512560e::t_72af66a93447f0 754,1219-1411
+  s_256b817512560e::t_e169eb7a7161d2 64-86
+  s_256b817512560e::t_6c67e77ca7bae4 604,625-656,658-664,672-753
+  s_256b817512560e::t_de5083143b349d 173-177,188-190,202-208,216
+  s_f5690667012577::t_8b5d45b1f8b644 755
+sandbox-guest/init/src/linux/exec.rs
+  s_256b817512560e::t_49405d2fa2bb9a 103-107,112-114
+agent/Sources/StratoAgent/Agent.swift
+  s_256b817512560e::t_9b639edabeac49 200-203
+  s_256b817512560e::t_7f9bd62634676d 268-269
+  s_256b817512560e::t_3064a166d0718a 570-572
+  s_256b817512560e::t_25c33f3715cc17 302-303
+sandbox-guest/init/src/linux/mod.rs
+  s_256b817512560e::t_646675d8c6ab54 53-68,77-81,86,90-92,95,98,102-113,118-125,127-144
+  s_256b817512560e::t_ffff2c7cd9c7f4 126
+agent/Sources/StratoAgentCore/SandboxConfigDrive.swift
+  s_256b817512560e::t_80bef8893fb506 34-42,50-54,62-63,72
+  s_256b817512560e::t_339790f0fe6f3c 175
+agent/Sources/StratoAgentCore/WarmSandboxSnapshotCache.swift
+  s_256b817512560e::t_1c87f726c6bfa3 2
+  s_256b817512560e::t_f3e3d7593bb3e7 199,202,204
+  s_256b817512560e::t_061052508151cf 1,3-198,200-201,203,205-206
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_256b817512560e::t_e5decff654ec18 373-374
+  s_256b817512560e::t_e7e75e0fe43640 338-339
+  s_256b817512560e::t_bbe7b6990cc1bc 391-395
+  s_256b817512560e::t_5cbe38b1989509 301-302
+  s_256b817512560e::t_6f1eff9bef75c5 256-262
+config.toml.example
+  s_256b817512560e::t_97eaca9b7cdea7 150-162
+docs/architecture/sandboxes.md
+  s_256b817512560e::t_7def804e401789 515-570,573-581,584-585
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "c06ee3f9227041e353dc3a103a553a8b28aa867b",
+  "prompts": {},
+  "sessions": {
+    "s_256b817512560e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cc585-7b1b-4f68-b28b-4af0753f6ba2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_f5690667012577": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "196fc78d-0876-4cb2-85a0-136f7470eb66",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

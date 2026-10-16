@@ -1,0 +1,19 @@
+.github/workflows/release.yaml
+  s_6f74095c1c77ed::t_8aad7a1bbfddb7 159-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "880088417412b6858af6532f82d96beb2ea74c70",
+  "prompts": {},
+  "sessions": {
+    "s_6f74095c1c77ed": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a578-9b41-7e83-950a-0ccd963fca8a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

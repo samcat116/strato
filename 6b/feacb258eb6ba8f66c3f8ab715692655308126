@@ -1,0 +1,34 @@
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_c6cbfb839458a0::t_7f148174e32e7a 116-118,190-197,263-264,576-581,679-681,683-687
+  s_c6cbfb839458a0::t_d97bb123814bef 265,304-305,693
+agent/Sources/StratoAgentCore/MetadataSnapshotStore.swift
+  s_c6cbfb839458a0::t_f02b69671d0e4d 99
+  s_c6cbfb839458a0::t_7f148174e32e7a 78-79,81-86
+agent/Sources/StratoAgentCore/DurableFileWriter.swift
+  s_c6cbfb839458a0::t_151f420ecddfbe 148,210,214
+  s_c6cbfb839458a0::t_dbec20a8b8f40c 1-147,149-209,211-213,215-268
+agent/Tests/StratoAgentTests/DurableFileWriterTests.swift
+  s_c6cbfb839458a0::t_c69320e40ae9f5 140-144
+  s_c6cbfb839458a0::t_ed3cb13f1a8010 1-139,145-147
+agent/Sources/StratoAgentCore/SnapshotRecordStore.swift
+  s_c6cbfb839458a0::t_7f148174e32e7a 153-156
+  s_c6cbfb839458a0::t_d97bb123814bef 168
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_c6cbfb839458a0::t_d97bb123814bef 458-462
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6bfeacb258eb6ba8f66c3f8ab715692655308126",
+  "prompts": {},
+  "sessions": {
+    "s_c6cbfb839458a0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffdbf-e30c-7bd1-87e7-1ece7d3a89cd",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

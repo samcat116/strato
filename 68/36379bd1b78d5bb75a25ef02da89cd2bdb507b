@@ -1,0 +1,20 @@
+control-plane/web/src/lib/cloud-images.ts
+  s_066b55920da146::t_d9af125b833d6e 207-214,223,225,233,235
+  s_066b55920da146::t_7a35dc2b1b4af8 7-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6836379bd1b78d5bb75a25ef02da89cd2bdb507b",
+  "prompts": {},
+  "sessions": {
+    "s_066b55920da146": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "66d217b0-a1eb-472b-bddf-6de6ee91db37",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

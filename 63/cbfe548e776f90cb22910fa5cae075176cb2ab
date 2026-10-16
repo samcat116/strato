@@ -1,0 +1,16 @@
+control-plane/Sources/App/Controllers/VMController.swift
+  h_a84d4ff76cadd1 653,684-685,795,888-897
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  h_a84d4ff76cadd1 131-132,193-197,224-256,258,260-262,264,268-316
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "63cbfe548e776f90cb22910fa5cae075176cb2ab",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

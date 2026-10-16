@@ -1,0 +1,21 @@
+agent/Sources/StratoAgent/Agent.swift
+  s_2380b6feb5f57e::t_8670675137b6cd 570,576-588,593-606
+  s_2380b6feb5f57e::t_b12155b89cee42 91-95
+  s_2380b6feb5f57e::t_e6a3ac1f368e0f 198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "babd0b7dbdf5088e4bb3e1d80b0a6d5ba79c2dcb",
+  "prompts": {},
+  "sessions": {
+    "s_2380b6feb5f57e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8ff1cb4-c797-4227-a659-a38402502833",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

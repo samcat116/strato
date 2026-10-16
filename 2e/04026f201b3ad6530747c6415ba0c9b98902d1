@@ -1,0 +1,37 @@
+control-plane/Tests/AppTests/VMSpecBuilderTests.swift
+  s_162d14514af173::t_683ddae2457c72 111,113,116,127,130,138,141,148,151,158,161,168-170,178,186-189,191,194,196,199,201,209,219,222,235,238,249,252,259,262,271,279,290,294,334,338,346,349,356,371,384,387,429,438-439,443,458,461
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_162d14514af173::t_d53b5d96180dfb 262
+  s_162d14514af173::t_9707733af1e13e 105
+  s_162d14514af173::t_8cdc487be3dcfd 143-150,152-168,170-183
+  s_162d14514af173::t_c6d0a2051d9f40 90
+  s_162d14514af173::t_a2896f423fb50b 5
+control-plane/Sources/App/Controllers/VMController.swift
+  s_162d14514af173::t_2f3d97ce410cf0 465-477,479-512
+  s_162d14514af173::t_2b1ee6a6c301c7 546-547
+  s_162d14514af173::t_15e094d001f57b 641
+  s_162d14514af173::t_5f121024630e05 328
+  s_162d14514af173::t_1956a55ee45562 347-349,352-357,359-362,364-370,372-373,376
+  s_162d14514af173::t_3fda159fcb0e78 584
+  s_162d14514af173::t_0d8ee78950d480 377
+control-plane/Sources/App/configure.swift
+  s_162d14514af173::t_7645dd517fe7a5 298-300
+control-plane/Sources/App/Migrations/VMTemplateMigration.swift
+  s_162d14514af173::t_a5c4bfeda03f65 2-14,16-17,21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2e04026f201b3ad6530747c6415ba0c9b98902d1",
+  "prompts": {},
+  "sessions": {
+    "s_162d14514af173": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d057987-40e4-47b6-afc4-07e363895496",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}

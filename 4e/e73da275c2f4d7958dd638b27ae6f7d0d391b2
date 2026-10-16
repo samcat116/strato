@@ -1,0 +1,38 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_c9833d46e3d894::t_2c291727ad4cf6 1068-1083
+  s_c9833d46e3d894::t_a152caff4de77b 225-235
+  s_c9833d46e3d894::t_a88ace1144eeab 216-220,222-224,236-241
+control-plane/Tests/AppTests/SiteTests.swift
+  s_c9833d46e3d894::t_e303870d2caa8a 58-59,71
+  s_c9833d46e3d894::t_0c44d226eecf3c 368-389
+  s_c9833d46e3d894::t_38bdcda260c253 184-213
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_c9833d46e3d894::t_e347ce95e66fc5 200-209
+control-plane/Sources/App/Models/Agent.swift
+  s_c9833d46e3d894::t_c9aa57c67fd589 71-78
+shared/Sources/StratoShared/WireProtocol.swift
+  s_c9833d46e3d894::t_0f6272de8327b7 62-72
+  s_c9833d46e3d894::t_4677cdda98432b 96-108
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_c9833d46e3d894::t_4f797fe6c10de6 135-151,153
+control-plane/Sources/App/configure.swift
+  s_c9833d46e3d894::t_3b3f7c744b078d 285
+control-plane/Sources/App/Migrations/AddWireProtocolVersionToAgent.swift
+  s_c9833d46e3d894::t_fbb691774f8f9d 1-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4ee73da275c2f4d7958dd638b27ae6f7d0d391b2",
+  "prompts": {},
+  "sessions": {
+    "s_c9833d46e3d894": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "faf56adc-acd3-4b91-bf82-59493e689cbb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
