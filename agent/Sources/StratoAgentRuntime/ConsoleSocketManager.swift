@@ -12,7 +12,7 @@ import StratoShared
 actor ConsoleSocketManager {
     private let logger: Logger
     private let eventLoopGroup: EventLoopGroup
-    private let receiveAllocator: any RecvByteBufferAllocator
+    private let initializeChannel: @Sendable (Channel) -> EventLoopFuture<Void>
 
     /// Active console connections keyed by sessionId
     private var connections: [String: ConsoleConnection] = [:]
@@ -47,11 +47,13 @@ actor ConsoleSocketManager {
 
     init(
         logger: Logger, eventLoopGroup: EventLoopGroup,
-        receiveAllocator: any RecvByteBufferAllocator = AdaptiveRecvByteBufferAllocator()
+        initializeChannel: @escaping @Sendable (Channel) -> EventLoopFuture<Void> = {
+            $0.eventLoop.makeSucceededFuture(())
+        }
     ) {
         self.logger = logger
         self.eventLoopGroup = eventLoopGroup
-        self.receiveAllocator = receiveAllocator
+        self.initializeChannel = initializeChannel
     }
 
     /// Sets the callback for console data output
@@ -101,8 +103,8 @@ actor ConsoleSocketManager {
         )
 
         // Connect to Unix socket
+        let initializeChannel = self.initializeChannel
         let bootstrap = ClientBootstrap(group: eventLoopGroup)
-            .channelOption(ChannelOptions.recvAllocator, value: receiveAllocator)
             // Serial devices can produce one-byte reads. Eager reading can fill
             // the relay's chunk budget with only a few KiB while its sink is
             // waiting on the control plane. Request the next read only after
@@ -110,7 +112,7 @@ actor ConsoleSocketManager {
             .channelOption(ChannelOptions.autoRead, value: false)
             .channelOption(ChannelOptions.maxMessagesPerRead, value: 1)
             .channelInitializer { channel in
-                channel.pipeline.addHandler(handler)
+                initializeChannel(channel).flatMap { channel.pipeline.addHandler(handler) }
             }
 
         do {

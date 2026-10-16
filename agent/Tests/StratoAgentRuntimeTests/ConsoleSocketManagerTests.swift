@@ -10,6 +10,41 @@ import Testing
 
 @Suite("Console socket flow control")
 struct ConsoleSocketManagerTests {
+    private final class ReadRequests: ChannelDuplexHandler, Sendable {
+        typealias InboundIn = ByteBuffer
+        typealias OutboundIn = ByteBuffer
+
+        private struct State {
+            var count = 0
+            var firstCycleScheduled = false
+        }
+        private let state = Mutex(State())
+        let firstCycle = AsyncStream<Int>.makeStream()
+
+        func read(context: ChannelHandlerContext) {
+            state.withLock { $0.count += 1 }
+            context.read()
+        }
+
+        func channelReadComplete(context: ChannelHandlerContext) {
+            context.fireChannelReadComplete()
+            let schedule = state.withLock { state in
+                guard !state.firstCycleScheduled else { return false }
+                state.firstCycleScheduled = true
+                return true
+            }
+            if schedule {
+                // NIO issues its automatic next read after this callback returns.
+                // Observe demand on the same loop after that first read cycle,
+                // independently of when the peer's later writes become readable.
+                context.eventLoop.execute {
+                    self.firstCycle.continuation.yield(self.state.withLock { $0.count })
+                    self.firstCycle.continuation.finish()
+                }
+            }
+        }
+    }
+
     private final class ReadSizes: Sendable {
         let values = Mutex<[Int]>([])
     }
@@ -38,6 +73,7 @@ struct ConsoleSocketManagerTests {
 
     @Test(
         "a slow relay survives small reads and preserves input, output, and EOF",
+        .timeLimit(.minutes(1)),
         arguments: [ConsoleStream.serial, .vnc])
     func slowRelaySurvivesSerialBurst(stream: ConsoleStream) async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
@@ -52,9 +88,14 @@ struct ConsoleSocketManagerTests {
             .bind(unixDomainSocketPath: path).get()
         let loop = group.next()
         let readSizes = ReadSizes()
+        let readRequests = ReadRequests()
         let manager = ConsoleSocketManager(
             logger: Logger(label: "console-test"), eventLoopGroup: loop,
-            receiveAllocator: OneByteReads(sizes: readSizes))
+            initializeChannel: { channel in
+                channel.setOption(ChannelOptions.recvAllocator, value: OneByteReads(sizes: readSizes)).flatMap {
+                    channel.pipeline.addHandler(readRequests)
+                }
+            })
         let entered = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let received = Mutex(Data())
@@ -78,9 +119,10 @@ struct ConsoleSocketManagerTests {
         do {
             try await peer.writeAndFlush(ByteBuffer(bytes: output.prefix(1))).get()
             for await _ in entered.stream {}
+            var readCycle = readRequests.firstCycle.stream.makeAsyncIterator()
+            let demandWhileHeld = try #require(await readCycle.next())
+            #expect(demandWhileHeld == 1)
             try await peer.writeAndFlush(ByteBuffer(bytes: output.dropFirst())).get()
-            let readsWhileHeld = try await loop.submit { readSizes.values.withLock { $0.count } }.get()
-            #expect(readsWhileHeld == 1)
             #expect(!closed.withLock { $0 })
             release.continuation.finish()
             for _ in 0..<500 where received.withLock({ $0.count }) < output.count {
