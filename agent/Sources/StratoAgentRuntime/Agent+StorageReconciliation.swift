@@ -34,7 +34,7 @@ extension Agent {
         case .throttle:
             try await volumeReconcileThrottle(item)
         case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
-            .reconfigureNetworks:
+            .reconfigureNetworks, .convergeGuestConfig:
             // A volume has no run state, nowhere to be exported to, and no
             // edges to apply; the planner never emits these.
             throw ConvergenceError.unsupported("step \(step) is not applicable to a volume")
@@ -53,7 +53,7 @@ extension Agent {
             try await snapshotReconcileExport(item)
         case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .throttle,
             .reboot, .restore,
-            .reconfigureNetworks:
+            .reconfigureNetworks, .convergeGuestConfig:
             // An artifact is frozen bytes: it has no run state, no size that
             // can change, nothing to plug in, and no edges of its own — a
             // restore acts on the artifact's *parent*. The planner never emits
@@ -1313,6 +1313,7 @@ extension Agent {
     }
 
     func reconcileDelete(_ item: ReconcileWorkItem) async throws {
+        guestConfigObservationCache.removeValue(forKey: item.id)
         // Orphan with no live session: try to re-adopt first so the surviving
         // hypervisor process is actually torn down instead of leaking. If the
         // session cannot be reattached, fall back to releasing the manifest

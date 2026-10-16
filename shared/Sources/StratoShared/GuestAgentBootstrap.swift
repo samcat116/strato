@@ -3,7 +3,9 @@ import Foundation
 /// First-boot installation only. Updating this pin affects new VMs, never software
 /// already installed in a tenant's OS. The release manifest selects the native arch.
 public enum GuestAgentBootstrap {
-    public static let defaultRelease = "v0.1.2"
+    // Publish this release from the STR-91 implementation before deploying wire v70.
+    public static let defaultRelease = "v0.1.3"
+    public static let guestConfigCapability = "guest_config_convergence"
 
     public static func installScript(release: String = defaultRelease) -> String {
         // The selector is platform-authored, but refuse shell metacharacters even
@@ -53,6 +55,9 @@ public enum GuestAgentBootstrap {
                     raise ValueError('Unsupported guest-agent manifest schema')
                 if release != 'latest' and manifest.get('version') != release:
                     raise ValueError('Guest-agent manifest does not match selected release')
+                capabilities = manifest.get('capabilities')
+                if not isinstance(capabilities, list) or '\(guestConfigCapability)' not in capabilities:
+                    raise ValueError('Guest-agent release does not support guest configuration convergence')
                 assets = [a for a in manifest['assets'] if a['arch'] == arch]
                 if len(assets) != 1:
                     raise ValueError('Manifest must contain exactly one native guest-agent artifact')

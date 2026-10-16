@@ -156,7 +156,7 @@ extension Agent {
         case .restore:
             try await sandboxReconcileRestore(item)
         case .pause, .resume, .resize, .reboot, .attach, .detach, .throttle, .export,
-            .reconfigureNetworks:
+            .reconfigureNetworks, .convergeGuestConfig:
             // Not in the sandbox step vocabulary (v1); the planner never
             // emits these for sandbox items. `.reboot` in particular is a VM
             // edge only: `POST /api/sandboxes/:id/restart` is expressed as a
@@ -621,6 +621,9 @@ extension Agent {
                     guestInfo: guestInfoCache[vmId],
                     guestAgentObservation: status == .running && entry.spec.guestAgentEnabled
                         ? guestAgentObservationCache[vmId] : nil,
+                    guestConfigObservation: guestConfigObservation(
+                        for: vmId, status: status, observedGeneration: facts.observedGeneration,
+                        failedGeneration: facts.failedGeneration),
                     memoryStats: memoryStatsCache[vmId],
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(

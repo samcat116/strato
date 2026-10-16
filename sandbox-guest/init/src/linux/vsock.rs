@@ -355,6 +355,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
                 } else {
                     CONTROL_PROTOCOL_VERSION
                 },
+                capabilities: vec![],
             }
         }
     }

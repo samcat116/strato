@@ -29,6 +29,7 @@ public actor HostVsockConnection: GuestLineConnection {
         port: UInt32,
         timeout: TimeInterval = 10,
         retryInterval: TimeInterval = 0.1,
+        maximumLineLength: Int = GuestControlProtocol.Limits.maxLineBytes,
         logger: Logger = Logger(label: "StratoAgent.HostVsock")
     ) async throws -> any GuestLineConnection {
         let deadline = ContinuousClock.now + .seconds(timeout)
@@ -43,7 +44,7 @@ public actor HostVsockConnection: GuestLineConnection {
                     .channelInitializer { channel in
                         do {
                             try channel.pipeline.syncOperations.addHandlers([
-                                ByteToMessageHandler(HostVsockLineFrameDecoder()),
+                                ByteToMessageHandler(HostVsockLineFrameDecoder(maximumLineLength: maximumLineLength)),
                                 bridge,
                             ])
                             return channel.eventLoop.makeSucceededVoidFuture()
@@ -117,18 +118,27 @@ public enum HostVsockConnectionError: Error, LocalizedError, Sendable {
     }
 }
 
-private struct HostVsockLineFrameDecoder: ByteToMessageDecoder {
+struct HostVsockLineFrameDecoder: ByteToMessageDecoder {
     typealias InboundOut = ByteBuffer
-    private let maximumLineLength = GuestControlProtocol.Limits.maxLineBytes
+    let maximumLineLength: Int
+
+    init(maximumLineLength: Int = GuestControlProtocol.Limits.maxLineBytes) {
+        self.maximumLineLength = maximumLineLength
+    }
+
+    func validate(length: Int) throws {
+        guard length <= maximumLineLength else {
+            throw HostVsockConnectionError.lineTooLong(maximumLineLength)
+        }
+    }
 
     func decode(context: ChannelHandlerContext, buffer: inout ByteBuffer) throws -> DecodingState {
         guard let newlineIndex = buffer.readableBytesView.firstIndex(of: 0x0A) else {
-            if buffer.readableBytes > maximumLineLength {
-                throw HostVsockConnectionError.lineTooLong(maximumLineLength)
-            }
+            try validate(length: buffer.readableBytes)
             return .needMoreData
         }
         let length = newlineIndex - buffer.readableBytesView.startIndex
+        try validate(length: length)
         let line = buffer.readSlice(length: length)!
         buffer.moveReaderIndex(forwardBy: 1)
         context.fireChannelRead(wrapInboundOut(line))

@@ -218,6 +218,8 @@ public enum ReconcileStep: Equatable, Sendable {
     /// (STR-202), or replace a Firecracker VMM whose immutable MMDS interface
     /// allow-list changed (STR-67). Creation realizes either initial set.
     case reconfigureNetworks
+    /// STR-91: guest diff/apply/read-back in the same per-VM serial lane.
+    case convergeGuestConfig
     case shutdown
     /// Gracefully stop (best effort) and remove the workload from this host.
     case delete
@@ -677,14 +679,17 @@ public protocol ReconcileActuator: Sendable {
     func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) async
     /// Execute one non-adopt step; `item.kind` selects the runtime.
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
-    /// Called after every work item finishes (success or failure) so the agent
-    /// can push a fresh `ObservedStateReport` to the control plane.
+    /// Retire guest facts when generation-guarded intent withdraws management.
+    func retireGuestConfigObservation(_ item: ReconcileWorkItem) async
     func resourceEnforcementWillConverge(_ item: ReconcileWorkItem) async
     func resourceEnforcementDidConverge(_ item: ReconcileWorkItem) async
+    /// Called after every work item finishes (success or failure) so the agent
+    /// can push a fresh `ObservedStateReport` to the control plane.
     func convergenceDidChange() async
 }
 
 extension ReconcileActuator {
+    public func retireGuestConfigObservation(_: ReconcileWorkItem) async {}
     public func resourceEnforcementWillConverge(_: ReconcileWorkItem) async {}
     public func resourceEnforcementDidConverge(_: ReconcileWorkItem) async {}
     public func prepareManagedVolumeInventory(

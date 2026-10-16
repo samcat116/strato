@@ -5,7 +5,7 @@ mod vsock;
 
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use strato_sandbox_init::protocol::MAX_IDENTITY_BYTES;
 
@@ -71,7 +71,13 @@ pub fn run() -> ExitCode {
         "[strato-guest-agent] starting for machine {} (boot {})",
         identity.guest_id, identity.nonce
     );
-    match vsock::serve(identity) {
+    let convergence = Arc::new(Mutex::new(
+        strato_sandbox_init::convergence::Converger::new(
+            std::path::PathBuf::from("/var/lib/strato-guest-agent/convergence.json"),
+            std::time::Duration::from_secs(180),
+        ),
+    ));
+    match vsock::serve(identity, convergence) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("[strato-guest-agent] {e}");

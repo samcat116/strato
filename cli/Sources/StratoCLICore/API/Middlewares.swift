@@ -16,6 +16,7 @@ struct IdempotencyKeyMiddleware: ClientMiddleware {
         "updateVM",
         "deleteVM",
         "startVM",
+        "retryVMPlacement",
         "attachVMNetworkInterface",
         "detachVMNetworkInterface",
         "retryVMNetworkInterfaceMutation",

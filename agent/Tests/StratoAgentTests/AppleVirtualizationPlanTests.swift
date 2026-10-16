@@ -157,6 +157,32 @@ struct AppleVirtualizationPlanTests {
         #expect(replay.items.isEmpty)
     }
 
+    @Test("A mixed fleet retains Apple cold reboot and same-generation QEMU guest convergence")
+    func mixedFleetGuestConvergence() throws {
+        let appleID = UUID()
+        let qemuID = UUID()
+        let apple = DesiredVMState(
+            vmId: appleID, hypervisorType: .appleVirtualization,
+            spec: VMSpec(cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil)),
+            desiredStatus: .running, generation: 2, rebootGeneration: 2)
+        let qemu = DesiredVMState(
+            vmId: qemuID, hypervisorType: .qemu,
+            spec: VMSpec(cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil), guestAgentEnabled: true),
+            desiredStatus: .running, generation: 2,
+            guestConfig: GuestConfig(packages: [GuestPackage(name: "curl", state: .present)]))
+        let plan = Reconciler.plan(
+            desired: [apple, qemu],
+            present: [appleID.uuidString: .managed(.running), qemuID.uuidString: .managed(.running)],
+            lastApplied: [appleID.uuidString: 1, qemuID.uuidString: 2],
+            appliedEdges: [appleID.uuidString: AppliedEdgeNonces(reboot: 1), qemuID.uuidString: AppliedEdgeNonces()])
+        let reboot = try #require(plan.items.first { $0.id == appleID.uuidString })
+        #expect(reboot.steps == [.shutdown, .boot])
+        #expect(reboot.appliedEdges == AppliedEdgeNonces(reboot: 2))
+        let convergence = try #require(plan.items.first { $0.id == qemuID.uuidString })
+        #expect(convergence.steps == [.convergeGuestConfig])
+        #expect(convergence.generation == 2)
+    }
+
     @Test("Duplicate disk sources cannot be attached twice")
     func duplicateDisks() {
         #expect(throws: HypervisorServiceError.self) {
