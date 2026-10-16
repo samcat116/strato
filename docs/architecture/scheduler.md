@@ -74,6 +74,10 @@ and records one create-attempt event. Concurrent unkeyed retries are refused
 after that advance; `Idempotency-Key` replays return the original acceptance.
 The caller follows the new generation's `conditions`, then starts the VM if
 its preserved desired power state is shutdown.
+The same acceptance transaction locks the existing boot volume, advances its
+generation and renews its create deadline. An expired original budget or
+terminal boot-volume failure cannot immediately fail the new attempt, and a
+sweep that selected the old generation cannot settle the renewed one.
 
 VM placement attempts use a per-VM `vm_placement` advisory session lock across
 planning, reservation and commit or rollback. This keeps a losing or stale

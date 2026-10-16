@@ -24,6 +24,7 @@ struct VMPlacementRetryTests {
         vm.setStatus(.error)
         try await vm.save(on: app.db)
         let boot = try await attachBootVolume(to: vm, on: nil, using: app.db)
+        boot.$sourceImage.id = vm.$sourceImage.id
         boot.observedGeneration = 0
         try await boot.save(on: app.db)
         let network = try await builder.createNetwork(name: "retry-net", project: fixture.project)
@@ -237,6 +238,58 @@ struct VMPlacementRetryTests {
             #expect(try await VMNetworkInterface.find(nic.id, on: app.db) != nil)
             #expect(try await Volume.query(on: app.db).count() == 1)
             #expect(try await ResourceEvent.query(on: app.db).filter(\.$resourceID == id).count() == 2)
+        }
+    }
+
+    @Test("Retry renews the existing boot volume's generation and budget", arguments: [false, true])
+    func bootVolumeBudgetIsRenewed(previouslyFailed: Bool) async throws {
+        try await withProjectApp(prefix: "bootbudgetretry") { app, builder, fixture in
+            app.logger.logLevel = .warning
+            let (vm, boot, _) = try await failedVM(app, builder, fixture)
+            let host = try await agent(app, builder)
+            let id = try vm.requireID()
+            let instant = try await ClusterClock.read(on: app.db)
+            if previouslyFailed {
+                boot.status = .error
+                boot.failedGeneration = boot.generation
+                boot.lastError = "Original boot volume deadline expired"
+                boot.convergenceDeadline = nil
+            } else {
+                boot.convergenceDeadline = instant.date.addingTimeInterval(1)
+            }
+            try await boot.save(on: app.db)
+            let stale = try #require(try await Volume.find(boot.id, on: app.db))
+            let key = UUID().uuidString
+            let response = try await retry(app, vmID: id, token: fixture.token, key: key)
+            #expect(response.0 == .accepted)
+            let _: String = try await pollUntil { try await VM.find(id, on: app.db)?.hypervisorId }
+            let renewed = try #require(try await Volume.find(boot.id, on: app.db))
+            let budget = OperationResourceKind.volume.completionBudgetSeconds(for: .create)
+            #expect(renewed.generation == stale.generation + 1)
+            #expect(renewed.failedGeneration != renewed.generation)
+            #expect(renewed.convergenceDeadline.map { $0 >= instant.date.addingTimeInterval(budget) } == true)
+            let desired = try await app.desiredStateAssembler.desiredVolumes(agentId: host, on: app.db)
+            let entry = try #require(desired.first { $0.volumeId == boot.id })
+            #expect(entry.generation == renewed.generation)
+            #expect(entry.desiredStatus == .present)
+            #expect(entry.source != nil)
+            let replay = try await retry(app, vmID: id, token: fixture.token, key: key)
+            #expect(replay.1?.mutationId == response.1?.mutationId)
+            let afterReplay = try #require(try await Volume.find(boot.id, on: app.db))
+            #expect(afterReplay.generation == renewed.generation)
+            #expect(afterReplay.convergenceDeadline == renewed.convergenceDeadline)
+            #expect(try await ResourceEvent.query(on: app.db).filter(\.$resourceID == id).count() == 1)
+            guard renewed.generation != stale.generation else { return }
+            // A sweep selected before the acceptance cannot fail the renewed
+            // boot attempt after acquiring its row lock.
+            let outcome = try await ResourceConvergence.recordExpiredDeadline(
+                stale, mutation: .create,
+                at: .testing(instant.date.addingTimeInterval(2)),
+                timeoutReason: "Stale original boot deadline", on: app.db)
+            #expect(outcome == .superseded(actualGeneration: renewed.generation))
+            let current = try #require(try await Volume.find(boot.id, on: app.db))
+            #expect(current.convergenceDeadline == renewed.convergenceDeadline)
+            #expect(current.failedGeneration == renewed.failedGeneration)
         }
     }
 

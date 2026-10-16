@@ -35,12 +35,26 @@ extension VMController {
             let boots = try await Volume.query(on: db)
                 .filter(\.$vm.$id == vmID).filter(\.$volumeType == .boot).all()
             guard boots.count == 1, let boot = boots.first,
+                try await boot.lockAndRefresh(on: db),
+                boot.$vm.id == vmID, boot.volumeType == .boot,
                 boot.desiredStatus == .present, boot.attachedAgentId == nil,
                 boot.reconcilerAgentId == nil,
                 try await VolumeReplica.query(on: db).filter(\.$volume.$id == boot.requireID()).count() == 0
             else {
                 throw Abort(.conflict, reason: "Placement retry requires one existing, unplaced boot volume")
             }
+            // The boot disk has its own generation and provisioning budget.
+            // Reusing the row must not reuse an expired deadline or the exact
+            // generation a previous terminal failure names. This transaction's
+            // VM create-attempt event covers the boot retry, as at initial create.
+            guard
+                case .applied = try await boot.advanceDesiredStateGeneration(
+                    expectedGeneration: boot.generation, on: db)
+            else { throw Abort(.conflict, reason: "Boot volume changed while retrying placement") }
+            boot.extendConvergenceDeadline(
+                by: OperationResourceKind.volume.completionBudgetSeconds(for: .create),
+                from: try await ClusterClock.read(on: db))
+            try await boot.save(on: db)
         }
         return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
