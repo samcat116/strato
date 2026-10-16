@@ -169,6 +169,10 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "metadata_enabled")
     var metadataEnabled: Bool
 
+    /// Native NAT has no link-local metadata transport, including for legacy
+    /// rows that predate backend-specific defaults.
+    var effectiveMetadataEnabled: Bool { hypervisorType != .appleVirtualization && metadataEnabled }
+
     /// Where this VM reads first-boot guest configuration (STR-64). The
     /// historical `.iso` shape carries the complete immutable NoCloud seed;
     /// `.imds` keeps only pre-network bootstrap on that ISO and fetches the
@@ -428,7 +432,7 @@ final class VM: Model, @unchecked Sendable {
         self.tpmEnabled = tpmEnabled
         self.guestAgentEnabled = guestAgentEnabled
         self.graphicsConsole = graphicsConsole
-        self.metadataEnabled = metadataEnabled
+        self.metadataEnabled = hypervisorType == .appleVirtualization ? false : metadataEnabled
         self.metadataSource = metadataSource
         self.metadataSeedToken = metadataSeedToken
         self.sshAuthorizedKeys = []
@@ -742,7 +746,8 @@ struct VMDetailResponse: Content {
     /// case it was added for. This is the VM's own switch: a VM on a network
     /// with `metadataEnabled` off still reports `true` here if nobody asked for
     /// it to be off, because that is what an operator set and what turning the
-    /// network's switch back on would restore.
+    /// network's switch back on would restore. Backends without a metadata
+    /// transport, including Apple NAT, always report false.
     let metadataEnabled: Bool
     /// Guest-bootstrap source selected when the VM was created (STR-64).
     let metadataSource: MetadataSource
@@ -849,7 +854,7 @@ struct VMDetailResponse: Content {
         self.tpmEnabled = vm.tpmEnabled
         self.guestAgentEnabled = vm.guestAgentEnabled
         self.graphicsConsole = vm.graphicsConsole
-        self.metadataEnabled = vm.metadataEnabled
+        self.metadataEnabled = vm.effectiveMetadataEnabled
         self.metadataSource = vm.metadataSource
         self.tags = vm.tags
         self.sshAuthorizedKeys = vm.effectiveSSHAuthorizedKeys

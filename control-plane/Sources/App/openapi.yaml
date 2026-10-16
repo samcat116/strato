@@ -10405,8 +10405,9 @@ components:
             belongs to at least one group.
         metadataEnabled:
           type: boolean
-          default: true
           description: >-
+            Defaults to true on QEMU/Firecracker and false on Apple Virtualization.
+            Apple NAT has no metadata transport and rejects an explicit true.
             Whether the instance metadata service answers this VM. Turning it
             off denies the guest `169.254.169.254` and `[fd00:ec2::254]`
             outright — the listener refuses it and an OVN ACL drops its packets
@@ -10480,6 +10481,7 @@ components:
         metadataEnabled:
           type: boolean
           description: >-
+            Apple Virtualization always disables this service and rejects true.
             Whether the instance metadata service answers this VM. Editable on a
             running VM and applied without a restart. Switching it *off* is
             refused with `409` when the VM sits on an agent too old to honour
@@ -10621,7 +10623,8 @@ components:
             Whether the instance metadata service answers this VM. This is the
             VM's own switch, not the effective answer: a VM on a network with
             metadata turned off still reports `true` here unless someone turned
-            it off for this VM.
+            it off for this VM. Apple Virtualization always reports false because
+            its NAT backend has no metadata transport.
         metadataSource:
           allOf:
             - $ref: "#/components/schemas/MetadataSource"

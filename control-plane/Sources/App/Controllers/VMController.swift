@@ -1027,6 +1027,13 @@ struct VMController: RouteCollection {
         guard let committed = try await VM.find(vmID, on: db) else {
             throw Abort(.notFound, reason: "VM no longer exists")
         }
+        if committed.hypervisorType == .appleVirtualization {
+            guard requested != true else {
+                throw Abort(.badRequest, reason: "Apple Virtualization NAT has no instance metadata service")
+            }
+            vm.metadataEnabled = false
+            return committed.metadataEnabled
+        }
         guard let requested else {
             vm.metadataEnabled = committed.metadataEnabled
             return false

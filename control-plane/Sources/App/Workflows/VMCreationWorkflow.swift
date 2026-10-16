@@ -200,6 +200,12 @@ enum VMCreationWorkflow {
 
         let usesManagedNetworking = chosenHypervisor != .appleVirtualization
         if chosenHypervisor == .appleVirtualization {
+            guard createRequest.metadataEnabled != true else {
+                throw Abort(.badRequest, reason: "Apple Virtualization NAT has no instance metadata service")
+            }
+            guard createRequest.metadataSource != .imds else {
+                throw Abort(.badRequest, reason: "IMDS is not supported for apple_virtualization VMs; use ISO")
+            }
             guard !requestedInterfaces.contains(where: { $0.securityGroupIds?.isEmpty == false }) else {
                 throw Abort(.badRequest, reason: "Apple Virtualization NAT cannot enforce security groups")
             }
@@ -299,7 +305,7 @@ enum VMCreationWorkflow {
             }
         }
 
-        let metadataEnabled = createRequest.metadataEnabled ?? true
+        let metadataEnabled = chosenHypervisor == .appleVirtualization ? false : createRequest.metadataEnabled ?? true
         let metadataSource = VMController.resolvedMetadataSource(
             createRequest.metadataSource, for: chosenHypervisor,
             architecture: image.architecture)

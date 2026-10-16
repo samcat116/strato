@@ -6097,11 +6097,8 @@ export interface components {
             graphicsConsole: boolean;
             /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
             securityGroupIds?: string[];
-            /**
-             * @description Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that a VM using `metadataSource: imds` also needs this service to fetch its cloud-init configuration. Requires an agent new enough to honour it; placement is constrained to such agents.
-             * @default true
-             */
-            metadataEnabled: boolean;
+            /** @description Defaults to true on QEMU/Firecracker and false on Apple Virtualization. Apple NAT has no metadata transport and rejects an explicit true. Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that a VM using `metadataSource: imds` also needs this service to fetch its cloud-init configuration. Requires an agent new enough to honour it; placement is constrained to such agents. */
+            metadataEnabled?: boolean;
             /** @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. An IMDS-backed VM must enable its metadata service and select at least one network that has metadata enabled. When omitted, x86_64 QEMU VMs default to `imds`; ARM64 QEMU and Firecracker VMs default to `iso`. IMDS constrains placement to an OVN-capable agent that advertises a running metadata service. Fixed at VM creation. */
             metadataSource?: components["schemas"]["MetadataSource"];
         };
@@ -6127,7 +6124,7 @@ export interface components {
              * @description Target memory in bytes. On a running VM it must not exceed `maxMemory`.
              */
             memory?: number;
-            /** @description Whether the instance metadata service answers this VM. Editable on a running VM and applied without a restart. Switching it *off* is refused with `409` when the VM sits on an agent too old to honour it, rather than reported as applied while the guest keeps reading its metadata. */
+            /** @description Apple Virtualization always disables this service and rejects true. Whether the instance metadata service answers this VM. Editable on a running VM and applied without a restart. Switching it *off* is refused with `409` when the VM sits on an agent too old to honour it, rather than reported as applied while the guest keeps reading its metadata. */
             metadataEnabled?: boolean;
         };
         /** @description Mutable guest-visible metadata. Omitted properties are unchanged; `{}` clears all tags and `[]` clears all authorized keys. */
@@ -6190,7 +6187,7 @@ export interface components {
             guestAgentEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
-            /** @description Whether the instance metadata service answers this VM. This is the VM's own switch, not the effective answer: a VM on a network with metadata turned off still reports `true` here unless someone turned it off for this VM. */
+            /** @description Whether the instance metadata service answers this VM. This is the VM's own switch, not the effective answer: a VM on a network with metadata turned off still reports `true` here unless someone turned it off for this VM. Apple Virtualization always reports false because its NAT backend has no metadata transport. */
             metadataEnabled?: boolean;
             /** @description Where this VM reads its first-boot guest configuration. Fixed at creation; VMs created before STR-64 report `iso`. */
             metadataSource?: components["schemas"]["MetadataSource"];

@@ -125,6 +125,7 @@ final class VMNetworkSelectionTests {
             }
             let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "apple-native").first())
             #expect(vm.hypervisorType == .appleVirtualization)
+            #expect(vm.metadataEnabled == false)
             #expect(vm.metadataSource == .iso)
             let volume = try #require(try await Volume.query(on: app.db).filter(\.$vm.$id == vm.id!).first())
             #expect(volume.format == .raw)
@@ -144,9 +145,31 @@ final class VMNetworkSelectionTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { response in
                 let detail = try response.content.decode(VMDetailResponse.self)
+                #expect(detail.metadataEnabled == false)
                 #expect(detail.networkInterfaces.first?.addresses.isEmpty == true)
                 #expect(detail.networkInterfaces.first?.securityGroupIds?.isEmpty == true)
             }
+        }
+    }
+
+    @Test("Apple creation rejects an explicit unreachable metadata service")
+    func appleMetadataRejected() async throws {
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
+            let count = try await VM.query(on: app.db).count()
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "apple-metadata", imageId: image.id,
+                        projectId: project.id, environment: "development", cpu: 1, memory: self.gb(1),
+                        disk: self.gb(10),
+                        networkId: nil, networkName: "default", hypervisorType: "apple_virtualization",
+                        metadataEnabled: true))
+            } afterResponse: { response in
+                #expect(response.status == .badRequest)
+                #expect(response.body.string.contains("metadata service"))
+            }
+            #expect(try await VM.query(on: app.db).count() == count)
         }
     }
 

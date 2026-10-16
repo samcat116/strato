@@ -255,7 +255,7 @@ export function CreateVMDialog({
       tpm: isQEMU && tpm,
       guestAgentEnabled: isQEMU && guestAgentEnabled,
       graphicsConsole: isQEMU && graphicsConsole,
-      metadataEnabled,
+      metadataEnabled: !isAppleVirtualization && metadataEnabled,
       // Keep the selected source explicit so the request matches what the
       // form showed. Paths that cannot reach IMDS record `iso`.
       metadataSource: metadataSourceForcedToISO ? "iso" as const : metadataSource,
@@ -559,7 +559,7 @@ export function CreateVMDialog({
               isLoading={isLoading}
               isFirecracker={isFirecracker}
               isAppleVirtualization={isAppleVirtualization}
-              metadataEnabled={metadataEnabled}
+              metadataEnabled={!isAppleVirtualization && metadataEnabled}
               setMetadataEnabled={setMetadataEnabled}
               metadataSource={metadataSource}
               setMetadataSource={setMetadataSource}

@@ -250,7 +250,8 @@ a local boot storage pool, and `metadataSource: "iso"`. The boot volume is
 materialized as raw, including conversion from qcow2 source images. Leave
 QEMU-only machine, graphics, guest-agent and optimized block options disabled.
 Networking uses native NAT; OVN policies and inter-VM network guarantees are
-unavailable. There is currently no serial socket or inbound SSH forwarding.
+unavailable. Instance metadata is disabled for Apple VMs; an explicit request to
+enable it is rejected. The seed ISO still provides hostname, SSH keys, and user data. There is currently no serial socket or inbound SSH forwarding.
 
 VMs cold-boot after the owning agent restarts. Managed volumes and EFI state
 persist; RAM and device state do not. Checkpoints and sandbox execution remain

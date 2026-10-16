@@ -78,7 +78,12 @@ export function VMGuestOptionsFields({
             {isFirecracker ? "Firecracker MMDS" : "Seed ISO"}
           </option>
         </select>
-        {isFirecracker ? (
+        {isAppleVirtualization ? (
+          <p className="text-xs text-muted-foreground">
+            Apple Virtualization uses the seed ISO for hostname, SSH keys, and user data.
+            Link-local instance metadata is unavailable on native NAT.
+          </p>
+        ) : isFirecracker ? (
           <p className="text-xs text-muted-foreground">
             Firecracker has no seed disk. It serves EC2-compatible
             metadata from MMDS on metadata-enabled NICs; the selected
@@ -206,24 +211,30 @@ export function VMGuestOptionsFields({
           <input
             id="metadataEnabled"
             type="checkbox"
-            checked={metadataEnabled}
+            checked={!isAppleVirtualization && metadataEnabled}
             onChange={(e) => {
               const enabled = e.target.checked;
               setMetadataEnabled(enabled);
               if (!enabled) setMetadataSource("iso");
             }}
-            disabled={isLoading}
+            disabled={isLoading || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Serve instance metadata to this VM
         </label>
         <p className="text-xs text-muted-foreground">
+          {isAppleVirtualization ? (
+            "Instance metadata is unavailable for Apple NAT guests. The seed ISO still supplies guest bootstrap data."
+          ) : (
+            <>
           Turning it off denies this VM the service outright, even where
           its security groups would allow it — the lever for a workload
           you want an SSRF bug to find nothing behind.{" "}
           If the guest bootstrap source above is instance metadata,
           turning this off also prevents cloud-init from fetching its
           configuration. This switch can be changed later.
+            </>
+          )}
         </p>
       </div>
       
