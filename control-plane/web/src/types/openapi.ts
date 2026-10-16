@@ -217,7 +217,7 @@ export interface paths {
         put?: never;
         /**
          * Retry placement of a failed, unplaced virtual machine
-         * @description Requires vm:start. Retries a failed create only when the VM has no assigned host and exactly one existing boot volume with no physical placement. Reuses its NICs, addresses, identity and boot volume, and preserves its desired power state. A pending or already placed VM is refused with 409. Completion is reported through the new generation's conditions; a VM whose desired state is shutdown can then be started.
+         * @description Requires vm:start. Retries a failed create only when the VM has no assigned host and exactly one existing boot volume with no physical placement and no active convergence deadline. Metadata-only generation advances after failure do not prevent retry. Reuses its NICs, addresses, identity and boot volume, and preserves its desired power state. A pending or already placed VM is refused with 409. Completion is reported through the new generation's conditions; a VM whose desired state is shutdown can then be started.
          */
         post: operations["retryVMPlacement"];
         delete?: never;

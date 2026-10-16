@@ -125,7 +125,7 @@ struct VMPlacementRetryTests {
 
     @Test(
         "Retry refuses ambiguous or ineligible state without recording an attempt",
-        arguments: ["placed", "pending", "missing-boot", "replica", "terminating"])
+        arguments: ["placed", "pending", "outstanding", "missing-boot", "replica", "terminating"])
     func refusesUnsafeState(state: String) async throws {
         try await withProjectApp(prefix: "invalidretry") { app, builder, fixture in
             app.logger.logLevel = .warning
@@ -133,6 +133,9 @@ struct VMPlacementRetryTests {
             switch state {
             case "placed": vm.hypervisorId = UUID().uuidString
             case "pending": vm.failedGeneration = nil
+            case "outstanding":
+                vm.generation = 2
+                vm.convergenceDeadline = Date().addingTimeInterval(60)
             case "missing-boot": try await boot.delete(on: app.db)
             case "replica":
                 try await placeVolume(boot, on: UUID().uuidString, using: app.db)
@@ -158,6 +161,44 @@ struct VMPlacementRetryTests {
             #expect(response.0 == .forbidden)
             #expect(try await VM.find(vm.id, on: app.db)?.generation == 1)
             #expect(try await ResourceEvent.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("Metadata edits after a failed create preserve placement retry", arguments: [false, true])
+    func metadataEditPreservesRetry(sshKeys: Bool) async throws {
+        try await withProjectApp(prefix: "metadataretry") { app, builder, fixture in
+            app.logger.logLevel = .warning
+            let (vm, boot, nic) = try await failedVM(app, builder, fixture)
+            let host = try await agent(app, builder)
+            let id = try vm.requireID()
+            let publicKey =
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f retry@test"
+            try await app.test(.PATCH, "/api/vms/\(id)") { request in
+                request.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                try request.content.encode(
+                    PatchVMMetadataRequest(
+                        tags: sshKeys ? nil : ["purpose": "retry"], sshAuthorizedKeys: sshKeys ? [publicKey] : nil))
+            } afterResponse: { response in
+                #expect(response.status == .ok)
+            }
+            let edited = try #require(try await VM.find(id, on: app.db))
+            #expect(edited.generation == 2 && edited.failedGeneration == 1)
+            let response = try await retry(app, vmID: id, token: fixture.token)
+            #expect(response.0 == .accepted)
+            #expect(response.1?.targetGeneration == 3)
+            // A failed acceptance is already an adequate regression signal;
+            // don't add a polling timeout to the original guard's refusal.
+            guard response.0 == .accepted else { return }
+            let placed: String = try await pollUntil { try await VM.find(id, on: app.db)?.hypervisorId }
+            #expect(placed == host)
+            #expect(try await Volume.find(boot.id, on: app.db)?.$vm.id == id)
+            #expect(try await VMNetworkInterface.find(nic.id, on: app.db) != nil)
+            let recovered = try #require(try await VM.find(id, on: app.db))
+            if sshKeys {
+                #expect(recovered.effectiveSSHAuthorizedKeys == [publicKey])
+            } else {
+                #expect(recovered.tags == ["purpose": "retry"])
+            }
         }
     }
 

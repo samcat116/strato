@@ -8,20 +8,25 @@ extension VMController {
         let user = try req.requireActingUser("Retrying VM placement")
         let vmID = try req.requireUUIDParameter("vmID", reason: "Invalid VM ID")
         let vm = try await req.authorizedVM(vmID, action: "vm:start")
-        let failedGeneration = vm.generation
+        let generationAtRead = vm.generation
         let app = req.application
         let accepted = try await req.resourceMutation.accept(
             .create, on: vm, actor: .user(try user.requireID()),
             dispatch: .placement { db in
                 let image = try await vm.$sourceImage.get(on: db)
                 try await app.workloadPlacement.createVM(
-                    vm: vm, db: db, image: image, expectedGeneration: failedGeneration + 1)
+                    vm: vm, db: db, image: image, expectedGeneration: generationAtRead + 1)
             }, on: req.db, app: app
         ) { db in
             // accept holds and refreshes the VM row. This also rejects a
             // concurrent retry before it records another event or dispatches.
-            guard vm.generation == failedGeneration,
-                vm.status == .error, vm.failedGeneration == failedGeneration,
+            // Metadata edits can advance generation after a terminal failure.
+            // recordFailure clears the deadline; accept stamps a new one before
+            // releasing this row lock. Use that to distinguish a failed VM from
+            // an outstanding retry without erasing its historical failure.
+            guard vm.generation == generationAtRead,
+                vm.status == .error, let failedGeneration = vm.failedGeneration,
+                failedGeneration <= generationAtRead, vm.convergenceDeadline == nil,
                 vm.hypervisorId == nil, !vm.isTerminating,
                 vm.desiredStatus == .shutdown || vm.desiredStatus == .running
             else {

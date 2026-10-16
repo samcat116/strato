@@ -65,7 +65,9 @@ carrying it until the agent's reconciler converges.
 ### Retrying a failed initial placement
 
 `POST /api/vms/{id}/retry-placement` requires `vm:start` and accepts only a
-failed current generation with no assigned host and one unplaced boot volume.
+failed VM with no active convergence deadline, no assigned host and one
+unplaced boot volume. Metadata edits can advance the generation after failure
+without losing retry eligibility; a pending retry's deadline prevents overlap.
 It reuses the existing VM, NICs, IP allocations, identity and boot volume.
 The acceptance transaction locks and refreshes the VM, advances its generation
 and records one create-attempt event. Concurrent unkeyed retries are refused
