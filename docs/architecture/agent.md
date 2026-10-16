@@ -1669,7 +1669,10 @@ Southbound load-balancer health connects lazily on observation, with a separate
 failure. A Southbound startup failure does not permanently disable health.
 
 Console relays preserve order and allow at most 4 MiB or 1,024 chunks, including
-the write currently waiting on the client. Exceeding either budget closes that
+the write currently waiting on the client. Socket reads are demand-driven: one
+read is requested after the preceding chunk has reached the control-plane
+transport. This applies backpressure instead of filling the chunk budget with
+tiny serial reads during a short output burst. Exceeding either budget closes that
 console session; the client must reconnect. The relay never drops bytes and
 continues the same stream.
 
