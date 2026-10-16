@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 67). The required registration fields
+currently 70). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -62,12 +62,21 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v67 carries resource-class snapshots, fractional CPU capacity, and coherent
-enforcement observations. Wire v66 adds net host memory accounting and backend
-allowances; v65 adds optional host memory profile observations, swap counters/rates,
-compressed zram original bytes, and bounded memory warnings. GuestConfig remains
-staged, generation-guarded vocabulary. This build advertises no guest configuration
-realization; its consumer requires a subsequent coordinated exact wire version.
+Wire v70 realizes guest configuration for running, opted-in VMs before their
+VM generation is acknowledged and carries generation-scoped guest configuration
+observations (STR-91). A v69 agent cannot register with a v70 control plane and
+acknowledge guest intent without performing that work. The independent guest-control
+protocol remains v4. The [update-only bridge](#update-only-bridge) can repair supported
+workload-version skew before registration without exchanging workload state.
+
+Wire v69 adds ordered sandbox idle evidence and automatic-fence provenance; v68
+adds generation-bound sandbox suspension and storage admission. Wire v67 carries
+resource-class snapshots, fractional CPU capacity, and coherent enforcement
+observations. Wire v66 adds net host memory accounting and backend allowances;
+v65 adds optional host memory profile observations, swap counters/rates, compressed
+zram original bytes, and bounded memory warnings. GuestConfig was staged vocabulary
+in those earlier versions; v70 ships its realization consumer and observations
+together.
 
 Wire v63 requires first-boot installation of the selected Strato guest-agent
 release for opted-in VMs across ISO and IMDS delivery, and adds independent
