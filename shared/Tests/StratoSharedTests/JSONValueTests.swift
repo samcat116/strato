@@ -13,7 +13,7 @@ struct JSONValueTests {
         let decoded = try JSONDecoder().decode(JSONValue.self, from: input)
         #expect(decoded["known"]?.stringValue == "value")
         #expect(decoded["unknown"]?["nested"] == .bool(true))
-        #expect(decoded["items"]?.arrayValue?.first == .null)
+        #expect(decoded["items"]?.arrayValue == [.null, .int(1), .double(2.5), .string("three"), .bool(false)])
 
         let encoded = try JSONEncoder().encode(decoded)
         #expect(try JSONDecoder().decode(JSONValue.self, from: encoded) == decoded)

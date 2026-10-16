@@ -39,28 +39,8 @@ struct OperationWaiterTests {
     func testWaitsForSuccess() async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
-                .init(statusCode: 200, json: Self.json(status: "pending")),
-                .init(statusCode: 200, json: Self.json(status: "succeeded")),
-            ])
-            let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
-
-            let final = try await waiter.wait(
-                for: AcceptedMutation(id: Self.operationID),
-                client: try client(transport: transport, directory: directory))
-            #expect(final.succeeded)
-            #expect(transport.recordedRequests.count == 2)
-            #expect(transport.recordedRequests.first?.path == "/api/operations/\(Self.operationID)")
-        }
-    }
-
-    @Test("A successful volume operation decodes through the generated contract")
-    func testVolumeOperationDecodes() async throws {
-        try await withTemporaryDirectoryAsync { directory in
-            let transport = MockTransport(responses: [
-                .init(
-                    statusCode: 200,
-                    json: Self.json(
-                        status: "succeeded", resourceKind: "volume", kind: "create"))
+                .init(statusCode: 200, json: Self.json(status: "pending", resourceKind: "volume", kind: "create")),
+                .init(statusCode: 200, json: Self.json(status: "succeeded", resourceKind: "volume", kind: "create")),
             ])
             let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
 
@@ -70,6 +50,8 @@ struct OperationWaiterTests {
             #expect(final.succeeded)
             #expect(final.resourceKind == .volume)
             #expect(final.kind == .create)
+            #expect(transport.recordedRequests.count == 2)
+            #expect(transport.recordedRequests.first?.path == "/api/operations/\(Self.operationID)")
         }
     }
 

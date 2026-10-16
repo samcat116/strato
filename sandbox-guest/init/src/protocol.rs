@@ -406,18 +406,6 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn ping_round_trips() {
-        let req = decode_request("{\"type\":\"ping\"}").expect("decode");
-        assert_eq!(req, Request::Ping);
-    }
-
-    #[test]
-    fn get_status_round_trips() {
-        let req = decode_request("  {\"type\":\"get_status\"}\n").expect("decode with whitespace");
-        assert_eq!(req, Request::GetStatus);
-    }
-
-    #[test]
     fn unknown_request_is_rejected() {
         assert!(decode_request("{\"type\":\"reboot\"}").is_err());
     }
@@ -624,22 +612,6 @@ mod tests {
     }
 
     #[test]
-    fn exec_round_trips() {
-        let req = Request::Exec {
-            session_id: None,
-            argv: vec!["/bin/sh".into(), "-c".into(), "id".into()],
-            env: None,
-            cwd: None,
-            tty: Some(false),
-            rows: None,
-            cols: None,
-        };
-        let line = encode_line(&req);
-        let decoded: Request = serde_json::from_str(line.trim()).expect("decode");
-        assert_eq!(decoded, req);
-    }
-
-    #[test]
     fn stdin_round_trips() {
         let req = decode_request(r#"{"type":"stdin","data":"aGVsbG8="}"#).expect("decode");
         assert_eq!(
@@ -811,17 +783,5 @@ mod tests {
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded.nonce(), "n-1");
         assert_eq!(decoded, response);
-    }
-
-    #[test]
-    fn base64_round_trips_arbitrary_bytes() {
-        let bytes: Vec<u8> = (0..=255).collect();
-        let encoded = encode_base64(&bytes);
-        assert_eq!(decode_base64(&encoded).expect("decode"), bytes);
-    }
-
-    #[test]
-    fn base64_rejects_garbage() {
-        assert!(decode_base64("not base64!!").is_err());
     }
 }

@@ -109,7 +109,7 @@ compile. Give builds a generous timeout rather than assuming they hung.
 
 ### The IAM symbolic-analysis suites
 
-The write-time guardrail report and the role-nesting subsumption proof
+The write-time guardrail report and conditioned-policy implication checks
 (`docs/architecture/iam.md`) drive an SMT solver, and their suites skip
 themselves when there is none. The rest of the suite is unaffected — the test
 harness installs a permissive analyzer, so writing a binding in an unrelated

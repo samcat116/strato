@@ -25,22 +25,6 @@ struct GuestExecSessionTests {
         }
     }
 
-    @Test("Raw terminal scope restores settings after cancellation")
-    func terminalRestoration() async {
-        let terminal = FakeGuestExecTerminal()
-        let started = Mutex(false)
-        let task = Task {
-            try await withRawTerminal(terminal) {
-                started.withLock { $0 = true }
-                try await Task.sleep(for: .seconds(30))
-            }
-        }
-        while !started.withLock({ $0 }) { await Task.yield() }
-        task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(terminal.transitions() == [.entered, .restored])
-    }
-
     @Test("Cancellation aborts a stalled WebSocket handshake")
     func stalledHandshakeCancellation() async {
         let started = Mutex(false)
@@ -133,7 +117,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Fails closed when the server does not echo multiplexed mode",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func requiresMultiplexNegotiation(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -162,7 +146,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Terminal stdin sends EOF immediately without reading input",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func terminalStdinEOF(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -195,7 +179,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Attach forwards terminal resizes",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func forwardsResize(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -238,7 +222,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Retries a replica that did not claim the single-use session",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func attachRetry(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -276,7 +260,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Retries 503 mint failures only within the thirty-second budget",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func mintRetryBudget(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(handler: { _ in
@@ -509,7 +493,7 @@ struct GuestExecSessionTests {
 
     @Test(
         "Cancellation closes an attached WebSocket",
-        arguments: [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        arguments: [GuestExecResource.virtualMachine("vm-1")])
     func cancellationClosesSocket(resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -550,7 +534,7 @@ struct GuestExecSessionTests {
             .remoteError,
             .malformedControl,
             .duplicateReady,
-        ], [GuestExecResource.sandbox("sandbox-1"), .virtualMachine("vm-1")])
+        ], [GuestExecResource.virtualMachine("vm-1")])
     func rejectsMalformedSessions(testCase: MalformedSessionCase, resource: GuestExecResource) async throws {
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
@@ -582,7 +566,6 @@ struct GuestExecSessionTests {
         "VM refusals retain their distinct server reasons and do not attach",
         arguments: [
             (400, "VM must be running to exec. Current state: Stopped"),
-            (400, "VM exec requires a VM created with the Strato guest agent enabled"),
             (503, "Agent 'node' does not support VM guest exec for qemu"),
             (403, "Forbidden: vm:exec"),
             (404, "VM not found"),

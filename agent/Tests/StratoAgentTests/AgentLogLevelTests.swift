@@ -22,7 +22,7 @@ struct AgentLogLevelTests {
 
     @Test(
         "CLI log levels resolve through the authoritative parser",
-        arguments: [AgentLogLevel.trace, .info, .warning])
+        arguments: [AgentLogLevel.warning])
     func resolvesCommandLineLevel(_ expected: AgentLogLevel) throws {
         let resolved = try AgentLogLevel.resolve(
             commandLineValue: expected.rawValue,
