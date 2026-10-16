@@ -1,0 +1,85 @@
+docs/development/local-development.md
+  s_1da39708548843::t_908f509c38b2bb 93-98
+control-plane/Sources/App/Controllers/VMController.swift
+  s_1da39708548843::t_e1126b2c1a5271 408-410
+  s_1da39708548843::t_3fa2a6dddfbfd2 414-431,434,441,450
+agent/Sources/StratoAgentCore/OCI/SandboxImageService.swift
+  s_1da39708548843::t_ffd9274bf8dc6f 68,181-196,198
+  s_1da39708548843::t_9720a944bdead3 255-259,262-273,285,289
+  s_1da39708548843::t_e2259485021e4f 260-261
+control-plane/Sources/App/Services/Sweeps/AgentAutoUpdateSweep.swift
+  s_1da39708548843::t_e1126b2c1a5271 53
+  s_1da39708548843::t_b5d5bb6d9d8ce8 311-331,336-337
+agent/Tests/StratoAgentStorageTests/OCIRootfsCacheTests.swift
+  s_1da39708548843::t_b4ba6387b5341e 59-75,79-81
+  s_1da39708548843::t_c20c39a253008c 3,12-20,33-52
+  s_1da39708548843::t_a3ef82192c958f 208
+  s_1da39708548843::t_e2259485021e4f 21-32,54-58,76-78
+  s_1da39708548843::t_f6d153d13754f0 53
+control-plane/Tests/AppPlatformTests/AgentAutoUpdateTests.swift
+  s_1da39708548843::t_e2259485021e4f 148-150
+  s_1da39708548843::t_447eb972e2e7d4 161-165,172-177
+  s_1da39708548843::t_0e9a14ed2ec9cd 152-160,166-171,178-180
+  s_1da39708548843::t_2fb2d1fd8844b4 151
+docs/architecture/sandboxes.md
+  s_1da39708548843::t_43834c4c14bd4e 202-207
+  s_1da39708548843::t_eb2382509a6d2d 191-196
+agent/Tests/StratoAgentStorageTests/DurableFileWriterTests.swift
+  s_1da39708548843::t_0e9a14ed2ec9cd 297,332
+  s_1da39708548843::t_eaaf56e5befda0 295-296
+control-plane/web/src/lib/hooks/use-console.ts
+  s_1da39708548843::t_477c83f122a67b 19-22,29,48-60,63-64,68,70,76,81,88,90-91,112-113,121,123,125,138,146,148,152-155,158
+control-plane/Tests/AppIdentityTests/ListPaginationTests.swift
+  s_1da39708548843::t_5bb67f1eaade3a 177,183,200-217
+  s_1da39708548843::t_e2259485021e4f 24-25,32-33,178-179,184-185
+  s_1da39708548843::t_946940c5044962 19-23,26-31,34-49,51-63,73-83
+  s_1da39708548843::t_db8d56d9252db3 50
+  s_1da39708548843::t_321b47fa25964b 64-72
+docs/architecture/control-plane.md
+  s_1da39708548843::t_eb2382509a6d2d 486-492
+control-plane/Tests/AppResourceTests/VMListScalingTests.swift
+  s_1da39708548843::t_fdf3de9f441da4 67,71,73
+control-plane/Sources/App/Extensions/ListPaging.swift
+  s_1da39708548843::t_a35a107821c719 30-36
+agent/Sources/StratoAgentCore/OCI/OCIRootfsCache.swift
+  s_1da39708548843::t_8aa684e27966d2 64-68,103-111,117-121,123-127,130-134,136-142,159,216,221,243,323-325
+  s_1da39708548843::t_e2259485021e4f 79-80,128-129
+  s_1da39708548843::t_c20c39a253008c 63,81-89,95,122,135
+  s_1da39708548843::t_55603ccd9100bb 78
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_1da39708548843::t_e2259485021e4f 105-106
+  s_1da39708548843::t_3fa2a6dddfbfd2 67-69,90-92,94-99,101,107,109-111
+  s_1da39708548843::t_e1126b2c1a5271 102-104,108
+control-plane/web/src/lib/hooks/use-console.test.tsx
+  s_1da39708548843::t_0e9a14ed2ec9cd 1-20,26-28,30-33,35-46,48-49,51-53,55-59,61-64
+  s_1da39708548843::t_2fb2d1fd8844b4 21-25,29,34,47,50,54,60
+docs/architecture/agent-updates.md
+  s_1da39708548843::t_43834c4c14bd4e 134-137
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_1da39708548843::t_3fa2a6dddfbfd2 67,83-88,90-96,104,109
+  s_1da39708548843::t_e1126b2c1a5271 77-79
+agent/Tests/StratoAgentStorageTests/SandboxImageServiceTests.swift
+  s_1da39708548843::t_eaaf56e5befda0 56-57,80-83
+  s_1da39708548843::t_e2259485021e4f 26-29,54-55,60-68,70-74
+  s_1da39708548843::t_2fb2d1fd8844b4 17-18,23-25,34-48,79,84-86
+  s_1da39708548843::t_1fce602c7feb70 88
+  s_1da39708548843::t_0e9a14ed2ec9cd 19-22,30-33,49-50,58-59,69,75-78,87
+agent/Tests/StratoAgentStorageTests/SandboxLazyMemoryStoreTests.swift
+  s_1da39708548843::t_267cc908d8a9b8 16,18-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "867879d95c287ffb70d5ad5e52edb600289d0b07",
+  "prompts": {},
+  "sessions": {
+    "s_1da39708548843": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14289-590b-7281-bc6d-17cfe1239636",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
