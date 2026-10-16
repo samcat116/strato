@@ -216,12 +216,12 @@ struct VMPlacementRetryTests {
         }
     }
 
-    @Test("Metadata edits after acceptance do not discard queued placement", arguments: [false, true])
-    func metadataWhileRetryQueued(sshKeys: Bool) async throws {
+    @Test("Metadata edits after acceptance settle queued placement", arguments: [false, true], [false, true])
+    func metadataWhileRetryQueued(sshKeys: Bool, schedulingFails: Bool) async throws {
         try await withProjectApp(prefix: "queuedmetadataretry") { app, builder, fixture in
             app.logger.logLevel = .warning
             let (vm, boot, _) = try await failedVM(app, builder, fixture)
-            let host = try await agent(app, builder)
+            let host = schedulingFails ? nil : try await agent(app, builder)
             let id = try vm.requireID()
             let publicKey =
                 "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f queued@test"
@@ -241,17 +241,36 @@ struct VMPlacementRetryTests {
                     #expect(response.status == .ok)
                 }
             }
-            let placed: String = try await pollUntil(attempts: 40) { try await VM.find(id, on: app.db)?.hypervisorId }
-            #expect(placed == host)
+            if schedulingFails {
+                let _: Int64 = try await pollUntil(attempts: 40) {
+                    guard let row = try await VM.find(id, on: app.db), row.failedGeneration == 3 else { return nil }
+                    return row.failedGeneration
+                }
+            } else {
+                let placed: String = try await pollUntil(attempts: 40) {
+                    try await VM.find(id, on: app.db)?.hypervisorId
+                }
+                #expect(placed == host)
+            }
             let current = try #require(try await VM.find(id, on: app.db))
             #expect(current.generation == 3)
+            if schedulingFails {
+                #expect(current.convergenceDeadline == nil)
+                #expect(current.hypervisorId == nil)
+                let next = try await retry(app, vmID: id, token: fixture.token)
+                #expect(next.0 == .accepted)
+            }
             if sshKeys {
                 #expect(current.effectiveSSHAuthorizedKeys == [publicKey])
             } else {
                 #expect(current.tags == ["purpose": "queued-retry"])
             }
-            #expect(try await VolumeReplica.query(on: app.db).filter(\.$volume.$id == boot.requireID()).count() == 1)
-            #expect(try await ResourceEvent.query(on: app.db).filter(\.$resourceID == id).count() == 1)
+            #expect(
+                try await VolumeReplica.query(on: app.db).filter(\.$volume.$id == boot.requireID()).count()
+                    == (schedulingFails ? 0 : 1))
+            #expect(
+                try await ResourceEvent.query(on: app.db).filter(\.$resourceID == id).count()
+                    == (schedulingFails ? 2 : 1))
         }
     }
 

@@ -67,6 +67,9 @@ actor WorkloadPlacementService {
             if let snapshot = plannedVM.resourceClass {
                 plannedVM.resourceClass = try await WorkloadResourceClassService.currentPolicy(snapshot, on: db)
             }
+            // Expose the generation actually planned to the dispatch failure
+            // handler, including edits accepted while placement was queued.
+            vm.generation = plannedVM.generation
             let currentVM = plannedVM
             let currentVMID = try currentVM.requireID()
             let bootVolumes = try await Volume.query(on: tx)

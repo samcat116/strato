@@ -78,6 +78,15 @@ struct ResourceMutation {
         case directResolution(@Sendable (any Database) async throws -> Void)
     }
 
+    /// Placement realizes current desired state, which may be newer than the
+    /// accepted mutation after metadata edits. Preserve its generation fence
+    /// when recording a terminal planning failure.
+    struct PlacementFailure: LocalizedError {
+        let generation: Int64
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
     /// What the `202` needs: the generation the client waits for, and the id of
     /// the `resource_events` row that recorded the request.
     ///
@@ -329,7 +338,7 @@ struct ResourceMutation {
                 } catch {
                     await degrade(
                         R.self, id: resourceID, mutation: kind,
-                        expectedGeneration: targetGeneration,
+                        expectedGeneration: (error as? PlacementFailure)?.generation ?? targetGeneration,
                         reason: error.localizedDescription, app: app)
                 }
             }

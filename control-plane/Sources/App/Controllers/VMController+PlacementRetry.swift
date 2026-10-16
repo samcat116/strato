@@ -14,8 +14,14 @@ extension VMController {
             .create, on: vm, actor: .user(try user.requireID()),
             dispatch: .placement { db in
                 let image = try await vm.$sourceImage.get(on: db)
-                try await app.workloadPlacement.createVM(
-                    vm: vm, db: db, image: image)
+                do {
+                    try await app.workloadPlacement.createVM(vm: vm, db: db, image: image)
+                } catch {
+                    // A deletion that superseded planning owns its own result.
+                    guard vm.desiredStatus != .absent else { throw error }
+                    throw ResourceMutation.PlacementFailure(
+                        generation: vm.generation, reason: error.localizedDescription)
+                }
             }, on: req.db, app: app
         ) { db in
             // accept holds and refreshes the VM row. This also rejects a
