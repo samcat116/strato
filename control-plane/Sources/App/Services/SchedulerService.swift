@@ -37,6 +37,7 @@ struct SchedulableAgent: Sendable {
     let runningVMCount: Int
     /// Hypervisor backends this agent can actually run, from its structured registration report.
     let supportedHypervisors: [HypervisorType]
+    let hypervisors: [HypervisorSupport]
     /// Host CPU architecture; nil for agents that predate architecture reporting
     let architecture: CPUArchitecture?
     /// Whether the agent's networking backend supports VM-to-VM traffic
@@ -76,6 +77,7 @@ struct SchedulableAgent: Sendable {
         status: AgentStatus,
         runningVMCount: Int,
         supportedHypervisors: [HypervisorType] = [.qemu],
+        hypervisors: [HypervisorSupport] = [],
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
         supportsMetadataService: Bool = false,
@@ -102,6 +104,7 @@ struct SchedulableAgent: Sendable {
         self.status = status
         self.runningVMCount = runningVMCount
         self.supportedHypervisors = supportedHypervisors
+        self.hypervisors = hypervisors
         self.architecture = architecture
         self.supportsInterVMNetworking = supportsInterVMNetworking
         self.supportsMetadataService = supportsMetadataService
@@ -164,6 +167,7 @@ struct SchedulableAgent: Sendable {
             status: status,
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
+            hypervisors: hypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
             supportsMetadataService: supportsMetadataService,
@@ -604,7 +608,13 @@ final class SchedulerService: Sendable {
             siteMatched = online
         }
 
-        let hypervisorCapable = siteMatched.filter { $0.supportedHypervisors.contains(requirements.hypervisorType) }
+        let hypervisorCapable = siteMatched.filter { agent in
+            agent.supportedHypervisors.contains(requirements.hypervisorType)
+                && (requirements.hypervisorType != .appleVirtualization
+                    || agent.hypervisors.contains {
+                        $0.type == .appleVirtualization && $0.available && $0.supportsMemorySize(requirements.memory)
+                    })
+        }
         guard !hypervisorCapable.isEmpty else {
             // Distinguish a genuine backend mismatch from agents that
             // advertise no hypervisor at all (failed binary probes at

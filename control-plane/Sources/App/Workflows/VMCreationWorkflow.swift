@@ -249,6 +249,11 @@ enum VMCreationWorkflow {
                 reason: "'disk' must not exceed \(WorkloadSizeLimits.maxDiskBytes) bytes")
         }
 
+        if chosenHypervisor == .appleVirtualization {
+            try await AppleVirtualizationValidation.requireMemory(
+                memoryValue, architecture: image.architecture, pool: bootPool, on: req.db)
+        }
+
         // Hot-add headroom (issue #568). The ceilings bound what a later
         // online resize may reach; below the boot sizing they would be
         // meaningless, and the upper vCPU bound keeps a typo from spawning a

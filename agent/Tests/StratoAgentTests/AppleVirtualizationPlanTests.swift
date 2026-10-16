@@ -11,6 +11,17 @@ struct AppleVirtualizationPlanTests {
             attachment: .file(path: "/tmp/managed.raw", format: format), ioLimits: limits)
     }
 
+    @Test(
+        "Invalid guest memory fails before filesystem or framework work",
+        arguments: [Int64(511 << 20), Int64((512 << 20) + 1), Int64(2049 << 20)])
+    func memoryLimits(bytes: Int64) {
+        #expect(throws: HypervisorServiceError.self) {
+            try AppleVirtualizationPlan(
+                spec: VMSpec(cpus: 1, memoryBytes: bytes, boot: .disk(firmware: nil), volumes: [disk()]),
+                networks: [], memoryBounds: (512 << 20)...(2048 << 20))
+        }
+    }
+
     @Test("EFI and direct-kernel boot retain raw volume ordering")
     func supportedBoots() throws {
         for boot in [BootSource.disk(firmware: nil), .directKernel(kernel: "/kernel", initramfs: nil, cmdline: nil)] {

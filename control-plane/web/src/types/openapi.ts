@@ -9162,6 +9162,16 @@ export interface components {
             supportsVsock?: boolean | null;
             /** @description Whether this agent can bridge guest-exec sessions to VMs using this hypervisor; null for agents that predate VM guest exec. */
             supportsGuestExec?: boolean | null;
+            /**
+             * Format: int64
+             * @description Host-specific minimum guest memory for this backend; absent on older registrations.
+             */
+            minimumMemoryBytes?: number;
+            /**
+             * Format: int64
+             * @description Host-specific maximum guest memory for this backend; absent on older registrations.
+             */
+            maximumMemoryBytes?: number;
             /** @description Whether this backend can enforce and read back per-volume total IOPS and bytes-per-second ceilings; null is treated as unsupported. */
             supportsVolumeIOLimits?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */

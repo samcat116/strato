@@ -65,9 +65,32 @@ final class VMNetworkSelectionTests {
         var metadataSource: String? = nil
     }
 
+    @Test(
+        "Apple creation rejects invalid memory before persisting VM or volume",
+        arguments: [Int64(511 << 20), Int64((512 << 20) + 1), Int64(9 << 30)])
+    func rejectInvalidAppleMemory(memory: Int64) async throws {
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
+            let vmCount = try await VM.query(on: app.db).count()
+            let volumeCount = try await Volume.query(on: app.db).count()
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "apple-invalid-memory", imageId: image.id,
+                        projectId: project.id, environment: "development", cpu: 1, memory: memory, disk: self.gb(10),
+                        networkId: nil, networkName: "default", hypervisorType: "apple_virtualization"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("Apple Virtualization memory"))
+            }
+            #expect(try await VM.query(on: app.db).count() == vmCount)
+            #expect(try await Volume.query(on: app.db).count() == volumeCount)
+        }
+    }
+
     @Test("Apple Virtualization creates a raw boot volume with ISO bootstrap")
     func createAppleVirtualization() async throws {
-        try await withApp { app, _, _, project, image, token in
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -88,7 +111,7 @@ final class VMNetworkSelectionTests {
 
     @Test("Apple Virtualization rejects guest execution and IMDS before persisting a VM", arguments: [false, true])
     func rejectUnsupportedAppleFeatures(exec: Bool) async throws {
-        try await withApp { app, _, _, project, image, token in
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
             try await app.test(.POST, "/api/vms") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -123,6 +146,7 @@ final class VMNetworkSelectionTests {
     }
 
     private func withApp(
+        appleHost: Bool = false,
         _ test: (Application, User, Organization, Project, Image, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
@@ -142,6 +166,19 @@ final class VMNetworkSelectionTests {
             // fixture makes the one most tests here select by name.
             try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
+            if appleHost {
+                let agent = try await builder.createAgent(
+                    named: "apple-host", hostname: "mac.example",
+                    architecture: image.architecture,
+                    siteID: try await builder.placementSite(for: project).requireID(),
+                    organizationScope: .organization(try org.requireID()))
+                agent.hypervisors = [
+                    HypervisorSupport(
+                        type: .appleVirtualization, available: true, accelerated: true,
+                        minimumMemoryBytes: 512 << 20, maximumMemoryBytes: 8 << 30)
+                ]
+                try await agent.save(on: app.db)
+            }
             let token = try await user.generateAPIKey(on: app.db)
 
             try await test(app, user, org, project, image, token)

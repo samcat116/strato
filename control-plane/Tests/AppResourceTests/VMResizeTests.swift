@@ -84,6 +84,11 @@ final class VMResizeTests {
                 siteID: try await builder.placementSite(for: project).requireID(),
                 organizationScope: .organization(try org.requireID()))
 
+            agent.hypervisors.append(
+                HypervisorSupport(
+                    type: .appleVirtualization, available: true, accelerated: true,
+                    minimumMemoryBytes: 512 << 20, maximumMemoryBytes: 32 << 30))
+            try await agent.save(on: app.db)
             let vm = try await builder.createVM(name: "resize-vm", project: project)
             vm.maxCpu = 8
             vm.maxMemory = 8 * 1024 * 1024 * 1024
@@ -218,6 +223,23 @@ final class VMResizeTests {
             }
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.generation == vm.generation)
+        }
+    }
+
+    @Test(
+        "Apple resize rejects invalid memory without mutating sizing or generation",
+        arguments: [Int64(511 << 20), Int64((512 << 20) + 1), Int64(33 << 30)])
+    func appleMemoryRejected(memory: Int64) async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            vm.hypervisorType = .appleVirtualization
+            vm.status = .shutdown
+            try await vm.save(on: app.db)
+            try await expectAppleResizeUnchanged(app, vm, project: project) {
+                try await self.put(app, vm, token: token, body: ["memory": memory]) { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("Apple Virtualization memory"))
+                }
+            }
         }
     }
 

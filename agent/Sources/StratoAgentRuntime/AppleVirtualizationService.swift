@@ -44,7 +44,8 @@ actor AppleVirtualizationService: HypervisorService {
             throw HypervisorServiceError.invalidConfiguration("VM identity must be a UUID")
         }
         guard specs[vmId] == nil else { return }
-        let plan = try AppleVirtualizationPlan(spec: spec, networks: networkAttachments)
+        let plan = try AppleVirtualizationPlan(
+            spec: spec, networks: networkAttachments, memoryBounds: await host.memoryBounds)
         let directory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         try ManagedStatePermissions.prepareVMDirectory(at: directory)
         let iso = VMDirectoryLayout.cloudInitISO(vmDirectory: directory)
@@ -63,7 +64,8 @@ actor AppleVirtualizationService: HypervisorService {
     ) async throws {
         try begin(vmId)
         defer { operations.remove(vmId) }
-        let plan = try AppleVirtualizationPlan(spec: spec, networks: networkAttachments)
+        let plan = try AppleVirtualizationPlan(
+            spec: spec, networks: networkAttachments, memoryBounds: await host.memoryBounds)
         let directory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         let iso = VMDirectoryLayout.cloudInitISO(vmDirectory: directory)
         let status = try await host.status(id: vmId)
@@ -155,7 +157,7 @@ actor AppleVirtualizationService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
         let next = current.withSizing(from: spec)
-        let plan = try AppleVirtualizationPlan(spec: next, networks: attachments)
+        let plan = try AppleVirtualizationPlan(spec: next, networks: attachments, memoryBounds: await host.memoryBounds)
         let directory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
         try await host.replace(
             id: vmId, plan: plan, directory: directory,
@@ -204,6 +206,12 @@ final class AppleVirtualizationHost {
     private var machines: [String: VZVirtualMachine] = [:]
     private var started: Set<String> = []
 
+    var memoryBounds: ClosedRange<Int64> {
+        let minimum = Int64(clamping: VZVirtualMachineConfiguration.minimumAllowedMemorySize)
+        let maximum = Int64(clamping: VZVirtualMachineConfiguration.maximumAllowedMemorySize)
+        return minimum...maximum
+    }
+
     func support() -> HypervisorSupport {
         var reason: String?
         if !VZVirtualMachine.isSupported {
@@ -231,7 +239,8 @@ final class AppleVirtualizationHost {
         return HypervisorSupport(
             type: .appleVirtualization, available: reason == nil, accelerated: reason == nil,
             unavailabilityReason: reason, supportsSnapshots: false, supportsVsock: false,
-            supportsGuestExec: false, supportsVolumeIOLimits: false)
+            supportsGuestExec: false, supportsVolumeIOLimits: false,
+            minimumMemoryBytes: memoryBounds.lowerBound, maximumMemoryBytes: memoryBounds.upperBound)
     }
 
     func create(id: String, plan: AppleVirtualizationPlan, directory: String, seed: String) throws {
@@ -362,9 +371,21 @@ final class AppleVirtualizationHost {
         try await vm.resume()
     }
 
+    /// Only terminal machines can be discarded without a stop. A transitional
+    /// machine that cannot stop yet must stay tracked so reconciliation retries.
+    static func stopForRemoval(
+        state: VZVirtualMachine.State, canStop: Bool, stop: @MainActor () async throws -> Void
+    ) async throws {
+        if state == .stopped || state == .error { return }
+        guard canStop else {
+            throw HypervisorServiceError.invalidConfiguration("Apple VM is transitioning and cannot stop yet")
+        }
+        try await stop()
+    }
+
     func remove(id: String) async throws {
         guard let vm = machines[id] else { return }
-        if vm.state != .stopped { try await vm.stop() }
+        try await Self.stopForRemoval(state: vm.state, canStop: vm.canStop) { try await vm.stop() }
         machines.removeValue(forKey: id)
         started.remove(id)
     }

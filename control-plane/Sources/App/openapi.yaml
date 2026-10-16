@@ -16326,6 +16326,14 @@ components:
           description: >-
             Whether this agent can bridge guest-exec sessions to VMs using
             this hypervisor; null for agents that predate VM guest exec.
+        minimumMemoryBytes:
+          type: integer
+          format: int64
+          description: Host-specific minimum guest memory for this backend; absent on older registrations.
+        maximumMemoryBytes:
+          type: integer
+          format: int64
+          description: Host-specific maximum guest memory for this backend; absent on older registrations.
         supportsVolumeIOLimits:
           type: boolean
           nullable: true

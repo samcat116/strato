@@ -4,10 +4,72 @@ import Logging
 import StratoAgentCore
 import StratoShared
 import Testing
+import Virtualization
 @testable import StratoAgentRuntime
 
 @Suite("Apple Virtualization runtime")
 struct AppleVirtualizationRuntimeTests {
+    @Test(
+        "Deletion discards terminal machines without an unavailable stop",
+        arguments: [VZVirtualMachine.State.stopped, .error])
+    @MainActor
+    func terminalDeletion(state: VZVirtualMachine.State) async throws {
+        try await AppleVirtualizationHost.stopForRemoval(state: state, canStop: false) {
+            Issue.record("Terminal machines must not be stopped")
+        }
+    }
+
+    @Test(
+        "Deletion retains machines in non-stoppable live transitions",
+        arguments: [VZVirtualMachine.State.starting, .stopping, .pausing, .resuming])
+    @MainActor
+    func transitionalDeletion(state: VZVirtualMachine.State) async {
+        await #expect(throws: HypervisorServiceError.self) {
+            try await AppleVirtualizationHost.stopForRemoval(state: state, canStop: false) {
+                Issue.record("An unavailable stop must not be called")
+            }
+        }
+    }
+
+    @Test("Deletion awaits a legal stop and propagates its failure")
+    @MainActor
+    func stoppableDeletion() async throws {
+        var stopped = false
+        try await AppleVirtualizationHost.stopForRemoval(state: .running, canStop: true) { stopped = true }
+        #expect(stopped)
+        await #expect(throws: HypervisorServiceError.self) {
+            try await AppleVirtualizationHost.stopForRemoval(state: .paused, canStop: true) {
+                throw HypervisorServiceError.timeout("stop")
+            }
+        }
+    }
+
+    @Test("Invalid memory is rejected before creating a VM directory")
+    func invalidMemoryDoesNotRealizeVM() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = await AppleVirtualizationService(logger: Logger(label: "apple-memory"), vmStoragePath: root.path)
+        let support = await service.support()
+        let minimum = try #require(support.minimumMemoryBytes)
+        let maximum = try #require(support.maximumMemoryBytes)
+        for memory in [minimum - (1 << 20), minimum + 1, maximum + (1 << 20)] {
+            await #expect(throws: HypervisorServiceError.self) {
+                try await service.createVM(
+                    vmId: UUID().uuidString,
+                    spec: VMSpec(
+                        cpus: 1, memoryBytes: memory, boot: .disk(firmware: nil),
+                        volumes: [
+                            VolumeSpec(
+                                volumeId: UUID(), deviceName: .disk(0),
+                                attachment: .file(path: "/tmp/apple-memory-test.raw", format: .raw))
+                        ]),
+                    imageInfo: nil, networkAttachments: [], metadata: nil, vsockCID: nil)
+            }
+        }
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+        #expect(await service.bootstrapWorkloadIDs() == [])
+    }
+
     @Test("A previous agent's VM cannot be falsely adopted")
     func adoptionAfterRestart() async throws {
         let service = await AppleVirtualizationService(

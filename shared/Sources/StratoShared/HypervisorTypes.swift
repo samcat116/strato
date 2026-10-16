@@ -81,6 +81,19 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
     /// equality, and treats nil as incompatible rather than guessing.
     public let version: String?
 
+    /// Host-specific guest memory bounds. Apple placement requires both;
+    /// older registrations without them must refresh before accepting VMs.
+    public let minimumMemoryBytes: Int64?
+    public let maximumMemoryBytes: Int64?
+
+    public func supportsMemorySize(_ bytes: Int64) -> Bool {
+        guard type == .appleVirtualization else { return true }
+        guard let minimumMemoryBytes, let maximumMemoryBytes,
+            minimumMemoryBytes > 0, maximumMemoryBytes >= minimumMemoryBytes
+        else { return false }
+        return bytes >= minimumMemoryBytes && bytes <= maximumMemoryBytes && bytes % (1 << 20) == 0
+    }
+
     public init(
         type: HypervisorType,
         available: Bool,
@@ -90,7 +103,9 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         supportsVsock: Bool? = nil,
         supportsGuestExec: Bool? = nil,
         supportsVolumeIOLimits: Bool? = nil,
-        version: String? = nil
+        version: String? = nil,
+        minimumMemoryBytes: Int64? = nil,
+        maximumMemoryBytes: Int64? = nil
     ) {
         self.type = type
         self.available = available
@@ -101,10 +116,12 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         self.supportsGuestExec = supportsGuestExec
         self.supportsVolumeIOLimits = supportsVolumeIOLimits
         self.version = version
+        self.minimumMemoryBytes = minimumMemoryBytes
+        self.maximumMemoryBytes = maximumMemoryBytes
     }
     private enum CodingKeys: String, CodingKey {
         case type, available, accelerated, unavailabilityReason, supportsSnapshots
-        case supportsVsock, supportsGuestExec, supportsVolumeIOLimits, version
+        case supportsVsock, supportsGuestExec, supportsVolumeIOLimits, version, minimumMemoryBytes, maximumMemoryBytes
     }
 
     public init(from decoder: Decoder) throws {
@@ -120,6 +137,8 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         supportsGuestExec = try container.decodeIfPresent(Bool.self, forKey: .supportsGuestExec)
         supportsVolumeIOLimits = try container.decodeIfPresent(Bool.self, forKey: .supportsVolumeIOLimits)
         version = try container.decodeIfPresent(String.self, forKey: .version)
+        minimumMemoryBytes = try container.decodeIfPresent(Int64.self, forKey: .minimumMemoryBytes)
+        maximumMemoryBytes = try container.decodeIfPresent(Int64.self, forKey: .maximumMemoryBytes)
     }
 }
 

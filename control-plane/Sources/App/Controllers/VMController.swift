@@ -638,6 +638,10 @@ struct VMController: RouteCollection {
         try Self.validateSizing(cpu: newCPU, memory: newMemory, balloonTarget: newBalloonTarget)
 
         try Self.validateAppleResize(vm: existingVM, balloonTarget: newBalloonTarget)
+        if existingVM.hypervisorType == .appleVirtualization {
+            try await AppleVirtualizationValidation.requireMemory(
+                newMemory, agentID: existingVM.hypervisorId, on: req.db)
+        }
 
         let growthMutationID = UUID()
         let growthClaim = NIOLockedValueBox<WorkloadResourceClassService.GrowthClaim?>(nil)
@@ -670,6 +674,10 @@ struct VMController: RouteCollection {
                         cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
                     // Reconciliation may have changed the observed state while we waited for the row lock.
                     try Self.validateAppleResize(vm: existingVM, balloonTarget: lockedBalloonTarget)
+                    if existingVM.hypervisorType == .appleVirtualization {
+                        try await AppleVirtualizationValidation.requireMemory(
+                            lockedMemory, agentID: existingVM.hypervisorId, on: db)
+                    }
                     _ = try await Self.applyMetadataUpdate(
                         updateRequest.metadataEnabled, to: existingVM, on: db)
                     try WorkloadResourceClassService.requireGrowthAvailable(

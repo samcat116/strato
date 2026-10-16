@@ -256,6 +256,13 @@ VMs cold-boot after the owning agent restarts. Managed volumes and EFI state
 persist; RAM and device state do not. Checkpoints and sandbox execution remain
 unsupported on this backend. See the [driver contract](../architecture/agent.md#native-macos-driver).
 
+Apple Virtualization agents report the framework's minimum and maximum guest
+memory in their hypervisor registration. Guest memory must be a multiple of
+1 MiB. Register a compatible Mac before creating or resizing an Apple VM;
+registrations without memory bounds must be refreshed. The API checks these
+bounds before saving desired state, placement checks the selected host, and
+the agent validates its current bounds before creating VM files.
+
 The opt-in `AppleVirtualizationRuntimeTests.nativeLifecycle` test starts a
 small disposable EFI VM, pauses, resumes and stops it. It requires an entitled
 test host as well as available hardware virtualization. Ordinary package tests

@@ -12,12 +12,20 @@ public struct AppleVirtualizationPlan: Sendable {
     public let disks: [Disk]
     public let networks: [ResolvedNetworkAttachment]
 
-    public init(spec: VMSpec, networks: [ResolvedNetworkAttachment]) throws {
+    public init(
+        spec: VMSpec, networks: [ResolvedNetworkAttachment], memoryBounds: ClosedRange<Int64>? = nil
+    ) throws {
         func unsupported(_ reason: String) throws -> Never {
             throw HypervisorServiceError.notSupported("Apple Virtualization: \(reason)")
         }
         guard spec.cpus > 0, spec.memoryBytes > 0 else {
             throw HypervisorServiceError.invalidConfiguration("CPU and memory must be positive")
+        }
+        guard spec.memoryBytes % (1 << 20) == 0,
+            memoryBounds?.contains(spec.memoryBytes) != false
+        else {
+            throw HypervisorServiceError.invalidConfiguration(
+                "Apple Virtualization memory must be MiB-aligned and within the host's framework bounds")
         }
         if spec.effectiveMachine.secureBoot || spec.effectiveMachine.tpm {
             try unsupported("Secure Boot and TPM")

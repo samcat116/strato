@@ -40,6 +40,7 @@ struct SchedulerServiceTests {
         status: AgentStatus = .online,
         runningVMCount: Int = 0,
         supportedHypervisors: [HypervisorType] = [.qemu],
+        hypervisors: [HypervisorSupport] = [],
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
         supportsMetadataService: Bool = false,
@@ -62,6 +63,7 @@ struct SchedulerServiceTests {
             status: status,
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
+            hypervisors: hypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
             supportsMetadataService: supportsMetadataService,
@@ -86,6 +88,30 @@ struct SchedulerServiceTests {
             requiresSandboxRuntime: true,
             requiresSandboxNetworking: requiresSandboxNetworking
         )
+    }
+
+    @Test("Apple placement excludes unknown or incompatible host memory bounds")
+    func appleMemoryPlacement() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "apple-memory"))
+        let support = HypervisorSupport(
+            type: .appleVirtualization, available: true, accelerated: true,
+            minimumMemoryBytes: 512 << 20, maximumMemoryBytes: 2048 << 20)
+        let unknown = createTestAgent(id: "unknown", supportedHypervisors: [.appleVirtualization])
+        let compatible = createTestAgent(
+            id: "compatible", supportedHypervisors: [.appleVirtualization],
+            hypervisors: [support])
+        let tooSmall = createTestAgent(
+            id: "too-small", supportedHypervisors: [.appleVirtualization],
+            hypervisors: [
+                HypervisorSupport(
+                    type: .appleVirtualization, available: true, accelerated: true,
+                    minimumMemoryBytes: 512 << 20, maximumMemoryBytes: 1024 << 20)
+            ])
+        let vm = createTestVM(memory: 2048 << 20, hypervisorType: .appleVirtualization)
+        #expect(try scheduler.selectAgent(for: vm, from: [unknown, tooSmall, compatible]) == "compatible")
+        #expect(throws: SchedulerError.self) { try scheduler.selectAgent(for: vm, from: [unknown, tooSmall]) }
+        let reserved = compatible.subtractingReservations(.zero)
+        #expect(try scheduler.selectAgent(for: vm, from: [reserved]) == "compatible")
     }
 
     // MARK: - Resource Utilization Tests
