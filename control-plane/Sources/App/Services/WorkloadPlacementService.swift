@@ -31,7 +31,7 @@ actor WorkloadPlacementService {
             timeout: .seconds(30), pollInterval: .milliseconds(25), logger: app.logger,
             preserveCompletedValueOnReleaseFailure: true
         ) { [self] connection in
-            let database = try PlacementTransactionConnection(connection)
+            let database = try PinnedTransactionConnection(connection)
             return try await placeVM(
                 vm: vm, db: database, strategy: strategy, image: image,
                 attemptDeadline: attemptDeadline, attemptsRemaining: 3)

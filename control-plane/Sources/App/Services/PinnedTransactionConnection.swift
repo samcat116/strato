@@ -4,10 +4,10 @@ import SQLKit
 import Vapor
 
 /// Fluent marks a plain pinned connection inTransaction even before BEGIN.
-/// Placement needs real commit/rollback while retaining its session lock.
+/// Session-lock holders need real commit/rollback on the same connection.
 /// Delegate transaction control to the underlying driver (including the
 /// production timeout wrapper), and track nested transactions explicitly.
-struct PlacementTransactionConnection: Database, SQLDatabase {
+struct PinnedTransactionConnection: Database, SQLDatabase {
     let connection: any Database
     let sql: any SQLDatabase
     let control: any TransactionControlDatabase
@@ -16,7 +16,7 @@ struct PlacementTransactionConnection: Database, SQLDatabase {
     init(_ connection: any Database) throws {
         guard let sql = connection as? any SQLDatabase,
             let control = connection as? any TransactionControlDatabase
-        else { throw Abort(.internalServerError, reason: "VM placement requires a pinned SQL connection") }
+        else { throw Abort(.internalServerError, reason: "Transaction fencing requires a pinned SQL connection") }
         self.init(connection: connection, sql: sql, control: control, inTransaction: false)
     }
 
