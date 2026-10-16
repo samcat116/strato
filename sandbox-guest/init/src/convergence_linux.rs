@@ -74,6 +74,16 @@ fn bounded_package_version(
         other => other,
     }
 }
+// Linked units are discoverable outside the unit search path, but have no
+// boot enablement. Disabling an already linked unit can remove its link.
+fn service_boot_enabled(state: &str) -> Option<bool> {
+    match state {
+        "enabled" => Some(true),
+        "enabled-runtime" | "linked" | "linked-runtime" | "disabled" | "static" | "masked"
+        | "masked-runtime" | "indirect" | "alias" | "generated" | "transient" => Some(false),
+        _ => None,
+    }
+}
 impl Backend for LinuxBackend {
     fn package(&mut self, name: &str, deadline: Instant) -> Result<Option<String>, String> {
         let result = if Path::new("/usr/bin/dpkg-query").exists() {
@@ -126,12 +136,7 @@ impl Backend for LinuxBackend {
             deadline,
             false,
         )?;
-        let enabled = match state.as_str() {
-            "enabled" => Some(true),
-            "enabled-runtime" | "disabled" | "static" | "masked" | "masked-runtime"
-            | "indirect" | "alias" | "generated" | "transient" => Some(false),
-            _ => None,
-        };
+        let enabled = service_boot_enabled(&state);
         let active = command(
             "/usr/bin/systemctl",
             &["show", "--property=ActiveState", "--value", "--", name],
@@ -293,6 +298,13 @@ mod tests {
             "package operation budget exhausted (mirror or package manager unavailable)"
         );
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn linked_units_satisfy_boot_disabled_intent() {
+        for state in ["linked", "linked-runtime"] {
+            assert_eq!(service_boot_enabled(state), Some(false), "{state}");
+        }
     }
 
     #[test]
