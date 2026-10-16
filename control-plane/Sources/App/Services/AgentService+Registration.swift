@@ -622,9 +622,11 @@ extension AgentService {
     /// Refresh the agent's presence and local-socket route at most once per
     /// half TTL. Their success timestamps are independent: either failed write
     /// retries on the next incoming frame even when the other one landed.
-    func refreshAgentPresenceIfNeeded(agentKey: String, force: Bool = false) async {
+    func refreshAgentPresenceIfNeeded(
+        agentKey: String, force: Bool = false, on database: (any Database)? = nil
+    ) async {
         guard let identity = AgentIdentity(key: agentKey),
-            let agent = try? await Agent.query(on: app.db)
+            let agent = try? await Agent.query(on: database ?? app.db)
                 .filter(\.$trustDomain == identity.trustDomain)
                 .filter(\.$name == identity.name).first(),
             !agent.administrativelyOffline
