@@ -90,6 +90,12 @@ suite. Frontend and other checks have their own workflow coverage; see
 `.github/workflows/README.md`. Report the actual package,
 platform, and test scope; a build or a macOS run cannot prove Linux VM behavior.
 
+To compare rootfs-cache verification under concurrent readers, run
+`STRATO_CACHE_BENCHMARK=1 swift test --package-path agent --filter concurrentLookupBenchmark`.
+It measures three passes of 16 concurrent lookups against a 64 MiB image on
+the local filesystem. Timing is informational; compare runs on the same host
+and toolchain. The benchmark is skipped in ordinary test runs.
+
 Tests use [swift-testing](https://github.com/swiftlang/swift-testing)
 (`@Test` / `#expect`), not XCTest. Keep control-plane tests in the template
 clone harness and point `DATABASE_*` at a disposable test server.

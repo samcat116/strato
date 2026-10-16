@@ -14,8 +14,77 @@ import StratoAgentTestSupport
 @Suite("Sandbox Image Service")
 struct SandboxImageServiceTests {
 
+    @Test("pinned repository mirrors share one digest materialization")
+    func concurrentMirrors() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let fixture = try makeFixture()
+        let transport = MockOCITransport()
+        let mirrors = (0..<8).map { "registry.example.com/acme/mirror-\($0):v1" }
+        for index in 0..<mirrors.count {
+            let base = "https://registry.example.com/v2/acme/mirror-\(index)"
+            await transport.script(
+                "\(base)/manifests/\(fixture.manifestDigest)",
+                .init(
+                    status: 200, headers: ["Content-Type": OCIMediaType.ociManifest], body: fixture.manifestData))
+            for (digest, bytes) in fixture.blobs {
+                await transport.script("\(base)/blobs/\(digest)", .init(status: 200, body: bytes))
+            }
+        }
+        let builder = RecordingImageBuilder()
+        let service = makeService(cacheRoot: root, transport: transport, builder: builder)
+        let paths = try await withThrowingTaskGroup(of: String.self) { group in
+            for mirror in mirrors {
+                group.addTask {
+                    try await service.materializeRootfs(image: mirror, imageDigest: fixture.manifestDigest).rootfsPath
+                }
+            }
+            var paths: [String] = []
+            for try await path in group { paths.append(path) }
+            return paths
+        }
+        #expect(paths.count == mirrors.count)
+        #expect(Set(paths).count == 1)
+        #expect(await builder.snapshots.count == 1)
+    }
+
     private let image = "registry.example.com/acme/app:v1"
     private let apiBase = "https://registry.example.com/v2/acme/app"
+
+    @Test(
+        "invalid registry layer sizes are rejected before fetching blobs",
+        arguments: [[Int64(1) << 62], [Int64.max, 1], [-1]])
+    func invalidRegistryLayerSizes(sizes: [Int64]) async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let manifest = OCIManifest(
+            config: OCIDescriptor(
+                mediaType: OCIMediaType.ociConfig,
+                digest: "sha256:" + String(repeating: "b", count: 64), size: 2),
+            layers: sizes.map { size in
+                OCIDescriptor(
+                    mediaType: "application/vnd.oci.image.layer.v1.tar",
+                    digest: "sha256:" + String(repeating: "c", count: 64), size: size)
+            })
+        let transport = MockOCITransport()
+        await transport.script(
+            "\(apiBase)/manifests/v1",
+            .init(
+                status: 200,
+                headers: ["Content-Type": OCIMediaType.ociManifest], body: try JSONEncoder().encode(manifest)))
+        let service = makeService(cacheRoot: root, transport: transport, builder: RecordingImageBuilder())
+        do {
+            _ = try await service.materializeRootfs(image: image)
+            Issue.record("Oversized image must be rejected")
+        } catch let error as OCIError {
+            switch error {
+            case .insufficientDiskSpace: #expect(!sizes.contains(where: { $0 < 0 }))
+            case .malformedResponse: #expect(sizes.contains(where: { $0 < 0 }))
+            default: Issue.record("Expected a layer-size rejection, got \(error)")
+            }
+        }
+        #expect(await transport.requests.count == 1)
+    }
 
     /// A two-layer fixture image: layer 2 replaces a file and whites out
     /// another, exercising ordering and whiteouts through the whole pipeline.

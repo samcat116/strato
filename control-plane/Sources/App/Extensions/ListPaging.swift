@@ -27,13 +27,13 @@ struct ListPaging: Sendable {
     /// Wraps an already authorization-filtered, deterministically ordered list
     /// in the envelope, echoing the clamped limit/offset actually applied.
     func page<Item: Content & Sendable>(_ items: [Item]) -> PagedResponse<Item> {
-        let slice: [Item]
-        if offset < items.count {
-            slice = Array(items[offset..<min(offset + limit, items.count)])
-        } else {
-            slice = []
-        }
-        return PagedResponse(items: slice, total: items.count, limit: limit, offset: offset)
+        PagedResponse(items: slice(items), total: items.count, limit: limit, offset: offset)
+    }
+
+    /// Slice lightweight candidates before loading their response graphs.
+    func slice<Item>(_ items: [Item]) -> [Item] {
+        guard offset < items.count else { return [] }
+        return Array(items[offset..<(offset + min(limit, items.count - offset))])
     }
 }
 

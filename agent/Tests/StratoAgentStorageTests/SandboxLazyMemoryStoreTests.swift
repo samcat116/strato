@@ -13,11 +13,15 @@ struct SandboxLazyMemoryStoreTests {
     private func withStore(maximumBytes: Int = 1 << 20, _ body: (String, SandboxLazyMemoryStore) async throws -> Void)
         async throws
     {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("lazy-store-\(UUID())")
-            .resolvingSymlinksInPath().path
+        let requestedRoot = FileManager.default.temporaryDirectory.appendingPathComponent("lazy-store-\(UUID())").path
         try FileManager.default.createDirectory(
-            atPath: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        defer { try? FileManager.default.removeItem(atPath: root) }
+            atPath: requestedRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(atPath: requestedRoot) }
+        // Foundation can preserve macOS's /var alias even after resolving URL
+        // symlinks. The store rejects every symlink component, so use realpath.
+        let resolved = try #require(realpath(requestedRoot, nil))
+        let root = String(cString: resolved)
+        free(resolved)
         let store = try SandboxLazyMemoryStore(directory: root, maximumBytes: maximumBytes)
         try await body(root, store)
     }

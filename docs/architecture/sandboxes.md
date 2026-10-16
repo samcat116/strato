@@ -188,12 +188,23 @@ flattened with OCI whiteout handling and traversal-safe unpacking, then
 `mkfs.ext4 -d` builds the image sized to content plus configurable headroom,
 staged and published atomically.
 
+Declared layer sizes use checked arithmetic before allocating disk work;
+unrepresentable totals or expansion budgets are rejected rather than trapping.
+Requests for the same reference share a pull. Distinct references and repository
+mirrors retain independent pull credentials and errors, then share the
+platform-digest-owned build and publication so they cannot compete over staging.
+
 The cache is **content-addressed by platform manifest digest** (with
 index→platform alias files so digest-pinned sandboxes hit it offline) and
 evicted after each materialization: entries idle past a 7-day TTL, plus —
 when `sandbox_image_cache_max_size_gb` is set — least-recently-used entries
 beyond the size budget (recently used entries are grace-protected). Only
-flattened images are cached (no layer-level dedup/snapshotter). The image
+flattened images are cached (no layer-level dedup/snapshotter). Overlapping
+lookups share one size/SHA-256 verification on a bounded IO queue, leaving the
+cache actor available for other work. Every subsequent lookup hashes again;
+verification is not memoized across reads, so same-size corruption is still
+detected. Invalidation or eviction during verification makes that lookup a
+miss rather than allowing it to serve or remove a replacement entry. The image
 config's execution parameters (entrypoint/cmd/env/workdir/user) are staged as
 `config.json` beside `rootfs.ext4` — the rootfs stays a pristine container
 filesystem; the config travels into the guest on the config drive described
