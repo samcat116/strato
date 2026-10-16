@@ -528,6 +528,29 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/retry-placement:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      operationId: retryVMPlacement
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      summary: Retry placement of a failed, unplaced virtual machine
+      description: >-
+        Requires vm:start. Retries a failed create only when the VM has no
+        assigned host and exactly one existing boot volume with no physical
+        placement. Reuses its NICs, addresses, identity and boot volume, and
+        preserves its desired power state. A pending or already placed VM is
+        refused with 409. Completion is reported through the new generation's
+        conditions; a VM whose desired state is shutdown can then be started.
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}/interfaces:
     parameters:
       - $ref: "#/components/parameters/VMID"

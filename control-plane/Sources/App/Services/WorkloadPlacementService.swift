@@ -1,6 +1,7 @@
 import Foundation
 import Fluent
 import NIOConcurrencyHelpers
+import NIOCore
 import SQLKit
 import StratoAPITypes
 import StratoShared
@@ -22,15 +23,28 @@ actor WorkloadPlacementService {
         vm: VM,
         db: Database,
         strategy: SchedulingStrategy? = nil,
-        image: Image? = nil
+        image: Image? = nil,
+        expectedGeneration: Int64? = nil
     ) async throws {
-        try await placeVM(vm: vm, db: db, strategy: strategy, image: image, attemptsRemaining: 3)
+        let agentID = try await AdvisoryLock.withSessionLock(
+            .object(.vmPlacement, id: vm.requireID()), on: db,
+            timeout: .seconds(30), pollInterval: .milliseconds(25), logger: app.logger
+        ) { [self] connection in
+            let database = try PlacementTransactionConnection(connection)
+            return try await placeVM(
+                vm: vm, db: database, strategy: strategy, image: image,
+                expectedGeneration: expectedGeneration, attemptsRemaining: 3)
+        }
+        // Doorbell delivery queries app.db. Release the pinned placement lease
+        // first, including on deployments with one connection per event loop.
+        if let agentID { await app.agentService.syncDesiredState(agentId: agentID) }
     }
 
     private func placeVM(
-        vm: VM, db: Database, strategy: SchedulingStrategy?, image: Image?, attemptsRemaining: Int
-    ) async throws {
-        let schedulableAgents = await schedulableAgentsFromDatabase()
+        vm: VM, db: Database, strategy: SchedulingStrategy?, image: Image?,
+        expectedGeneration: Int64?, attemptsRemaining: Int
+    ) async throws -> String? {
+        let schedulableAgents = await schedulableAgentsFromDatabase(on: db)
         let vmId = try vm.requireID().uuidString
         let imageArchitecture = image?.architecture
         var reservedAgentId: String?
@@ -43,9 +57,10 @@ actor WorkloadPlacementService {
             guard let plannedVM = try await VM.find(vm.id, on: db) else {
                 throw Abort(.notFound, reason: "VM no longer exists")
             }
+            if let expectedGeneration, plannedVM.generation != expectedGeneration { return nil }
             if let placedAgent = plannedVM.hypervisorId {
                 vm.hypervisorId = placedAgent
-                return
+                return nil
             }
             if let snapshot = plannedVM.resourceClass {
                 plannedVM.resourceClass = try await WorkloadResourceClassService.currentPolicy(snapshot, on: db)
@@ -239,7 +254,8 @@ actor WorkloadPlacementService {
                 // Retry only optimistic input validation, never a transaction
                 // abort or an ambiguous commit; generic DB retries are separate.
                 return try await placeVM(
-                    vm: vm, db: db, strategy: strategy, image: image, attemptsRemaining: attemptsRemaining - 1)
+                    vm: vm, db: db, strategy: strategy, image: image,
+                    expectedGeneration: expectedGeneration, attemptsRemaining: attemptsRemaining - 1)
             }
             throw error
         }
@@ -255,7 +271,7 @@ actor WorkloadPlacementService {
                 "strato.agent.id": .string(agentId),
             ])
 
-        await app.agentService.syncDesiredState(agentId: agentId)
+        return agentId
     }
 
     /// Places a sandbox on a compatible Firecracker agent. Networked sandboxes
@@ -472,13 +488,14 @@ actor WorkloadPlacementService {
     /// The scheduler's view of the fleet, assembled from the shared registry:
     /// agent rows (resources refreshed by heartbeats through any replica) and
     /// per-agent VM counts, filtered to agents whose presence key is live.
-    func schedulableAgentsFromDatabase() async -> [SchedulableAgent] {
+    func schedulableAgentsFromDatabase(on database: (any Database)? = nil) async -> [SchedulableAgent] {
+        let db = database ?? app.db
         do {
-            async let onlineAgents = Agent.query(on: app.db)
+            async let onlineAgents = Agent.query(on: db)
                 .filter(\.$status == .online)
                 .all()
-            async let groupedCounts = runningVMCountsFromDatabase()
-            async let clusterInstant = ClusterClock.read(on: app.db)
+            async let groupedCounts = runningVMCountsFromDatabase(on: db)
+            async let clusterInstant = ClusterClock.read(on: db)
             let (agents, runningVMCounts, instant) = try await (
                 onlineAgents, groupedCounts, clusterInstant
             )
@@ -495,7 +512,7 @@ actor WorkloadPlacementService {
                     }
                 } ?? agents
 
-            let durableRows = try await AgentResourceAdmission.query(on: app.db).all()
+            let durableRows = try await AgentResourceAdmission.query(on: db).all()
             let durable = Dictionary(
                 uniqueKeysWithValues: durableRows.compactMap { row in
                     row.id.map { ($0, row.state) }
@@ -538,8 +555,8 @@ actor WorkloadPlacementService {
     }
 
     /// Count placed VMs per agent without hydrating every VM in the cluster.
-    private func runningVMCountsFromDatabase() async throws -> [String: Int] {
-        guard let sql = app.db as? SQLDatabase else {
+    private func runningVMCountsFromDatabase(on db: any Database) async throws -> [String: Int] {
+        guard let sql = db as? SQLDatabase else {
             throw Abort(.internalServerError, reason: "Scheduler placement requires an SQL database")
         }
 

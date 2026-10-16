@@ -16,7 +16,7 @@ struct AdvisoryLockTests {
         let values = AdvisoryLockNamespace.allCases.map(\.rawValue)
 
         #expect(Set(values).count == values.count)
-        #expect(values == Array(Int32(0)...Int32(13)))
+        #expect(values == Array(Int32(0)...Int32(14)))
     }
 
     @Test("UUID digests are stable and singleton locks use zero")

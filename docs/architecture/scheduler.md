@@ -21,14 +21,14 @@ When a new VM is created, the Scheduler Service analyzes all available agents an
    - Registered as an Application service
    - Accessible via `req.scheduler` in request handlers
 
-2. **AgentService Integration** (`control-plane/Sources/App/Services/AgentService.swift`)
+2. **Placement Service** (`control-plane/Sources/App/Services/WorkloadPlacementService.swift`)
    - Builds `SchedulableAgent` candidates from the database
      (`schedulableAgentsFromDatabase()`)
    - Calls scheduler during VM creation
    - Persists hypervisor assignment to database
 
 3. **VMController Integration** (`control-plane/Sources/App/Controllers/VMController.swift`)
-   - Invokes `agentService.createVM()` with database context
+   - Invokes `workloadPlacement.createVM()` with database context
    - Properly persists `hypervisorId` field in VM model
 
 ### Data Flow
@@ -38,9 +38,9 @@ VM Creation Request
     ↓
 VMController.create()
     ↓
-AgentService.createVM()
+WorkloadPlacementService.createVM()
     ↓
-AgentService.getSchedulableAgents()
+WorkloadPlacementService.schedulableAgentsFromDatabase()
     ↓
 SchedulerService.selectAgent()
     ↓
@@ -61,6 +61,23 @@ There is no imperative create message: once the placement is persisted, the
 VM is part of the chosen agent's desired state. The immediate doorbell wakes a
 parked poll for low latency; reconnect and unconditional full refetches keep
 carrying it until the agent's reconciler converges.
+
+### Retrying a failed initial placement
+
+`POST /api/vms/{id}/retry-placement` requires `vm:start` and accepts only a
+failed current generation with no assigned host and one unplaced boot volume.
+It reuses the existing VM, NICs, IP allocations, identity and boot volume.
+The acceptance transaction locks and refreshes the VM, advances its generation
+and records one create-attempt event. Concurrent unkeyed retries are refused
+after that advance; `Idempotency-Key` replays return the original acceptance.
+The caller follows the new generation's `conditions`, then starts the VM if
+its preserved desired power state is shutdown.
+
+VM placement attempts use a per-VM `vm_placement` advisory session lock across
+planning, reservation and commit or rollback. This keeps a losing or stale
+attempt from releasing another attempt's reservation across replicas. All
+placement SQL reuses the pinned connection, and doorbells run after its
+release. A retry dispatched for a superseded generation performs no placement.
 
 ## Scheduling Strategies
 

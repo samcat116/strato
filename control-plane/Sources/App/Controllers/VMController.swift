@@ -153,6 +153,7 @@ struct VMController: RouteCollection {
             vm.patch(use: patchMetadata)
             vm.delete(use: delete).supportsIdempotency()
             vm.post("start", use: start).supportsIdempotency()
+            vm.post("retry-placement", use: retryPlacement).supportsIdempotency()
             vm.post("stop", use: stop).supportsIdempotency()
             vm.post("restart", use: restart).supportsIdempotency()
             vm.post("pause", use: pause).supportsIdempotency()
