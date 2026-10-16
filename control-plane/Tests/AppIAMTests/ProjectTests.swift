@@ -91,7 +91,7 @@ final class ProjectTests {
                         description: "Project that should get an org tuple",
                         organizationalUnitId: nil,
                         defaultEnvironment: "development",
-                        environments: ["development"]
+                        environments: ["development", "staging", "production"]
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -100,7 +100,8 @@ final class ProjectTests {
                 #expect(response.name == "Perms Project")
                 #expect(response.organizationId == testOrganization.id)
                 #expect(response.organizationalUnitId == nil)
-                #expect(response.environments.count == 1)
+                #expect(response.environments.count == 3)
+                #expect(response.defaultEnvironment == "development")
             }
 
             // Parentage must reference the *persisted* project id (issue #267):
@@ -135,8 +136,8 @@ final class ProjectTests {
                         name: "OU Perms Project",
                         description: "OU project that should get an OU parent tuple",
                         organizationalUnitId: nil,
-                        defaultEnvironment: "development",
-                        environments: ["development", "production"]
+                        defaultEnvironment: "dev",
+                        environments: ["dev", "prod"]
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -145,7 +146,8 @@ final class ProjectTests {
                 #expect(response.name == "OU Perms Project")
                 #expect(response.organizationId == nil)
                 #expect(response.organizationalUnitId == testOU.id)
-                #expect(response.environments.count == 2)
+                #expect(response.environments == ["dev", "prod"])
+                #expect(response.defaultEnvironment == "dev")
             }
 
             let projectId = try #require(createdProjectId)

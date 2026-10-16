@@ -36,7 +36,7 @@ Paths below are relative to each package's `Tests` directory.
 | `RoleNestingSubsumptionTests` synthetic flat action policies | `CedarSchemaTests.seededRoleChainNested` and `SwiftCedarEngineTests.roleActionEnumeration` check set nesting and actual assembled policies. Conditioned guardrail/write-report solver coverage remains. |
 | Registration Boolean grammar 13 rows → 3 | True, false and one invalid value cover App's configuration wiring. Default, endpoint refusal, bootstrap concurrency and username-oracle tests remain. |
 | Three repeated `AppResourceTests/ImageControllerTests` uploads, artifact extension rows 3 → 1 | `testCreateImageUploadSuccess` includes persisted QCOW virtual size; `testUploadStoresExactBytes` includes streamed length and independently computed SHA-256; `testUploadWithoutFormatDetectsRaw` remains. Every-format filename validation stays in the leaf validator. |
-| Seven one-field/default `VMSpecBuilderTests` | `testCompleteSpec`, `testMinimalSpec`, `testVolumeConfiguration` retain nondefault/default mapping and writable managed boot-volume assertions. |
+| Seven one-field/default `VMSpecBuilderTests` | `testCompleteSpec`, `testMinimalSpec`, `testImageBasedSpec`, `testVolumeConfiguration` retain nondefault/default mapping and writable managed boot-volume assertions. |
 | Six `ImageValidationServiceTests` declarations / ten cases | Every-format disk/artifact extension contracts, exact VHDX detection, truncated buffer and positive filesystem probes. Unsafe filename/QCOW-reference/boundary cases remain. |
 | Two `ImageObjectStoreTests` duplicates, one `ByteConversionTests` roundtrip | Existing nested-path write/read, exact disk/rootfs key contract and direct conversion checks. Atomicity, rollback, terminal races, integer overflow and non-finite bounds remain. |
 | Shared metadata NIC/identity and JSONValue duplicate full-fixture roundtrips | `InstanceMetadataTests.metadataRoundTrip` compares the full Equatable envelope; `JSONValueTests.roundTripsEveryJSONKind` covers mixed nested kinds. Custom decode behavior remains. |
@@ -77,3 +77,10 @@ Swift PR validation does not compile or run test targets. These cuts primarily
 reduce maintenance and local/manual test work; they do not halve ordinary PR
 Actions costs. Focused validation and measured timings belong in the PR rather
 than treating source counts as runtime predictions.
+
+A single paired local health-suite benchmark used the same package path,
+Swift 6.4/macOS and dedicated PostgreSQL 14 cluster: 21 → 13 functions,
+8.874s → 5.551s reported test execution (3.323s saved). Build steps were
+9.80s and 6.66s; changed-target and cache state differ, so this is not a
+compilation benchmark. This small comparison does not predict full-suite
+or Actions savings. The production database platform is PostgreSQL 15.

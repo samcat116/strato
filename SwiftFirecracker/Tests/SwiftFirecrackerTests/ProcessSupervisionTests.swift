@@ -288,6 +288,7 @@ struct ProcessSupervisionTests {
     func argvMatching() {
         #expect(FirecrackerClient.argvCarriesVMId(["firecracker", "--id", "vm-1"], vmId: "vm-1"))
         #expect(FirecrackerClient.argvCarriesVMId(["firecracker", "--id=vm-1"], vmId: "vm-1"))
+        #expect(!FirecrackerClient.argvCarriesVMId(["firecracker", "--id=vm-10"], vmId: "vm-1"))
         #expect(!FirecrackerClient.argvCarriesVMId(["firecracker", "--id", "vm-11"], vmId: "vm-1"))
         #expect(!FirecrackerClient.argvCarriesVMId(["firecracker", "--id"], vmId: "vm-1"))
         #expect(!FirecrackerClient.argvCarriesVMId([], vmId: "vm-1"))
