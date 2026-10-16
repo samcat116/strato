@@ -896,6 +896,11 @@ retained separately: a failure at that same generation overrides completion,
 while a later unrelated VM goal cannot rewrite the completed request. Explicit
 retry creates another request; the earlier failure remains failed. Operation
 history resolves these outcomes in one query bounded by the requested targets.
+Offline dispatch and convergence deadline failures append a failed guest request
+outcome in the same transaction as the generic resource failure. They preserve
+host diagnostics and create no guest-channel failure generation or item evidence.
+Later resource recovery cannot change that failed request into a success, and
+unrelated host failures do not rewrite an already completed guest request.
 
 GET projects desired and observed values independently, with matched/drift/unknown/
 stale/failed item states. Only `failedItem` marks a failed row; missing facts can be

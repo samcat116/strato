@@ -15,6 +15,8 @@ struct VMGuestConfigurationItem: Content {
 
 enum VMGuestConfigPresentation {
     static let failure = "Guest configuration failed. Repair the guest, then retry with a new generation."
+    static let operationFailure =
+        "Guest configuration did not complete for this request. Check the VM, then retry with a new generation."
     /// Only exact, source-defined diagnostics can leave the redacted report.
     /// Unrecognized guest text may contain arbitrary file/command content.
     static func safeFailure(_ reason: String?) -> String {

@@ -56,7 +56,8 @@ enum ResourceEventPhase: String, Codable, CaseIterable, Sendable {
     /// The mutation reached its goal. Appended by the finalizer reap for a
     /// delete, or after validated guest configuration and host convergence.
     case completed
-    /// A terminal guest configuration failure. Its safe reason is projected
+    /// A terminal guest configuration operation failure, including host dispatch
+    /// and convergence deadline failures. Its safe reason is projected
     /// by the facade; arbitrary guest errors are never stored in this ledger.
     case failed
 }

@@ -179,7 +179,7 @@ enum OperationFacade {
                 guard let target = row.targetGeneration, outcomes[target]?.status != .failed else { continue }
                 outcomes[target] = Verdict(
                     status: row.phase == .failed ? .failed : .succeeded,
-                    error: row.phase == .failed ? VMGuestConfigPresentation.failure : nil,
+                    error: row.phase == .failed ? VMGuestConfigPresentation.operationFailure : nil,
                     completedAt: row.createdAt)
             }
         }

@@ -159,8 +159,13 @@ struct VMGuestConfigurationTests {
                     #expect(res.status == .accepted)
                 }
             }
+            await app.backgroundTasks.drain(timeout: .seconds(10))
             #expect(try await VM.find(vm.id!, on: app.db)?.generation == originalGeneration + 1)
-            #expect(try await ResourceEvent.query(on: app.db).count() == 1)
+            let events = try await ResourceEvent.query(on: app.db).all()
+            #expect(events.filter { $0.phase == .requested }.count == 1)
+            // This fixture is unplaced: its single accepted request also has
+            // exactly one durable offline-dispatch failure, even after replay.
+            #expect(events.filter { $0.phase == .failed }.count == 1)
             user.isSystemAdmin = false
             try await user.save(on: app.db)
             try await app.test(.PUT, "/api/vms/\(vm.id!)/guest-config") { req in
@@ -498,6 +503,128 @@ struct VMGuestConfigurationTests {
                 resourceKind: .virtualMachine, resourceID: vm.id!, limit: 100, on: app.db)
             #expect(history.first { $0.id == accepted.mutationID }?.status == .failed)
             #expect(history.first { $0.id == retry.mutationID }?.status == .succeeded)
+        }
+    }
+
+    @Test("Offline dispatch and deadline failures remain failed after late guest success", arguments: [false, true])
+    func genericFailureKeepsGuestOperationOutcome(deadline: Bool) async throws {
+        try await withFixture { app, user, vm, _ in
+            vm.hypervisorId = "config-node"
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 2
+            vm.observedGeneration = 2
+            try await vm.save(on: app.db)
+            let config = GuestConfig(packages: [.init(name: "curl", state: .present)])
+            let mutation = VMGuestConfigMutation(dispatch: FakeAgentDispatch(online: deadline), logger: app.logger)
+            let accepted = try #require(
+                try await mutation.replace(config, on: vm, actor: .user(user.id!), context: nil, db: app.db, app: app))
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            if deadline {
+                vm.convergenceDeadline = Date().addingTimeInterval(-1)
+                try await vm.save(on: app.db)
+                await app.agentMaintenance.sweepStuckConvergence()
+                await app.agentMaintenance.sweepStuckConvergence()
+            }
+            let request = try #require(try await ResourceEvent.find(accepted.mutationID, on: app.db))
+            let failed = try #require(try await VM.find(vm.id!, on: app.db))
+            #expect(failed.failedGeneration == accepted.targetGeneration)
+            #expect(failed.lastError?.contains(deadline ? "Timed out" : "offline") == true)
+            #expect(failed.guestConfigFailedGeneration == nil)
+            #expect(failed.guestConfigEvidence == nil)
+            let operation = try await OperationFacade.response(for: request, on: app.db)
+            #expect(operation.status == .failed)
+            #expect(operation.error == VMGuestConfigPresentation.operationFailure)
+            // The resource can recover without inventing a guest-channel verdict,
+            // but the settled request must remain failed after a database reload.
+            let good = try observation(["packages": [["name": "curl", "version": "1"]]])
+            try await apply(good, vm: failed, app: app)
+            try await apply(good, vm: failed, app: app)
+            #expect(failed.isConverged)
+            #expect(failed.guestConfigFailedGeneration == nil)
+            #expect(try await OperationFacade.response(for: request, on: app.db).status == .failed)
+            let outcomes = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceID == vm.id!).filter(\.$mutation == .guestConfig)
+                .filter(\.$targetGeneration == accepted.targetGeneration).filter(\.$phase != .requested).all()
+            #expect(outcomes.map(\.phase) == [.failed])
+            let newer = VMGuestConfigMutation(dispatch: FakeAgentDispatch(), logger: app.logger)
+            let next = try #require(
+                try await newer.replace(nil, on: failed, actor: .user(user.id!), context: nil, db: app.db, app: app))
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            try await apply(nil, vm: failed, app: app)
+            let nextRequest = try #require(try await ResourceEvent.find(next.mutationID, on: app.db))
+            #expect(try await OperationFacade.response(for: nextRequest, on: app.db).status == .succeeded)
+            #expect(try await OperationFacade.response(for: request, on: app.db).status == .failed)
+        }
+    }
+
+    @Test("The durable guest operation failure rolls back with the resource failure")
+    func genericFailureOutcomeIsTransactional() async throws {
+        enum Rollback: Error { case requested }
+        try await withFixture { app, user, vm, _ in
+            vm.hypervisorId = "config-node"
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.running)
+            try await vm.save(on: app.db)
+            let mutation = VMGuestConfigMutation(dispatch: FakeAgentDispatch(), logger: app.logger)
+            let accepted = try #require(
+                try await mutation.replace(
+                    GuestConfig(packages: [.init(name: "curl", state: .present)]), on: vm,
+                    actor: .user(user.id!), context: nil, db: app.db, app: app))
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            await #expect(throws: Rollback.self) {
+                try await app.db.transaction { tx -> Void in
+                    let copy = try #require(try await VM.find(vm.id!, on: tx))
+                    let outcome = try await ResourceConvergence.recordFailure(
+                        copy, mutation: .guestConfig, reason: "Agent is offline",
+                        telemetryReason: "mutation_failed", at: try await ClusterClock.read(on: tx), on: tx)
+                    #expect(outcome == .recorded)
+                    let phases = try await ResourceEvent.query(on: tx)
+                        .filter(\.$resourceID == vm.id!).filter(\.$targetGeneration == accepted.targetGeneration)
+                        .all().map(\.phase)
+                    #expect(phases.contains(.failed))
+                    throw Rollback.requested
+                }
+            }
+            let reloaded = try #require(try await VM.find(vm.id!, on: app.db))
+            #expect(reloaded.failedGeneration == nil)
+            #expect(reloaded.lastError == nil)
+            #expect(reloaded.convergenceDeadline != nil)
+            let phases = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceID == vm.id!).filter(\.$targetGeneration == accepted.targetGeneration)
+                .all().map(\.phase)
+            #expect(phases == [.requested])
+        }
+    }
+
+    @Test("A generic host failure does not rewrite a completed guest operation at the same generation")
+    func genericHostFailurePreservesGuestCompletion() async throws {
+        try await withFixture { app, user, vm, _ in
+            vm.hypervisorId = "config-node"
+            vm.setFixtureDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 2
+            try await vm.save(on: app.db)
+            let mutation = VMGuestConfigMutation(dispatch: FakeAgentDispatch(), logger: app.logger)
+            let accepted = try #require(
+                try await mutation.replace(
+                    GuestConfig(packages: [.init(name: "curl", state: .present)]), on: vm,
+                    actor: .user(user.id!), context: nil, db: app.db, app: app))
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+            try await apply(observation(["packages": [["name": "curl", "version": "1"]]]), vm: vm, app: app)
+            let request = try #require(try await ResourceEvent.find(accepted.mutationID, on: app.db))
+            #expect(try await OperationFacade.response(for: request, on: app.db).status == .succeeded)
+            let outcome = try await ResourceConvergence.recordFailure(
+                vm, mutation: .resize, reason: "host resize failed", telemetryReason: "mutation_failed",
+                at: try await ClusterClock.read(on: app.db), on: app.db)
+            #expect(outcome == .recorded)
+            #expect(vm.guestConfigFailedGeneration == nil)
+            #expect(vm.lastError == "host resize failed")
+            #expect(try await OperationFacade.response(for: request, on: app.db).status == .succeeded)
+            let outcomes = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceID == vm.id!).filter(\.$mutation == .guestConfig)
+                .filter(\.$targetGeneration == accepted.targetGeneration).filter(\.$phase != .requested).all()
+            #expect(outcomes.map(\.phase) == [.completed])
         }
     }
 

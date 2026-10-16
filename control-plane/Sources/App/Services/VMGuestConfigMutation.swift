@@ -30,6 +30,35 @@ struct VMGuestConfigMutation {
         return try encoder.encode(normalized(lhs)) == encoder.encode(normalized(rhs))
     }
 
+    /// Called under the VM generation lock in the generic failure transaction.
+    /// A host/dispatch timeout settles the request, not the guest channel: leave
+    /// guest failure generations and read-back evidence untouched.
+    static func recordOperationFailure(for vm: VM, at failedGeneration: Int64, on db: any Database) async throws {
+        let id = try vm.requireID()
+        guard
+            let request = try await ResourceEvent.query(on: db)
+                .filter(\.$resourceKind == .virtualMachine).filter(\.$resourceID == id)
+                .filter(\.$mutation == .guestConfig).filter(\.$phase == .requested)
+                .sort(\.$targetGeneration, .descending).first(),
+            let target = request.targetGeneration,
+            target == failedGeneration || (target < failedGeneration && vm.observedGeneration < target)
+        else { return }
+        // Protect completed requests from unrelated host failures, and make
+        // repeated settlement idempotent. Only real guest read-back failures
+        // can override completion at the realized generation.
+        guard
+            try await ResourceEvent.query(on: db)
+                .filter(\.$resourceKind == .virtualMachine).filter(\.$resourceID == id)
+                .filter(\.$mutation == .guestConfig).filter(\.$targetGeneration == target)
+                .filter(\.$phase != .requested).first() == nil
+        else { return }
+        try await ResourceEvent.record(
+            .guestConfig, resourceKind: .virtualMachine, resourceID: id, actor: .system, phase: .failed,
+            scope: .init(
+                organizationID: request.organizationID, projectID: request.projectID,
+                resourceName: request.resourceName, generation: target), on: db)
+    }
+
     func replace(
         _ config: GuestConfig?, retry: Bool = false, on vm: VM, actor: MutationActor,
         context: IdempotencyRequestContext?, db: any Database, app: Application
