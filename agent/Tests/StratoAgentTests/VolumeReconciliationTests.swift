@@ -151,7 +151,7 @@ struct VolumeReconciliationTests {
             case .delete:
                 volumes.removeValue(forKey: item.id)
             case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
-                .reconfigureNetworks:
+                .reconfigureNetworks, .convergeGuestConfig:
                 break
             }
         }

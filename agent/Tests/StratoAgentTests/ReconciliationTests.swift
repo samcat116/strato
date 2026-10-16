@@ -147,6 +147,12 @@ struct ReconciliationTests {
         /// spec to plan resizes (issue #568).
         var sizing: [String: VMSizing] = [:]
         private(set) var performed: [(step: ReconcileStep, vmId: String)] = []
+        private(set) var retiredGuestObservations: [Int64] = []
+        func retireGuestConfigObservation(_ item: ReconcileWorkItem) {
+            if item.kind == .vm, item.desired?.guestConfig?.isEmpty != false {
+                retiredGuestObservations.append(item.generation)
+            }
+        }
         private(set) var reportCount = 0
         private(set) var enforcementStarted: [Int64] = []
         private(set) var enforcementSucceeded: [Int64] = []
@@ -163,6 +169,8 @@ struct ReconciliationTests {
         private(set) var recordedEdges: [(id: String, nonces: AppliedEdgeNonces)] = []
         /// When set, every action throws this error.
         var failWith: (any Error)?
+        var beforeGuestConvergence: (@Sendable () async -> Void)?
+        func setGuestConvergenceGate(_ gate: @escaping @Sendable () async -> Void) { beforeGuestConvergence = gate }
 
         init(presence: [String: VMPresence] = [:]) {
             self.presence = presence
@@ -221,7 +229,8 @@ struct ReconciliationTests {
             throw UnsupportedTestActuation.sandbox
         }
 
-        func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
+        func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+            if step == .convergeGuestConfig { await beforeGuestConvergence?() }
             if let failWith { throw failWith }
             performed.append((step, item.id))
             switch step {
@@ -236,7 +245,7 @@ struct ReconciliationTests {
                 }
             case .reboot: presence[item.id] = .managed(.running)
             case .restore: presence[item.id] = .managed(.running)
-            case .adopt, .export, .reconfigureNetworks: break
+            case .adopt, .export, .reconfigureNetworks, .convergeGuestConfig: break
             case .attach, .detach, .throttle: break  // volume-only steps; never planned for a VM
             }
         }
@@ -264,6 +273,110 @@ struct ReconciliationTests {
         Reconciler(
             actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
             metadataStore: MetadataStore(), now: now)
+    }
+
+    @Test("Guest observation retirement covers no-step withdrawal and runtime work but ignores stale intent")
+    func guestObservationRetirementFollowsGenerationGuard() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .managed(.running)])
+        let reconciler = makeReconciler(actuator)
+        func intent(_ generation: Int64, _ status: DesiredVMStatus, config: GuestConfig? = nil) -> DesiredStateMessage {
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: status,
+                    generation: generation, guestConfig: config)
+            ])
+        }
+        await reconciler.apply(intent(7, .running, config: GuestConfig()))
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 7)
+        #expect(await actuator.performed.isEmpty)
+        #expect(await actuator.retiredGuestObservations == [7])
+        await reconciler.apply(intent(6, .running))
+        #expect(await actuator.retiredGuestObservations == [7])
+        await reconciler.apply(intent(8, .shutdown))
+        _ = await actuator.waitForReports(2)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 8)
+        #expect(await actuator.retiredGuestObservations == [7, 8])
+        #expect(await actuator.performed.last?.step == .shutdown)
+    }
+
+    @Test("A newer no-step withdrawal waits for in-flight guest realization before retiring its facts")
+    func guestWithdrawalWaitsForPreviousPass() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .managed(.running)])
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        await actuator.setGuestConvergenceGate {
+            started.continuation.yield(())
+            started.continuation.finish()
+            for await _ in release.stream { break }
+        }
+        let reconciler = makeReconciler(actuator)
+        await reconciler.apply(
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
+                    generation: 7, guestConfig: GuestConfig(packages: [GuestPackage(name: "curl", state: .present)]))
+            ]))
+        for await _ in started.stream { break }
+        await reconciler.apply(
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running, generation: 8)
+            ]))
+        #expect(await actuator.retiredGuestObservations.isEmpty)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 0)
+        release.continuation.yield(())
+        release.continuation.finish()
+        _ = await actuator.waitForReports(2)
+        #expect(await actuator.retiredGuestObservations == [8])
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 8)
+    }
+
+    @Test("Guest convergence gates the VM generation and permanent failure needs a new generation")
+    func guestFailureGatesGeneration() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .managed(.running)])
+        await actuator.setFailure(GuestConfigurationFailure.failed(reason: "package budget exhausted"))
+        let reconciler = makeReconciler(actuator)
+        func intent(_ generation: Int64) -> DesiredStateMessage {
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
+                    generation: generation,
+                    guestConfig: GuestConfig(packages: [GuestPackage(name: "curl", state: .present)]))
+            ])
+        }
+        await reconciler.apply(intent(7))
+        _ = await actuator.waitForReports(1)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 0)
+        #expect(await reconciler.lastError(for: id.uuidString) == "package budget exhausted")
+        #expect(await reconciler.failureClassification(for: id.uuidString) == .permanent)
+        let attempts = await actuator.performed.count
+        await actuator.setFailure(nil)
+        await reconciler.apply(intent(7))
+        #expect(await actuator.performed.count == attempts)
+        await reconciler.apply(intent(8))
+        _ = await actuator.waitForReports(2)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 8)
+        #expect(await reconciler.lastError(for: id.uuidString) == nil)
+        #expect(await actuator.performed.last?.step == .convergeGuestConfig)
+    }
+
+    @Test("Guest convergence follows adoption before the VM generation is acknowledged")
+    func guestConvergenceFollowsAdoption() async {
+        let id = UUID()
+        let actuator = MockActuator(presence: [id.uuidString: .orphaned])
+        let reconciler = makeReconciler(actuator)
+        await reconciler.apply(
+            Self.sync([
+                DesiredVMState(
+                    vmId: id, hypervisorType: .qemu, spec: Self.spec(), desiredStatus: .running,
+                    generation: 7, guestConfig: GuestConfig(packages: [GuestPackage(name: "curl", state: .present)]))
+            ]))
+        _ = await actuator.waitForReports(1)
+        #expect(await actuator.performed.last?.step == .convergeGuestConfig)
+        #expect(await reconciler.observedGeneration(for: id.uuidString) == 7)
     }
 
     // MARK: - Pure diff engine

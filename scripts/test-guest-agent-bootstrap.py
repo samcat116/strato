@@ -16,7 +16,7 @@ from unittest.mock import patch
 script = pathlib.Path(sys.argv[1]).read_text()
 python_code = script.split("<<'STRATO_GUEST_AGENT_PY'\n", 1)[1].split("\nSTRATO_GUEST_AGENT_PY", 1)[0]
 base = 'https://github.com/samcat116/strato/releases/'
-for mode in ['x86_64', 'aarch64', 'latest', 'checksum', 'unsupported', 'download', 'version', 'layout', 'interrupt', 'service']:
+for mode in ['x86_64', 'aarch64', 'latest', 'checksum', 'unsupported', 'download', 'version', 'layout', 'capability', 'legacy-capability', 'malformed-capability', 'interrupt', 'service']:
     with tempfile.TemporaryDirectory() as directory:
         arch = 'aarch64' if mode == 'aarch64' else 'x86_64'
         buffer = io.BytesIO()
@@ -27,11 +27,16 @@ for mode in ['x86_64', 'aarch64', 'latest', 'checksum', 'unsupported', 'download
                 archive.addfile(member, io.BytesIO(payload))
         artifact = buffer.getvalue()
         name = 'strato-guest-agent-' + arch + '.tar.gz'
-        manifest = {'schemaVersion': 1, 'version': 'v0.1.2', 'assets': [{
-            'arch': arch, 'asset': name, 'url': base + 'download/v0.1.2/' + name,
+        manifest = {'schemaVersion': 1, 'version': 'v0.1.3',
+                    'capabilities': [] if mode == 'capability' else ['guest_config_convergence'], 'assets': [{
+            'arch': arch, 'asset': name, 'url': base + 'download/v0.1.3/' + name,
             'sha256': '0' * 64 if mode == 'checksum' else hashlib.sha256(artifact).hexdigest(),
             'guestAgentBinaryPath': 'strato-guest-agent',
             'systemdUnitPath': 'wrong.service' if mode == 'layout' else 'strato-guest-agent.service'}]}
+        if mode == 'legacy-capability':
+            del manifest['capabilities']
+        elif mode == 'malformed-capability':
+            manifest['capabilities'] = 'guest_config_convergence'
         if mode == 'version':
             manifest['version'] = 'v0.1.1'
         calls, urls = [], []
@@ -54,7 +59,7 @@ for mode in ['x86_64', 'aarch64', 'latest', 'checksum', 'unsupported', 'download
         failed = False
         with patch('platform.system', return_value='Linux'), patch('platform.machine', return_value='riscv64' if mode == 'unsupported' else arch), \
              patch('urllib.request.urlopen', side_effect=fetch), patch('subprocess.run', side_effect=service), \
-             patch('os.fsync', side_effect=fsync), patch('sys.argv', ['installer', 'latest' if mode == 'latest' else 'v0.1.2']):
+             patch('os.fsync', side_effect=fsync), patch('sys.argv', ['installer', 'latest' if mode == 'latest' else 'v0.1.3']):
             try:
                 exec(compile(code, 'generated-installer', 'exec'), {})
             except (Exception, SystemExit, KeyboardInterrupt):
@@ -66,7 +71,7 @@ for mode in ['x86_64', 'aarch64', 'latest', 'checksum', 'unsupported', 'download
         if expected_success:
             assert pathlib.Path(directory + '/bin/strato-guest-agent').read_bytes() == b'fixture binary'
             assert calls[-1] == ['systemctl', 'enable', '--now', 'strato-guest-agent.service']
-            assert urls[0] == base + ('latest/download/' if mode == 'latest' else 'download/v0.1.2/') + 'guest-agent-manifest.json'
+            assert urls[0] == base + ('latest/download/' if mode == 'latest' else 'download/v0.1.3/') + 'guest-agent-manifest.json'
         elif mode != 'service':
             assert files == [], (mode, files)
             assert calls == [], mode

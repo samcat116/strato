@@ -87,7 +87,7 @@ struct StratoClientTests {
                 declared.insert(operation)
             }
         }
-        #expect(declared.count == 32)
+        #expect(declared.count == 33)
         #expect(IdempotencyKeyMiddleware.supportedOperationIDs == declared)
     }
 

@@ -53,6 +53,9 @@ pub const DEFAULT_VSOCK_PORT: u32 = 1024;
 /// the shared module means neither root-running guest speaker can accidentally
 /// restore unbounded `read_line` allocation.
 pub const MAX_REQUEST_LINE_BYTES: usize = 1 << 20;
+/// Convergence-only ceiling: 6 * 262144 content + 2 * 128 * 4096 paths
+/// + 2 * 128 * 1024 sysctl values + bounded names/envelope < 4 MiB.
+pub const MAX_CONVERGENCE_LINE_BYTES: usize = 4 << 20;
 
 /// Maximum UTF-8 size of identity fields accepted by the host parser.
 pub const MAX_IDENTITY_BYTES: usize = 256;
@@ -66,6 +69,7 @@ pub const MAX_IDENTITY_BYTES: usize = 256;
 /// carries that sandbox's address in kernel memory, and re-addressing it in
 /// place is what makes warm start and fork work for networked sandboxes.
 pub const CONTROL_PROTOCOL_VERSION: u32 = 4;
+pub const GUEST_CONFIG_CAPABILITY: &str = "guest_config_convergence";
 
 /// Default for [`Request::Exec`]'s `tty` when the host omits it.
 pub const DEFAULT_EXEC_TTY: bool = false;
@@ -100,6 +104,11 @@ pub enum Request {
     ReleaseIdle {
         operation_id: String,
         admission_token: String,
+    },
+    /// STR-91: authoritative enclosing VM generation and small STR-90 intent.
+    ConvergeGuestConfig {
+        generation: i64,
+        guest_config: Option<crate::convergence::GuestConfig>,
     },
     /// Start an exec session on this connection (v2). Must be the first
     /// request on the connection.
@@ -269,11 +278,17 @@ pub enum Response {
         admission_token: String,
         state: String,
     },
+    GuestConfigState {
+        nonce: String,
+        observation: crate::convergence::Observation,
+    },
     /// Reply to [`Request::Ping`].
     Pong {
         sandbox_id: String,
         nonce: String,
         control_protocol_version: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     /// Reply to [`Request::GetStatus`].
     Status {
@@ -351,6 +366,7 @@ impl Response {
             | Response::IdleError { nonce, .. }
             | Response::IdleActivity { nonce, .. }
             | Response::IdleFence { nonce, .. }
+            | Response::GuestConfigState { nonce, .. }
             | Response::Error { nonce, .. } => nonce,
         }
     }
@@ -388,13 +404,39 @@ pub fn decode_request(line: &str) -> Result<Request, serde_json::Error> {
 /// only through the first byte past the limit and rejected; connection handlers
 /// close that connection rather than attempting to resynchronize it.
 pub fn read_request_line(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
-    line.clear();
-    let mut limited = std::io::Read::take(reader, (MAX_REQUEST_LINE_BYTES + 1) as u64);
-    let bytes = limited.read_line(line)?;
-    if bytes > MAX_REQUEST_LINE_BYTES {
+    read_line_with_limit(reader, line, MAX_REQUEST_LINE_BYTES)
+}
+
+/// Only VM control exchanges admit larger convergence frames. Other requests
+/// retain the original ceiling, including when sent on this connection.
+pub fn read_vm_control_line(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
+    let bytes = read_line_with_limit(reader, line, MAX_CONVERGENCE_LINE_BYTES)?;
+    if bytes > MAX_REQUEST_LINE_BYTES
+        && !matches!(
+            decode_request(line),
+            Ok(Request::ConvergeGuestConfig { .. })
+        )
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("request line exceeds {MAX_REQUEST_LINE_BYTES} bytes"),
+            "oversized non-convergence request",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn read_line_with_limit(
+    reader: &mut impl BufRead,
+    line: &mut String,
+    limit: usize,
+) -> io::Result<usize> {
+    line.clear();
+    let mut limited = std::io::Read::take(reader, (limit + 1) as u64);
+    let bytes = limited.read_line(line)?;
+    if bytes > limit {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("request line exceeds {limit} bytes"),
         ));
     }
     Ok(bytes)
@@ -404,6 +446,32 @@ pub fn read_request_line(reader: &mut impl BufRead, line: &mut String) -> io::Re
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn guest_config_request_matches_host_contract_and_observation_has_nonce() {
+        let request = decode_request(r#"{"type":"converge_guest_config","generation":7,"guest_config":{"packages":[],"files":[],"services":[],"sysctls":[]}}"#).unwrap();
+        match request {
+            Request::ConvergeGuestConfig {
+                generation,
+                guest_config: Some(config),
+            } => {
+                assert_eq!(generation, 7);
+                config.validate().unwrap();
+            }
+            _ => panic!("wrong guest config request"),
+        }
+        let request = decode_request(
+            r#"{"type":"converge_guest_config","generation":8,"guest_config":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            request,
+            Request::ConvergeGuestConfig {
+                guest_config: None,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn unknown_request_is_rejected() {
@@ -424,6 +492,63 @@ mod tests {
         let mut reader = Cursor::new(over_limit);
         let err = read_request_line(&mut reader, &mut line).expect_err("oversized line");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn vm_control_reader_accepts_only_large_convergence_requests() {
+        let config = crate::convergence::GuestConfig {
+            files: (0..4)
+                .map(|index| crate::convergence::File {
+                    path: format!("/escaped-{index}"),
+                    content: "\u{1}".repeat(65536),
+                    mode: "0600".into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        config.validate().unwrap();
+        let mut encoded = serde_json::to_vec(&Request::ConvergeGuestConfig {
+            generation: 7,
+            guest_config: Some(config),
+        })
+        .unwrap();
+        encoded.push(b'\n');
+        assert!(encoded.len() > MAX_REQUEST_LINE_BYTES);
+        assert!(encoded.len() <= MAX_CONVERGENCE_LINE_BYTES);
+
+        let mut line = String::new();
+        assert_eq!(
+            read_vm_control_line(&mut Cursor::new(&encoded), &mut line).unwrap(),
+            encoded.len()
+        );
+        assert!(matches!(
+            decode_request(&line),
+            Ok(Request::ConvergeGuestConfig { .. })
+        ));
+        assert_eq!(
+            read_request_line(&mut Cursor::new(&encoded), &mut line)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let mut oversized_ping = br#"{"type":"ping","padding":""#.to_vec();
+        oversized_ping.resize(MAX_REQUEST_LINE_BYTES + 64, b'x');
+        oversized_ping.extend_from_slice(b"\"}\n");
+        assert_eq!(
+            read_vm_control_line(&mut Cursor::new(oversized_ping), &mut line)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let oversized_convergence = vec![b' '; MAX_CONVERGENCE_LINE_BYTES + 1];
+        assert_eq!(
+            read_vm_control_line(&mut Cursor::new(oversized_convergence), &mut line)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
@@ -657,11 +782,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_pong_has_no_guest_configuration_capability() {
+        let response: Response = serde_json::from_str(
+            r#"{"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4}"#,
+        )
+        .unwrap();
+        match response {
+            Response::Pong { capabilities, .. } => assert!(capabilities.is_empty()),
+            _ => panic!("expected pong"),
+        }
+    }
+
+    #[test]
     fn pong_encodes_identity() {
         let resp = Response::Pong {
             sandbox_id: "sb-1".into(),
             nonce: "n-1".into(),
             control_protocol_version: CONTROL_PROTOCOL_VERSION,
+            capabilities: vec![],
         };
         let line = encode_line(&resp);
         assert!(line.ends_with('\n'));

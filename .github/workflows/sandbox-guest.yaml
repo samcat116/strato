@@ -298,7 +298,8 @@ jobs:
           done < assets.tsv
 
           jq -n --arg version "$TAG" --arg sha "$GITHUB_SHA" --argjson assets "$entries" \
-            '{schemaVersion: 1, version: $version, gitSHA: $sha, assets: $assets}' \
+            '{schemaVersion: 1, version: $version, gitSHA: $sha,
+              capabilities: ["guest_config_convergence"], assets: $assets}' \
             > guest-agent-manifest.json
           cat guest-agent-manifest.json
           gh release upload "$TAG" guest-agent-manifest.json --clobber

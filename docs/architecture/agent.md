@@ -706,10 +706,12 @@ The create dialog and `strato vm create --guest-agent` disclose that this instal
 an exec-capable **root** systemd daemon. The setting changes vsock PCI topology;
 existing VMs require recreation, including changing it while stopped.
 
-First boot downloads `guest-agent-manifest.json` from the pinned published
-`v0.1.2` release, selects `x86_64` or `aarch64` from the guest, and verifies the
-native tarball's SHA-256 before publishing either file. It installs the packaged
-binary and unit, then enables/starts `strato-guest-agent.service`. The installer
+First boot downloads `guest-agent-manifest.json` from the pinned `v0.1.3`
+release, requires its `guest_config_convergence` capability, selects `x86_64` or
+`aarch64` from the guest, and verifies the native tarball's SHA-256 before
+publishing either file. The installer places the packaged binary and unit, then
+enables/starts `strato-guest-agent.service`. Publish the compatible v0.1.3
+artifacts and manifest before deploying the wire-v70 control plane/agent. The installer
 requires cloud-init, Python 3, systemd and HTTPS egress to GitHub. Download,
 manifest, architecture, checksum and startup errors fail the cloud-init script;
 an image without cloud-init cannot execute it at all. Opt-in does not prove
@@ -1702,3 +1704,36 @@ retain their separate lossless delivery and overflow contracts (STR-89).
 The [opt-in bootstrap profile](../deployment/host-memory-profile.md) owns persistent
 compressed swap, THP, and tenant-safe KSM settings. Runtime observation is read-only
 and profile failures fence all hypervisor placement, including KSM unmerge transitions.
+
+### Guest configuration convergence (STR-91)
+
+For running VM intent with STR-90 `guestConfig`, the VM planner appends
+`convergeGuestConfig` after power/network/edge realization and after orphan
+adoption. The normal per-VM lane and observed-generation/error verdict cover
+this step: a VM generation cannot succeed before guest read-back. Equal-generation
+syncs still run the step to observe and repair drift. Nil intent runs no guest
+steps and never reverses prior changes. A stopped or paused VM defers guest
+realization until desired running state.
+
+`GuestConfigClient` checks placement before connection/request and after the
+reply, verifies the ping/reply boot nonce, and bounds and validates the hostile
+observation before retaining it, including matching each converged file digest
+to the locally computed SHA-256 of its desired UTF-8 bytes. Before sending intent,
+the ping must advertise `guest_config_convergence`; older guests remain a
+dependency wait until an
+explicit guest upgrade. The first-boot pin is v0.1.3, whose compatible artifacts
+and capability-bearing manifest must be published before rollout; existing VMs
+are not automatically updated. A guest-side busy pass is also a dependency wait;
+a reported guest failure is permanent for that generation. Fixed host log
+categories prevent guest-controlled diagnostic text from entering node logs.
+The full report includes `guestConfigObservation` alongside the existing VM
+failure fields. STR-92 owns detailed observation persistence/API projection.
+The dedicated exchange permits up to 4 MiB per line for worst-case escaped
+valid intent while every other guest-control client keeps the 1 MiB limit.
+
+The Linux guest uses a single serialized diff/apply/read-back engine, a shared
+180-second pass budget, 120-second package commands, and a durable metadata-only
+journal. Failed/interrupted generations survive restarts; successful replays
+measure current facts rather than trusting the journal as installed state.
+See [guest configuration details](https://github.com/samcat116/strato/blob/main/sandbox-guest/README.md#managed-vm-guest-configuration-str-90--str-91)
+for supported managers, observations, withdrawal semantics, and failure recovery.
