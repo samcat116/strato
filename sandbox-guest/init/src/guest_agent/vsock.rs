@@ -8,7 +8,7 @@ use strato_sandbox_init::convergence::Converger;
 
 use strato_sandbox_init::protocol::{
     decode_request, encode_line, read_vm_control_line, Request, Response, WorkloadState,
-    CONTROL_PROTOCOL_VERSION, DEFAULT_VSOCK_PORT,
+    CONTROL_PROTOCOL_VERSION, DEFAULT_VSOCK_PORT, GUEST_CONFIG_CAPABILITY,
 };
 
 use super::exec::{self, ExecRequest};
@@ -257,7 +257,7 @@ fn vm_control_response(
                 observation: engine.converge(
                     generation,
                     guest_config,
-                    &mut strato_sandbox_init::convergence_linux::LinuxBackend,
+                    &mut strato_sandbox_init::convergence_linux::LinuxBackend::default(),
                 ),
             },
             Err(_) => Response::Error {
@@ -281,6 +281,7 @@ fn control_response(request: Request, identity: &GuestIdentity) -> Response {
             sandbox_id: identity.guest_id.clone(),
             nonce: identity.nonce.clone(),
             control_protocol_version: CONTROL_PROTOCOL_VERSION,
+            capabilities: vec![GUEST_CONFIG_CAPABILITY.into()],
         },
     }
 }
@@ -467,6 +468,7 @@ mod tests {
                 sandbox_id: "machine-1".into(),
                 nonce: "boot-1".into(),
                 control_protocol_version: CONTROL_PROTOCOL_VERSION,
+                capabilities: vec!["guest_config_convergence".into()],
             }
         );
         assert_eq!(

@@ -4,6 +4,12 @@ import Testing
 
 @Suite("Guest-agent bootstrap artifact installation")
 struct GuestAgentBootstrapTests {
+    @Test func bootstrapRequiresTheCapabilityBearingRelease() {
+        #expect(GuestAgentBootstrap.defaultRelease == "v0.1.3")
+        let script = GuestAgentBootstrap.installScript()
+        #expect(script.contains("python3 - 'v0.1.3'"))
+    }
+
     @Test func executesInstallerFailuresAndArchitectureSelection() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()

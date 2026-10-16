@@ -66,8 +66,10 @@ Wire v70 realizes guest configuration for running, opted-in VMs before their
 VM generation is acknowledged and carries generation-scoped guest configuration
 observations (STR-91). A v69 agent cannot register with a v70 control plane and
 acknowledge guest intent without performing that work. The independent guest-control
-protocol remains v4. The [update-only bridge](#update-only-bridge) can repair supported
-workload-version skew before registration without exchanging workload state.
+protocol remains v4; the guest must advertise `guest_config_convergence` before
+receiving convergence intent. The [update-only bridge](#update-only-bridge) can
+repair supported workload-version skew before registration without exchanging
+workload state.
 
 Wire v69 adds ordered sandbox idle evidence and automatic-fence provenance; v68
 adds generation-bound sandbox suspension and storage admission. Wire v67 carries
@@ -690,10 +692,14 @@ and observations ship together on exact wire v70.
 
 Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`)
 and `guest_config_state` (`nonce`, `observation`). These are additive to the
-sandbox guest v4 surface; sandbox init does not realize VM guest intent. An old
-VM daemon rejects the new request explicitly rather than reporting convergence.
-The host client performs the existing v4 ping handshake on the same connection,
-and every reply is checked against that boot nonce. Generic guest-control lines
+sandbox guest v4 surface; sandbox init does not realize VM guest intent. The VM
+daemon advertises `capabilities: ["guest_config_convergence"]` in its v4 `pong`.
+The host requires that capability before sending the request; v0.1.2 and other
+non-advertising guests wait for an explicit upgrade without receiving intent.
+First-boot installation is pinned to v0.1.3, whose capability-bearing guest
+artifacts and manifest must be published before wire-v70 rollout. Existing VMs
+are never automatically updated. The host client performs the v4 ping handshake
+on the same connection, and every reply is checked against that boot nonce. Generic guest-control lines
 remain bounded at 1 MiB. Only `converge_guest_config` requests and their response
 line use a 4 MiB bound, including when convergence is the first control frame.
 The bound derives from worst-case JSON escaping of the existing STR-90 field

@@ -1715,7 +1715,11 @@ realization until desired running state.
 
 `GuestConfigClient` checks placement before connection/request and after the
 reply, verifies the ping/reply boot nonce, and bounds and validates the hostile
-observation before retaining it. A guest-side busy pass is a dependency wait;
+observation before retaining it. Before sending intent, the ping must advertise
+`guest_config_convergence`; older guests remain a dependency wait until an
+explicit guest upgrade. The first-boot pin is v0.1.3, whose compatible artifacts
+and capability-bearing manifest must be published before rollout; existing VMs
+are not automatically updated. A guest-side busy pass is also a dependency wait;
 a reported guest failure is permanent for that generation. Fixed host log
 categories prevent guest-controlled diagnostic text from entering node logs.
 The full report includes `guestConfigObservation` alongside the existing VM

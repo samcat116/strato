@@ -69,6 +69,7 @@ pub const MAX_IDENTITY_BYTES: usize = 256;
 /// carries that sandbox's address in kernel memory, and re-addressing it in
 /// place is what makes warm start and fork work for networked sandboxes.
 pub const CONTROL_PROTOCOL_VERSION: u32 = 4;
+pub const GUEST_CONFIG_CAPABILITY: &str = "guest_config_convergence";
 
 /// Default for [`Request::Exec`]'s `tty` when the host omits it.
 pub const DEFAULT_EXEC_TTY: bool = false;
@@ -286,6 +287,8 @@ pub enum Response {
         sandbox_id: String,
         nonce: String,
         control_protocol_version: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
     },
     /// Reply to [`Request::GetStatus`].
     Status {
@@ -779,11 +782,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_pong_has_no_guest_configuration_capability() {
+        let response: Response = serde_json::from_str(
+            r#"{"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4}"#,
+        )
+        .unwrap();
+        match response {
+            Response::Pong { capabilities, .. } => assert!(capabilities.is_empty()),
+            _ => panic!("expected pong"),
+        }
+    }
+
+    #[test]
     fn pong_encodes_identity() {
         let resp = Response::Pong {
             sandbox_id: "sb-1".into(),
             nonce: "n-1".into(),
             control_protocol_version: CONTROL_PROTOCOL_VERSION,
+            capabilities: vec![],
         };
         let line = encode_line(&resp);
         assert!(line.ends_with('\n'));

@@ -10,8 +10,12 @@ struct GuestConfigClientTests {
         var lines: [String]
         var writes: [Data] = []
         var closed = false
-        init(_ response: String) {
-            lines = [#"{"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4}"#, response]
+        init(
+            _ response: String,
+            ping: String =
+                #"{"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4,"capabilities":["guest_config_convergence"]}"#
+        ) {
+            lines = [ping, response]
         }
         func write(_ data: Data) { writes.append(data) }
         func nextLine(timeout: TimeInterval?) -> String? { lines.isEmpty ? nil : lines.removeFirst() }
@@ -43,6 +47,24 @@ struct GuestConfigClientTests {
         #expect(request["type"] as? String == "converge_guest_config")
         #expect(request["generation"] as? Int == 7)
         #expect(request["guest_config"] is [String: Any])
+    }
+
+    @Test func olderGuestsAreUpgradeWaitsAndNeverReceiveConvergenceIntent() async {
+        for capabilities in ["", #","capabilities":[]"#, #","capabilities":["unrelated"]"#] {
+            let connection = Connection(
+                response(),
+                ping: """
+                    {"type":"pong","sandbox_id":"machine","nonce":"boot","control_protocol_version":4\(capabilities)}
+                    """)
+            let failure = await #expect(throws: GuestConfigurationFailure.self) {
+                try await client(connection).converge(
+                    placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+            }
+            #expect(failure?.failureClassification == .waitingOnDependency)
+            #expect(failure?.errorDescription?.contains(GuestAgentBootstrap.defaultRelease) == true)
+            #expect(await connection.writes.count == 1)
+            #expect(await connection.closed)
+        }
     }
 
     @Test func maximumEscapedContentFitsConvergenceFrame() async throws {

@@ -27,6 +27,9 @@ public struct GuestConfigClient: Sendable {
         let generation: Int64
         let guest_config: GuestConfig
     }
+    private struct Handshake: Decodable {
+        let capabilities: [String]?
+    }
     private struct Response: Decodable {
         let type: String
         let nonce: String
@@ -46,8 +49,13 @@ public struct GuestConfigClient: Sendable {
         do {
             try await connection.write(GuestControlProtocol.Request.ping.encodedLine())
             guard let ping = try await connection.nextLine(timeout: 10),
-                case .pong(_, let nonce, _) = try? GuestControlProtocol.Response.decode(line: ping)
+                ping.utf8.count <= GuestControlProtocol.Limits.maxLineBytes,
+                case .pong(_, let nonce, _) = try? GuestControlProtocol.Response.decode(line: ping),
+                let handshake = try? JSONDecoder().decode(Handshake.self, from: Data(ping.utf8))
             else { throw GuestConfigurationFailure.invalidResponse }
+            guard handshake.capabilities?.contains(GuestAgentBootstrap.guestConfigCapability) == true else {
+                throw GuestConfigurationFailure.unsupportedGuest
+            }
             guard await placementIsCurrent() else { throw VMExecBridgeError.vmNotPlaced(placement.vmId) }
             var data = try JSONEncoder().encode(Request(generation: generation, guest_config: config))
             guard data.count < Self.maxFrameBytes else {
@@ -86,6 +94,7 @@ public struct GuestConfigClient: Sendable {
 public enum GuestConfigurationFailure: Error, LocalizedError, ClassifiableError, Sendable {
     case invalidResponse
     case busy
+    case unsupportedGuest
     case failed(reason: String)
     public static func safeReason(_ reason: String?) -> String {
         // Never put guest-chosen text in node logs. Project known categories.
@@ -102,12 +111,18 @@ public enum GuestConfigurationFailure: Error, LocalizedError, ClassifiableError,
             "Guest configuration convergence failed; inspect guestConfigObservation.error and submit a new VM generation to retry"
     }
     public var failureClassification: FailureClassification {
-        if case .busy = self { return .waitingOnDependency }
-        return .permanent
+        switch self {
+        case .busy, .unsupportedGuest: return .waitingOnDependency
+        default: return .permanent
+        }
     }
     public var errorDescription: String? {
         switch self {
         case .busy: "Guest configuration convergence is still running in the guest"
+        case .unsupportedGuest:
+            "Guest configuration requires a compatible Strato guest agent; explicitly upgrade the guest to "
+                + GuestAgentBootstrap.defaultRelease + " or later with the "
+                + GuestAgentBootstrap.guestConfigCapability + " capability"
         case .invalidResponse: "Guest configuration response unavailable, unsupported, or invalid"
         case .failed(let reason): reason
         }

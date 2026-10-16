@@ -7,7 +7,39 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-pub struct LinuxBackend;
+pub struct LinuxBackend {
+    package_manager: Option<PackageManager>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageManager {
+    DpkgApt,
+    RpmDnf,
+}
+impl PackageManager {
+    fn detect(exists: impl Fn(&str) -> bool) -> Option<Self> {
+        if exists("/usr/bin/dpkg-query") && exists("/usr/bin/apt-get") {
+            Some(Self::DpkgApt)
+        } else if exists("/usr/bin/rpm") && exists("/usr/bin/dnf") {
+            Some(Self::RpmDnf)
+        } else {
+            None
+        }
+    }
+}
+impl Default for LinuxBackend {
+    fn default() -> Self {
+        Self {
+            package_manager: PackageManager::detect(|path| Path::new(path).exists()),
+        }
+    }
+}
+impl LinuxBackend {
+    fn package_manager(&self) -> Result<PackageManager, String> {
+        self.package_manager.ok_or_else(|| {
+            "unsupported guest package manager (requires complete dpkg/apt or rpm/dnf pair)".into()
+        })
+    }
+}
 fn check(deadline: Instant) -> Result<Duration, String> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
@@ -86,24 +118,21 @@ fn service_boot_enabled(state: &str) -> Option<bool> {
 }
 impl Backend for LinuxBackend {
     fn package(&mut self, name: &str, deadline: Instant) -> Result<Option<String>, String> {
-        let result = if Path::new("/usr/bin/dpkg-query").exists() {
-            command(
+        let result = match self.package_manager()? {
+            PackageManager::DpkgApt => command(
                 "/usr/bin/dpkg-query",
                 &["-W", "-f=${db:Status-Status}\t${Version}", "--", name],
                 deadline,
                 false,
             )
-            .map(|s| s.strip_prefix("installed\t").map(str::to_owned))
-        } else if Path::new("/usr/bin/rpm").exists() {
-            command(
+            .map(|s| s.strip_prefix("installed\t").map(str::to_owned)),
+            PackageManager::RpmDnf => command(
                 "/usr/bin/rpm",
                 &["-q", "--qf", "%{VERSION}-%{RELEASE}", "--", name],
                 deadline,
                 false,
             )
-            .map(Some)
-        } else {
-            return Err("unsupported guest package manager (requires dpkg/apt or rpm/dnf)".into());
+            .map(Some),
         };
         bounded_package_version(result)
     }
@@ -170,35 +199,36 @@ impl Backend for LinuxBackend {
         } else {
             "remove"
         };
-        if Path::new("/usr/bin/apt-get").exists() {
-            command(
-                "/usr/bin/apt-get",
-                &[
-                    "-y",
-                    "-o",
-                    "Acquire::Retries=0",
-                    "-o",
-                    "Acquire::http::Timeout=30",
-                    "-o",
-                    "Acquire::https::Timeout=30",
-                    "-o",
-                    "DPkg::Lock::Timeout=10",
-                    operation,
-                    "--",
-                    &package.name,
-                ],
-                deadline,
-                true,
-            )?;
-        } else if Path::new("/usr/bin/dnf").exists() {
-            command(
-                "/usr/bin/dnf",
-                &["-y", operation, "--", &package.name],
-                deadline,
-                true,
-            )?;
-        } else {
-            return Err("unsupported guest package manager (requires apt or dnf)".into());
+        match self.package_manager()? {
+            PackageManager::DpkgApt => {
+                command(
+                    "/usr/bin/apt-get",
+                    &[
+                        "-y",
+                        "-o",
+                        "Acquire::Retries=0",
+                        "-o",
+                        "Acquire::http::Timeout=30",
+                        "-o",
+                        "Acquire::https::Timeout=30",
+                        "-o",
+                        "DPkg::Lock::Timeout=10",
+                        operation,
+                        "--",
+                        &package.name,
+                    ],
+                    deadline,
+                    true,
+                )?;
+            }
+            PackageManager::RpmDnf => {
+                command(
+                    "/usr/bin/dnf",
+                    &["-y", operation, "--", &package.name],
+                    deadline,
+                    true,
+                )?;
+            }
         }
         Ok(())
     }
@@ -253,7 +283,7 @@ mod tests {
             content: "configured\n".into(),
             mode: "0640".into(),
         };
-        let mut backend = LinuxBackend;
+        let mut backend = LinuxBackend::default();
         assert!(backend
             .file(&entry.path, deadline)
             .unwrap()
@@ -298,6 +328,22 @@ mod tests {
             "package operation budget exhausted (mirror or package manager unavailable)"
         );
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn package_observation_and_effects_select_a_complete_pair() {
+        let rpm_guest = ["/usr/bin/dpkg-query", "/usr/bin/rpm", "/usr/bin/dnf"];
+        assert_eq!(
+            PackageManager::detect(|p| rpm_guest.contains(&p)),
+            Some(PackageManager::RpmDnf)
+        );
+        let debian_guest = ["/usr/bin/dpkg-query", "/usr/bin/apt-get", "/usr/bin/dnf"];
+        assert_eq!(
+            PackageManager::detect(|p| debian_guest.contains(&p)),
+            Some(PackageManager::DpkgApt)
+        );
+        let incomplete = ["/usr/bin/dpkg-query", "/usr/bin/dnf"];
+        assert_eq!(PackageManager::detect(|p| incomplete.contains(&p)), None);
     }
 
     #[test]
