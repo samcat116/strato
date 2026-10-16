@@ -10,8 +10,10 @@ import Vapor
 
 @Suite("Inventory presence connection reuse", .serialized, .postgresFixture)
 struct InventoryPresenceConnectionTests {
-    @Test("Reports refresh presence with one connection and do not revive a revoked agent", arguments: [false, true])
-    func refreshWithOneConnection(revoked: Bool) async throws {
+    @Test(
+        "Heartbeats and reports refresh presence with one connection without reviving revoked agents",
+        arguments: [false, true], [false, true])
+    func refreshWithOneConnection(revoked: Bool, heartbeat: Bool) async throws {
         let database = try await PostgresTestDatabases.shared.createDatabaseForTest()
         // A single loop makes an accidental app.db checkout deterministic,
         // rather than occasionally borrowing the other loop's connection.
@@ -38,8 +40,15 @@ struct InventoryPresenceConnectionTests {
             let resources = AgentResources(
                 totalCPU: 8, availableCPU: 6, totalMemory: 8 << 30, availableMemory: 6 << 30,
                 totalDisk: 100 << 30, availableDisk: 90 << 30)
-            let report = ObservedStateReport(agentId: try agent.requireID().uuidString, vms: [], resources: resources)
-            await app.agentService.applyObservedStateReport(try MessageEnvelope(message: report), fromAgentKey: key)
+            if heartbeat {
+                try await app.agentService.updateAgentHeartbeat(
+                    AgentHeartbeatMessage(agentId: try agent.requireID().uuidString, resources: resources),
+                    fromAgentKey: key)
+            } else {
+                let report = ObservedStateReport(
+                    agentId: try agent.requireID().uuidString, vms: [], resources: resources)
+                await app.agentService.applyObservedStateReport(try MessageEnvelope(message: report), fromAgentKey: key)
+            }
 
             let refreshed = await app.agentService.presenceRefreshedAt[key]
             #expect((refreshed != nil) == !revoked)

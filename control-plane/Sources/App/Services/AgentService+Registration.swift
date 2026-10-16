@@ -474,7 +474,7 @@ extension AgentService {
         guard !agent.administrativelyOffline else { return }
         // Refresh the agent's presence key so its liveness stays visible
         // cluster-wide, not just to the process holding this socket.
-        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey, on: db)
 
         app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentId)])
     }
@@ -622,6 +622,8 @@ extension AgentService {
     /// Refresh the agent's presence and local-socket route at most once per
     /// half TTL. Their success timestamps are independent: either failed write
     /// retries on the next incoming frame even when the other one landed.
+    /// Callers holding an inventory fence pass its pinned database so the
+    /// lookup cannot borrow a second connection from the same pool.
     func refreshAgentPresenceIfNeeded(
         agentKey: String, force: Bool = false, on database: (any Database)? = nil
     ) async {
