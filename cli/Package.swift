@@ -19,6 +19,7 @@ let package = Package(
         // server's own contract: a breaking spec change breaks this build
         // rather than surfacing as a runtime decode failure later.
         .package(name: "strato-api-client", path: "../clients/swift"),
+        .package(name: "StratoShared", path: "../shared"),
         // Used directly by the CLI's transport and middlewares, not just
         // transitively through the generated client.
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.0.0"),
@@ -35,6 +36,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Toml", package: "swift-toml"),
                 .product(name: "StratoAPIClient", package: "strato-api-client"),
+                .product(name: "StratoShared", package: "StratoShared"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "NIOCore", package: "swift-nio"),

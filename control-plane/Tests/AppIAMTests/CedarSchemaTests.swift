@@ -66,6 +66,7 @@ struct CedarSchemaTests {
         let roleless = IAMRoleRegistry.identityActions
             .union(IAMRoleRegistry.systemAdminOnlyActions)
             .union(IAMRoleRegistry.guestExecutionActions)
+            .union(IAMRoleRegistry.guestConfigurationActions)
             .union(["project:create"])
         #expect(admin == IAMRoleRegistry.allActions.subtracting(roleless))
     }
@@ -77,7 +78,7 @@ struct CedarSchemaTests {
         // root-on-VM; a seeded role would carry them down every subtree it is
         // bound on, so they are reachable only through a deliberately authored
         // custom role (or the tier-1 system-admin policy).
-        for action in IAMRoleRegistry.guestExecutionActions {
+        for action in IAMRoleRegistry.guestExecutionActions.union(IAMRoleRegistry.guestConfigurationActions) {
             #expect(
                 IAMRoleRegistry.roles(granting: action).isEmpty,
                 "\(action) must not be carried by a seeded role")

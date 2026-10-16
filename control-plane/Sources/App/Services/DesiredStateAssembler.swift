@@ -229,7 +229,9 @@ struct DesiredStateAssembler {
                     imageInfo: imageInfo,
                     metadata: metadata,
                     rebootGeneration: rebootGeneration,
-                    restore: restore
+                    restore: restore,
+                    guestConfig: vm.guestConfig,
+                    guestConfigFailedGeneration: vm.guestConfigFailedGeneration
                 ))
         }
 

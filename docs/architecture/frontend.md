@@ -204,3 +204,23 @@ cover hooks, providers, routing helpers, and components (`bun run test`).
 Playwright exercises critical browser navigation against a deterministic mock
 control plane (`bun run test:e2e`). CI enforces unit tests, browser smoke tests,
 lint, and the production build.
+
+## Guest configuration editor (STR-92)
+
+The VM overview includes a guest-configuration card gated by backend
+`vm:configureGuest` checks. Desired file contents appear only inside the privileged
+JSON editor, not in status summaries. A dirty editor survives polling and keeps
+its request identity after an ambiguous response, so retrying cannot create a
+second mutation. A synchronous no-op does not register a convergence watcher.
+
+The card consumes server comparisons of desired and STR-91 observed facts.
+Unknown, stale, disconnected, deferred and failed states remain distinct; a named
+failed item never makes every unobserved item a failure. Polling can update a
+same-generation success to failure without overwriting the dirty editor. Changing
+the VM resets its editor. Operation-based watching requires real guest read-back,
+and the failed-state retry button requests a new generation explicitly.
+The CLI equivalents are `strato vm guest-config get`, `set --file config.json`,
+and `clear`, with `--no-wait` on mutations and `set --retry` for terminal failure.
+Table output separates desired/observed/state and excludes file contents;
+JSON config export is a deliberate privileged read. CLI input uses the shared
+validator before sending the generated API request.

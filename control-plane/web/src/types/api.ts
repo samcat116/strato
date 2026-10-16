@@ -33,6 +33,9 @@ export type ClaimInfoResponse = OpenAPISchemas["ClaimInfoResponse"];
 export type UpdateUserRequest = OpenAPISchemas["UpdateUserRequest"];
 
 export type Passkey = WithRequired<OpenAPISchemas["PasskeySummary"], "id">;
+export type GuestConfig = OpenAPISchemas["GuestConfig"];
+export type VMGuestConfiguration = OpenAPISchemas["VMGuestConfiguration"];
+export type ReplaceVMGuestConfigurationRequest = OpenAPISchemas["ReplaceVMGuestConfigurationRequest"];
 export type VMStatus = OpenAPISchemas["VMStatus"];
 export type InterfaceAddress = OpenAPISchemas["InterfaceAddress"];
 export type ObservedInterfaceAddress = OpenAPISchemas["ObservedInterfaceAddress"];

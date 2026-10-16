@@ -251,6 +251,8 @@ extension Application {
         migrations.add(AddSandboxIdleActivity())
         migrations.add(AddSandboxIdleFences())
         migrations.add(AddAgentUpdateHealthVerification())
+        migrations.add(AddVMGuestConfig())
+        migrations.add(AddVMGuestConfigEvidence())
         migrations.add(AddAppleVirtualizationBackend())
     }
 }

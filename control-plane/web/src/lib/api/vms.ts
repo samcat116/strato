@@ -5,6 +5,8 @@ import { listAllPages } from "./pagination";
 import { buildLogQueryString } from "./logs";
 import type {
   VM,
+  VMGuestConfiguration,
+  ReplaceVMGuestConfigurationRequest,
   GuestExecRequest,
   GuestExecSession,
   CreateVMRequest,
@@ -25,6 +27,13 @@ import type {
 // converged — or, for a delete, polls operationsApi.get(mutationId), because a
 // deleted VM has nothing left to refetch.
 export const vmsApi = {
+  guestConfiguration(id: string, signal?: AbortSignal): Promise<VMGuestConfiguration> {
+    return api.get(`/api/vms/${id}/guest-config`, undefined, signal);
+  },
+
+  replaceGuestConfiguration(id: string, body: ReplaceVMGuestConfigurationRequest, key?: string): Promise<VM | AcceptedMutation<VM>> {
+    return api.put(`/api/vms/${id}/guest-config`, body, undefined, key);
+  },
   exec(id: string, body: GuestExecRequest): Promise<GuestExecSession> {
     return api.post<GuestExecSession>(`/api/vms/${id}/exec`, body);
   },

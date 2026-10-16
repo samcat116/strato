@@ -667,6 +667,9 @@ enum ResourceConvergence {
                 }
             }
             try await resource.save(on: tx)
+            if let vm = resource as? VM {
+                try await VMGuestConfigMutation.recordOperationFailure(for: vm, at: expectedGeneration, on: tx)
+            }
             try await WebhookEvents.enqueueMutationOutcome(
                 for: resource, succeeded: false, error: reason, on: tx)
             return .recorded

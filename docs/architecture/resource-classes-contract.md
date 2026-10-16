@@ -8,7 +8,7 @@ STR267 is stacked on STR265 PR1444, exact head
 `be5c7f10b2bddc290bd4841c80cb0152ee91d24f`. Issues #1246 and #1251 govern the
 control-plane and runtime halves. GuestConfig was staged vocabulary in this
 v67 contract; STR-91 ships its realization consumer and observations on exact
-wire v71.
+wire v72.
 v65 is host density,
 and v66 is headroom; v67 is the coordinated resource-class schema.
 Do not independently allocate another version for STR272 fields while both

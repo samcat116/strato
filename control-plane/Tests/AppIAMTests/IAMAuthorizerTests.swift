@@ -718,6 +718,9 @@ final class IAMAuthorizerBackstopTests {
         // The live interactive shape and the reserved async shape. The
         // failure this guards is silent: an unlisted POST subpath falls back
         // to `vm:update` — an *editor* action gating a root shell.
+        for method in [HTTPMethod.GET, .PUT, .PATCH, .POST, .DELETE] {
+            #expect(action("/api/vms/\(id)/guest-config", method) == "vm:configureGuest")
+        }
         #expect(action("/api/vms/\(id)/exec") == "vm:exec")
         #expect(action("/api/vms/\(id)/actions/run") == "vm:runCommand")
 

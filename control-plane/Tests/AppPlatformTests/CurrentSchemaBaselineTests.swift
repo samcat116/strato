@@ -19,13 +19,14 @@ struct CurrentSchemaBaselineTests {
     // Compute adds net accounting, class snapshots/ledgers, and one durable admission table.
     // Account identity validation adds three checks after the compute migrations.
     // STR-333 adds four nullable update-verification fields on agents.
+    // STR-92 adds four nullable guest intent/evidence/generation columns and a mutation value.
     // The combined catalog was measured from PostgreSQL, not inferred from migration text.
     // Historical catalogs and the frozen baseline remain
     // independently asserted below.
-    private static let expectedPreAppleCatalogMD5 = "3f966e11e1dd9c53fd4c1702385efb93"
+    private static let expectedPreAppleCatalogMD5 = "e5bfa799794134caa550f4ae9dec1884"
     // Apple Virtualization expands only ck_vms_hypervisor_type_enum. Measured
     // on PostgreSQL and independently checked by the migration round trip below.
-    private static let expectedCurrentCatalogMD5 = "d59ff30d4d1b37b6f15782b41e2222f3"
+    private static let expectedCurrentCatalogMD5 = "8287eceaa2414b3e58b08809ffb74c9f"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -79,7 +80,7 @@ struct CurrentSchemaBaselineTests {
             #expect(baselineMD5 == Self.expectedCatalogMD5)
             #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Observed current catalog: \(upgradedMD5)")
             #expect(upgradedCounts.tables == 85)
-            #expect(upgradedCounts.columns == 1094)
+            #expect(upgradedCounts.columns == 1098)
             #expect(upgradedCounts.constraints == 391)
             #expect(upgradedCounts.indexes == 256)
             #expect(upgradedCounts.enums == baselineCounts.enums)
@@ -123,7 +124,8 @@ struct CurrentSchemaBaselineTests {
             try await agent.save(on: app.db)
             let full = try await self.catalogMD5(on: app.db)
             try await migration.revert(on: app.db)
-            #expect(try await self.catalogMD5(on: app.db) == "4bd921c32dce26b3108987ba0a16649e")
+            let beforeHealth = try await self.catalogMD5(on: app.db)
+            #expect(beforeHealth == "ed512c3eb12d42066f6aef2504370df7", "Observed pre-health catalog: \(beforeHealth)")
             let sql = try #require(app.db as? any SQLDatabase)
             // Existing assignments acquire no invented successful baseline.
             try await migration.prepare(on: app.db)
@@ -147,7 +149,10 @@ struct CurrentSchemaBaselineTests {
             app.migrations.add(CurrentSchemaBaseline())
             try await app.autoMigrate()
             app.registerForwardMigrations()
-            try await app.autoMigrate()
+            let pending = try await app.migrator.previewPrepareBatch().get()
+            for (migration, _) in pending.prefix(while: { $0.0.name != AddVMGuestConfig().name }) {
+                try await migration.prepare(on: app.db).get()
+            }
             // Keep this historical round trip independent of later additions.
             try await AddAppleVirtualizationBackend().revert(on: app.db)
             try await AddAgentUpdateHealthVerification().revert(on: app.db)

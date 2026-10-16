@@ -37,6 +37,7 @@ import {
   VMIdentityCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs, usePermissions } from "@/lib/hooks";
+import { VMGuestConfigurationCard } from "@/components/vms/vm-guest-configuration-card";
 import { VMExecSessionsCard } from "@/components/vms/vm-exec-sessions-card";
 import { VMGuestAgentCard } from "@/components/vms/vm-guest-agent-card";
 import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
@@ -394,6 +395,8 @@ export function VMDetailPage({ id }: { id: string }) {
               <VMGuestAgentCard vm={vm} />
             </SecondarySection>
           </div>
+          <VMGuestConfigurationCard key={vm.id} vm={vm} />
+
         </TabsContent>
 
         <TabsContent value="console" className="mt-4">

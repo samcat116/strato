@@ -40,6 +40,7 @@ public struct ConvergenceFacts: Equatable, Sendable {
     public let lastError: String?
     public let failedGeneration: Int64?
     public let failureClassification: ObservedFailureClassification?
+    public let guestConfigFailedGeneration: Int64?
 }
 
 public actor Reconciler {
@@ -80,6 +81,7 @@ public actor Reconciler {
         var lastError: String
         var classification: FailureClassification
         var retryNotBefore: Date?
+        var guestConfigFailed = false
         /// Whether the warning and process-local counter for a terminal
         /// permanent failure have already been emitted for this generation.
         var terminalSuppressionReported = false
@@ -163,7 +165,8 @@ public actor Reconciler {
             phase: currentPhase[ref],
             lastError: failure?.lastError,
             failedGeneration: failure?.generation,
-            failureClassification: classification)
+            failureClassification: classification,
+            guestConfigFailedGeneration: failure?.guestConfigFailed == true ? failure?.generation : nil)
     }
 
     public func observedGeneration(for id: String, kind: WorkloadKind = .vm) -> Int64 {
@@ -718,11 +721,13 @@ public actor Reconciler {
         let ref = WorkloadRef(item)
         await actuator.retireGuestConfigObservation(item)
         await actuator.resourceEnforcementWillConverge(item)
+        var executingStep: ReconcileStep?
         do {
             var steps = item.steps
             var index = 0
             while index < steps.count {
                 let step = steps[index]
+                executingStep = step
                 let phase = phaseDescription(step, kind: item.kind)
                 currentPhase[ref] = phase
                 if step == .adopt {
@@ -732,6 +737,13 @@ public actor Reconciler {
                             try await self.adoptAndReplan(item)
                         })
                 } else {
+                    // The durable verdict travels with desired state, including the first sync
+                    // after restart. Adoption and host repair may run, but guest work cannot replay.
+                    if step == .convergeGuestConfig,
+                        item.desired?.guestConfigFailedGeneration == item.generation
+                    {
+                        throw GuestConfigurationFailure.failed(reason: GuestConfigurationFailure.safeReason(nil))
+                    }
                     try await watched(phase, item) {
                         try await self.actuator.perform(step, item: item)
                     }
@@ -772,7 +784,11 @@ public actor Reconciler {
                     "generation": .stringConvertible(item.generation),
                 ])
         } catch {
-            let classification = (error as? ClassifiableError)?.failureClassification ?? .transient
+            let category = (error as? ClassifiableError)?.failureClassification ?? .transient
+            let guestFailed =
+                executingStep == .convergeGuestConfig && category != .waitingOnDependency
+                && category != .blocked
+            let classification: FailureClassification = guestFailed ? .permanent : category
 
             // Waiting on another component (e.g. the site network controller
             // hasn't realized this workload's switch in the shared NB yet) is
@@ -826,6 +842,7 @@ public actor Reconciler {
                 failure.attempts += 1
             }
             failure.classification = classification
+            failure.guestConfigFailed = guestFailed
             failure.terminalSuppressionReported = false
             if classification == .transient {
                 failure.retryNotBefore = now().addingTimeInterval(
@@ -833,7 +850,7 @@ public actor Reconciler {
             } else {
                 failure.retryNotBefore = nil
             }
-            let reason = error.localizedDescription
+            let reason = guestFailed ? GuestConfigurationFailure.safeReason(nil) : error.localizedDescription
             // A blocked item is re-driven on every sync for as long as the
             // block holds, so an error line per sync would bury the failures
             // that are actually new. It logs on the transition and then every

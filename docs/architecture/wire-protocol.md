@@ -51,7 +51,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 70). The required registration fields
+currently 71). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -62,9 +62,11 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v71 adds the `apple_virtualization` backend identity to the v70 contract.
-Control plane and agent builds must both use v71; v70 agents cannot decode the
+Wire v72 adds the `apple_virtualization` backend identity to the v71 contract.
+Control plane and agent builds must both use v72; v71 agents cannot decode the
 new backend and are rejected at registration.
+
+Wire v71 carries explicit terminal guest-step failures and their durable retry fence.
 
 Wire v70 realizes guest configuration for running, opted-in VMs before their
 VM generation is acknowledged and carries generation-scoped guest configuration
@@ -615,7 +617,7 @@ expected encode/decode flows and compatibility behavior.
 
 STR-90 introduced the shared vocabulary without a live realization capability.
 STR-91 enables the agent consumer and generation-scoped guest observations on
-exact wire v71. Control plane and agent builds must match; v69 agents cannot
+exact wire v72. Control plane and agent builds must match; v69 agents cannot
 register and acknowledge guest intent without realizing it.
 
 `DesiredVMState.guestConfig: GuestConfig?` extends the VM's existing desired
@@ -674,7 +676,7 @@ capability checks, generation guarding, and content-free observations. STR-92
 owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
-remain decodable; realization-capable live peers use the current exact wire v71
+remain decodable; realization-capable live peers use the current exact wire v72
 registration.
 
 STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
@@ -692,7 +694,7 @@ sysctls (`key`, nullable `value`). No file contents or command output are report
 Success requires complete identities and no error; failure may contain partial
 facts but also sets the existing VM `lastError` / `failedGeneration` fields.
 Stored payloads without this optional field decode as nil. Guest realization
-and observations ship together on exact wire v71.
+and observations ship together on exact wire v72.
 
 Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`)
 and `guest_config_state` (`nonce`, `observation`). These are additive to the
@@ -701,13 +703,13 @@ daemon advertises `capabilities: ["guest_config_convergence"]` in its v4 `pong`.
 The host requires that capability before sending the request; v0.1.2 and other
 non-advertising guests wait for an explicit upgrade without receiving intent.
 First-boot installation is pinned to v0.1.3, whose capability-bearing guest
-artifacts and manifest must be published before wire-v71 rollout. Existing VMs
+artifacts and manifest must be published before wire-v72 rollout. Existing VMs
 are never automatically updated. The host client performs the v4 ping handshake
 on the same connection, and every reply is checked against that boot nonce. Generic guest-control lines
 remain bounded at 1 MiB. Only `converge_guest_config` requests and their response
 line use a 4 MiB bound, including when convergence is the first control frame.
 The bound derives from worst-case JSON escaping of the existing STR-90 field
-limits; the guest-control protocol remains v4, independently of workload wire v71.
+limits; the guest-control protocol remains v4, independently of workload wire v72.
 
 Item-level failures are explicit: optional `failedItem` contains `section`
 (`packages`, `files`, `services`, or `sysctls`), `identity` (package/service
@@ -725,3 +727,17 @@ and an already authorized update artifact. It neither registers a workload
 session nor relaxes exact workload equality. Bridge desired-state polls carry
 `Strato-Workload-Wire-Version`; mismatches are rejected before assembly.
 See [staging and bootstrap limits](./agent-updates.md#stable-bridge-exchange-str-340).
+
+### Guest configuration terminal retry fence (STR-92, wire v71)
+
+`ObservedVMState.guestConfigFailedGeneration` attributes a terminal failure to
+`convergeGuestConfig`, including loss of the channel before read-back. Host
+resize, networking, boot, and edge failures carry no guest failure attribution;
+the control plane preserves their host diagnostic and does not invent a guest
+operation outcome. Dependency waits remain retryable and do not stamp this field.
+
+The persisted verdict returns as `DesiredVMState.guestConfigFailedGeneration`.
+A restarted agent may adopt the VM and perform preceding host steps, but refuses
+the guest step at that generation before invoking its transport. Only a newer VM
+generation permits another attempt. The control plane and agent must both use
+wire v71; the independent guest-control protocol remains v4.

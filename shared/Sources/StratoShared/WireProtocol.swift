@@ -13,7 +13,8 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// Version 71 adds the apple_virtualization backend identity to the v70 contract.
+    /// Version 72 adds the apple_virtualization backend identity to the v71 contract.
+    /// Version 71 carries explicit terminal guest-step failures and their durable retry fence.
     /// Version 70 realizes guest configuration before acknowledging VM generations
     /// and carries generation-scoped guest configuration observations (STR-91).
     /// Version 69 adds ordered sandbox idle evidence and automatic-fence provenance.
@@ -47,7 +48,7 @@ public enum WireProtocol {
     /// to place IMDS-backed VMs safely (STR-64), after v48's guest-bootstrap source and v47's dependency health
     /// contract (STR-237), and v46's authoritative native-OVN load-balancer
     /// state and observations (STR-28).
-    public static let currentVersion = 71
+    public static let currentVersion = 72
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.
