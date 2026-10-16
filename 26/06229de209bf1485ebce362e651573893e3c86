@@ -1,0 +1,34 @@
+control-plane/Sources/App/Controllers/VMController+PlacementRetry.swift
+  h_a84d4ff76cadd1 1-42
+control-plane/Sources/App/Controllers/VMController.swift
+  h_a84d4ff76cadd1 156
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  h_a84d4ff76cadd1 77
+control-plane/Sources/App/Services/AdvisoryLock.swift
+  h_a84d4ff76cadd1 34-36,55
+control-plane/Sources/App/Services/PlacementTransactionConnection.swift
+  h_a84d4ff76cadd1 1-66
+control-plane/Sources/App/Services/WorkloadPlacementService.swift
+  h_a84d4ff76cadd1 4,26-27,29-40,44-47,60,63,257-258,274,491-492,494,497-498,515,558-559
+control-plane/Sources/App/openapi.yaml
+  h_a84d4ff76cadd1 531-553
+control-plane/Tests/AppPlatformTests/AdvisoryLockTests.swift
+  h_a84d4ff76cadd1 19
+control-plane/Tests/AppResourceTests/VMPlacementRetryTests.swift
+  h_a84d4ff76cadd1 1-319
+control-plane/web/src/types/openapi.ts
+  h_a84d4ff76cadd1 206-228,11449-11471
+docs/architecture/scheduler.md
+  h_a84d4ff76cadd1 24,31,41,43,65-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2606229de209bf1485ebce362e651573893e3c86",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
