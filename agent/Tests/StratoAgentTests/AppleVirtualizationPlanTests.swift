@@ -133,6 +133,30 @@ struct AppleVirtualizationPlanTests {
         #expect(plan(observed: .running, desired: .shutdown).items.map(\.steps) == [[.shutdown]])
     }
 
+    @Test("Apple reboot rebuilds desired configuration through cold boot before acknowledging its nonce")
+    func rebootRebuildsConfiguration() throws {
+        let id = UUID()
+        let desired = DesiredVMState(
+            vmId: id, hypervisorType: .appleVirtualization,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [NetworkSpec(network: "nat", networkId: UUID(), dnsServers: ["192.0.2.53"])]),
+            desiredStatus: .running, generation: 2, rebootGeneration: 2)
+        let plan = Reconciler.plan(
+            desired: [desired], present: [id.uuidString: .managed(.running)], lastApplied: [id.uuidString: 1],
+            appliedEdges: [id.uuidString: AppliedEdgeNonces(reboot: 1)],
+            presentNetworks: [id.uuidString: []])
+        let item = try #require(plan.items.first)
+        #expect(item.steps == [.shutdown, .boot])
+        #expect(item.desired?.spec.networks == desired.spec.networks)
+        #expect(item.appliedEdges == AppliedEdgeNonces(reboot: 2))
+        let replay = Reconciler.plan(
+            desired: [desired], present: [id.uuidString: .managed(.running)], lastApplied: [id.uuidString: 2],
+            appliedEdges: [id.uuidString: AppliedEdgeNonces(reboot: 2)],
+            presentNetworks: [id.uuidString: desired.spec.networks])
+        #expect(replay.items.isEmpty)
+    }
+
     @Test("Duplicate disk sources cannot be attached twice")
     func duplicateDisks() {
         #expect(throws: HypervisorServiceError.self) {

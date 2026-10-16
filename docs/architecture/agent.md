@@ -195,7 +195,9 @@ network attachments, and start, graceful shutdown, reboot, pause, resume, delete
 and stopped resize. Before an existing VM boots, the agent resolves its current
 managed volumes again and rebuilds the configuration and seed, including desired
 network changes. Network drift alone does not schedule hot-plug or restart a
-running Apple VM; those changes take effect on its next cold boot. Apple framework
+running Apple VM; those changes take effect on its next cold boot. Reboot edges
+also use shutdown followed by ordinary boot, so the latest configuration and seed
+are rebuilt before the reboot nonce is acknowledged. Apple framework
 objects stay on the main dispatch queue behind a `@MainActor` owner; the agent
 and its driver exchange only Sendable plans and observations.
 

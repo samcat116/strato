@@ -27,6 +27,16 @@ extension Reconciler {
             presentNetworks: presentNetworks,
             presentFirecrackerMMDSInterfaces: presentFirecrackerMMDSInterfaces,
             appliedEdges: appliedEdges)
+        for index in plan.items.indices {
+            let item = plan.items[index]
+            guard item.desired?.hypervisorType == .appleVirtualization, item.steps.contains(.reboot) else { continue }
+            // Ordinary boot rebuilds Apple's devices and NoCloud seed from the
+            // desired spec. Keep nonce acknowledgement after that rebuild succeeds.
+            let steps: [ReconcileStep] = item.steps.flatMap { $0 == .reboot ? [.shutdown, .boot] : [$0] }
+            plan.items[index] = ReconcileWorkItem(
+                kind: item.kind, id: item.id, generation: item.generation, steps: steps,
+                target: item.target, appliedEdges: item.appliedEdges)
+        }
         return plan
     }
 
