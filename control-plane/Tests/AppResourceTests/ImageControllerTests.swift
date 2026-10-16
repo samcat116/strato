@@ -971,9 +971,10 @@ final class ImageControllerTests {
                 #expect(response.format == .qcow2)
                 #expect(response.filename == "test.qcow2")
                 #expect(response.checksum != nil)
+                let imageID = try #require(response.id)
                 let artifact = try #require(
                     try await ImageArtifact.query(on: app.db)
-                        .filter(\.$image.$id == response.id)
+                        .filter(\.$image.$id == imageID)
                         .filter(\.$kind == .diskImage)
                         .first())
                 #expect(artifact.virtualSize == Int64(10 * 1024 * 1024 * 1024))
