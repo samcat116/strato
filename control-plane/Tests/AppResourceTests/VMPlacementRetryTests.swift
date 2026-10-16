@@ -2,6 +2,7 @@ import AppTestSupport
 import Fluent
 import FluentPostgresDriver
 import NIOPosix
+import SQLKit
 import StratoShared
 import Testing
 import Vapor
@@ -215,6 +216,45 @@ struct VMPlacementRetryTests {
         }
     }
 
+    @Test("Metadata edits after acceptance do not discard queued placement", arguments: [false, true])
+    func metadataWhileRetryQueued(sshKeys: Bool) async throws {
+        try await withProjectApp(prefix: "queuedmetadataretry") { app, builder, fixture in
+            app.logger.logLevel = .warning
+            let (vm, boot, _) = try await failedVM(app, builder, fixture)
+            let host = try await agent(app, builder)
+            let id = try vm.requireID()
+            let publicKey =
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f queued@test"
+            try await AdvisoryLock.withSessionLock(
+                .object(.vmPlacement, id: id), on: app.db, timeout: .seconds(3),
+                pollInterval: .milliseconds(10), logger: app.logger
+            ) { _ in
+                let response = try await retry(app, vmID: id, token: fixture.token)
+                #expect(response.0 == .accepted)
+                try await app.test(.PATCH, "/api/vms/\(id)") { request in
+                    request.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
+                    try request.content.encode(
+                        PatchVMMetadataRequest(
+                            tags: sshKeys ? nil : ["purpose": "queued-retry"],
+                            sshAuthorizedKeys: sshKeys ? [publicKey] : nil))
+                } afterResponse: { response in
+                    #expect(response.status == .ok)
+                }
+            }
+            let placed: String = try await pollUntil(attempts: 40) { try await VM.find(id, on: app.db)?.hypervisorId }
+            #expect(placed == host)
+            let current = try #require(try await VM.find(id, on: app.db))
+            #expect(current.generation == 3)
+            if sshKeys {
+                #expect(current.effectiveSSHAuthorizedKeys == [publicKey])
+            } else {
+                #expect(current.tags == ["purpose": "queued-retry"])
+            }
+            #expect(try await VolumeReplica.query(on: app.db).filter(\.$volume.$id == boot.requireID()).count() == 1)
+            #expect(try await ResourceEvent.query(on: app.db).filter(\.$resourceID == id).count() == 1)
+        }
+    }
+
     @Test("A failed retry can retry again without replacing its resources")
     func schedulingFailureCanRetry() async throws {
         try await withProjectApp(prefix: "failedretry") { app, builder, fixture in
@@ -311,7 +351,7 @@ struct VMPlacementRetryTests {
             let fixture = try await builder.createAuthenticatedProject(prefix: "oneconnectionplacement")
             let (vm, boot, _) = try await failedVM(app, builder, fixture)
             let host = try await agent(app, builder)
-            try await app.workloadPlacement.createVM(vm: vm, db: app.db, expectedGeneration: vm.generation)
+            try await app.workloadPlacement.createVM(vm: vm, db: app.db)
             #expect(try await VM.find(vm.id, on: app.db)?.hypervisorId == host)
             #expect(try await Volume.find(boot.id, on: app.db)?.attachedAgentId == host)
         } catch {
@@ -338,9 +378,9 @@ struct VMPlacementRetryTests {
                 let (vm, boot, _) = try await failedVM(app, builder, fixture)
                 let host = try await agent(app, builder)
                 let counterpart = try #require(try await VM.find(vm.id, on: other.db))
-                async let a: Void = app.workloadPlacement.createVM(vm: vm, db: app.db, expectedGeneration: 1)
+                async let a: Void = app.workloadPlacement.createVM(vm: vm, db: app.db)
                 async let b: Void = other.workloadPlacement.createVM(
-                    vm: counterpart, db: other.db, expectedGeneration: 1)
+                    vm: counterpart, db: other.db)
                 _ = try await (a, b)
                 #expect(try await VM.find(vm.id, on: app.db)?.hypervisorId == host)
                 #expect(
@@ -355,7 +395,7 @@ struct VMPlacementRetryTests {
         }
     }
 
-    @Test("A superseded retry cannot assign a host or provision a boot replica")
+    @Test("Deletion cancels queued placement without assigning a host or provisioning a boot replica")
     func supersededRetryDoesNotPlace() async throws {
         try await withProjectApp(prefix: "staleretry") { app, builder, fixture in
             app.logger.logLevel = .warning
@@ -374,7 +414,7 @@ struct VMPlacementRetryTests {
             }
             // A serialized service call drains the earlier background attempt.
             let newer = try #require(try await VM.find(id, on: app.db))
-            try await app.workloadPlacement.createVM(vm: newer, db: app.db, expectedGeneration: 2)
+            try await app.workloadPlacement.createVM(vm: newer, db: app.db)
             #expect(try await VM.find(id, on: app.db)?.hypervisorId == nil)
             #expect(try await VolumeReplica.query(on: app.db).filter(\.$volume.$id == boot.requireID()).count() == 0)
             let reserved = await app.coordination.activeReservations(agentIds: [host])
@@ -392,16 +432,25 @@ struct VMPlacementRetryTests {
             // service checks this after writing hypervisorId, so rollback is
             // what keeps the VM unplaced rather than partially committing it.
             try await placeVolume(boot, on: host, using: app.db)
+            let placementDB: any Database
             if productionTimeouts {
                 let database = try #require(app.storage[TestDatabaseNameKey.self])
+                let id = DatabaseID(string: "placement-production")
                 app.databases.use(
                     try DatabaseStatementTimeout(milliseconds: 5_000).applying(
                         to: .postgres(
                             configuration: PostgresTestDatabases.configuration(database: database),
-                            maxConnectionsPerEventLoop: 1)), as: .psql)
+                            maxConnectionsPerEventLoop: 1)), as: id, isDefault: false)
+                placementDB = app.db(id)
+                let sql = try #require(placementDB as? any SQLDatabase)
+                let timeout = try await sql.raw("SELECT current_setting('statement_timeout') AS value")
+                    .first(decodingColumn: "value", as: String.self)
+                #expect(timeout == "5s")
+            } else {
+                placementDB = app.db
             }
             await #expect(throws: Abort.self) {
-                try await app.workloadPlacement.createVM(vm: vm, db: app.db, expectedGeneration: 1)
+                try await app.workloadPlacement.createVM(vm: vm, db: placementDB)
             }
             #expect(try await VM.find(vm.id, on: app.db)?.hypervisorId == nil)
             #expect(try await Volume.find(boot.id, on: app.db)?.attachedAgentId == nil)

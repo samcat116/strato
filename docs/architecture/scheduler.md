@@ -83,7 +83,8 @@ VM placement attempts use a per-VM `vm_placement` advisory session lock across
 planning, reservation and commit or rollback. This keeps a losing or stale
 attempt from releasing another attempt's reservation across replicas. All
 placement SQL reuses the pinned connection, and doorbells run after its
-release. A retry dispatched for a superseded generation performs no placement.
+release. Planning rereads current intent: metadata and sizing edits accepted
+while placement is queued are retained, and deletion prevents placement.
 
 ## Scheduling Strategies
 

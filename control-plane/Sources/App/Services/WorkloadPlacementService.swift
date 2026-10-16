@@ -23,8 +23,7 @@ actor WorkloadPlacementService {
         vm: VM,
         db: Database,
         strategy: SchedulingStrategy? = nil,
-        image: Image? = nil,
-        expectedGeneration: Int64? = nil
+        image: Image? = nil
     ) async throws {
         let agentID = try await AdvisoryLock.withSessionLock(
             .object(.vmPlacement, id: vm.requireID()), on: db,
@@ -33,7 +32,7 @@ actor WorkloadPlacementService {
             let database = try PlacementTransactionConnection(connection)
             return try await placeVM(
                 vm: vm, db: database, strategy: strategy, image: image,
-                expectedGeneration: expectedGeneration, attemptsRemaining: 3)
+                attemptsRemaining: 3)
         }
         // Doorbell delivery queries app.db. Release the pinned placement lease
         // first, including on deployments with one connection per event loop.
@@ -42,7 +41,7 @@ actor WorkloadPlacementService {
 
     private func placeVM(
         vm: VM, db: Database, strategy: SchedulingStrategy?, image: Image?,
-        expectedGeneration: Int64?, attemptsRemaining: Int
+        attemptsRemaining: Int
     ) async throws -> String? {
         let schedulableAgents = await schedulableAgentsFromDatabase(on: db)
         let vmId = try vm.requireID().uuidString
@@ -57,7 +56,10 @@ actor WorkloadPlacementService {
             guard let plannedVM = try await VM.find(vm.id, on: db) else {
                 throw Abort(.notFound, reason: "VM no longer exists")
             }
-            if let expectedGeneration, plannedVM.generation != expectedGeneration { return nil }
+            // Placement realizes the current resource, including metadata or
+            // sizing edits accepted while this work was queued. Deletion is
+            // the intent that cancels it; the transaction rechecks it below.
+            if plannedVM.desiredStatus == .absent { return nil }
             if let placedAgent = plannedVM.hypervisorId {
                 vm.hypervisorId = placedAgent
                 return nil
@@ -255,7 +257,7 @@ actor WorkloadPlacementService {
                 // abort or an ambiguous commit; generic DB retries are separate.
                 return try await placeVM(
                     vm: vm, db: db, strategy: strategy, image: image,
-                    expectedGeneration: expectedGeneration, attemptsRemaining: attemptsRemaining - 1)
+                    attemptsRemaining: attemptsRemaining - 1)
             }
             throw error
         }

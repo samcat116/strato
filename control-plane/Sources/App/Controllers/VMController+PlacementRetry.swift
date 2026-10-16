@@ -15,7 +15,7 @@ extension VMController {
             dispatch: .placement { db in
                 let image = try await vm.$sourceImage.get(on: db)
                 try await app.workloadPlacement.createVM(
-                    vm: vm, db: db, image: image, expectedGeneration: generationAtRead + 1)
+                    vm: vm, db: db, image: image)
             }, on: req.db, app: app
         ) { db in
             // accept holds and refreshes the VM row. This also rejects a
