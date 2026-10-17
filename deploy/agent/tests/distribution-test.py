@@ -53,12 +53,16 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual([a["arch"] for a in manifest["assets"]], ["x86_64", "arm64"])
         self.assertTrue(all(a["agentBinaryPath"] == "strato-agent" for a in manifest["assets"]))
 
-    def test_main_image_environment_keeps_the_commit_identity(self):
+    def test_main_deployments_keep_the_commit_identity(self):
         # Container environment takes precedence over CompiledBuildInfo. Check
         # both backend and frontend image builds, not just the bare-host probe.
         workflow = (ROOT.parents[1] / ".github/workflows/main-build.yaml").read_text()
         image_versions = re.findall(r"^            STRATO_VERSION=(.*)$", workflow, re.M)
         self.assertEqual(image_versions, ["${{ steps.meta.outputs.version }}"] * 2)
+        compose = (ROOT.parents[1] / "deploy/compose/docker-compose.yml").read_text()
+        self.assertIsNone(re.search(r"^\s+STRATO_VERSION:", compose, re.M))
+        helm = (ROOT.parents[1] / "helm/strato-control-plane/templates/deployment.yaml").read_text()
+        self.assertNotIn("- name: STRATO_VERSION", helm)
 
     def test_rejects_wrong_binary_identity(self):
         with self.assertRaises(ValueError):

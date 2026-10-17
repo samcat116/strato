@@ -122,11 +122,8 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
-            # Build identity, surfaced on /health/* so a given response can be
-            # traced back to an exact version/commit. The published image bakes
-            # in its full SHA; only override it when the operator supplies one.
-            - name: STRATO_VERSION
-              value: "{{ .Values.image.tag | default .Chart.AppVersion }}"
+            # Preserve the image's version; image.tag may be a moving alias.
+            # Only override the full SHA when the operator explicitly supplies one.
             {{- with .Values.strato.gitSHA }}
             - name: STRATO_GIT_SHA
               value: {{ . | quote }}

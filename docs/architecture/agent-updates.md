@@ -45,6 +45,11 @@ agent or a restarted control plane instead of dying with the request.
 
 ### Main-branch bare-host artifacts
 
+Compose and Helm preserve the version baked into the image, even when its image
+selector is the moving `main` or `latest` alias. They must not replace an immutable
+build identity with the selector; `AGENT_TARGET_VERSION` remains the explicit
+agent-target override.
+
 Main builds publish an immutable `main-<12 lowercase hex>` GitHub prerelease
 with agent-only `strato-agent-linux-{x86_64,arm64}.tar.gz` archives and checksum
 sidecars. Each binary embeds the exact version and full commit SHA. The schema-v1
