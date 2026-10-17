@@ -5,7 +5,10 @@ arch="${1:?usage: build-release.sh <x86_64|arm64> <output-dir>}"
 output="${2:?}"
 : "${GITHUB_SHA:?}" "${SWIFTPM_CACHE_PATH:?}"
 [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
-[ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "checkout identity mismatch" >&2; exit 1; }
+# Actions checkout's temporary HOME can differ from this container's HOME.
+# Trust only this mounted checkout, only for these read-only commands; never
+# persist a global safe.directory exception or disable ownership checks broadly.
+[ "$(git -c safe.directory="$PWD" rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "checkout identity mismatch" >&2; exit 1; }
 case "$(uname -m):$arch" in
   x86_64:x86_64|aarch64:arm64) ;;
   *) echo "native architecture does not match $arch" >&2; exit 1 ;;
@@ -26,4 +29,4 @@ if grep -E 'libswift|libjemalloc|not found' <<< "$libraries"; then exit 1; fi
 wire=$(sed -n 's/.*public static let currentVersion = \([0-9]*\).*/\1/p' shared/Sources/StratoShared/WireProtocol.swift)
 python3 deploy/agent/package-release.py package --binary "$bin/StratoAgent" \
   --arch "$arch" --sha "$GITHUB_SHA" --wire-version "$wire" \
-  --epoch "$(git show -s --format=%ct HEAD)" --output "$output"
+  --epoch "$(git -c safe.directory="$PWD" show -s --format=%ct HEAD)" --output "$output"

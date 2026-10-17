@@ -12,7 +12,8 @@ run-name: "${{ inputs.validation_scope == 'agent-artifacts' && 'Agent artifacts'
 # Run it before a risky merge, after a dependency bump, or when you want a
 # second opinion on a local failure. The two Swift jobs are a verbatim copy of
 # the test jobs build.yaml used to run, minus the paths-filter gating — a manual
-# run always exercises every package.
+# full-scope run exercises every package. The agent-artifacts scope below
+# skips these broad jobs and validates only the exact bare-host release path.
 #
 # The third job covers something no workflow runs any more (see
 # `docker_source_build` below) and is opt-in because it costs ~40-60 minutes
