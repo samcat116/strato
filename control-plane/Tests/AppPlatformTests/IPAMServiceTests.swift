@@ -60,7 +60,10 @@ struct IPAMServiceTests {
     func invalidSubnet() {
         // Includes prefixes outside the allocatable /8–/30 range: /31–/32 have
         // no host range, and wider-than-/8 would make exhaustion scans huge.
-        for subnet in ["not-a-cidr", "192.168.1.0", "192.168.1.0/33", "192.168.1.0/31", "0.0.0.0/1", "1.2.3/24"] {
+        for subnet in [
+            "not-a-cidr", "192.168.1.0", "192.168.1.0/33", "192.168.1.0/31", "192.168.1.0/32",
+            "0.0.0.0/0", "0.0.0.0/7", "1.2.3/24",
+        ] {
             #expect(throws: IPAMService.IPAMError.invalidSubnet(subnet)) {
                 try IPAMService.allocateIP(networkName: "x", subnet: subnet, gateway: nil, used: [])
             }
@@ -84,6 +87,21 @@ struct IPAMServiceTests {
         let allocation = try IPAMService.allocateIP(
             networkName: "default", subnet: "192.168.1.77/24", gateway: "192.168.1.1", used: [])
         #expect(allocation.ipAddress == "192.168.1.2")
+    }
+
+    @Test("allocation accepts the widest prefix and the highest IPv4 subnet")
+    func edgePrefixes() throws {
+        let wide = try IPAMService.allocateIP(
+            networkName: "wide", subnet: "10.255.255.255/8", gateway: "10.0.0.1", used: [])
+        #expect(wide.ipAddress == "10.0.0.2")
+        #expect(wide.netmask == "255.0.0.0")
+        #expect(wide.prefixLength == 8)
+
+        let high = try IPAMService.allocateIP(
+            networkName: "high", subnet: "255.255.255.255/30", gateway: "255.255.255.253", used: [])
+        #expect(high.ipAddress == "255.255.255.254")
+        #expect(high.netmask == "255.255.255.252")
+        #expect(high.prefixLength == 30)
     }
 
     // MARK: - IPv6 allocation core
@@ -159,6 +177,11 @@ struct IPAMServiceTests {
     func firstHost() {
         #expect(IPAMService.firstHostAddress(inSubnet: "192.168.1.0/24") == "192.168.1.1")
         #expect(IPAMService.firstHostAddress(inSubnet: "10.0.0.0/8") == "10.0.0.1")
+        #expect(IPAMService.firstHostAddress(inSubnet: "192.168.1.77/24") == "192.168.1.1")
+        #expect(IPAMService.firstHostAddress(inSubnet: "255.255.255.255/30") == "255.255.255.253")
+        for subnet in ["0.0.0.0/0", "10.0.0.0/7", "192.168.1.0/31", "255.255.255.255/32"] {
+            #expect(IPAMService.firstHostAddress(inSubnet: subnet) == nil)
+        }
         #expect(IPAMService.firstHostAddress(inSubnet: "junk") == nil)
     }
 

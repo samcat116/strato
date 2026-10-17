@@ -145,13 +145,11 @@ enum IPAMService {
     static func allocateIP(
         networkName: String, subnet: String, gateway: String?, used: Set<UInt32>
     ) throws -> Allocation {
-        guard let (base, prefix) = parseCIDR(subnet), allocatablePrefixRange.contains(prefix) else {
+        guard let cidr = IPv4CIDR(subnet), allocatablePrefixRange.contains(cidr.prefix) else {
             throw IPAMError.invalidSubnet(subnet)
         }
 
-        let mask = IPv4CIDR(base: IPv4Address(raw: base), prefix: prefix).mask
-        let networkAddress = base & mask
-        let broadcastAddress = networkAddress | ~mask
+        let broadcastAddress = cidr.networkAddress.raw | ~cidr.mask
 
         // A malformed gateway must fail loudly: silently treating it as absent
         // would hand the gateway's real address out to a VM.
@@ -165,11 +163,11 @@ enum IPAMService {
             gatewayValue = nil
         }
 
-        for candidate in (networkAddress + 1)..<broadcastAddress {
+        for candidate in cidr.firstHost.raw..<broadcastAddress {
             if candidate == gatewayValue { continue }
             if used.contains(candidate) { continue }
             return Allocation(
-                ipAddress: formatIPv4(candidate), netmask: formatIPv4(mask), prefixLength: prefix)
+                ipAddress: formatIPv4(candidate), netmask: cidr.netmask.description, prefixLength: cidr.prefix)
         }
 
         throw IPAMError.poolExhausted(network: networkName, subnet: subnet)
@@ -275,9 +273,8 @@ enum IPAMService {
     /// "192.168.1.0/24" → "192.168.1.1". Used when seeding networks without an
     /// explicit gateway.
     static func firstHostAddress(inSubnet subnet: String) -> String? {
-        guard let (base, prefix) = parseCIDR(subnet), allocatablePrefixRange.contains(prefix) else { return nil }
-        let mask = IPv4CIDR(base: IPv4Address(raw: base), prefix: prefix).mask
-        return formatIPv4((base & mask) + 1)
+        guard let cidr = IPv4CIDR(subnet), allocatablePrefixRange.contains(cidr.prefix) else { return nil }
+        return cidr.firstHost.description
     }
 
     // MARK: - IPv4 helpers
