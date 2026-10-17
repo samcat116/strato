@@ -1,4 +1,5 @@
 name: Full Test Suite (manual)
+run-name: "${{ inputs.validation_scope == 'agent-artifacts' && 'Agent artifacts' || 'Full suite' }} (${{ github.ref_name }})"
 
 # The full Swift test suite, on demand only.
 #
@@ -19,6 +20,11 @@ name: Full Test Suite (manual)
 on:
   workflow_dispatch:
     inputs:
+      validation_scope:
+        description: Full suite, or only the exact main agent archives and bare-host probes (never publishes)
+        type: choice
+        options: [full, agent-artifacts]
+        default: full
       docker_source_build:
         description: >-
           Also build the control-plane and agent images from source
@@ -44,6 +50,7 @@ jobs:
   # arch labels here. See build.yaml for how the scratch-slot pool and the
   # shared SwiftPM cache work; both are reused unchanged.
   test-packages:
+    if: inputs.validation_scope != 'agent-artifacts'
     name: Test Swift Packages
     runs-on: swift-runners-strato
     timeout-minutes: 90
@@ -138,6 +145,7 @@ jobs:
   # Control-plane build + test against Postgres — the engine production uses,
   # validating migrations and Postgres-specific SQL (issue #195).
   test-control-plane:
+    if: inputs.validation_scope != 'agent-artifacts'
     name: Test Control Plane
     runs-on: swift-runners-strato
     timeout-minutes: 90
@@ -290,7 +298,7 @@ jobs:
   # clock is one image, not two.
   docker-source-build:
     name: Docker Source Build (${{ matrix.image }})
-    if: inputs.docker_source_build
+    if: inputs.docker_source_build && inputs.validation_scope != 'agent-artifacts'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -319,3 +327,58 @@ jobs:
           file: ${{ matrix.file }}
           push: false
           platforms: linux/amd64
+
+  # Scoped validation for the bare-host publishing path, with no packages:write
+  # or contents:write permission and no release, image push or deployment step.
+  build-agent-artifacts:
+    name: Agent Release Build (${{ matrix.arch }})
+    if: inputs.validation_scope == 'agent-artifacts'
+    runs-on: ${{ matrix.arch == 'x64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    container: swift:6.4.0-noble
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packaging tools
+        run: |
+          apt-get update
+          apt-get install -y python3 binutils
+      - name: Prepare Swift build environment
+        uses: ./.github/actions/swift-build-env
+      - name: Build exact main agent archive
+        run: bash deploy/agent/build-release.sh "${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}" agent-downloads
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-downloads-${{ matrix.arch }}
+          path: agent-downloads/
+          retention-days: 7
+          if-no-files-found: error
+
+  probe-agent-artifacts:
+    needs: build-agent-artifacts
+    uses: ./.github/workflows/agent-artifact-probes.yaml
+
+  verify-agent-manifest:
+    name: Verify Agent Manifest
+    needs: probe-agent-artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-downloads-*
+          path: agent-downloads
+          merge-multiple: true
+      - name: Assemble and verify the existing manifest contract
+        run: |
+          python3 deploy/agent/package-release.py manifest --directory agent-downloads --repository "$GITHUB_REPOSITORY"
+          cat agent-downloads/agent-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-validation-manifest
+          path: agent-downloads/agent-manifest.json
+          retention-days: 7
+          if-no-files-found: error

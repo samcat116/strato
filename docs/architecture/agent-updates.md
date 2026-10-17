@@ -61,6 +61,23 @@ Archive headers are deterministic for a given binary and commit timestamp; this
 does not claim bit-for-bit reproducibility of the Swift compiler and dependencies.
 Temporary Actions artifacts remain short lived; GitHub release assets are durable.
 
+Before merge, the existing manual `main-tests.yaml` workflow accepts
+`validation_scope=agent-artifacts`. It skips the broad suite and Docker source
+builds, builds only the two native static agents with the same
+`deploy/agent/build-release.sh` used by main, calls the same minimal-host probe
+workflow, then assembles the manifest. Its token has read permissions only; it
+uploads seven-day Actions artifacts and never publishes a release or image:
+
+```bash
+gh workflow run main-tests.yaml --ref <feature-branch> \
+  -f validation_scope=agent-artifacts -f docker_source_build=false
+```
+
+Record the run's `headSha` before interpreting results. Download
+`agent-downloads-x64`, `agent-downloads-arm64` and `agent-validation-manifest`
+from that run to inspect the actual archives, sidecars and full commit identity.
+A compile-only PR check does not establish that these probes passed.
+
 An available artifact does not bypass wire equality or update-bridge rollout
 ordering below. Existing main binaries that baked only `main` have ambiguous
 identity and need explicit operator attention. Publication does not change

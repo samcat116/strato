@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tarfile
 import tempfile
@@ -51,6 +52,13 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(manifest["workloadWireVersion"], 72)
         self.assertEqual([a["arch"] for a in manifest["assets"]], ["x86_64", "arm64"])
         self.assertTrue(all(a["agentBinaryPath"] == "strato-agent" for a in manifest["assets"]))
+
+    def test_main_image_environment_keeps_the_commit_identity(self):
+        # Container environment takes precedence over CompiledBuildInfo. Check
+        # both backend and frontend image builds, not just the bare-host probe.
+        workflow = (ROOT.parents[1] / ".github/workflows/main-build.yaml").read_text()
+        image_versions = re.findall(r"^            STRATO_VERSION=(.*)$", workflow, re.M)
+        self.assertEqual(image_versions, ["${{ steps.meta.outputs.version }}"] * 2)
 
     def test_rejects_wrong_binary_identity(self):
         with self.assertRaises(ValueError):

@@ -289,3 +289,8 @@ act pull_request -W .github/workflows/build.yaml --secret-file .secrets
 - Check file system permissions
 - Verify Docker socket access
 - Review runner service account permissions
+
+The manual `main-tests.yaml` workflow also accepts `validation_scope=agent-artifacts`
+for a focused, nonpublishing run of the exact main static-agent build, both native
+bare-host probes and manifest assembly. It skips broad tests and Docker builds
+and retains the archives/checksums/manifest as seven-day Actions artifacts.
