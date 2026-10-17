@@ -25,9 +25,10 @@ struct AgentVersionTargetTests {
         // semver image tag back as the control plane's version.
         #expect(!AgentVersionTarget.updateAvailable(agentVersion: "v1.2.3", target: "1.2.3"))
         #expect(!AgentVersionTarget.updateAvailable(agentVersion: "1.2.3", target: "v1.2.3"))
-        // Main branch: images are baked as "main" but published as main-<sha>.
-        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "main", target: "main-abc123def"))
-        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "main-abc123def", target: "main-0123456789"))
+        // Main build identity retains the commit for assignment convergence.
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "main", target: "main-abc123def"))
+        #expect(AgentVersionTarget.updateAvailable(agentVersion: "main-abc123def", target: "main-0123456789"))
+        #expect(!AgentVersionTarget.updateAvailable(agentVersion: "main-0123456789ab", target: "main-0123456789ab"))
         // Non-aliases that merely resemble the alias shapes still compare.
         #expect(AgentVersionTarget.updateAvailable(agentVersion: "main-branch", target: "main"))
         #expect(AgentVersionTarget.updateAvailable(agentVersion: "vela", target: "ela"))

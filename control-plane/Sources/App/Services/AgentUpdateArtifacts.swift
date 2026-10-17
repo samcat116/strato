@@ -163,9 +163,8 @@ enum AgentUpdateArtifacts {
     /// The release tag a version travels under. Tags are v-prefixed
     /// (`v1.2.3`) but the configured target may arrive bare (`1.2.3`, the
     /// semver image-tag form Helm feeds back as STRATO_VERSION) — collapse
-    /// both to the tagged form. Non-semver values (e.g. "main") pass through
-    /// and are rejected by the URL builders below, since main-branch builds
-    /// publish container images, not release tarballs.
+    /// both to the tagged form. Commit-specific main prereleases retain their
+    /// exact tag; the moving "main" alias has no downloadable artifact.
     static func releaseTag(for version: String) -> String {
         if version.first?.isNumber == true {
             return "v\(version)"
@@ -173,10 +172,14 @@ enum AgentUpdateArtifacts {
         return version
     }
 
-    /// True when a target has no release assets at all (main/dev builds) —
-    /// the caller then requires an explicit artifact override.
+    /// Only the exact main-<12 hex> identity used by main-build is published.
+    /// Moving aliases and historical short hashes need an explicit override.
     static func hasReleaseAssets(targetVersion: String) -> Bool {
-        AgentVersionTarget.canonical(targetVersion) != "main"
+        if targetVersion.hasPrefix("main") {
+            return targetVersion.count == 17
+                && targetVersion.range(of: "^main-[0-9a-f]{12}$", options: .regularExpression) != nil
+        }
+        return !targetVersion.isEmpty && targetVersion != "dev"
     }
 
     private static func trimmedBase(_ baseURL: String?) -> String {
@@ -201,7 +204,8 @@ enum AgentUpdateArtifacts {
         baseURL: String? = nil
     ) -> String? {
         guard hasReleaseAssets(targetVersion: targetVersion) else { return nil }
-        let asset = "strato-\(operatingSystem.rawValue)-\(architecture.rawValue).tar.gz"
+        let prefix = targetVersion.hasPrefix("main-") ? "strato-agent" : "strato"
+        let asset = "\(prefix)-\(operatingSystem.rawValue)-\(architecture.rawValue).tar.gz"
         return "\(trimmedBase(baseURL))/\(releaseTag(for: targetVersion))/\(asset)"
     }
 
@@ -307,7 +311,7 @@ enum AgentUpdateArtifacts {
             throw Abort(
                 .badRequest,
                 reason:
-                    "Target version '\(targetVersion)' has no published release assets (main-branch builds ship as container images). Pass artifactUrl and sha256 explicitly."
+                    "Target version '\(targetVersion)' has no published release assets. Pin a release or main-<12 hex> commit. Pass artifactUrl and sha256 explicitly."
             )
         }
 
@@ -331,6 +335,11 @@ enum AgentUpdateArtifacts {
                     .badGateway,
                     reason: "The release manifest at \(manifestURL) did not parse: \(error)")
             }
+            guard manifest.schemaVersion == 1,
+                AgentVersionTarget.canonical(manifest.version) == AgentVersionTarget.canonical(targetVersion)
+            else {
+                throw Abort(.badGateway, reason: "Release manifest schema or version does not match the target")
+            }
             guard
                 let resolved = selectAsset(
                     from: manifest, operatingSystem: operatingSystem, architecture: architecture)
@@ -342,6 +351,10 @@ enum AgentUpdateArtifacts {
                 )
             }
             return resolved
+        }
+
+        if targetVersion.hasPrefix("main-") {
+            throw Abort(.badGateway, reason: "Commit-specific main builds require a published agent-manifest.json")
         }
 
         // Releases published before the manifest existed still have the

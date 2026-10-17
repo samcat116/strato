@@ -325,6 +325,10 @@ case "$uname_m" in
   *)             die "unsupported architecture: $uname_m" ;;
 esac
 ASSET="strato-${OS}-${ARCH}.tar.gz"
+# Main prereleases contain the agent only; stable bundles retain their names.
+if [[ "$VERSION" =~ ^main-[0-9a-f]{12}$ ]]; then
+  ASSET="strato-agent-${OS}-${ARCH}.tar.gz"
+fi
 # spire/alloy release assets use Go arch names; spiffe-helper uses uname-style.
 GOARCH=$([ "$ARCH" = "x86_64" ] && echo amd64 || echo arm64)
 log "Detected host: ${OS}/${ARCH}"
@@ -359,7 +363,7 @@ sha256_verify() {
   elif command -v shasum >/dev/null 2>&1; then
     (cd "$1" && shasum -a 256 -c "${ASSET}.sha256")
   else
-    warn "no sha256sum/shasum available; skipping checksum verification"
+    die "sha256sum or shasum is required to verify the agent"
   fi
 }
 
@@ -393,12 +397,14 @@ install_binary() {
     log "Verifying checksum"
     sha256_verify "$tmp" || die "checksum verification failed for ${ASSET}"
   else
-    warn "no published checksum for ${ASSET}; skipping verification"
+    die "missing checksum for ${ASSET}; refusing an unverified agent"
   fi
 
   tar -xzf "${tmp}/${ASSET}" -C "$tmp" strato-agent \
     || die "release tarball did not contain a 'strato-agent' binary"
 
+  chmod 0755 "${tmp}/strato-agent"
+  "${tmp}/strato-agent" --version || die "downloaded agent cannot execute on this host"
   install -d "$BIN_DIR"
   install -m 0755 "${tmp}/strato-agent" "${BIN_DIR}/strato-agent"
   STRATO_AGENT_BIN="${BIN_DIR}/strato-agent"

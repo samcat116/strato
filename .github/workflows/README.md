@@ -88,6 +88,9 @@ Builds release binaries and Docker images when code is pushed to the main branch
 (no tests):
 - Swift release binary builds
 - Docker image builds
+- Commit-specific agent prereleases after both Linux architecture probes and
+  image publication succeed, retaining the existing `agent-manifest.json` updater
+  contract and stable `latest`. See [agent updates](../../docs/architecture/agent-updates.md#main-branch-bare-host-artifacts).
 
 ### Release (`release.yaml`)
 Triggered when a new tag is pushed (e.g., `v1.0.0`):

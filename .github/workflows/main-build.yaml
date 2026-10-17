@@ -53,7 +53,7 @@ jobs:
           SUDO=""
           command -v sudo >/dev/null && SUDO=sudo
           $SUDO apt-get update
-          $SUDO apt-get install -y libjemalloc-dev
+          $SUDO apt-get install -y libjemalloc-dev python3 binutils
 
       # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
       # volume, so it stays on actions/cache + the default .build path. That
@@ -103,6 +103,16 @@ jobs:
           # Copy application resources
           [ -d Resources ] && cp -R Resources ../artifacts/control-plane/ || true
 
+      - name: Bake bare-host agent identity
+        shell: bash
+        run: |
+          cat > agent/Sources/StratoAgentRuntime/CompiledBuildInfo.swift <<EOF
+          enum CompiledBuildInfo {
+              static let version: String? = "main-${GITHUB_SHA::12}"
+              static let gitSHA: String? = "${GITHUB_SHA}"
+          }
+          EOF
+
       - name: Build Agent Release Binary
         working-directory: agent
         run: |
@@ -121,6 +131,33 @@ jobs:
           fi
           # Copy resources
           find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+
+      # Preserve the dynamic image binary above before linking the bare-host
+      # product against the static Swift runtime. SwiftPM tracks linker flags.
+      - name: Build and package bare-host agent
+        shell: bash
+        run: |
+          swift build --package-path agent -c release --product StratoAgent --static-swift-stdlib -j 4 --cache-path "$SWIFTPM_CACHE_PATH"
+          BIN="$(swift build --package-path agent -c release --show-bin-path)"
+          strip "$BIN/StratoAgent"
+          # Static Swift does not mean static glibc. Refuse accidentally shipping
+          # an image binary that needs the Swift toolchain or jemalloc on hosts.
+          ldd "$BIN/StratoAgent" > /tmp/agent-libraries.txt
+          cat /tmp/agent-libraries.txt
+          if grep -E 'libswift|libjemalloc|not found' /tmp/agent-libraries.txt; then exit 1; fi
+          ARCH="${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}"
+          WIRE=$(sed -n 's/.*public static let currentVersion = \([0-9]*\).*/\1/p' shared/Sources/StratoShared/WireProtocol.swift)
+          python3 deploy/agent/package-release.py package --binary "$BIN/StratoAgent" \
+            --arch "$ARCH" --sha "$GITHUB_SHA" --wire-version "$WIRE" \
+            --epoch "$(git show -s --format=%ct HEAD)" --output agent-downloads
+
+      - name: Upload agent downloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-downloads-${{ matrix.arch }}
+          path: agent-downloads/
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -379,6 +416,51 @@ jobs:
           docker buildx imagetools create -t "${REF}:main" -t "${REF}:main-${SHA}" $DIGESTS
           docker buildx imagetools inspect "${REF}:main-${SHA}"
 
+  # Probe each native binary in the supported host OS without a Swift runtime.
+  verify-agent-downloads:
+    needs: build-swift-release
+    runs-on: ${{ matrix.arch == 'x64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    container: ubuntu:26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-downloads-${{ matrix.arch }}
+          path: downloads
+      - name: Probe without a Swift toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libcurl4 ca-certificates
+          cd downloads
+          sha256sum -c ./*.sha256
+          tar -xzf ./*.tar.gz strato-agent
+          test "$(./strato-agent --version)" = "main-$(echo "$GITHUB_SHA" | cut -c1-12) ($GITHUB_SHA)"
+
+  # Immutable prereleases use the same manifest contract as tagged releases.
+  # Draft until both native probes and all image publications succeed; never
+  # move stable /latest or overwrite an already published commit's artifacts.
+  publish-agent-downloads:
+    needs: [verify-agent-downloads, publish-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-downloads-*
+          path: agent-downloads
+          merge-multiple: true
+      - name: Assemble existing v1 manifest
+        run: python3 deploy/agent/package-release.py manifest --directory agent-downloads --repository "$GITHUB_REPOSITORY"
+      - name: Publish commit-specific prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash deploy/agent/publish-main-release.sh
+
   # The swift-binaries-* and digest-* artifacts are a job-to-job handoff, dead
   # the moment publish-manifests reads them — but retention-days:1 is the floor
   # GitHub allows, so they would otherwise sit in billed storage for ~24h. At
@@ -390,7 +472,7 @@ jobs:
   # a run that dies after upload is exactly when the quota is most at risk.
   cleanup-artifacts:
     name: Delete Run Artifacts
-    needs: [publish-manifests]
+    needs: [publish-manifests, publish-agent-downloads]
     if: always()
     runs-on: ubuntu-latest
     permissions:
