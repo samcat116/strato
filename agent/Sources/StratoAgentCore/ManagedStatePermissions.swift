@@ -105,7 +105,7 @@ public enum ManagedStatePermissions {
         }
     }
 
-    static func requireRegularOrMissing(at path: String) throws {
+    public static func requireRegularOrMissing(at path: String) throws {
         var info = stat()
         if lstat(path, &info) != 0 {
             if errno == ENOENT { return }

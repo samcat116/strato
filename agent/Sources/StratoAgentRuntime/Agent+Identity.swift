@@ -214,7 +214,7 @@ extension Agent {
         // Simulation mode bypasses the probes and preflight entirely: there is
         // no real hypervisor to detect, so it advertises the mock backends as
         // available+accelerated to make the agent placement-eligible.
-        let hypervisors: [HypervisorSupport]
+        var hypervisors: [HypervisorSupport]
         // Whether this host can back a guest TPM 2.0 (issue #565). Simulation
         // mode asserts it for the same reason it asserts the sandbox runtime:
         // the host fact it checks for is meaningless to a mock backend, and
@@ -268,6 +268,17 @@ extension Agent {
                 )
             }
         }
+
+        #if os(macOS)
+        if !isSimulationMode,
+            let service = hypervisorServices[.appleVirtualization] as? AppleVirtualizationService
+        {
+            let support = await service.support()
+            hypervisors =
+                (hostPreflightReport?.gate([support]) ?? [support])
+                + hypervisors.filter { $0.type != .appleVirtualization }
+        }
+        #endif
 
         // The identity range gates only jailed sandboxes, never trusted
         // Firecracker VMs. Refresh on every registration so fixing the host's
@@ -632,7 +643,10 @@ extension Agent {
                 type: type,
                 available: true,
                 accelerated: true,
-                supportsVsock: type == .qemu ? true : nil
+                supportsVsock: type == .qemu ? true : nil,
+                // The mock has no framework bounds; host capacity still limits placement.
+                minimumMemoryBytes: type == .appleVirtualization ? 1 << 20 : nil,
+                maximumMemoryBytes: type == .appleVirtualization ? Int64.max : nil
             )
         }
     }

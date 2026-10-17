@@ -654,7 +654,11 @@ jobs:
                 # toolchain behavior on a runner image we don't pin; re-sign
                 # ad hoc unconditionally, which is what the linker gave these
                 # binaries in the first place (no Developer ID, no notarizing).
-                codesign --force --sign - "$f"
+                if [ "$f" = release/strato-agent ]; then
+                  codesign --force --sign - --entitlements deploy/agent/macos.entitlements "$f"
+                else
+                  codesign --force --sign - "$f"
+                fi
                 ;;
             esac
             echo "stripped ${f##*/}: ${before} -> ${after} bytes"

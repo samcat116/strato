@@ -272,6 +272,7 @@ enum DNSZoneService {
     /// The zones a VM registers derived records into: the primary zone of
     /// every network it has a NIC on. Usually zero or one.
     static func registrationZones(vmID: UUID, on db: any Database) async throws -> [DNSZone] {
+        if try await VM.find(vmID, on: db)?.hypervisorType == .appleVirtualization { return [] }
         let networkIDs = try await VMNetworkInterface.query(on: db)
             .filter(\.$vm.$id == vmID)
             .all()
@@ -305,6 +306,7 @@ enum DNSZoneService {
                 .compactMap(\.id)
             if !networkIDs.isEmpty {
                 var query = VM.query(on: db)
+                    .filter(\.$hypervisorType != .appleVirtualization)
                     .join(VMNetworkInterface.self, on: \VMNetworkInterface.$vm.$id == \VM.$id)
                     .filter(VMNetworkInterface.self, \.$logicalNetwork.$id ~~ networkIDs)
                     .filter(\.$hostname == hostname)
@@ -376,7 +378,9 @@ enum DNSZoneService {
             .map { $0.$vm.id }
         var seen: Set<String> = []
         if !vmIDs.isEmpty {
-            for vm in try await VM.query(on: db).filter(\.$id ~~ Array(Set(vmIDs))).all() {
+            for vm in try await VM.query(on: db).filter(\.$id ~~ Array(Set(vmIDs)))
+                .filter(\.$hypervisorType != .appleVirtualization).all()
+            {
                 guard let hostname = vm.hostname else { continue }
                 guard seen.insert(hostname).inserted else {
                     throw Abort(

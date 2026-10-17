@@ -45,7 +45,7 @@ export function AgentDetailPage({ agentId: id }: { agentId: string }) {
     ...agent?.hypervisors
       .filter((hypervisor) => hypervisor.available)
       .flatMap((hypervisor) => [
-        hypervisor.type === "qemu" ? "QEMU" : "Firecracker",
+        hypervisor.type === "qemu" ? "QEMU" : hypervisor.type === "firecracker" ? "Firecracker" : "Apple Virtualization",
         ...(hypervisor.supportsSnapshots
           ? [hypervisor.type === "qemu" ? "QEMU snapshots" : "Firecracker snapshots"]
           : []),

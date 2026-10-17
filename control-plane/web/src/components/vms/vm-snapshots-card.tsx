@@ -43,7 +43,9 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
   // A checkpoint captures live machine state, so there has to be some: a
   // shut-down VM has no QEMU process to read memory from. The server enforces
   // this too; disabling the button explains it before the round trip.
-  const canCheckpoint = vm.status === "Running" || vm.status === "Paused";
+  const supportsCheckpoints = vm.hypervisorType !== "apple_virtualization";
+  const unsupportedMessage = "Checkpoints are not supported by Apple Virtualization.";
+  const canCheckpoint = supportsCheckpoints && (vm.status === "Running" || vm.status === "Paused");
 
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -126,9 +128,11 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
             disabled={!canCheckpoint}
             onClick={() => setShowCreate(true)}
             title={
-              canCheckpoint
-                ? "Capture the VM's current memory and disk state"
-                : "The VM must be running or paused to be checkpointed"
+              !supportsCheckpoints
+                ? unsupportedMessage
+                : canCheckpoint
+                  ? "Capture the VM's current memory and disk state"
+                  : "The VM must be running or paused to be checkpointed"
             }
           >
             <Camera className="h-4 w-4 mr-2" />
@@ -189,7 +193,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
                       size="sm"
                       variant="outline"
                       disabled={
-                        snapshot.status !== "ready" || busyId === snapshot.id
+                        !supportsCheckpoints || snapshot.status !== "ready" || busyId === snapshot.id
                       }
                       onClick={() => setRestoring(snapshot)}
                     >
@@ -217,7 +221,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              No checkpoints yet.
+              {supportsCheckpoints ? "No checkpoints yet." : unsupportedMessage}
             </p>
           )}
         </CardContent>

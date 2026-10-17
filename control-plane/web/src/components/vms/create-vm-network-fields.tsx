@@ -25,6 +25,7 @@ interface VMNetworkInterfacesFieldsProps {
   networks: Network[];
   securityGroups: SecurityGroup[];
   securityGroupsFailed: boolean;
+  nativeNAT?: boolean;
 }
 
 export function VMNetworkInterfacesFields({
@@ -34,6 +35,7 @@ export function VMNetworkInterfacesFields({
   networks,
   securityGroups,
   securityGroupsFailed,
+  nativeNAT = false,
 }: VMNetworkInterfacesFieldsProps) {
   const updateNIC = (key: string, update: Partial<NICRow>) => {
     setNetworkInterfaces((rows) =>
@@ -58,6 +60,13 @@ export function VMNetworkInterfacesFields({
 
   return (
     <>
+      {nativeNAT && (
+        <p className="text-xs text-muted-foreground">
+          Apple Virtualization uses DHCP behind outbound NAT. The selected network
+          chooses the site; managed IP addresses, DNS registration, and security
+          groups are unavailable.
+        </p>
+      )}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div>
@@ -144,7 +153,7 @@ export function VMNetworkInterfacesFields({
                 />
               </div>
             </div>
-            {securityGroups.length > 0 && (
+            {!nativeNAT && securityGroups.length > 0 && (
               <div className="space-y-1">
                 <Label>Security groups</Label>
                 <div className="grid gap-1 rounded-md border border-border p-2 sm:grid-cols-2">
@@ -180,7 +189,7 @@ export function VMNetworkInterfacesFields({
           </p>
         )}
       </div>
-      {securityGroupsFailed && (
+      {!nativeNAT && securityGroupsFailed && (
         // A failed fetch must not read as "this project has no groups":
         // the VM would silently land on the default group only.
         <p className="text-xs text-red-600">

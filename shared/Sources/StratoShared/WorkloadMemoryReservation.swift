@@ -4,6 +4,7 @@ import Foundation
 /// Process overhead is charged once, independently of the guest grant.
 public struct WorkloadMemoryReservation: Codable, Sendable, Equatable {
     public static let defaultQEMUOverheadBytes: Int64 = 512 * 1024 * 1024
+    public static let appleVirtualizationOverheadBytes: Int64 = 512 * 1024 * 1024
     public static let firecrackerOverheadBytes: Int64 = 128 * 1024 * 1024
     public let guestBytes: Int64
     public let backendOverheadBytes: Int64
@@ -20,12 +21,18 @@ public struct WorkloadMemoryReservation: Codable, Sendable, Equatable {
         memoryBytes: Int64, maxMemoryBytes: Int64, hypervisorType: HypervisorType,
         architecture: CPUArchitecture, qemuOverheadBytes: Int64 = defaultQEMUOverheadBytes
     ) -> Self {
-        Self(
+        let overhead: Int64
+        switch hypervisorType {
+        case .qemu: overhead = qemuOverheadBytes
+        case .firecracker: overhead = firecrackerOverheadBytes
+        case .appleVirtualization: overhead = appleVirtualizationOverheadBytes
+        }
+        return Self(
             guestBytes: hypervisorType == .qemu
                 ? QEMUMemoryReservation.reservedBytes(
                     memoryBytes: max(0, memoryBytes), maxMemoryBytes: maxMemoryBytes, architecture: architecture)
                 : memoryBytes,
-            backendOverheadBytes: hypervisorType == .qemu ? qemuOverheadBytes : firecrackerOverheadBytes)
+            backendOverheadBytes: overhead)
     }
 
     public static func sandbox(memoryBytes: Int64) -> Self {

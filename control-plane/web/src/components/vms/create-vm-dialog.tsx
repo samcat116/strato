@@ -28,7 +28,7 @@ import { useNetworks } from "@/lib/hooks/use-networks";
 import { useProjectStoragePools } from "@/lib/hooks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
-import type { MetadataSource, VolumeBlockMode } from "@/types/api";
+import type { HypervisorType, MetadataSource, VolumeBlockMode } from "@/types/api";
 import { toast } from "sonner";
 
 interface CreateVMDialogProps {
@@ -44,6 +44,7 @@ export function CreateVMDialog({
   onCreated,
 }: CreateVMDialogProps) {
   const { isLoading, run } = useAcceptedMutation();
+  const [hypervisor, setHypervisor] = useState<HypervisorType | "">("");
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: "",
@@ -109,18 +110,15 @@ export function CreateVMDialog({
     [images]
   );
 
-  // The dialog never sends a hypervisor: the API infers one from the image's
-  // artifact set when that set is compatible with exactly one, else QEMU.
-  // Mirroring that inference here lets the firmware toggles disable themselves
-  // instead of letting the create fail with a 400.
   const selectedImage = useMemo(
     () => readyImages.find((img) => img.id === formData.imageId),
     [readyImages, formData.imageId]
   );
-  const isFirecracker = useMemo(() => {
-    const compatible = selectedImage?.compatibleHypervisors ?? [];
-    return compatible.length === 1 && compatible[0] === "firecracker";
-  }, [selectedImage]);
+  const compatible = selectedImage?.compatibleHypervisors ?? [];
+  const effectiveHypervisor = hypervisor || (compatible.length === 1 ? compatible[0] : "qemu");
+  const isFirecracker = effectiveHypervisor === "firecracker";
+  const isAppleVirtualization = effectiveHypervisor === "apple_virtualization";
+  const isQEMU = effectiveHypervisor === "qemu";
   const allSelectedNetworksDisableMetadata = useMemo(
     () =>
       networkInterfaces.every((nic) => {
@@ -130,7 +128,7 @@ export function CreateVMDialog({
     [networkInterfaces, networks]
   );
   const metadataSourceForcedToISO =
-    isFirecracker || !metadataEnabled || allSelectedNetworksDisableMetadata;
+    !isQEMU || !metadataEnabled || allSelectedNetworksDisableMetadata;
 
   const hasUserData = formData.userData.trim().length > 0;
   const hasFirecrackerMetadataNetwork = networkInterfaces.some((nic) => {
@@ -141,6 +139,7 @@ export function CreateVMDialog({
   // Handle image selection - applies defaults directly without useEffect
   const handleImageSelect = useCallback(
     (imageId: string) => {
+      setHypervisor("");
       const nextImage = readyImages.find((img) => img.id === imageId);
       if (nextImage) {
         const compatible = nextImage.compatibleHypervisors ?? [];
@@ -234,15 +233,16 @@ export function CreateVMDialog({
       description: formData.description || undefined,
       projectId,
       imageId: formData.imageId,
+      hypervisorType: hypervisor || undefined,
       cpu: parseInt(formData.cpu) || 2,
       memory: (parseInt(formData.memory) || 4) * GB,
       disk: (parseInt(formData.disk) || 50) * GB,
-      blockMode: isFirecracker ? undefined : formData.blockMode,
+      blockMode: isQEMU ? formData.blockMode : undefined,
       poolId: selectedPoolId || undefined,
       networkInterfaces: networkInterfaces.map((nic) => ({
         networkId: nic.networkId,
         securityGroupIds:
-          nic.securityGroupIds.length > 0
+          !isAppleVirtualization && nic.securityGroupIds.length > 0
             ? nic.securityGroupIds
             : undefined,
         mtu: nic.mtu ? Number(nic.mtu) : undefined,
@@ -251,11 +251,11 @@ export function CreateVMDialog({
       // Sent verbatim (no trim): the first bytes are the format header
       // cloud-init dispatches on.
       userData: formData.userData.trim() ? formData.userData : undefined,
-      secureBoot: !isFirecracker && secureBoot,
-      tpm: !isFirecracker && tpm,
-      guestAgentEnabled: !isFirecracker && guestAgentEnabled,
-      graphicsConsole: !isFirecracker && graphicsConsole,
-      metadataEnabled,
+      secureBoot: isQEMU && secureBoot,
+      tpm: isQEMU && tpm,
+      guestAgentEnabled: isQEMU && guestAgentEnabled,
+      graphicsConsole: isQEMU && graphicsConsole,
+      metadataEnabled: !isAppleVirtualization && metadataEnabled,
       // Keep the selected source explicit so the request matches what the
       // form showed. Paths that cannot reach IMDS record `iso`.
       metadataSource: metadataSourceForcedToISO ? "iso" as const : metadataSource,
@@ -291,6 +291,7 @@ export function CreateVMDialog({
           sshPublicKey: "",
           userData: "",
         });
+        setHypervisor("");
         setSecureBoot(false);
         setTpm(false);
         setGraphicsConsole(false);
@@ -404,6 +405,26 @@ export function CreateVMDialog({
             />
 
             <div className="space-y-2">
+              <Label htmlFor="hypervisor">Hypervisor</Label>
+              <select id="hypervisor" value={hypervisor}
+                onChange={(event) => setHypervisor(event.target.value as HypervisorType | "")}
+                disabled={isLoading}
+                className="w-full px-3 py-2 bg-background border border-input rounded-md">
+                <option value="">Automatic</option>
+                {compatible.map((backend) => (
+                  <option key={backend} value={backend}>
+                    {backend === "qemu" ? "QEMU" : backend === "firecracker" ? "Firecracker" : "Apple Virtualization (macOS)"}
+                  </option>
+                ))}
+              </select>
+              {isAppleVirtualization && (
+                <p className="text-xs text-muted-foreground">
+                  Requires a Mac matching the image architecture. Uses NAT networking and seed ISO bootstrap.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="vmStoragePool" className="text-foreground">
                 Boot storage pool
               </Label>
@@ -510,7 +531,7 @@ export function CreateVMDialog({
                     blockMode: event.target.value as VolumeBlockMode,
                   })
                 }
-                disabled={isLoading || isFirecracker}
+                disabled={isLoading || !isQEMU}
                 className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="conservative">Conservative (default)</option>
@@ -518,14 +539,15 @@ export function CreateVMDialog({
                 <option value="cachedShared">Cached shared base</option>
               </select>
               <p className="text-xs text-muted-foreground">
-                {isFirecracker
-                  ? "Firecracker does not use QEMU block-device policy."
+                {!isQEMU
+                  ? "Block-device policy is available only for QEMU."
                   : "Direct I/O is probed on the selected storage before the VM is defined; a failed probe falls back without failing creation."}
               </p>
             </div>
 
             <VMNetworkInterfacesFields
               isLoading={isLoading}
+              nativeNAT={isAppleVirtualization}
               networkInterfaces={networkInterfaces}
               setNetworkInterfaces={setNetworkInterfaces}
               networks={networks}
@@ -536,7 +558,8 @@ export function CreateVMDialog({
             <VMGuestOptionsFields
               isLoading={isLoading}
               isFirecracker={isFirecracker}
-              metadataEnabled={metadataEnabled}
+              isAppleVirtualization={isAppleVirtualization}
+              metadataEnabled={!isAppleVirtualization && metadataEnabled}
               setMetadataEnabled={setMetadataEnabled}
               metadataSource={metadataSource}
               setMetadataSource={setMetadataSource}

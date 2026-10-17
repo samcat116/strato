@@ -95,14 +95,14 @@ extension InstanceMetadata {
             // VMs never publish one.
             noCloudSeedToken: vm.metadataSource == .imds ? vm.metadataSeedToken : nil,
             // The per-instance kill switch (STR-185). Sent as the column's
-            // literal value rather than folded with the network's
+            // value (gated by backend transport support), independent of the network's
             // `metadataEnabled`: the two are enforced at different layers — the
             // network's by whether the localport exists at all, this one by the
             // listener and the deny ACL — and folding them here would put a
             // network's setting into a per-VM field that outlives it, so
             // turning the network's switch back on would leave every VM on it
             // still refused.
-            serviceEnabled: vm.metadataEnabled
+            serviceEnabled: vm.effectiveMetadataEnabled
         )
     }
 }

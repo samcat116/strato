@@ -62,6 +62,44 @@ final class VMMetadataOptOutTests {
         let metadataEnabled: Bool?
     }
 
+    @Test("Apple metadata stays unavailable in API, desired state, and updates")
+    func appleMetadataUnavailable() async throws {
+        try await withVMTestApp { app, project, token in
+            let vm = try await self.placeVM(app: app, project: project, named: "apple", onAgent: nil)
+            vm.hypervisorType = .appleVirtualization
+            vm.metadataEnabled = true  // Legacy rows must not advertise an unreachable service.
+            vm.userData = "#cloud-config\npackages: [curl]"
+            try await vm.save(on: app.db)
+            let metadata = try InstanceMetadata.build(
+                vm: vm, vmId: vm.requireID(), resolvedInterfaces: [],
+                region: nil, availabilityZone: nil, instanceSPIFFEID: nil)
+            #expect(metadata.serviceEnabled == false)
+            #expect(metadata.userData == vm.userData)  // ISO provisioning remains available.
+            try await app.test(.GET, "/api/vms/\(try vm.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                let detail = try response.content.decode(VMDetailResponse.self)
+                #expect(detail.metadataEnabled == false)
+            }
+            try await app.test(.PUT, "/api/vms/\(try vm.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateBody(metadataEnabled: true))
+            } afterResponse: { response in
+                #expect(response.status == .badRequest)
+                #expect(response.body.string.contains("metadata service"))
+            }
+            try await app.test(.PUT, "/api/vms/\(try vm.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateBody(metadataEnabled: false))
+            } afterResponse: { response in
+                #expect(response.status == .ok)
+                let detail = try response.content.decode(VMDetailResponse.self)
+                #expect(detail.metadataEnabled == false)
+            }
+            #expect(try await VM.find(vm.id, on: app.db)?.metadataEnabled == false)
+        }
+    }
+
     // MARK: - The default
 
     @Test("A VM is served metadata unless someone says otherwise")

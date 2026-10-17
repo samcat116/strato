@@ -84,6 +84,11 @@ final class VMResizeTests {
                 siteID: try await builder.placementSite(for: project).requireID(),
                 organizationScope: .organization(try org.requireID()))
 
+            agent.hypervisors.append(
+                HypervisorSupport(
+                    type: .appleVirtualization, available: true, accelerated: true,
+                    minimumMemoryBytes: 512 << 20, maximumMemoryBytes: 32 << 30))
+            try await agent.save(on: app.db)
             let vm = try await builder.createVM(name: "resize-vm", project: project)
             vm.maxCpu = 8
             vm.maxMemory = 8 * 1024 * 1024 * 1024
@@ -128,7 +133,8 @@ final class VMResizeTests {
     /// transaction then guarantees the stale-snapshot interleaving STR-302
     /// reproduces instead of relying on task scheduling to happen to expose it.
     private func putDisjointSizingUpdatesAtLockBoundary(
-        _ app: Application, _ vm: VM, token: String, expectedStatus: HTTPResponseStatus
+        _ app: Application, _ vm: VM, token: String, expectedStatus: HTTPResponseStatus,
+        statusBeforeUnlock: VMStatus? = nil
     ) async throws {
         let databaseName = try #require(app.storage[TestDatabaseNameKey.self])
         let lockObserver = try await Application.makeForTesting(
@@ -189,6 +195,11 @@ final class VMResizeTests {
                     }
                     try await Task.sleep(for: .milliseconds(10))
                 }
+                if let statusBeforeUnlock {
+                    try await sql.raw(
+                        "UPDATE vms SET status = \(bind: statusBeforeUnlock.rawValue) WHERE id = \(bind: vmID)"
+                    ).run()
+                }
             }
 
             try await requests.waitForResponses()
@@ -213,6 +224,116 @@ final class VMResizeTests {
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.generation == vm.generation)
         }
+    }
+
+    @Test(
+        "Apple resize rejects invalid memory without mutating sizing or generation",
+        arguments: [Int64(511 << 20), Int64((512 << 20) + 1), Int64(33 << 30)])
+    func appleMemoryRejected(memory: Int64) async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            vm.hypervisorType = .appleVirtualization
+            vm.status = .shutdown
+            try await vm.save(on: app.db)
+            try await expectAppleResizeUnchanged(app, vm, project: project) {
+                try await self.put(app, vm, token: token, body: ["memory": memory]) { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("Apple Virtualization memory"))
+                }
+            }
+        }
+    }
+
+    @Test("Native Apple resize only accepts created and shutdown states", arguments: VMStatus.allCases)
+    func appleResizeStateGuard(status: VMStatus) async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            vm.hypervisorType = .appleVirtualization
+            vm.status = status
+            try await vm.save(on: app.db)
+            if status == .created || status == .shutdown {
+                let sixteenGB = Int64(16 * 1024 * 1024 * 1024)
+                try await put(app, vm, token: token, body: ["cpu": 12, "memory": sixteenGB]) { res in
+                    #expect(res.status == .ok)
+                }
+                let resized = try #require(try await VM.find(vm.requireID(), on: app.db))
+                #expect(resized.cpu == 12)
+                #expect(resized.memory == sixteenGB)
+                #expect(resized.maxCpu == 12)
+                #expect(resized.maxMemory == sixteenGB)
+                #expect(resized.generation > vm.generation)
+            } else {
+                try await expectAppleResizeUnchanged(app, vm, project: project) {
+                    try await self.put(
+                        app, vm, token: token, body: ["cpu": 12, "memory": Int64(16 * 1024 * 1024 * 1024)]
+                    ) { res in
+                        #expect(res.status == .unprocessableEntity)
+                        #expect(res.body.string.contains("Shut down"))
+                    }
+                }
+            }
+        }
+    }
+
+    @Test("Native Apple resize rejects a state change while waiting for the row lock")
+    func appleResizeRevalidatesLockedState() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            vm.hypervisorType = .appleVirtualization
+            vm.status = .shutdown
+            try await vm.save(on: app.db)
+            try await expectAppleResizeUnchanged(app, vm, project: project) {
+                try await self.putDisjointSizingUpdatesAtLockBoundary(
+                    app, vm, token: token, expectedStatus: .unprocessableEntity, statusBeforeUnlock: .error)
+            }
+            #expect(try await VM.find(vm.id, on: app.db)?.status == .error)
+        }
+    }
+
+    @Test("Native Apple stopped resize still rejects balloon targets")
+    func appleBalloonTargetRejected() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            vm.hypervisorType = .appleVirtualization
+            vm.status = .shutdown
+            try await vm.save(on: app.db)
+            try await expectAppleResizeUnchanged(app, vm, project: project) {
+                try await self.put(app, vm, token: token, body: ["balloonTarget": 1024 * 1024 * 1024]) { res in
+                    #expect(res.status == .badRequest)
+                    #expect(res.body.string.contains("does not support balloon targets"))
+                }
+            }
+        }
+    }
+
+    private func expectAppleResizeUnchanged(
+        _ app: Application, _ vm: VM, project: Project, request: () async throws -> Void
+    ) async throws {
+        let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
+            for: project, environment: vm.environment, on: app.db)
+        let quotaBefore = try #require(quotasBefore.first)
+        let admissionsBefore = try await AgentResourceAdmission.query(on: app.db).all()
+        let claimsBefore = admissionsBefore.flatMap { $0.state.pending.map(\.reservationID) }.sorted()
+        let agentID = try #require(vm.hypervisorId)
+        let reservationsBefore = await app.coordination.activeReservations(agentIds: [agentID])[agentID] ?? .zero
+        try await request()
+        let unchanged = try #require(try await VM.find(vm.requireID(), on: app.db))
+        #expect(unchanged.cpu == vm.cpu)
+        #expect(unchanged.memory == vm.memory)
+        #expect(unchanged.balloonTarget == vm.balloonTarget)
+        #expect(unchanged.maxCpu == vm.maxCpu)
+        #expect(unchanged.maxMemory == vm.maxMemory)
+        #expect(unchanged.generation == vm.generation)
+        #expect(unchanged.admittedReservation == vm.admittedReservation)
+        #expect(unchanged.resourceClass == vm.resourceClass)
+        let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
+            for: project, environment: vm.environment, on: app.db)
+        let quotaAfter = try #require(quotasAfter.first)
+        #expect(quotaAfter.reservedVCPUs == quotaBefore.reservedVCPUs)
+        #expect(quotaAfter.reservedMemory == quotaBefore.reservedMemory)
+        let admissionsAfter = try await AgentResourceAdmission.query(on: app.db).all()
+        #expect(admissionsAfter.count == admissionsBefore.count)
+        #expect(admissionsAfter.flatMap { $0.state.pending.map(\.reservationID) }.sorted() == claimsBefore)
+        let reservationsAfter = await app.coordination.activeReservations(agentIds: [agentID])[agentID] ?? .zero
+        #expect(reservationsAfter.cpuMicroUnits == reservationsBefore.cpuMicroUnits)
+        #expect(reservationsAfter.memory == reservationsBefore.memory)
+        #expect(reservationsAfter.disk == reservationsBefore.disk)
     }
 
     // MARK: - Resting VM

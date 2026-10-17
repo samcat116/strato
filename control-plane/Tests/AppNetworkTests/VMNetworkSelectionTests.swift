@@ -63,6 +63,159 @@ final class VMNetworkSelectionTests {
         var networkId: UUID? = nil
         var securityGroupIds: [UUID]? = nil
         var metadataSource: String? = nil
+        var hypervisorType: String? = nil
+    }
+
+    @Test(
+        "Apple creation rejects invalid memory before persisting VM or volume",
+        arguments: [Int64(511 << 20), Int64((512 << 20) + 1), Int64(9 << 30)])
+    func rejectInvalidAppleMemory(memory: Int64) async throws {
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
+            let vmCount = try await VM.query(on: app.db).count()
+            let volumeCount = try await Volume.query(on: app.db).count()
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "apple-invalid-memory", imageId: image.id,
+                        projectId: project.id, environment: "development", cpu: 1, memory: memory, disk: self.gb(10),
+                        networkId: nil, networkName: "default", hypervisorType: "apple_virtualization"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("Apple Virtualization memory"))
+            }
+            #expect(try await VM.query(on: app.db).count() == vmCount)
+            #expect(try await Volume.query(on: app.db).count() == volumeCount)
+        }
+    }
+
+    @Test("Apple Virtualization creates NAT NICs without managed allocations", arguments: [false, true])
+    func createAppleVirtualization(multipleNICs: Bool) async throws {
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
+            let network = try #require(
+                try await LogicalNetwork.query(on: app.db)
+                    .filter(\.$project.$id == project.requireID()).filter(\.$name == "default").first())
+            network.subnet6 = "fd12:3456:789a::/64"
+            network.gateway6 = "fd12:3456:789a::1"
+            try await network.save(on: app.db)
+            let groupCount = try await SecurityGroup.query(on: app.db).count()
+            let nextIP = try await app.db.transaction { db in
+                try await IPAMService.allocateIP(for: network, on: db).ipAddress
+            }
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                if multipleNICs {
+                    try req.content.encode(
+                        CreateMultiVMBody(
+                            name: "apple-native", imageId: image.requireID(),
+                            projectId: project.requireID(),
+                            networkInterfaces: [
+                                CreateNICBody(networkId: network.requireID(), networkName: nil),
+                                CreateNICBody(networkId: network.requireID(), networkName: nil),
+                            ], hypervisorType: "apple_virtualization"))
+                } else {
+                    try req.content.encode(
+                        CreateVMBody(
+                            name: "apple-native", imageId: image.id, projectId: project.id,
+                            environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                            networkId: nil, networkName: "default", hypervisorType: "apple_virtualization"))
+                }
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "apple-native").first())
+            #expect(vm.hypervisorType == .appleVirtualization)
+            #expect(vm.metadataEnabled == false)
+            #expect(vm.metadataSource == .iso)
+            let volume = try #require(try await Volume.query(on: app.db).filter(\.$vm.$id == vm.id!).first())
+            #expect(volume.format == .raw)
+            let interfaces = try await VMNetworkInterface.query(on: app.db)
+                .filter(\.$vm.$id == vm.requireID()).with(\.$addresses).with(\.$securityGroupMemberships).all()
+            let nic = try #require(interfaces.first)
+            #expect(interfaces.count == (multipleNICs ? 2 : 1))
+            #expect(Set(interfaces.map(\.macAddress)).count == interfaces.count)
+            #expect(nic.logicalNetworkID == network.id)
+            #expect(interfaces.allSatisfy { $0.addresses.isEmpty && $0.securityGroupMemberships.isEmpty })
+            #expect(try await SecurityGroup.query(on: app.db).count() == groupCount)
+            let nextIPAfter = try await app.db.transaction { db in
+                try await IPAMService.allocateIP(for: network, on: db).ipAddress
+            }
+            #expect(nextIPAfter == nextIP)
+            try await app.test(.GET, "/api/vms/\(try vm.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                let detail = try response.content.decode(VMDetailResponse.self)
+                #expect(detail.metadataEnabled == false)
+                #expect(detail.networkInterfaces.first?.addresses.isEmpty == true)
+                #expect(detail.networkInterfaces.first?.securityGroupIds?.isEmpty == true)
+            }
+        }
+    }
+
+    @Test("Apple creation rejects an explicit unreachable metadata service")
+    func appleMetadataRejected() async throws {
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
+            let count = try await VM.query(on: app.db).count()
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "apple-metadata", imageId: image.id,
+                        projectId: project.id, environment: "development", cpu: 1, memory: self.gb(1),
+                        disk: self.gb(10),
+                        networkId: nil, networkName: "default", hypervisorType: "apple_virtualization",
+                        metadataEnabled: true))
+            } afterResponse: { response in
+                #expect(response.status == .badRequest)
+                #expect(response.body.string.contains("metadata service"))
+            }
+            #expect(try await VM.query(on: app.db).count() == count)
+        }
+    }
+
+    @Test("Apple NAT rejects explicit security groups before persisting a VM")
+    func appleSecurityGroupsRejected() async throws {
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
+            let group = try await SecurityGroupService.ensureDefaultGroup(projectID: project.requireID(), on: app.db)
+            let network = try #require(
+                try await LogicalNetwork.query(on: app.db)
+                    .filter(\.$project.$id == project.requireID()).first())
+            let vmCount = try await VM.query(on: app.db).count()
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateMultiVMBody(
+                        name: "apple-security", imageId: image.requireID(),
+                        projectId: project.requireID(),
+                        networkInterfaces: [
+                            CreateNICBody(
+                                networkId: network.requireID(), networkName: nil, securityGroupIds: [group.requireID()])
+                        ], hypervisorType: "apple_virtualization"))
+            } afterResponse: { response in
+                #expect(response.status == .badRequest)
+                #expect(response.body.string.contains("security groups"))
+            }
+            #expect(try await VM.query(on: app.db).count() == vmCount)
+        }
+    }
+
+    @Test("Apple Virtualization rejects guest execution and IMDS before persisting a VM", arguments: [false, true])
+    func rejectUnsupportedAppleFeatures(exec: Bool) async throws {
+        try await withApp(appleHost: true) { app, _, _, project, image, token in
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "apple-unsupported", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default", hypervisorType: "apple_virtualization",
+                        guestAgentEnabled: exec, metadataSource: exec ? "iso" : "imds"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("apple_virtualization"))
+            }
+            #expect(try await VM.query(on: app.db).filter(\.$name == "apple-unsupported").count() == 0)
+        }
     }
 
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
@@ -83,6 +236,7 @@ final class VMNetworkSelectionTests {
     }
 
     private func withApp(
+        appleHost: Bool = false,
         _ test: (Application, User, Organization, Project, Image, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
@@ -102,6 +256,19 @@ final class VMNetworkSelectionTests {
             // fixture makes the one most tests here select by name.
             try await builder.createNetwork(name: "default", project: project)
             let image = try await builder.createImage(project: project, uploadedBy: user)
+            if appleHost {
+                let agent = try await builder.createAgent(
+                    named: "apple-host", hostname: "mac.example",
+                    architecture: image.architecture,
+                    siteID: try await builder.placementSite(for: project).requireID(),
+                    organizationScope: .organization(try org.requireID()))
+                agent.hypervisors = [
+                    HypervisorSupport(
+                        type: .appleVirtualization, available: true, accelerated: true,
+                        minimumMemoryBytes: 512 << 20, maximumMemoryBytes: 8 << 30)
+                ]
+                try await agent.save(on: app.db)
+            }
             let token = try await user.generateAPIKey(on: app.db)
 
             try await test(app, user, org, project, image, token)

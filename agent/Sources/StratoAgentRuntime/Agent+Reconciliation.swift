@@ -785,6 +785,7 @@ extension Agent: ReconcileActuator {
                     ])
             }
         }
+        var appleBootSpec: VMSpec?
         do {
             if let reprobedQEMUSpec {
                 // This rewrite is required. Persisting the new applied echo
@@ -817,13 +818,21 @@ extension Agent: ReconcileActuator {
             // NICs is idempotent and gives the provisioner the current guest
             // network document. Treat this migration as required: a VM that
             // merely starts while cloud-init falls back is not converged.
-            if !item.steps.contains(.create), desired.spec.metadataSource == .imds {
+            if !item.steps.contains(.create),
+                desired.spec.metadataSource == .imds || desired.hypervisorType == .appleVirtualization
+            {
                 let attachments = try await networkOrchestrator.prepareAttachments(
                     vmId: item.id, networks: desired.spec.networks,
                     metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
+                let bootSpec =
+                    desired.hypervisorType == .appleVirtualization
+                    ? try await specWithRealizedVolumeAttachments(
+                        desired.spec, vmId: item.id, hypervisorType: desired.hypervisorType)
+                    : desired.spec
                 try await service.convergeGuestBootstrap(
-                    vmId: item.id, spec: desired.spec,
+                    vmId: item.id, spec: bootSpec,
                     networkAttachments: attachments, metadata: desired.metadata)
+                if desired.hypervisorType == .appleVirtualization { appleBootSpec = bootSpec }
             }
             try await service.ensureMemoryCeiling(vmId: item.id, spec: desired.spec)
             try await service.bootVM(vmId: item.id)
@@ -834,6 +843,7 @@ extension Agent: ReconcileActuator {
 
         if let entry = managedVMs[item.id] ?? orphanedVMs[item.id] {
             var booted = entry.reservingPositiveSizingGrowth(toward: desired.spec)
+            if let appleBootSpec { booted = booted.with(spec: appleBootSpec) }
             if entry.hypervisorType == .qemu {
                 booted = booted.reservingMemory(
                     atLeast: max(

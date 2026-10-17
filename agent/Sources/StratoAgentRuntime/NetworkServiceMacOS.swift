@@ -3,8 +3,8 @@ import Logging
 import StratoAgentCore
 import StratoShared
 
-/// macOS network service implementation using user-mode (SLIRP) networking
-/// OVN/OVS are not supported on macOS, so we use QEMU's built-in user-mode networking
+/// Describes NAT attachments for QEMU user-mode networking and Apple Virtualization.
+/// The driver realizes them; this service configures no host topology.
 actor NetworkServiceMacOS: NetworkServiceProtocol {
     private let logger: Logger
 
@@ -12,7 +12,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
     init(logger: Logger) {
         self.logger = logger
-        logger.info("Network service initialized with user-mode (SLIRP) networking for macOS")
+        logger.info("Network service initialized for driver-provided NAT networking")
     }
 
     // MARK: - Connection Management
@@ -46,9 +46,9 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
         let macAddress = config.macAddress.description
 
-        // User-mode networking provides automatic DHCP: VMs get addresses in the
-        // 10.0.2.0/24 range from QEMU's SLIRP, so no IP is allocated (or honored)
-        // here — reporting one would just be fiction.
+        // The driver supplies NAT and DHCP (QEMU SLIRP or Apple NAT). This
+        // service allocates no IP; the logical network's address is not realized
+        // by either NAT backend and must not be reported as assigned.
         let networkInfo = VMNetworkInfo(
             vmId: vmId,
             networkName: config.networkName,

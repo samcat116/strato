@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "strato-agent",
     platforms: [
-        // macOS 15+ required by grpc-swift-2 (the macOS agent is dev/test only)
+        // macOS 15+ required by grpc-swift-2 and the native agent baseline
         .macOS(.v15)
     ],
     products: [

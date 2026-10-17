@@ -134,6 +134,11 @@ export function VMDetailPage({ id }: { id: string }) {
   }
 
   const isRunning = vm.status === "Running";
+  const supportsConsole = vm.hypervisorType !== "apple_virtualization";
+  const canUseConsole = supportsConsole && isRunning;
+  const consoleUnavailableReason = supportsConsole
+    ? "Start the VM to access the console"
+    : "Serial console is not supported by Apple Virtualization.";
   const memoryUsagePercent = vm.guestMemoryUsedBytes != null && vm.memory > 0
     ? Math.min(100, Math.max(0, Math.round((vm.guestMemoryUsedBytes / vm.memory) * 100)))
     : null;
@@ -167,9 +172,9 @@ export function VMDetailPage({ id }: { id: string }) {
           <div className="flex shrink-0 items-center gap-2">
             <Button
               size="sm"
-              disabled={!isRunning}
+              disabled={!canUseConsole}
               onClick={() => setActiveTab("console")}
-              title={!isRunning ? "Start the VM to access the console" : undefined}
+              title={!canUseConsole ? consoleUnavailableReason : undefined}
             >
               <Terminal aria-hidden="true" className="size-4" /> Open console
             </Button>
@@ -198,12 +203,15 @@ export function VMDetailPage({ id }: { id: string }) {
             <TabsTrigger
               value="console"
               className="data-[state=active]:bg-muted"
-              disabled={!isRunning}
+              disabled={!canUseConsole}
+              title={!canUseConsole ? consoleUnavailableReason : undefined}
             >
               <Terminal aria-hidden="true" className="hidden size-4 sm:block" />
               Console
-              {!isRunning && (
-                <span className="sr-only sm:not-sr-only sm:ml-1 sm:text-xs sm:text-muted-foreground">(VM not running)</span>
+              {!canUseConsole && (
+                <span className="sr-only sm:not-sr-only sm:ml-1 sm:text-xs sm:text-muted-foreground">
+                  {supportsConsole ? "(VM not running)" : "(Unsupported)"}
+                </span>
               )}
             </TabsTrigger>
             {permissions.exec && (
@@ -392,7 +400,7 @@ export function VMDetailPage({ id }: { id: string }) {
         </TabsContent>
 
         <TabsContent value="console" className="mt-4">
-          {isRunning ? (
+          {canUseConsole ? (
             <Card className="bg-background border-border">
               <CardContent className="p-0">
                 <ConsoleTerminal
@@ -406,10 +414,10 @@ export function VMDetailPage({ id }: { id: string }) {
               <CardContent className="py-12 text-center">
                 <Terminal className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground">
-                  Console is only available when the VM is running.
+                  {supportsConsole ? "Console is only available when the VM is running." : consoleUnavailableReason}
                 </p>
                 <p className="text-muted-foreground text-sm mt-2">
-                  Start the VM to access the console.
+                  {supportsConsole ? "Start the VM to access the console." : "Use the guest's own network access tools when available."}
                 </p>
               </CardContent>
             </Card>
@@ -427,12 +435,12 @@ export function VMDetailPage({ id }: { id: string }) {
                     {vm.guestAgentEnabled === false ? (
                       <>
                         <p>Strato guest agent channel is disabled for this VM.</p>
-                        <p>Recreation is required to enable it. Create a Linux/QEMU VM with the guest agent opt-in; cloud-init installs it at first boot. Use Console to access this VM.</p>
+                        <p>Recreation is required to enable it. Create a Linux/QEMU VM with the guest agent opt-in; cloud-init installs it at first boot. {supportsConsole ? "Use Console to access this VM." : "Serial console is unavailable for Apple Virtualization."}</p>
                       </>
                     ) : (
                       <>
                         <p>Guest-agent opt-in state is unavailable.</p>
-                        <p>Refresh VM details or update the control plane before using Exec. Console remains available.</p>
+                        <p>Refresh VM details or update the control plane before using Exec. {supportsConsole ? "Console remains available." : "Serial console is unavailable for Apple Virtualization."}</p>
                       </>
                     )}
                   </div>

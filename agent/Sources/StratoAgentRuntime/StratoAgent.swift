@@ -14,7 +14,7 @@ public struct StratoAgent: AsyncParsableCommand {
 
     public static let configuration = CommandConfiguration(
         commandName: "strato-agent",
-        abstract: "Strato hypervisor agent for managing VMs on QEMU",
+        abstract: "Strato hypervisor agent for managing virtual machines",
         version: BuildInfo.displayVersion,
         subcommands: [Run.self, SpiffeDelegatedProbe.self, MetadataServer.self],
         defaultSubcommand: Run.self

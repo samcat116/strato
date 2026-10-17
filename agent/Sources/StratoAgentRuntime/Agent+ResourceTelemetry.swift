@@ -113,7 +113,7 @@ extension Agent {
                         resourceLimits: try? BurstableResourceLimits.plan(
                             resourceClass: entry.spec.resourceClass, guestGrantBytes: entry.spec.memoryBytes,
                             backendOverheadBytes: configuration.qemuMemoryOverheadBytes)))
-            case .firecracker:
+            case .firecracker, .appleVirtualization:
                 // Ordinary Firecracker VMs are unjailed and share the agent's
                 // cgroup. Reporting that host cgroup as per-VM contention
                 // would falsely attribute every sibling process, so absence is

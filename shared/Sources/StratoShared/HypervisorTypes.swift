@@ -2,24 +2,17 @@ import Foundation
 
 /// Identity of a VM backend *driver*, not of the accelerator behind it.
 ///
-/// `.qemu` is the QEMU driver wherever it runs — accelerated by KVM on Linux
-/// or Hypervisor.framework (HVF) on macOS, falling back to TCG emulation
-/// when neither is usable. Whether acceleration is actually in effect is a
-/// per-host attribute probed at agent startup and reported separately
-/// (`HypervisorSupport.accelerated`), never encoded in this enum. A backend
-/// that talks to a different VMM (e.g. a native Virtualization.framework
-/// driver on macOS) would be a new case here with its own `HypervisorService`
-/// conformance, not a variation of `.qemu`.
-///
-/// Adding a case means: `displayName`, the default snapshot capability on
-/// `HypervisorSupport`, a probe report in `HypervisorProbe.probeAll`, and one
-/// driver registration in `Agent.start()`.
+/// QEMU and Firecracker are Linux drivers. Apple Virtualization is a native
+/// macOS driver; acceleration is reported separately from driver identity.
 public enum HypervisorType: String, Codable, CaseIterable, Sendable {
-    /// QEMU with KVM (Linux) or HVF (macOS) acceleration
+    /// QEMU through libvirt (Linux)
     case qemu = "qemu"
 
     /// Amazon Firecracker microVM (Linux only)
     case firecracker = "firecracker"
+
+    /// Apple Virtualization.framework (macOS only)
+    case appleVirtualization = "apple_virtualization"
 
     /// Human-readable display name
     public var displayName: String {
@@ -28,6 +21,8 @@ public enum HypervisorType: String, Codable, CaseIterable, Sendable {
             return "QEMU"
         case .firecracker:
             return "Firecracker"
+        case .appleVirtualization:
+            return "Apple Virtualization"
         }
     }
 }
@@ -38,8 +33,8 @@ public enum NetworkCapability: String, Codable, CaseIterable, Sendable {
     /// tenant isolation, and inbound connections are supported.
     case overlay = "overlay"
 
-    /// User-mode (SLIRP) networking only: outbound NAT, no VM-to-VM traffic,
-    /// no inbound connections, no isolation.
+    /// Outbound NAT (QEMU SLIRP or Apple NAT), without managed VM-to-VM guarantees,
+    /// inbound routing, or logical-network isolation.
     case userMode = "user_mode"
 }
 
@@ -86,6 +81,19 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
     /// equality, and treats nil as incompatible rather than guessing.
     public let version: String?
 
+    /// Host-specific guest memory bounds. Apple placement requires both;
+    /// older registrations without them must refresh before accepting VMs.
+    public let minimumMemoryBytes: Int64?
+    public let maximumMemoryBytes: Int64?
+
+    public func supportsMemorySize(_ bytes: Int64) -> Bool {
+        guard type == .appleVirtualization else { return true }
+        guard let minimumMemoryBytes, let maximumMemoryBytes,
+            minimumMemoryBytes > 0, maximumMemoryBytes >= minimumMemoryBytes
+        else { return false }
+        return bytes >= minimumMemoryBytes && bytes <= maximumMemoryBytes && bytes % (1 << 20) == 0
+    }
+
     public init(
         type: HypervisorType,
         available: Bool,
@@ -95,7 +103,9 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         supportsVsock: Bool? = nil,
         supportsGuestExec: Bool? = nil,
         supportsVolumeIOLimits: Bool? = nil,
-        version: String? = nil
+        version: String? = nil,
+        minimumMemoryBytes: Int64? = nil,
+        maximumMemoryBytes: Int64? = nil
     ) {
         self.type = type
         self.available = available
@@ -106,10 +116,12 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         self.supportsGuestExec = supportsGuestExec
         self.supportsVolumeIOLimits = supportsVolumeIOLimits
         self.version = version
+        self.minimumMemoryBytes = minimumMemoryBytes
+        self.maximumMemoryBytes = maximumMemoryBytes
     }
     private enum CodingKeys: String, CodingKey {
         case type, available, accelerated, unavailabilityReason, supportsSnapshots
-        case supportsVsock, supportsGuestExec, supportsVolumeIOLimits, version
+        case supportsVsock, supportsGuestExec, supportsVolumeIOLimits, version, minimumMemoryBytes, maximumMemoryBytes
     }
 
     public init(from decoder: Decoder) throws {
@@ -125,6 +137,8 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         supportsGuestExec = try container.decodeIfPresent(Bool.self, forKey: .supportsGuestExec)
         supportsVolumeIOLimits = try container.decodeIfPresent(Bool.self, forKey: .supportsVolumeIOLimits)
         version = try container.decodeIfPresent(String.self, forKey: .version)
+        minimumMemoryBytes = try container.decodeIfPresent(Int64.self, forKey: .minimumMemoryBytes)
+        maximumMemoryBytes = try container.decodeIfPresent(Int64.self, forKey: .maximumMemoryBytes)
     }
 }
 
@@ -133,6 +147,8 @@ extension HypervisorType {
         switch self {
         case .qemu, .firecracker:
             return true
+        case .appleVirtualization:
+            return false
         }
     }
 }

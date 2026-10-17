@@ -30,9 +30,8 @@ struct HypervisorProbeTests {
         #expect(report.accelerated)
         #expect(report.unavailabilityReason == nil)
         #else
-        // Off Linux the registered `.qemu` backend is a mock, so the host must
-        // not advertise itself as able to run VMs — otherwise the scheduler
-        // places real workloads onto it.
+        // Off Linux QEMU is unavailable. The native Apple backend has an
+        // independent runtime probe and must never be advertised as QEMU.
         #expect(!report.available)
         #expect(report.unavailabilityReason?.contains("Linux") == true)
         #endif

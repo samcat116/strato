@@ -137,7 +137,7 @@ extension Image {
     func usableBootArtifact(for hypervisorType: HypervisorType) -> ImageArtifact? {
         let requiredKind: ArtifactKind
         switch hypervisorType {
-        case .qemu:
+        case .qemu, .appleVirtualization:
             requiredKind = .diskImage
         case .firecracker:
             requiredKind = .rootfs
@@ -187,6 +187,7 @@ extension Image {
         var result: Set<HypervisorType> = []
         if kinds.contains(.diskImage) {
             result.insert(.qemu)
+            result.insert(.appleVirtualization)
         }
         if kinds.contains(.kernel) && kinds.contains(.rootfs) {
             result.insert(.firecracker)

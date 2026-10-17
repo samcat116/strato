@@ -178,15 +178,44 @@ host cleanly rejects placements it can't serve.
   sandbox runtime, so VMs and sandboxes go through a single process
   registry and socket layout.
 - **`MockHypervisorService`**: the no-op backend used in simulation mode (one
-  mock per hypervisor type) and as the `.qemu` registration on a platform that
-  has no libvirt. It tracks specs and status so reservations and reconciliation
+  mock per hypervisor type). It tracks specs and status so reservations and reconciliation
   behave realistically.
 
-**There is no QEMU driver off Linux.** libvirt is Linux-only, so a macOS agent
-registers the mock and reports `.qemu` as *unavailable* — the scheduler places
-nothing on it, and the startup log says so in as many words. This is a
-deliberate, temporary regression (STR-136): the macOS agent is a dev/test host,
-and a native Virtualization.framework driver is separate work.
+### Native macOS driver
+
+`AppleVirtualizationService` (`apple_virtualization`, macOS 15+) uses Apple's
+Virtualization.framework for same-architecture Linux guests. It is independent
+of QEMU/libvirt and Firecracker. The runtime registers it on macOS and probes
+both framework support and the executable's virtualization entitlement before
+advertising availability; the ordinary storage preflight still applies.
+
+The driver supports EFI boot with a persistent private variable store, direct
+Linux kernel boot, managed local **raw** disks, a cloud-init NoCloud ISO, NAT
+network attachments, and start, graceful shutdown, reboot, pause, resume, delete,
+and stopped resize. Before an existing VM boots, the agent resolves its current
+managed volumes again and rebuilds the configuration and seed, including desired
+network changes. Network drift alone does not schedule hot-plug or restart a
+running Apple VM; those changes take effect on its next cold boot. Reboot edges
+also use shutdown followed by ordinary boot, so the latest configuration and seed
+are rebuilt before the reboot nonce is acknowledged. Apple framework
+objects stay on the main dispatch queue behind a `@MainActor` owner; the agent
+and its driver exchange only Sendable plans and observations.
+
+VMs belong to the agent process. An agent exit stops them; adoption reports
+`adoptionTargetGone`, allowing reconciliation to recreate the VM from its
+surviving managed volumes and cold-boot when desired. This is not live adoption
+or stateful migration. The backend charges a fixed 512 MiB overhead per VM.
+
+The first implementation has no OVN/TAP networking, Ceph disks, IMDS transport,
+serial socket bridge, VNC, guest-exec bridge, checkpoints, online resize, device
+hot-plug, Secure Boot/TPM, balloon targets, or burstable cgroup enforcement.
+Unsupported specs fail explicitly. Registration reports snapshots, vsock,
+guest execution, and volume I/O limits as unsupported. Native NAT does not
+implement logical-network security groups, ACLs, or the managed resolver.
+
+The Linux bootstrap installer remains Linux-only. macOS source builds require
+explicit signing and an existing SPIFFE identity; see
+[local development](../development/local-development.md#macos-native-agent).
 
 ### The libvirt QEMU driver
 
@@ -711,7 +740,7 @@ release, requires its `guest_config_convergence` capability, selects `x86_64` or
 `aarch64` from the guest, and verifies the native tarball's SHA-256 before
 publishing either file. The installer places the packaged binary and unit, then
 enables/starts `strato-guest-agent.service`. Publish the compatible v0.1.3
-artifacts and manifest before deploying the wire-v70 control plane/agent. The installer
+artifacts and manifest before deploying the wire-v72 control plane/agent. The installer
 requires cloud-init, Python 3, systemd and HTTPS egress to GitHub. Download,
 manifest, architecture, checksum and startup errors fail the cloud-init script;
 an image without cloud-init cannot execute it at all. Opt-in does not prove
@@ -1682,7 +1711,7 @@ New network realization requires a valid control-plane-assigned unicast MAC.
 The agent no longer allocates random fallback addresses. Older manifests remain
 readable and live adoption preserves their existing identity. A legacy NIC with
 no MAC must receive one in desired state before network realization can proceed.
-The retired `enable_hvf` TOML key is rejected: macOS uses the mock hypervisor;
+The retired `enable_hvf` TOML key is rejected: macOS uses Apple Virtualization;
 Linux still supports `enable_kvm`.
 
 ## Workload log pressure (issue #1366)

@@ -325,7 +325,7 @@ actor Agent {
     // The QEMU driver, kept typed as well as in `hypervisorServices` so the
     // registration path can hand it what only the host preflight knows: whether
     // this host's libvirt can back a guest vTPM. Nil off Linux, where the
-    // registered `.qemu` backend is a mock.
+    // native Apple driver has no emulated TPM implementation.
     var libvirtService: LibvirtService?
     var sandboxJailerBlockedReason: String?
     /// Live host-range failure under `required`, refreshed by preflight on

@@ -7,6 +7,7 @@ import type { Image, MetadataSource } from "@/types/api";
 interface VMGuestOptionsFieldsProps {
   isLoading: boolean;
   isFirecracker: boolean;
+  isAppleVirtualization?: boolean;
   metadataEnabled: boolean;
   setMetadataEnabled: Dispatch<SetStateAction<boolean>>;
   metadataSource: MetadataSource;
@@ -29,6 +30,7 @@ interface VMGuestOptionsFieldsProps {
 export function VMGuestOptionsFields({
   isLoading,
   isFirecracker,
+  isAppleVirtualization = false,
   metadataEnabled,
   setMetadataEnabled,
   metadataSource,
@@ -76,7 +78,12 @@ export function VMGuestOptionsFields({
             {isFirecracker ? "Firecracker MMDS" : "Seed ISO"}
           </option>
         </select>
-        {isFirecracker ? (
+        {isAppleVirtualization ? (
+          <p className="text-xs text-muted-foreground">
+            Apple Virtualization uses the seed ISO for hostname, SSH keys, and user data.
+            Link-local instance metadata is unavailable on native NAT.
+          </p>
+        ) : isFirecracker ? (
           <p className="text-xs text-muted-foreground">
             Firecracker has no seed disk. It serves EC2-compatible
             metadata from MMDS on metadata-enabled NICs; the selected
@@ -126,9 +133,9 @@ export function VMGuestOptionsFields({
           <input
             id="secureBoot"
             type="checkbox"
-            checked={!isFirecracker && secureBoot}
+            checked={!isFirecracker && !isAppleVirtualization && secureBoot}
             onChange={(e) => setSecureBoot(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Secure Boot
@@ -137,17 +144,16 @@ export function VMGuestOptionsFields({
           <input
             id="tpm"
             type="checkbox"
-            checked={!isFirecracker && tpm}
+            checked={!isFirecracker && !isAppleVirtualization && tpm}
             onChange={(e) => setTpm(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           TPM 2.0
         </label>
-        {isFirecracker ? (
+        {isFirecracker || isAppleVirtualization ? (
           <p className="text-xs text-muted-foreground">
-            Unavailable for this image: it boots under Firecracker, which
-            has no UEFI firmware or TPM device. Use a QEMU image.
+            Secure Boot and TPM are available only with QEMU.
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -170,17 +176,16 @@ export function VMGuestOptionsFields({
           <input
             id="graphicsConsole"
             type="checkbox"
-            checked={!isFirecracker && graphicsConsole}
+            checked={!isFirecracker && !isAppleVirtualization && graphicsConsole}
             onChange={(e) => setGraphicsConsole(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Graphics console
         </label>
-        {isFirecracker ? (
+        {isFirecracker || isAppleVirtualization ? (
           <p className="text-xs text-muted-foreground">
-            Unavailable for this image: it boots under Firecracker, which
-            emulates no display device. Use a QEMU image.
+            The graphics console is available only with QEMU.
           </p>
         ) : (
           <p className="text-xs text-muted-foreground">
@@ -206,24 +211,30 @@ export function VMGuestOptionsFields({
           <input
             id="metadataEnabled"
             type="checkbox"
-            checked={metadataEnabled}
+            checked={!isAppleVirtualization && metadataEnabled}
             onChange={(e) => {
               const enabled = e.target.checked;
               setMetadataEnabled(enabled);
               if (!enabled) setMetadataSource("iso");
             }}
-            disabled={isLoading}
+            disabled={isLoading || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Serve instance metadata to this VM
         </label>
         <p className="text-xs text-muted-foreground">
+          {isAppleVirtualization ? (
+            "Instance metadata is unavailable for Apple NAT guests. The seed ISO still supplies guest bootstrap data."
+          ) : (
+            <>
           Turning it off denies this VM the service outright, even where
           its security groups would allow it — the lever for a workload
           you want an SSRF bug to find nothing behind.{" "}
           If the guest bootstrap source above is instance metadata,
           turning this off also prevents cloud-init from fetching its
           configuration. This switch can be changed later.
+            </>
+          )}
         </p>
       </div>
       
@@ -231,9 +242,9 @@ export function VMGuestOptionsFields({
         <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
-            checked={!isFirecracker && guestAgentEnabled}
+            checked={!isFirecracker && !isAppleVirtualization && guestAgentEnabled}
             onChange={(e) => setGuestAgentEnabled(e.target.checked)}
-            disabled={isLoading || isFirecracker}
+            disabled={isLoading || isFirecracker || isAppleVirtualization}
             className="h-4 w-4 rounded border-input bg-background accent-blue-600"
           />
           Install Strato guest agent (root command execution)

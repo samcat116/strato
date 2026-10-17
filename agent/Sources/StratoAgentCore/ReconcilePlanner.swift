@@ -27,6 +27,16 @@ extension Reconciler {
             presentNetworks: presentNetworks,
             presentFirecrackerMMDSInterfaces: presentFirecrackerMMDSInterfaces,
             appliedEdges: appliedEdges)
+        for index in plan.items.indices {
+            let item = plan.items[index]
+            guard item.desired?.hypervisorType == .appleVirtualization, item.steps.contains(.reboot) else { continue }
+            // Ordinary boot rebuilds Apple's devices and NoCloud seed from the
+            // desired spec. Keep nonce acknowledgement after that rebuild succeeds.
+            let steps: [ReconcileStep] = item.steps.flatMap { $0 == .reboot ? [.shutdown, .boot] : [$0] }
+            plan.items[index] = ReconcileWorkItem(
+                kind: item.kind, id: item.id, generation: item.generation, steps: steps,
+                target: item.target, appliedEdges: item.appliedEdges)
+        }
         // A same-generation pass still re-observes guest drift. This step is
         // always real work: VM convergence cannot advance before its read-back.
         for entry in desired where entry.desiredStatus == .running && entry.guestConfig?.isEmpty == false {
@@ -69,6 +79,10 @@ extension Reconciler {
 
             let needsReconfiguration: Bool
             switch entry.hypervisorType {
+            case .appleVirtualization:
+                // Native NAT has no network hot-plug. Existing Apple VMs rebuild
+                // their configuration and seed from desired state before cold boot.
+                continue
             case .qemu:
                 needsReconfiguration = observed != entry.spec.networks
             case .firecracker:
@@ -191,7 +205,11 @@ extension Reconciler {
                 entry.hypervisorType == .qemu
                 && (status == .shutdown || status == .created)
                 && entry.spec.cpus < observed.cpus
-            guard runningResize || stoppedVCPUShrink else { continue }
+            let stoppedAppleResize =
+                entry.hypervisorType == .appleVirtualization
+                && (status == .shutdown || status == .created)
+                && observed.differs(from: entry.spec)
+            guard runningResize || stoppedVCPUShrink || stoppedAppleResize else { continue }
             // Same staleness rule as the core diff: an older sync must never
             // undo a newer one, and an equal generation is drift correction —
             // which is deliberately *not* "already done". See the note above
@@ -202,7 +220,7 @@ extension Reconciler {
                 var steps = items[index].steps
                 if steps.isEmpty {
                     steps = [.resize]
-                } else if stoppedVCPUShrink, let boot = steps.firstIndex(of: .boot) {
+                } else if stoppedVCPUShrink || stoppedAppleResize, let boot = steps.firstIndex(of: .boot) {
                     steps.insert(.resize, at: boot)
                 } else {
                     continue

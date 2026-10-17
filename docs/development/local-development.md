@@ -28,11 +28,10 @@ Platform notes for running VMs:
   The 11.5 floor covers local QEMU disks. Namespaced RBD attached through QEMU
   requires libvirt 11.6+; Firecracker/krbd-only Ceph clients do not require a
   reachable libvirt daemon.
-- **macOS**: macOS 15+, Xcode Command Line Tools, `brew install qemu` for
-  `qemu-img`. Best-effort only: no CI builds the agent for macOS, and without
-  libvirt it registers a mock QEMU driver and reports the backend
-  unavailable — control-plane and frontend development is the supported use;
-  running real VMs is not.
+- **macOS**: macOS 15+, a Mac with hardware virtualization available, and
+  `brew install qemu` for `qemu-img`. The native `apple_virtualization` backend
+  runs Linux guests matching the Mac's architecture. The executable must have
+  the virtualization entitlement; see [macOS native agent](#macos-native-agent).
 
 ## Build and test
 
@@ -224,6 +223,51 @@ CLI arguments override config-file values. `control_plane_url` is required;
 other common options are `log_level`, `network_mode` (`ovn` or `user`), and
 `firecracker_binary_path`. See
 [Deploying agents](/deployment/agents) for the full reference.
+
+### macOS native agent
+
+Build and ad-hoc sign the executable before running it:
+
+```bash
+swift build --package-path agent --product StratoAgent
+codesign --force --sign - --entitlements deploy/agent/macos.entitlements \
+  "$(swift build --package-path agent --show-bin-path)/StratoAgent"
+```
+
+Run that signed binary directly, rather than using a command that rebuilds it
+and replaces the signature. Release tarballs apply the entitlement during
+packaging. PR CI currently checks macOS dependency resolution; release CI also
+builds the macOS ARM64 binaries.
+
+Configure `network_mode = "user"` and `hypervisor_type = "apple_virtualization"`.
+Authentication remains mandatory: configure `spiffe` with real file-based SVID
+credentials and a trust bundle, or a usable Workload API source. This does not
+add a macOS enrollment installer or launchd integration.
+
+Create a VM with `hypervisorType: "apple_virtualization"` (or select Apple
+Virtualization in the create dialog), a matching-architecture Linux disk image,
+a local boot storage pool, and `metadataSource: "iso"`. The boot volume is
+materialized as raw, including conversion from qcow2 source images. Leave
+QEMU-only machine, graphics, guest-agent and optimized block options disabled.
+Networking uses native NAT; OVN policies and inter-VM network guarantees are
+unavailable. Instance metadata is disabled for Apple VMs; an explicit request to
+enable it is rejected. The seed ISO still provides hostname, SSH keys, and user data. There is currently no serial socket or inbound SSH forwarding.
+
+VMs cold-boot after the owning agent restarts. Managed volumes and EFI state
+persist; RAM and device state do not. Checkpoints and sandbox execution remain
+unsupported on this backend. See the [driver contract](../architecture/agent.md#native-macos-driver).
+
+Apple Virtualization agents report the framework's minimum and maximum guest
+memory in their hypervisor registration. Guest memory must be a multiple of
+1 MiB. Register a compatible Mac before creating or resizing an Apple VM;
+registrations without memory bounds must be refreshed. The API checks these
+bounds before saving desired state, placement checks the selected host, and
+the agent validates its current bounds before creating VM files.
+
+The opt-in `AppleVirtualizationRuntimeTests.nativeLifecycle` test starts a
+small disposable EFI VM, pauses, resumes and stops it. It requires an entitled
+test host as well as available hardware virtualization. Ordinary package tests
+skip this hardware check and exercise configuration and recovery contracts.
 
 ## Kubernetes
 

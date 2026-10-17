@@ -37,6 +37,7 @@ struct SchedulableAgent: Sendable {
     let runningVMCount: Int
     /// Hypervisor backends this agent can actually run, from its structured registration report.
     let supportedHypervisors: [HypervisorType]
+    let hypervisors: [HypervisorSupport]
     /// Host CPU architecture; nil for agents that predate architecture reporting
     let architecture: CPUArchitecture?
     /// Whether the agent's networking backend supports VM-to-VM traffic
@@ -76,6 +77,7 @@ struct SchedulableAgent: Sendable {
         status: AgentStatus,
         runningVMCount: Int,
         supportedHypervisors: [HypervisorType] = [.qemu],
+        hypervisors: [HypervisorSupport] = [],
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
         supportsMetadataService: Bool = false,
@@ -102,6 +104,7 @@ struct SchedulableAgent: Sendable {
         self.status = status
         self.runningVMCount = runningVMCount
         self.supportedHypervisors = supportedHypervisors
+        self.hypervisors = hypervisors
         self.architecture = architecture
         self.supportsInterVMNetworking = supportsInterVMNetworking
         self.supportsMetadataService = supportsMetadataService
@@ -164,6 +167,7 @@ struct SchedulableAgent: Sendable {
             status: status,
             runningVMCount: runningVMCount,
             supportedHypervisors: supportedHypervisors,
+            hypervisors: hypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
             supportsMetadataService: supportsMetadataService,
@@ -213,7 +217,8 @@ struct VMPlacementRequirements: Sendable, Equatable {
     /// metadata service. Independent from the overlay-networking requirement.
     let requiresMetadataService: Bool
     /// Site the VM must place into, when one of its networks is pinned to a
-    /// site (a pinned network only exists in that site's OVN deployment).
+    /// site. Linux workloads also need that site's OVN fabric; native Apple
+    /// NAT uses the site as a locality constraint without overlay guarantees.
     /// Hard constraint; nil means unconstrained.
     let siteID: UUID?
     /// Whether the workload is a sandbox, which only agents advertising the
@@ -589,13 +594,14 @@ final class SchedulerService: Sendable {
             throw SchedulerError.noAvailableAgents
         }
 
-        // A network pinned to a site exists only in that site's OVN
-        // deployment. User-mode agents in the site are still ineligible
-        // because they never attach to its OVN fabric.
+        // Linux workloads need the pinned site's OVN fabric. Native Apple
+        // workloads use NAT instead, but must still remain in the pinned site.
+        // Explicit overlay requirements are enforced independently below.
         let siteMatched: [SchedulableAgent]
         if let requiredSiteID = requirements.siteID {
             siteMatched = online.filter {
-                $0.siteID == requiredSiteID && $0.supportsInterVMNetworking
+                $0.siteID == requiredSiteID
+                    && (requirements.hypervisorType == .appleVirtualization || $0.supportsInterVMNetworking)
             }
             guard !siteMatched.isEmpty else {
                 throw SchedulerError.siteUnsatisfied(requiredSiteID: requiredSiteID)
@@ -604,7 +610,13 @@ final class SchedulerService: Sendable {
             siteMatched = online
         }
 
-        let hypervisorCapable = siteMatched.filter { $0.supportedHypervisors.contains(requirements.hypervisorType) }
+        let hypervisorCapable = siteMatched.filter { agent in
+            agent.supportedHypervisors.contains(requirements.hypervisorType)
+                && (requirements.hypervisorType != .appleVirtualization
+                    || agent.hypervisors.contains {
+                        $0.type == .appleVirtualization && $0.available && $0.supportsMemorySize(requirements.memory)
+                    })
+        }
         guard !hypervisorCapable.isEmpty else {
             // Distinguish a genuine backend mismatch from agents that
             // advertise no hypervisor at all (failed binary probes at

@@ -253,5 +253,6 @@ extension Application {
         migrations.add(AddAgentUpdateHealthVerification())
         migrations.add(AddVMGuestConfig())
         migrations.add(AddVMGuestConfigEvidence())
+        migrations.add(AddAppleVirtualizationBackend())
     }
 }

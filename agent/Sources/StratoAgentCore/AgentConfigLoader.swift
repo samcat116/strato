@@ -310,7 +310,7 @@ extension AgentConfig {
         if let typeString = hypervisorTypeString {
             guard let hType = HypervisorType(rawValue: typeString) else {
                 throw AgentConfigError.invalidConfiguration(
-                    "hypervisor_type must be 'qemu' or 'firecracker', got '\(typeString)'")
+                    "hypervisor_type must be 'qemu', 'firecracker', or 'apple_virtualization', got '\(typeString)'")
             }
             hypervisorType = hType
             logger?.info("Agent configured to use hypervisor type: \(typeString)")

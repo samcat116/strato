@@ -2,10 +2,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VMGuestOptionsFields } from "./create-vm-guest-options-fields";
 
-function fields(isFirecracker = false) {
+function fields(isFirecracker = false, isAppleVirtualization = false) {
   const setGuestAgentEnabled = vi.fn();
   render(<VMGuestOptionsFields
-    isLoading={false} isFirecracker={isFirecracker}
+    isLoading={false} isFirecracker={isFirecracker} isAppleVirtualization={isAppleVirtualization}
     metadataEnabled metadataSource="iso" metadataSourceForcedToISO={false}
     allSelectedNetworksDisableMetadata={false} secureBoot={false} tpm={false}
     graphicsConsole={false} guestAgentEnabled={false}
@@ -31,4 +31,13 @@ describe("Guest-agent opt-in", () => {
     fields(true);
     expect(screen.getByRole("checkbox", { name: /Install Strato guest agent/ })).toBeDisabled();
   });
+  it("keeps link-local metadata off for Apple while retaining ISO user data", () => {
+    fields(false, true);
+    const option = screen.getByRole("checkbox", { name: /Serve instance metadata/ });
+    expect(option).toBeDisabled();
+    expect(option).not.toBeChecked();
+    expect(screen.getByText(/Instance metadata is unavailable for Apple NAT guests/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Cloud-init user data/)).toHaveValue("#!/bin/sh\necho tenant");
+  });
+
 });

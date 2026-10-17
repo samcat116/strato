@@ -640,6 +640,12 @@ struct VMController: RouteCollection {
 
         try Self.validateSizing(cpu: newCPU, memory: newMemory, balloonTarget: newBalloonTarget)
 
+        try Self.validateAppleResize(vm: existingVM, balloonTarget: newBalloonTarget)
+        if existingVM.hypervisorType == .appleVirtualization {
+            try await AppleVirtualizationValidation.requireMemory(
+                newMemory, agentID: existingVM.hypervisorId, on: req.db)
+        }
+
         let growthMutationID = UUID()
         let growthClaim = NIOLockedValueBox<WorkloadResourceClassService.GrowthClaim?>(nil)
         do {
@@ -669,6 +675,12 @@ struct VMController: RouteCollection {
                     let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
                     try Self.validateSizing(
                         cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
+                    // Reconciliation may have changed the observed state while we waited for the row lock.
+                    try Self.validateAppleResize(vm: existingVM, balloonTarget: lockedBalloonTarget)
+                    if existingVM.hypervisorType == .appleVirtualization {
+                        try await AppleVirtualizationValidation.requireMemory(
+                            lockedMemory, agentID: existingVM.hypervisorId, on: db)
+                    }
                     _ = try await Self.applyMetadataUpdate(
                         updateRequest.metadataEnabled, to: existingVM, on: db)
                     try WorkloadResourceClassService.requireGrowthAvailable(
@@ -778,6 +790,7 @@ struct VMController: RouteCollection {
                 let lockedBalloonTarget = updateRequest.balloonTarget ?? committed.balloonTarget
                 try Self.validateSizing(
                     cpu: lockedCPU, memory: lockedMemory, balloonTarget: lockedBalloonTarget)
+                try Self.validateAppleResize(vm: existingVM, balloonTarget: lockedBalloonTarget)
                 try WorkloadResourceClassService.requireGrowthAvailable(
                     vm: existingVM, cpu: lockedCPU, memory: lockedMemory)
                 try await QuotaEnforcementService.reserveVMResize(
@@ -868,6 +881,16 @@ struct VMController: RouteCollection {
             await req.application.agentService.syncDesiredState(agentId: placedAgentId)
         }
         return try await Self.detailResponse(for: updatedVM, on: req)
+    }
+
+    private static func validateAppleResize(vm: VM, balloonTarget: Int64?) throws {
+        guard vm.hypervisorType == .appleVirtualization else { return }
+        guard balloonTarget == nil else {
+            throw Abort(.badRequest, reason: "Apple Virtualization does not support balloon targets")
+        }
+        guard vm.status == .created || vm.status == .shutdown else {
+            throw Abort(.unprocessableEntity, reason: "Shut down this Apple Virtualization VM before resizing it")
+        }
     }
 
     private static func runningVCPUShrinkAbort(from current: Int, to requested: Int) -> Abort {
@@ -1006,6 +1029,13 @@ struct VMController: RouteCollection {
         let vmID = try vm.requireID()
         guard let committed = try await VM.find(vmID, on: db) else {
             throw Abort(.notFound, reason: "VM no longer exists")
+        }
+        if committed.hypervisorType == .appleVirtualization {
+            guard requested != true else {
+                throw Abort(.badRequest, reason: "Apple Virtualization NAT has no instance metadata service")
+            }
+            vm.metadataEnabled = false
+            return committed.metadataEnabled
         }
         guard let requested else {
             vm.metadataEnabled = committed.metadataEnabled

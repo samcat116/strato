@@ -559,6 +559,7 @@ actor WorkloadPlacementService {
                     status: agent.status,
                     runningVMCount: runningVMCounts[agentId] ?? 0,
                     supportedHypervisors: agent.supportedHypervisors(at: instant),
+                    hypervisors: agent.hypervisors,
                     architecture: agent.cpuArchitecture,
                     supportsInterVMNetworking: agent.supportsInterVMNetworking(at: instant),
                     supportsMetadataService: agent.metadataServiceCapable,

@@ -13,6 +13,7 @@ const agent: Agent = {
   },
   hypervisors: [
     { type: "qemu", available: true, accelerated: true, supportsSnapshots: true },
+    { type: "apple_virtualization", available: true, accelerated: true, supportsSnapshots: false },
     {
       type: "firecracker", available: false, accelerated: false,
       supportsSnapshots: true, unavailabilityReason: "Firecracker binary not found",
@@ -36,9 +37,11 @@ vi.mock("@/components/agents/agent-force-offline-action", () => ({ AgentForceOff
 describe("AgentDetailPage", () => {
   afterEach(cleanup);
 
-  it("renders flat snapshot support only for available hypervisors", () => {
+  it("renders backend names and flat snapshot support only for available hypervisors", () => {
     render(<AgentDetailPage agentId={agent.id} />);
 
+    expect(screen.getByText("Apple Virtualization")).toBeVisible();
+    expect(screen.queryByText("Apple Virtualization snapshots")).toBeNull();
     expect(screen.getByText("QEMU snapshots")).toBeVisible();
     expect(screen.queryByText("Firecracker snapshots")).toBeNull();
     expect(screen.getByRole("heading", { name: "Node 1" })).toBeVisible();
