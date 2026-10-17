@@ -19,13 +19,26 @@ enum CompiledBuildInfo {
     static let gitSHA: String? = "${GITHUB_SHA}"
 }
 EOF
-swift build --package-path agent -c release --product StratoAgent --static-swift-stdlib -j 4 --cache-path "$SWIFTPM_CACHE_PATH"
-bin="$(swift build --package-path agent -c release --show-bin-path)"
+xml_dir="$PWD/agent/.build/static-xml"
+bash deploy/agent/build-static-xml.sh "$xml_dir"
+# Swift 6.4.0's default backend drops Foundation's static dependencies:
+# https://github.com/swiftlang/swift-build/issues/1764
+swift build --package-path agent -c release --product StratoAgent --static-swift-stdlib \
+  --build-system native -j 4 --cache-path "$SWIFTPM_CACHE_PATH" \
+  -Xlinker "-L$xml_dir"
+bin="$(swift build --package-path agent -c release --build-system native --show-bin-path)"
+probe_package=.github/fixtures/agent-runtime-probe
+swift build --package-path "$probe_package" -c release --static-swift-stdlib --build-system native \
+  -Xlinker "-L$xml_dir"
+probe_bin="$(swift build --package-path "$probe_package" -c release --build-system native --show-bin-path)"
+"$probe_bin/AgentRuntimeProbe"
+mkdir -p "$output"
+cp "$probe_bin/AgentRuntimeProbe" "$output/runtime-probe"
 strip "$bin/StratoAgent"
 # Static Swift does not mean static glibc. Refuse accidental image binaries.
 libraries=$(ldd "$bin/StratoAgent")
 printf '%s\n' "$libraries"
-if grep -E 'libswift|libjemalloc|not found' <<< "$libraries"; then exit 1; fi
+if grep -E 'libswift|libFoundation|lib_Foundation|libdispatch|libBlocksRuntime|libjemalloc|libxml2|libicu|not found' <<< "$libraries"; then exit 1; fi
 wire=$(sed -n 's/.*public static let currentVersion = \([0-9]*\).*/\1/p' shared/Sources/StratoShared/WireProtocol.swift)
 python3 deploy/agent/package-release.py package --binary "$bin/StratoAgent" \
   --arch "$arch" --sha "$GITHUB_SHA" --wire-version "$wire" \

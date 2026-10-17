@@ -346,7 +346,7 @@ jobs:
       - name: Install packaging tools
         run: |
           apt-get update
-          apt-get install -y python3 binutils
+          apt-get install -y python3 binutils dpkg-dev libxml2-dev liblzma-dev zlib1g-dev pkg-config automake libtool
       - name: Prepare Swift build environment
         uses: ./.github/actions/swift-build-env
       - name: Build exact main agent archive

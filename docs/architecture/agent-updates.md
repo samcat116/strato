@@ -54,6 +54,13 @@ for main builds; a missing manifest fails without guessing a legacy bundle URL.
 The moving `main` alias and historical short hashes require an explicit artifact
 override. Stable `latest` and tagged release bundles keep their current behavior.
 
+The pinned Swift 6.4.0 compiler uses the native build backend for static
+Foundation linkage. XML is compiled from Ubuntu's signed, security-patched Noble
+source package with its optional ICU backend disabled, then linked into the
+binary. This avoids the Noble-to-26.04 XML ABI mismatch and a second ICU runtime.
+A companion probe exercises Unicode XML/XPath, JSON, locale/date handling and
+FoundationNetworking in the same minimal host container without network requests.
+
 Publication waits for both native Linux probes in Ubuntu 26.04 without a Swift
 toolchain and the main image publication barrier. A failed upload stays draft;
 retries may repair drafts but must compare rather than replace published assets.

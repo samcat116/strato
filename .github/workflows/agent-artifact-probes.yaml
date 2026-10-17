@@ -31,4 +31,6 @@ jobs:
           tar -xzf ./*.tar.gz strato-agent
           test "$(./strato-agent --version)" = "main-$(echo "$GITHUB_SHA" | cut -c1-12) ($GITHUB_SHA)"
           ./strato-agent --version
+          chmod 0755 runtime-probe
+          ./runtime-probe
           uname -m

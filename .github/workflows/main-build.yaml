@@ -53,7 +53,7 @@ jobs:
           SUDO=""
           command -v sudo >/dev/null && SUDO=sudo
           $SUDO apt-get update
-          $SUDO apt-get install -y libjemalloc-dev python3 binutils
+          $SUDO apt-get install -y libjemalloc-dev python3 binutils dpkg-dev libxml2-dev liblzma-dev zlib1g-dev pkg-config automake libtool
 
       # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
       # volume, so it stays on actions/cache + the default .build path. That

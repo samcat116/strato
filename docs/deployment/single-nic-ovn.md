@@ -13,8 +13,9 @@ The installer installs the host prerequisites and agent; it does not migrate
 management networking. Linux hypervisors need KVM, QEMU/libvirt >= 11.5, swtpm,
 OVS/OVN host tools, SPIRE and authenticated control-plane reachability. Published
 main binaries are built with Swift 6.4 on Ubuntu 24.04 with a static Swift runtime
-and probed on Ubuntu 26.04. They still require host system libraries, including
-libcurl; this is not a fully static libc executable. Installing a main binary
+and probed on Ubuntu 26.04. XML is linked into the binary from Ubuntu's signed
+Noble sources; its ICU option is disabled to coexist with Swift's embedded ICU.
+They still require host system libraries, including libcurl; this is not a fully static libc executable. Installing a main binary
 requires an explicit `--version main-<12 lowercase hex>`; `latest` stays stable.
 
 Download the exact commit's `agent-manifest.json`, agent archive and `.sha256`
