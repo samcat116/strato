@@ -87,8 +87,8 @@ jobs:
 
       - name: Assert control-plane build identity
         run: |
-          if grep -q 'name: STRATO_GIT_SHA' /tmp/default-template.yaml; then
-            echo "Default chart must preserve the full SHA baked into the image"
+          if grep -Eq 'name: STRATO_(VERSION|GIT_SHA)' /tmp/default-template.yaml; then
+            echo "Default chart must preserve the version and full SHA baked into the image"
             exit 1
           fi
 

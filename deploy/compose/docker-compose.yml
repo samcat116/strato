@@ -253,12 +253,8 @@ services:
     # Match the non-root UID/GID baked into the control-plane image.
     user: "999:999"
     environment: &control-plane-env
-      # Report the exact tag the operator pinned on /health/* (see
-      # BuildInfo.swift), overriding the image's baked default so the running
-      # process names what was actually deployed. STRATO_GIT_SHA is deliberately
-      # left unset here: the image bakes in the real commit, which is more precise
-      # than this tag string.
-      STRATO_VERSION: ${STRATO_VERSION:-main}
+      # Keep the image's compiled version and SHA. The image selector above
+      # may be a moving alias (main/latest), which is not a build identity.
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: vapor_database
