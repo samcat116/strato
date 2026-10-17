@@ -347,14 +347,14 @@ extension FirecrackerSandboxRuntime {
             // crash-swept host (reused when it exists).
             try await createNetns(plan.netnsName)
 
-            let memory = try prepareRestoreMemory(filePath: SandboxJailPlan.snapshotMemoryPathInJail)
+            try Task.checkCancellation()
             newManager = try await client.restoreVM(
                 vmId: sandboxId,
                 jail: makeJailerOptions(
                     plan: plan, guestMemoryBytes: managed.spec.memoryBytes, resourceClass: managed.spec.resourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
-                    memFilePath: memory.path,
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
                     resumeVM: !suspensionManagedRestore && managed.spec.resourceClass?.policy.kind != .burstable,
                     networkOverrides: overrides),
                 validateCgroup: try resourceLimitValidator(sandboxId: sandboxId, spec: managed.spec))
@@ -370,12 +370,12 @@ extension FirecrackerSandboxRuntime {
             // The restored vsock device re-binds the deterministic UDS; a
             // stale file from the old process would make that bind fail.
             try? FileManager.default.removeItem(atPath: managed.vsockUdsPath)
-            let memory = try prepareRestoreMemory(filePath: archiveMemory)
+            try Task.checkCancellation()
             newManager = try await client.restoreVM(
                 vmId: sandboxId, jail: nil,
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: archiveVmstate,
-                    memFilePath: memory.path,
+                    memFilePath: archiveMemory,
                     resumeVM: !suspensionManagedRestore && managed.spec.resourceClass?.policy.kind != .burstable,
                     networkOverrides: overrides))
         }
@@ -433,16 +433,6 @@ extension FirecrackerSandboxRuntime {
         logger.info(
             "Sandbox restored from snapshot",
             metadata: ["strato.sandbox.id": .string(sandboxId), "snapshotId": .string(snapshotId)])
-    }
-
-    /// Memory preparation is subordinate to STR-312's restore lane. Keep File
-    /// selected until the real UFFD handler and lifecycle proof are available.
-    private func prepareRestoreMemory(filePath: String) throws -> SandboxRestoreMemoryPreparation.FilePlan {
-        let plan = try SandboxRestoreMemoryPreparation.prepare(filePath: filePath)
-        logger.debug(
-            "Sandbox restore memory backend selected",
-            metadata: ["backend": "File", "reason": .string(plan.fallbackReason)])
-        return plan
     }
 
     func deleteSandboxSnapshot(sandboxId: String, snapshotId: String) async throws {

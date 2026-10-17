@@ -22,9 +22,6 @@ final class SecurityGroupRule: Model, @unchecked Sendable {
         case ipv6
     }
 
-    /// The protocols a rule can name; nil on the row means "any".
-    static let allowedProtocols: Set<String> = ["tcp", "udp", "icmp"]
-
     @ID(key: .id)
     var id: UUID?
 

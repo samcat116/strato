@@ -303,7 +303,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         } catch {
             retainPrepared = SubprocessBudget.preserveStaging(after: error)
             if !retainPrepared { try? FileManager.default.removeItem(atPath: stagingPath) }
-            guard Self.isInsufficientDiskSpace(error) else { throw error }
+            guard FileSystemError.isInsufficientDiskSpace(error) else { throw error }
             throw StorageBackendError.insufficientDiskSpace(
                 "materializing \(path) ran out of space on the filesystem backing "
                     + "\(destinationDirectory). Free disk space or inodes, then retry. "
@@ -728,7 +728,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         let entries: [String]
         do {
             entries = try enumerateVolumeStore(volumeStoragePath)
-        } catch  where Self.isFileNotFound(error) {
+        } catch  where FileSystemError.isFileNotFound(error) {
             // A child can vanish while Foundation builds the returned names.
             // The observed Darwin error wraps that ENOENT in
             // NSFileReadUnknownError (Cocoa 256), even though the store itself
@@ -771,59 +771,6 @@ public actor FileSystemStorageBackend: StorageBackend {
             }
         }
         return volumes
-    }
-
-    /// Foundation can wrap POSIX errors more than once. Only ENOENT means a
-    /// child raced this scan; EACCES, EIO, EMFILE, and every unknown error are
-    /// still failures of the store as a whole.
-    private static func isFileNotFound(_ error: Error) -> Bool {
-        var current: any Error = error
-        while true {
-            let candidate = current as NSError
-            if candidate.domain == NSCocoaErrorDomain,
-                candidate.code == NSFileNoSuchFileError || candidate.code == NSFileReadNoSuchFileError
-            {
-                return true
-            }
-            if candidate.domain == NSPOSIXErrorDomain,
-                candidate.code == POSIXErrorCode.ENOENT.rawValue
-            {
-                return true
-            }
-            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
-                return false
-            }
-            current = underlying
-        }
-    }
-
-    /// Copy and durable-publication failures can surface as direct POSIX
-    /// errors, Cocoa wrappers, or the durable writer's typed POSIX error.
-    private static func isInsufficientDiskSpace(_ error: Error) -> Bool {
-        var current: any Error = error
-        while true {
-            if let durableError = current as? DurableFileWriteError,
-                durableError.errorNumber == ENOSPC
-            {
-                return true
-            }
-
-            let candidate = current as NSError
-            if candidate.domain == NSPOSIXErrorDomain,
-                candidate.code == POSIXErrorCode.ENOSPC.rawValue
-            {
-                return true
-            }
-            if candidate.domain == NSCocoaErrorDomain,
-                candidate.code == CocoaError.Code.fileWriteOutOfSpace.rawValue
-            {
-                return true
-            }
-            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
-                return false
-            }
-            current = underlying
-        }
     }
 
     private func unreadableVolumeStore(_ error: Error) -> StorageBackendError {
