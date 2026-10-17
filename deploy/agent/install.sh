@@ -194,6 +194,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Agent-only main prereleases have no sandbox guest assets. Reject before
+# redeeming enrollment or changing the host, rather than failing halfway through.
+if [[ "$VERSION" =~ ^main-[0-9a-f]{12}$ ]] && [ "$INSTALL_SANDBOX_GUEST" -eq 1 ]; then
+  die "--sandbox-guest is unavailable for agent-only main prereleases; use a release with sandbox guest assets"
+fi
+
 decode_bootstrap_value() {
   local decoded
   if decoded="$(printf '%s' "$1" | base64 --decode 2>/dev/null)"; then

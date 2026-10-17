@@ -17,6 +17,9 @@ and probed on Ubuntu 26.04. XML is linked into the binary from Ubuntu's signed
 Noble sources; its ICU option is disabled to coexist with Swift's embedded ICU.
 They still require host system libraries, including libcurl; this is not a fully static libc executable. Installing a main binary
 requires an explicit `--version main-<12 lowercase hex>`; `latest` stays stable.
+Main prereleases contain only host agents: combining them with `--sandbox-guest`
+is rejected before enrollment or host changes. Use a release that also publishes
+the sandbox guest assets when installing that component.
 
 Download the exact commit's `agent-manifest.json`, agent archive and `.sha256`
 sidecar from its GitHub prerelease. The archive contains `strato-agent` at its

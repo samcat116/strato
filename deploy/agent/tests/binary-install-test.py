@@ -14,6 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BinaryInstallTests(unittest.TestCase):
+    def test_rejects_main_sandbox_before_bootstrap(self):
+        for version, rejected in (("main-aaaaaaaaaaaa", True), ("v0.1.2", False)):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                curl = root / "curl"
+                curl.write_text('#!/bin/sh\necho called > "$ACTION_LOG"\nexit 22\n')
+                curl.chmod(0o755)
+                action_log = root / "actions"
+                result = subprocess.run(
+                    ["bash", str(ROOT / "install.sh"), "--version", version, "--sandbox-guest",
+                     "--enrollment-token", "enroll_v1_fixture", "--enrollment-api-url",
+                     "https://control.example/api/agent-enrollments/bootstrap"],
+                    env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                             ACTION_LOG=str(action_log)), capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual("agent-only main prereleases" in result.stderr, rejected)
+                self.assertEqual(action_log.exists(), not rejected)
+
     def test_requires_verified_runnable_binary_before_replacing_old_one(self):
         source = (ROOT / "install.sh").read_text()
         helpers = "\n".join(re.search(r"^" + name + r"\(\) \{\n.*?^\}", source, re.M | re.S)[0]
