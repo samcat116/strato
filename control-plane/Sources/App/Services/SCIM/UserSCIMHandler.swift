@@ -349,40 +349,14 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
 
     private func applyFilter(_ filter: SCIMFilterExpression, to query: QueryBuilder<User>) throws -> QueryBuilder<User>
     {
-        switch filter {
-        case .attribute(let path, let op, let value):
-            return try applyAttributeFilter(path: path, op: op, value: value, to: query)
-
-        case .logical(let logicalOp, let left, let right):
-            switch logicalOp {
-            case .and:
-                var result = try applyFilter(left, to: query)
-                result = try applyFilter(right, to: result)
-                return result
-            case .or, .not:
-                throw SCIMServerError.invalidFilter(
-                    detail: "SCIM logical filter operator '\(logicalOp)' is not supported"
-                )
-            }
-
-        case .not:
-            throw SCIMServerError.invalidFilter(
-                detail: "SCIM NOT filter is not supported"
-            )
-
-        case .present(let path):
-            // Check if attribute is present (not null)
-            if path.lowercased() == "username" {
-                return query.filter(\.$username != "")
-            }
-            return query
-
-        case .group(let inner):
-            return try applyFilter(inner, to: query)
-
-        case .empty:
-            return query
-        }
+        try SCIMQueryFilter.apply(
+            filter, to: query,
+            attribute: { path, op, value, query in
+                try applyAttributeFilter(path: path, op: op, value: value, to: query)
+            },
+            present: { path, query in
+                path.lowercased() == "username" ? query.filter(\.$username != "") : query
+            })
     }
 
     private func applyAttributeFilter(
@@ -395,17 +369,17 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
 
         switch lowercasePath {
         case "username":
-            return applyStringFilter(
+            return SCIMQueryFilter.string(
                 keyPath: \User.$username, column: "username", op: op,
                 value: try value.requireText(path: path), to: query)
 
         case "displayname":
-            return applyStringFilter(
+            return SCIMQueryFilter.string(
                 keyPath: \User.$displayName, column: "display_name", op: op,
                 value: try value.requireText(path: path), to: query)
 
         case "emails.value", "emails[type eq \"work\"].value":
-            return applyStringFilter(
+            return SCIMQueryFilter.string(
                 keyPath: \User.$email, column: "email", op: op,
                 value: try value.requireText(path: path), to: query)
 
@@ -425,27 +399,4 @@ struct UserSCIMHandler: SCIMResourceHandler, Sendable {
         }
     }
 
-    private func applyStringFilter(
-        keyPath: KeyPath<User, FieldProperty<User, String>>,
-        column: String,
-        op: SCIMFilterOperator,
-        value: String,
-        to query: QueryBuilder<User>
-    ) -> QueryBuilder<User> {
-        switch op {
-        case .equal:
-            return query.filter(keyPath == value)
-        case .notEqual:
-            return query.filter(keyPath != value)
-        case .contains:
-            return query.filter(.caseInsensitiveContains(schema: User.schema, column: column, value: value))
-        case .startsWith:
-            return query.filter(.caseInsensitiveStartsWith(schema: User.schema, column: column, value: value))
-        case .endsWith:
-            return query.filter(.caseInsensitiveEndsWith(schema: User.schema, column: column, value: value))
-        case .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual, .present:
-            // These don't make sense for strings, just return unchanged
-            return query
-        }
-    }
 }

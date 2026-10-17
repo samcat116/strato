@@ -131,7 +131,15 @@ It must not own desired status, stop policy, quota, or a parallel resume path.
    only unpinned bases. Account base cache, private deltas and staging bytes
    separately; reserve disk for verification and bound total cache bytes.
 
-## Integration update against STR-312 draft #1447
+## Historical implementation notes
+
+The preparatory Swift page-source/store, transport, supervisor, capability-proof
+types and C shim described below were removed from the agent during cleanup.
+They had no runtime callers and did not enable UFFD restore. The agent continues
+to restore from memory files, with cancellation checked before snapshot load.
+These notes retain the earlier experiments and outstanding acceptance criteria.
+
+### Integration update against STR-312 draft #1447
 
 Integrated final STR-312 head `c57da019760db5af37b428087e3c775ccacef419`.
 `restoreSandboxArchive` now calls a cancellation-aware memory preparation step
@@ -165,7 +173,7 @@ watchdog adapter, actual dirty capture, scoped live proof and
 lifecycle cleanup integration. Local supervision, durable artifacts and negative
 proof logic are described below. The environment limitations above remain.
 
-## Additional kernel-independent implementation
+### Additional kernel-independent implementation
 
 `SandboxUffdTransport` and the local `CSandboxUFFD` shim implement a connected
 Unix-socket receiver for the upstream **v1.13.1 reference protocol**, not a

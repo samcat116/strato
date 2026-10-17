@@ -83,46 +83,8 @@ enum SecurityGroupService {
             throw Abort(.badRequest, reason: "A rule may have a CIDR peer or a group peer, not both")
         }
 
-        var protocolName: String?
-        if let requested = request.protocolName {
-            let normalized = requested.lowercased()
-            guard SecurityGroupRule.allowedProtocols.contains(normalized) else {
-                throw Abort(
-                    .badRequest,
-                    reason: "Unsupported protocol '\(requested)': expected tcp, udp, or icmp")
-            }
-            protocolName = normalized
-        }
-
-        switch protocolName {
-        case "tcp", "udp":
-            if let min = request.portRangeMin, let max = request.portRangeMax {
-                guard (0...65535).contains(min), (0...65535).contains(max), min <= max else {
-                    throw Abort(.badRequest, reason: "Port range must satisfy 0 ≤ min ≤ max ≤ 65535")
-                }
-            } else if request.portRangeMin != nil || request.portRangeMax != nil {
-                throw Abort(.badRequest, reason: "Port ranges need both portRangeMin and portRangeMax")
-            }
-        case "icmp":
-            // portRangeMin is the ICMP type, portRangeMax the code; the code
-            // is meaningless without a type.
-            if let type = request.portRangeMin {
-                guard (0...255).contains(type) else {
-                    throw Abort(.badRequest, reason: "ICMP type must be 0–255")
-                }
-                if let code = request.portRangeMax {
-                    guard (0...255).contains(code) else {
-                        throw Abort(.badRequest, reason: "ICMP code must be 0–255")
-                    }
-                }
-            } else if request.portRangeMax != nil {
-                throw Abort(.badRequest, reason: "An ICMP code (portRangeMax) needs a type (portRangeMin)")
-            }
-        default:
-            if request.portRangeMin != nil || request.portRangeMax != nil {
-                throw Abort(.badRequest, reason: "Port ranges require a protocol of tcp, udp, or icmp")
-            }
-        }
+        let protocolName = try NetworkRuleValidation.validate(
+            protocolName: request.protocolName, portRangeMin: request.portRangeMin, portRangeMax: request.portRangeMax)
 
         if let cidr = request.remoteCIDR {
             switch request.ethertype {

@@ -76,7 +76,7 @@ public final class OCIImageFlattener {
             do {
                 try apply(entry: entry, reader: reader)
             } catch {
-                guard Self.isInsufficientDiskSpace(error) else { throw error }
+                guard FileSystemError.isInsufficientDiskSpace(error) else { throw error }
                 throw OCIError.insufficientDiskSpace(
                     detail: "unpacking layer entry '\(entry.name)' ran out of space on the filesystem "
                         + "backing \(rootPath). Free disk space or inodes, then retry.")
@@ -285,28 +285,6 @@ public final class OCIImageFlattener {
     private func itemExists(at path: String) -> Bool {
         FileManager.default.fileExists(atPath: path)
             || (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
-    }
-
-    /// Foundation can wrap POSIX write failures in one or more Cocoa errors.
-    private static func isInsufficientDiskSpace(_ error: Error) -> Bool {
-        var current: any Error = error
-        while true {
-            let candidate = current as NSError
-            if candidate.domain == NSPOSIXErrorDomain,
-                candidate.code == POSIXErrorCode.ENOSPC.rawValue
-            {
-                return true
-            }
-            if candidate.domain == NSCocoaErrorDomain,
-                candidate.code == CocoaError.Code.fileWriteOutOfSpace.rawValue
-            {
-                return true
-            }
-            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
-                return false
-            }
-            current = underlying
-        }
     }
 
     private func changeOwner(path: String, uid: Int, gid: Int, ofSymlink: Bool = false) {

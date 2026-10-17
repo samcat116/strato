@@ -329,32 +329,10 @@ extension FirecrackerSandboxRuntime {
         }
     }
 
-    static func isFileNotFound(_ error: any Error) -> Bool {
-        var current: any Error = error
-        while true {
-            let candidate = current as NSError
-            if candidate.domain == NSCocoaErrorDomain,
-                candidate.code == NSFileNoSuchFileError
-                    || candidate.code == NSFileReadNoSuchFileError
-            {
-                return true
-            }
-            if candidate.domain == NSPOSIXErrorDomain,
-                candidate.code == POSIXErrorCode.ENOENT.rawValue
-            {
-                return true
-            }
-            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
-                return false
-            }
-            current = underlying
-        }
-    }
-
     func directoryContentsIfPresent(atPath path: String) throws -> [String] {
         do {
             return try FileManager.default.contentsOfDirectory(atPath: path)
-        } catch  where Self.isFileNotFound(error) {
+        } catch  where FileSystemError.isFileNotFound(error) {
             return []
         } catch {
             throw SandboxRuntimeError.jailSetupFailed(
@@ -377,7 +355,7 @@ extension FirecrackerSandboxRuntime {
                     "leaked warm template \(templateId) has an invalid jail UID sidecar")
             }
             return uid
-        } catch  where Self.isFileNotFound(error) {
+        } catch  where FileSystemError.isFileNotFound(error) {
             // A pre-STR-290 build has no sidecar; inspect artifacts/processes.
         } catch let error as SandboxRuntimeError {
             throw error
@@ -394,7 +372,7 @@ extension FirecrackerSandboxRuntime {
             let attributes: [FileAttributeKey: Any]
             do {
                 attributes = try FileManager.default.attributesOfItem(atPath: path)
-            } catch  where Self.isFileNotFound(error) {
+            } catch  where FileSystemError.isFileNotFound(error) {
                 continue
             } catch {
                 throw SandboxRuntimeError.jailSetupFailed(
@@ -598,7 +576,7 @@ extension FirecrackerSandboxRuntime {
     func removeItemIfPresent(atPath path: String) throws {
         do {
             try FileManager.default.removeItem(atPath: path)
-        } catch  where Self.isFileNotFound(error) {
+        } catch  where FileSystemError.isFileNotFound(error) {
             return
         } catch {
             throw SandboxRuntimeError.jailSetupFailed(
