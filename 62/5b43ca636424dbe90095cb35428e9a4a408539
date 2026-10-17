@@ -1,0 +1,61 @@
+control-plane/Sources/App/Services/SCIM/GroupSCIMHandler.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 449-456,469
+prototypes/uffd-restore/README.md
+  s_ef2db09c79d48a::t_cc73f6a365ac12 134-142,176
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 352-359,372,377,382
+control-plane/Tests/AppIdentityTests/SCIMFilterTests.swift
+  s_ef2db09c79d48a::t_bae8fcdf3159ec 76-128
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+WarmStart.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 335,358,375,579
+control-plane/Sources/App/Services/SCIM/SCIMQueryFilter.swift
+  s_ef2db09c79d48a::t_dd92eb0b3d40e7 1-56
+agent/Sources/StratoAgentCore/OCI/Ext4ImageBuilder.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 86
+control-plane/Sources/App/Services/SecurityGroupService.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 86-87
+agent/Sources/StratoAgentCore/WarmSandboxSnapshotCache.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 379
+control-plane/Sources/App/Services/NetworkRuleValidation.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 1-50
+agent/Tests/StratoAgentStorageTests/FileSystemErrorTests.swift
+  s_ef2db09c79d48a::t_98ce8871ce3983 1-29,32-46
+  s_ef2db09c79d48a::t_bae8fcdf3159ec 30-31
+agent/Sources/StratoAgentCore/FileSystemError.swift
+  s_ef2db09c79d48a::t_bae8fcdf3159ec 8-9
+  s_ef2db09c79d48a::t_dd92eb0b3d40e7 1-7,10-38
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 306,731
+agent/Sources/StratoAgentCore/DiskCacheLRU.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 214
+agent/Sources/StratoAgentRuntime/Agent+Messages.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 507
+control-plane/Sources/App/Controllers/VMController.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 72
+control-plane/Sources/App/Extensions/Validate+GuestCommand.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 1-35
+agent/Sources/StratoAgentCore/OCI/OCIImageFlattener.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 79
+agent/Sources/StratoAgentRuntime/FirecrackerSandboxRuntime+Snapshots.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 350,357,373,378
+control-plane/Sources/App/Services/NetworkACLService.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 20-21
+control-plane/Sources/App/Controllers/GuestExecWebSocketController.swift
+  s_ef2db09c79d48a::t_cc73f6a365ac12 17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "625b43ca636424dbe90095cb35428e9a4a408539",
+  "prompts": {},
+  "sessions": {
+    "s_ef2db09c79d48a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14a6f-d69d-7e33-95aa-7c766a14d2f9",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
