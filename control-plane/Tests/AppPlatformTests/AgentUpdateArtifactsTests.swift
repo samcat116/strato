@@ -34,16 +34,23 @@ struct AgentUpdateArtifactsTests {
         #expect(arm == "https://mirror.internal/strato/v2.0.0/strato-macos-arm64.tar.gz")
     }
 
-    @Test("main-branch targets have no release assets and resolve to nil")
+    @Test("only commit-specific main builds have release assets")
     func mainBuildsResolveToNil() {
-        // Both the baked form ("main") and the published-tag form
-        // ("main-<sha>") collapse to main and must refuse URL resolution.
+        // Moving main and historical short refs cannot select immutable assets.
         let baked = AgentUpdateArtifacts.assetURL(
             targetVersion: "main", operatingSystem: .linux, architecture: .x86_64)
         #expect(baked == nil)
         let tagged = AgentUpdateArtifacts.assetURL(
             targetVersion: "main-abc123def", operatingSystem: .linux, architecture: .x86_64)
         #expect(tagged == nil)
+        #expect(
+            AgentUpdateArtifacts.manifestURL(targetVersion: "main-0123456789ab")
+                == "https://github.com/samcat116/strato/releases/download/main-0123456789ab/agent-manifest.json")
+        for invalid in [
+            "dev", "", "main-branch", "main-0123456789AB", "main-0123456789ab/other", "main-0123456789ab\n",
+        ] {
+            #expect(!AgentUpdateArtifacts.hasReleaseAssets(targetVersion: invalid))
+        }
     }
 
     // MARK: - Manifest resolution (issue #431)
@@ -240,6 +247,38 @@ struct AgentUpdateArtifactsTests {
             #expect(resolved.sha256 == digest)
             // The CDN hop was actually taken, not just the original URL.
             #expect(client.requestedURLs.contains(cdnURL))
+        }
+    }
+
+    @Test("main resolution requires its exact manifest identity and never falls back")
+    func mainManifestIdentity() async throws {
+        let version = "main-0123456789ab"
+        let url = try #require(AgentUpdateArtifacts.manifestURL(targetVersion: version))
+        let digest = String(repeating: "ab", count: 32)
+        let good = manifestJSON(assetURL: "https://example.com/agent.tar.gz", digest: digest)
+            .replacingOccurrences(of: "v1.2.3", with: version)
+        for body in [
+            good, good.replacingOccurrences(of: version, with: "main-aaaaaaaaaaaa"),
+            good.replacingOccurrences(of: "schemaVersion\":1", with: "schemaVersion\":2"), nil,
+        ] {
+            try await withEventLoop { eventLoop in
+                let responses: [String: ClientResponse] = body.map { [url: .ok(body: $0)] } ?? [:]
+                let client = RecordingClient(eventLoop: eventLoop, responses: responses)
+                if body == good {
+                    let artifact = try await AgentUpdateArtifacts.resolveArtifact(
+                        targetVersion: version, operatingSystem: .linux, architecture: .x86_64,
+                        client: client, logger: Logger(label: "test"))
+                    #expect(artifact.sha256 == digest)
+                    #expect(artifact.tarballMember == "strato-agent")
+                } else {
+                    await #expect(throws: (any Error).self) {
+                        try await AgentUpdateArtifacts.resolveArtifact(
+                            targetVersion: version, operatingSystem: .linux, architecture: .x86_64,
+                            client: client, logger: Logger(label: "test"))
+                    }
+                }
+                #expect(client.requestedURLs == [url])
+            }
         }
     }
 

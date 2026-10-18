@@ -53,7 +53,7 @@ jobs:
           SUDO=""
           command -v sudo >/dev/null && SUDO=sudo
           $SUDO apt-get update
-          $SUDO apt-get install -y libjemalloc-dev
+          $SUDO apt-get install -y libjemalloc-dev python3 binutils dpkg-dev libxml2-dev liblzma-dev zlib1g-dev pkg-config automake libtool
 
       # arm64 runs on an ephemeral GitHub-hosted runner with no persistent
       # volume, so it stays on actions/cache + the default .build path. That
@@ -121,6 +121,19 @@ jobs:
           fi
           # Copy resources
           find -L "$BIN/" -regex '.*\.\(resources\|bundle\)$' -exec cp -Ra {} ../artifacts/agent/resources/ \; || true
+
+      # Preserve the dynamic image binary above before linking the bare-host
+      # product against the static Swift runtime. SwiftPM tracks linker flags.
+      - name: Build and package bare-host agent
+        run: bash deploy/agent/build-release.sh "${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}" agent-downloads
+
+      - name: Upload agent downloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-downloads-${{ matrix.arch }}
+          path: agent-downloads/
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -221,7 +234,7 @@ jobs:
           # set now, not at publish time.
           build-args: |
             PREBUILT_ARTIFACTS=${{ matrix.prebuilt }}
-            STRATO_VERSION=main
+            STRATO_VERSION=${{ steps.meta.outputs.version }}
             STRATO_GIT_SHA=${{ github.sha }}
 
       # Hand the digest to the publish job via an artifact. The filename is the
@@ -302,7 +315,7 @@ jobs:
           cache-from: type=registry,ref=${{ steps.meta.outputs.name }}:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ steps.meta.outputs.name }}:buildcache-${{ matrix.arch }},mode=max
           build-args: |
-            STRATO_VERSION=main
+            STRATO_VERSION=${{ steps.meta.outputs.version }}
             STRATO_GIT_SHA=${{ github.sha }}
 
       - name: Export digest
@@ -379,6 +392,33 @@ jobs:
           docker buildx imagetools create -t "${REF}:main" -t "${REF}:main-${SHA}" $DIGESTS
           docker buildx imagetools inspect "${REF}:main-${SHA}"
 
+  # Identical probes are callable from the nonpublishing manual validation.
+  verify-agent-downloads:
+    needs: build-swift-release
+    uses: ./.github/workflows/agent-artifact-probes.yaml
+
+  # Immutable prereleases use the same manifest contract as tagged releases.
+  # Draft until both native probes and all image publications succeed; never
+  # move stable /latest or overwrite an already published commit's artifacts.
+  publish-agent-downloads:
+    needs: [verify-agent-downloads, publish-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-downloads-*
+          path: agent-downloads
+          merge-multiple: true
+      - name: Assemble existing v1 manifest
+        run: python3 deploy/agent/package-release.py manifest --directory agent-downloads --repository "$GITHUB_REPOSITORY"
+      - name: Publish commit-specific prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash deploy/agent/publish-main-release.sh
+
   # The swift-binaries-* and digest-* artifacts are a job-to-job handoff, dead
   # the moment publish-manifests reads them — but retention-days:1 is the floor
   # GitHub allows, so they would otherwise sit in billed storage for ~24h. At
@@ -390,7 +430,7 @@ jobs:
   # a run that dies after upload is exactly when the quota is most at risk.
   cleanup-artifacts:
     name: Delete Run Artifacts
-    needs: [publish-manifests]
+    needs: [publish-manifests, publish-agent-downloads]
     if: always()
     runs-on: ubuntu-latest
     permissions:

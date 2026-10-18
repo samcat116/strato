@@ -88,6 +88,9 @@ Builds release binaries and Docker images when code is pushed to the main branch
 (no tests):
 - Swift release binary builds
 - Docker image builds
+- Commit-specific agent prereleases after both Linux architecture probes and
+  image publication succeed, retaining the existing `agent-manifest.json` updater
+  contract and stable `latest`. See [agent updates](../../docs/architecture/agent-updates.md#main-branch-bare-host-artifacts).
 
 ### Release (`release.yaml`)
 Triggered when a new tag is pushed (e.g., `v1.0.0`):
@@ -286,3 +289,8 @@ act pull_request -W .github/workflows/build.yaml --secret-file .secrets
 - Check file system permissions
 - Verify Docker socket access
 - Review runner service account permissions
+
+The manual `main-tests.yaml` workflow also accepts `validation_scope=agent-artifacts`
+for a focused, nonpublishing run of the exact main static-agent build, both native
+bare-host probes and manifest assembly. It skips broad tests and Docker builds
+and retains the archives/checksums/manifest as seven-day Actions artifacts.

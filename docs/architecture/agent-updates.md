@@ -30,10 +30,10 @@ agent or a restarted control plane instead of dying with the request.
 - Agents report their build version at registration
   (`AgentRegisterMessage.version`, baked into release binaries; issue #430).
 - The **target version** is the control plane's own build version, or the
-  `AGENT_TARGET_VERSION` override. Comparison is canonical: `v1.2.3`,
-  `1.2.3`, and `main`/`main-<sha>` aliases collapse before comparing, so a
-  same-artifact deployment never flags a false update. A `dev` build has no
-  meaningful target and never triggers updates.
+  `AGENT_TARGET_VERSION` override. Comparison is canonical: `v1.2.3` and
+  `1.2.3` aliases collapse before comparing. Commit-specific `main-<sha>`
+  builds retain their SHA and compare as different versions. A `dev` build
+  has no meaningful target and never triggers updates.
 - Each release publishes an `agent-manifest.json` (issue #431) mapping
   OS/arch to a tarball URL, SHA-256, and the member holding the agent binary.
   `AgentUpdateArtifacts` resolves the manifest at assignment and sync-assembly
@@ -42,6 +42,60 @@ agent or a restarted control plane instead of dying with the request.
   `strato-<os>-<arch>.tar.gz` + `.sha256` sidecar convention.
   `AGENT_UPDATE_ARTIFACT_BASE_URL` points both at a mirror for air-gapped
   deployments.
+
+### Main-branch bare-host artifacts
+
+Compose and Helm preserve the version baked into the image, even when its image
+selector is the moving `main` or `latest` alias. They must not replace an immutable
+build identity with the selector; `AGENT_TARGET_VERSION` remains the explicit
+agent-target override.
+
+Main builds publish an immutable `main-<12 lowercase hex>` GitHub prerelease
+with agent-only `strato-agent-linux-{x86_64,arm64}.tar.gz` archives and checksum
+sidecars. Each binary embeds the exact version and full commit SHA. The schema-v1
+`agent-manifest.json` adds `gitSHA` and `workloadWireVersion` metadata and retains
+the existing URL/checksum/member contract. The resolver requires that manifest
+for main builds; a missing manifest fails without guessing a legacy bundle URL.
+The moving `main` alias and historical short hashes require an explicit artifact
+override. Stable `latest` and tagged release bundles keep their current behavior.
+
+The pinned Swift 6.4.0 compiler uses the native build backend for static
+Foundation linkage. XML is compiled from Ubuntu's signed, security-patched Noble
+source package with its optional ICU backend disabled, then linked into the
+binary. This avoids the Noble-to-26.04 XML ABI mismatch and a second ICU runtime.
+A companion probe exercises Unicode XML/XPath, JSON, locale/date handling and
+FoundationNetworking in the same minimal host container without network requests.
+
+Publication waits for both native Linux probes in Ubuntu 26.04 without a Swift
+toolchain and the main image publication barrier. A failed upload stays draft;
+retries may repair drafts but must compare rather than replace published assets.
+Archive headers are deterministic for a given binary and commit timestamp; this
+does not claim bit-for-bit reproducibility of the Swift compiler and dependencies.
+Temporary Actions artifacts remain short lived; GitHub release assets are durable.
+
+Before merge, the existing manual `main-tests.yaml` workflow accepts
+`validation_scope=agent-artifacts`. It skips the broad suite and Docker source
+builds, builds only the two native static agents with the same
+`deploy/agent/build-release.sh` used by main, calls the same minimal-host probe
+workflow, then assembles the manifest. Its token has read permissions only; it
+uploads seven-day Actions artifacts and never publishes a release or image:
+
+```bash
+gh workflow run main-tests.yaml --ref <feature-branch> \
+  -f validation_scope=agent-artifacts -f docker_source_build=false
+```
+
+Record the run's `headSha` before interpreting results. Download
+`agent-downloads-x64`, `agent-downloads-arm64` and `agent-validation-manifest`
+from that run to inspect the actual archives, sidecars and full commit identity.
+A compile-only PR check does not establish that these probes passed.
+
+An available artifact does not bypass wire equality or update-bridge rollout
+ordering below. Existing main binaries that baked only `main` have ambiguous
+identity and need explicit operator attention. Publication does not change
+update enrollment or assign an update; an already opted-in rollout still follows
+its configured target when that target's artifacts become available. See the [single-NIC discovery and migration plan](../deployment/single-nic-ovn.md)
+before connecting a management NIC to the provider bridge.
 
 ## The update mechanism (agent side)
 

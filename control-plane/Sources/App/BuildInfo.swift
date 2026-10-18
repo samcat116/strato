@@ -40,23 +40,12 @@ enum AgentVersionTarget {
         raw == "dev" ? nil : raw
     }
 
-    /// Collapses the aliases under which one build travels, so same-artifact
-    /// deployments never flag a false update: release tags appear both
-    /// v-prefixed (`github.ref_name`, baked into agents) and bare (the semver
-    /// image-tag patterns, which Helm feeds back as the control plane's
-    /// STRATO_VERSION), and main-branch images are baked as "main" but
-    /// published under `main-<sha>` tags. `main-<sha>` deliberately loses the
-    /// sha: two "main" builds are indistinguishable to this comparison anyway
-    /// (agents bake plain "main"), so drift within main never flags.
+    /// Release tags also travel as bare semver image tags. Main builds carry
+    /// their commit in both binary and image identity; never discard it or a
+    /// different main build would incorrectly satisfy an update assignment.
     static func canonical(_ version: String) -> String {
         if version.first == "v", version.dropFirst().first?.isNumber == true {
             return String(version.dropFirst())
-        }
-        let mainPrefix = "main-"
-        if version.hasPrefix(mainPrefix), version.count > mainPrefix.count,
-            version.dropFirst(mainPrefix.count).allSatisfy(\.isHexDigit)
-        {
-            return "main"
         }
         return version
     }

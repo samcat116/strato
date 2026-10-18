@@ -1,0 +1,36 @@
+name: Probe Agent Artifacts
+
+# The same minimal-host probes gate main publication and manual validation.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Bare-host Probe (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'x64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    container: ubuntu:26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-downloads-${{ matrix.arch }}
+          path: downloads
+      - name: Probe without a Swift toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libcurl4 ca-certificates
+          cd downloads
+          sha256sum -c ./*.sha256
+          tar -xzf ./*.tar.gz strato-agent
+          test "$(./strato-agent --version)" = "main-$(echo "$GITHUB_SHA" | cut -c1-12) ($GITHUB_SHA)"
+          ./strato-agent --version
+          chmod 0755 runtime-probe
+          ./runtime-probe
+          uname -m

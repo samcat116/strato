@@ -147,6 +147,9 @@ server-selected value and a fresh one-time SPIRE join token.
   bootstrap bearer. A previously copied long command remains usable until its
   original expiry; otherwise revoke and recreate the enrollment.
 
+For a single management NIC, read the [OVN setup plan](single-nic-ovn.md).
+The installer does not migrate management networking into OVS.
+
 ## One-command install
 
 The `bootstrapCommand` from the enrollment above has one input:
@@ -181,7 +184,7 @@ gate: the install completes either way, so read its output.
 Useful flags (`--help` lists them all):
 
 - `--network-mode user` — skip OVN/OVS packages (dev/test, no SDN)
-- `--version vX.Y.Z` — pin a release instead of `latest`
+- `--version vX.Y.Z` — pin a release instead of `latest`; `main-<12 hex>` pins a main prerelease
 - `--no-systemd` — install the binary + deps but don't manage a service
 - `--no-deps` — you manage host packages yourself
 - `--no-libvirt-config` — install libvirt but leave `/etc/libvirt/qemu.conf`
