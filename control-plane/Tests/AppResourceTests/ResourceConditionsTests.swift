@@ -530,6 +530,143 @@ final class ResourceConditionsTests {
         }
     }
 
+    // MARK: - Datastore rewind (STR-336)
+
+    @Test("A VM report ahead of the rewound row cannot complete a reboot", arguments: [false, true])
+    func futureVMGenerationRejected(futureFailure: Bool) async throws {
+        try await withTestApp { app, _, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "rewound-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "rewound-vm-agent", hypervisorType: .qemu)
+            vm.hypervisorId = agentId
+            vm.desiredStatus = .running
+            vm.setStatus(.running)
+            // The database was restored below the agent's retained generation 8.
+            vm.generation = 5
+            vm.observedGeneration = 4
+            vm.rebootGeneration = 2
+            vm.extendConvergenceDeadline(by: 120)
+            try await vm.save(on: app.db)
+            let event = try await ResourceEvent.record(
+                .reboot, resourceKind: .virtualMachine, resourceID: try vm.requireID(), actor: .system, on: app.db)
+            let deadline = vm.convergenceDeadline
+
+            let ahead = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: futureFailure ? 4 : 8,
+                        convergencePhase: futureFailure ? "retrying" : nil,
+                        lastError: futureFailure ? "newer generation failed" : nil,
+                        failedGeneration: futureFailure ? 8 : nil)
+                ])
+            await app.agentService.applyObservedStateReport(ahead, fromAgentKey: agentKey("rewound-vm-agent"))
+            var refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.generation == 5)
+            #expect(refreshed.observedGeneration == 4)
+            #expect(refreshed.rebootGeneration == 2)
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.convergenceDeadline == deadline)
+            #expect(!refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
+            #expect(refreshed.conditions.degraded?.reason.contains("datastore rewind") == true)
+            #expect(try await OperationFacade.response(for: event, on: app.db).status == .failed)
+            #expect(try await self.mutationOutcomes(app: app).isEmpty)
+
+            // Older success cannot clear the diagnostic. A valid current report
+            // can, once the operator has resolved the generation mismatch.
+            for (generation, expected) in [(Int64(4), Int64(4)), (5, 5), (4, 5)] {
+                let envelope = try self.report(
+                    agentId: agentId,
+                    vms: [
+                        ObservedVMState(
+                            vmId: vm.id!, status: generation == 5 ? .running : .shutdown,
+                            observedGeneration: generation)
+                    ])
+                await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("rewound-vm-agent"))
+                refreshed = try #require(await VM.find(vm.id, on: app.db))
+                #expect(refreshed.observedGeneration == expected)
+                if expected == 4 {
+                    #expect(!refreshed.conditions.converged)
+                    #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
+                } else {
+                    #expect(refreshed.conditions.converged)
+                    #expect(refreshed.conditions.degraded == nil)
+                }
+            }
+            #expect(refreshed.observedGeneration == 5)
+            #expect(refreshed.status == .running)
+            #expect(try await OperationFacade.response(for: event, on: app.db).status == .succeeded)
+        }
+    }
+
+    @Test("A sandbox report ahead of the rewound row cannot complete a restore", arguments: [false, true])
+    func futureSandboxGenerationRejected(futureFailure: Bool) async throws {
+        try await withTestApp { app, _, project in
+            let sandbox = try await TestDataBuilder(db: app.db).createSandbox(name: "rewound-sandbox", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "rewound-sandbox-agent", hypervisorType: .firecracker)
+            sandbox.hypervisorId = agentId
+            sandbox.desiredStatus = .running
+            sandbox.generation = 5
+            sandbox.observedGeneration = 4
+            sandbox.restoreGeneration = 2
+            sandbox.restoreSnapshotID = UUID()
+            sandbox.extendConvergenceDeadline(by: 120)
+            try await sandbox.save(on: app.db)
+            let snapshotID = sandbox.restoreSnapshotID
+            let event = try await ResourceEvent.record(
+                .restore, resourceKind: .sandbox, resourceID: try sandbox.requireID(), actor: .system, on: app.db)
+
+            let ahead = try self.report(
+                agentId: agentId,
+                sandboxes: [
+                    ObservedSandboxState(
+                        sandboxId: sandbox.id!, status: .running, observedGeneration: futureFailure ? 4 : 8,
+                        lastError: futureFailure ? "newer generation failed" : nil,
+                        failedGeneration: futureFailure ? 8 : nil, exitCode: 42)
+                ])
+            await app.agentService.applyObservedStateReport(ahead, fromAgentKey: agentKey("rewound-sandbox-agent"))
+            var refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(refreshed.generation == 5)
+            #expect(refreshed.observedGeneration == 4)
+            #expect(refreshed.status == sandbox.status)
+            #expect(refreshed.exitCode == nil)
+            #expect(refreshed.restoreGeneration == 2)
+            #expect(refreshed.restoreSnapshotID == snapshotID)
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.convergenceDeadline == sandbox.convergenceDeadline)
+            #expect(!refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded?.reason.contains("datastore rewind") == true)
+            #expect(try await OperationFacade.response(for: event, on: app.db).status == .failed)
+
+            for (generation, expected) in [(Int64(4), Int64(4)), (5, 5), (4, 5)] {
+                let envelope = try self.report(
+                    agentId: agentId,
+                    sandboxes: [
+                        ObservedSandboxState(
+                            sandboxId: sandbox.id!, status: generation == 5 ? .running : .stopped,
+                            observedGeneration: generation)
+                    ])
+                await app.agentService.applyObservedStateReport(
+                    envelope, fromAgentKey: agentKey("rewound-sandbox-agent"))
+                refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+                #expect(refreshed.observedGeneration == expected)
+                if expected == 4 {
+                    #expect(!refreshed.conditions.converged)
+                    #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
+                } else {
+                    #expect(refreshed.conditions.converged)
+                    #expect(refreshed.conditions.degraded == nil)
+                }
+            }
+            #expect(refreshed.observedGeneration == 5)
+            #expect(refreshed.status == .running)
+            #expect(try await OperationFacade.response(for: event, on: app.db).status == .succeeded)
+        }
+    }
+
     // MARK: - Persistence from observed reports
 
     @Test("A converging report records the agent's phase on the VM row")
