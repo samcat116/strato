@@ -667,6 +667,96 @@ final class ResourceConditionsTests {
         }
     }
 
+    @Test("A lagging vm agent can fail the current desired generation", arguments: [false, true])
+    func laggingVMCurrentFailureAccepted(blocked: Bool) async throws {
+        try await withTestApp { app, _, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(
+                name: "lagging-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "lagging-vm-agent", hypervisorType: .qemu)
+            vm.hypervisorId = agentId
+            vm.desiredStatus = .running
+            vm.status = .running
+            vm.generation = 5
+            vm.observedGeneration = 5
+            vm.extendConvergenceDeadline(by: 120)
+            try await vm.save(on: app.db)
+            let event = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: try vm.requireID(), actor: .system, on: app.db)
+            #expect(vm.conditions.converged)
+
+            // A replacement agent retained only generation 4, then failed 5.
+            let reason = "current generation failed on the replacement agent"
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: 4,
+                        lastError: reason, failedGeneration: 5,
+                        failureClassification: blocked ? .blocked : .permanent)
+                ])
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("lagging-vm-agent"))
+
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.generation == 5)
+            #expect(refreshed.observedGeneration == 5)
+            #expect(!refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded?.reason == reason)
+            #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
+            #expect(refreshed.conditions.degraded?.lastErrorAt != nil)
+            #expect((refreshed.convergenceDeadline != nil) == blocked)
+            #expect(try await OperationFacade.response(for: event, on: app.db).status == .failed)
+            #expect(try await self.mutationOutcomes(app: app) == (blocked ? [] : ["operation.failed"]))
+        }
+    }
+
+    @Test("A lagging sandbox agent can fail the current desired generation", arguments: [false, true])
+    func laggingSandboxCurrentFailureAccepted(blocked: Bool) async throws {
+        try await withTestApp { app, _, project in
+            try await self.subscribeToEverything(app: app)
+            let sandbox = try await TestDataBuilder(db: app.db).createSandbox(
+                name: "lagging-sandbox", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "lagging-sandbox-agent", hypervisorType: .firecracker)
+            sandbox.hypervisorId = agentId
+            sandbox.desiredStatus = .running
+            sandbox.status = .running
+            sandbox.generation = 5
+            sandbox.observedGeneration = 5
+            sandbox.extendConvergenceDeadline(by: 120)
+            try await sandbox.save(on: app.db)
+            let event = try await ResourceEvent.record(
+                .boot, resourceKind: .sandbox, resourceID: try sandbox.requireID(), actor: .system, on: app.db)
+            #expect(sandbox.conditions.converged)
+
+            // A replacement agent retained only generation 4, then failed 5.
+            let reason = "current generation failed on the replacement agent"
+            let envelope = try self.report(
+                agentId: agentId,
+                sandboxes: [
+                    ObservedSandboxState(
+                        sandboxId: sandbox.id!, status: .running, observedGeneration: 4,
+                        lastError: reason, failedGeneration: 5,
+                        failureClassification: blocked ? .blocked : .permanent)
+                ])
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("lagging-sandbox-agent"))
+
+            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(refreshed.generation == 5)
+            #expect(refreshed.observedGeneration == 5)
+            #expect(!refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded?.reason == reason)
+            #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
+            #expect(refreshed.conditions.degraded?.lastErrorAt != nil)
+            #expect((refreshed.convergenceDeadline != nil) == blocked)
+            #expect(try await OperationFacade.response(for: event, on: app.db).status == .failed)
+            #expect(try await self.mutationOutcomes(app: app) == (blocked ? [] : ["operation.failed"]))
+        }
+    }
+
     // MARK: - Persistence from observed reports
 
     @Test("A converging report records the agent's phase on the VM row")

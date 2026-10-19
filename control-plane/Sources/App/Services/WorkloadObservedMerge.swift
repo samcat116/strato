@@ -39,9 +39,12 @@ extension ObservedStateApplier {
         }
         // Out-of-order success cannot roll back newer facts or clear a failure
         // at a generation it has not reached (including the rewind diagnostic).
-        return observedGeneration < resource.observedGeneration
-            || (resource.lastError != nil && resource.failedGeneration == resource.generation
-                && observedGeneration < resource.generation && failedGeneration != resource.generation)
+        // An adopted agent can legitimately fail the current desired generation
+        // before reaching the database's last observed generation.
+        return failedGeneration != resource.generation
+            && (observedGeneration < resource.observedGeneration
+                || (resource.lastError != nil && resource.failedGeneration == resource.generation
+                    && observedGeneration < resource.generation))
     }
 
     /// Apply one settled (or failing) observation to its VM row and record the
