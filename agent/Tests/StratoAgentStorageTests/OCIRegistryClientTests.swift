@@ -5,48 +5,6 @@ import Testing
 
 @testable import StratoAgentCore
 
-@Suite("OCI Auth Challenge Parsing")
-struct OCIAuthChallengeTests {
-
-    @Test("bearer challenge with quoted parameters")
-    func bearerChallenge() {
-        let parsed = OCIAuthChallenge.parse(
-            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\"")
-        #expect(parsed == .bearer(realm: "https://auth.docker.io/token", service: "registry.docker.io", scope: nil))
-    }
-
-    @Test("bearer challenge with scope and unquoted values")
-    func bearerChallengeWithScope() {
-        let parsed = OCIAuthChallenge.parse(
-            "Bearer realm=https://auth.example.com/token,scope=\"repository:a/b:pull\",service=reg")
-        #expect(
-            parsed == .bearer(realm: "https://auth.example.com/token", service: "reg", scope: "repository:a/b:pull"))
-    }
-
-    @Test("quoted commas do not split parameters")
-    func quotedCommas() {
-        let parsed = OCIAuthChallenge.parse(
-            "Bearer realm=\"https://auth.example.com/token\",scope=\"repository:a:pull,push\"")
-        guard case .bearer(let realm, _, let scope) = parsed else {
-            Issue.record("expected a bearer challenge")
-            return
-        }
-        #expect(realm == "https://auth.example.com/token")
-        #expect(scope == "repository:a:pull,push")
-    }
-
-    @Test("basic challenge")
-    func basicChallenge() {
-        #expect(OCIAuthChallenge.parse("Basic realm=\"registry\"") == .basic)
-    }
-
-    @Test("unrecognized schemes and realm-less bearers parse to nil")
-    func unrecognized() {
-        #expect(OCIAuthChallenge.parse("Digest realm=\"x\"") == nil)
-        #expect(OCIAuthChallenge.parse("Bearer service=\"x\"") == nil)
-    }
-}
-
 @Suite("OCI Registry Client")
 struct OCIRegistryClientTests {
 
@@ -112,6 +70,30 @@ struct OCIRegistryClientTests {
         let manifestRequests = await transport.requests(to: manifestURL)
         #expect(manifestRequests.count == 2)
         #expect(manifestRequests.last?.headers["Authorization"] == "Bearer tok123")
+    }
+
+    @Test("agent honors the registry-suggested scope")
+    func registrySuggestedScope() async throws {
+        let transport = MockOCITransport()
+        let fixture = try manifestFixture()
+        await transport.script(
+            manifestURL,
+            .init(
+                status: 401,
+                headers: [
+                    "WWW-Authenticate":
+                        #"Bearer realm="https://auth.example.com/token",scope="repository:mirror/app:pull",service="reg""#
+                ]),
+            .init(status: 200, headers: ["Content-Type": OCIMediaType.ociManifest], body: fixture.data))
+        let suggestedTokenURL = "https://auth.example.com/token?scope=repository:mirror/app:pull&service=reg"
+        await transport.script(suggestedTokenURL, .init(status: 200, body: Data(#"{"token":"scoped-token"}"#.utf8)))
+
+        _ = try await makeClient(transport).resolveManifest(for: ref)
+
+        let tokenRequests = await transport.requests(to: suggestedTokenURL)
+        #expect(tokenRequests.count == 1)
+        let manifestRequests = await transport.requests(to: manifestURL)
+        #expect(manifestRequests.last?.headers["Authorization"] == "Bearer scoped-token")
     }
 
     @Test("basic credentials authenticate the token endpoint")

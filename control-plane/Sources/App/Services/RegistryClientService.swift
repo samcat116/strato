@@ -177,11 +177,12 @@ final class DistributionRegistryClient: RegistryClientProtocol {
         }
         guard
             let challengeHeader = probe.headers.first(name: .wwwAuthenticate),
-            let challenge = RegistryAuthChallenge.parse(challengeHeader)
+            let challenge = OCIAuthChallenge.parse(challengeHeader)
         else {
             return nil
         }
-        guard case .bearer(let realm, let service) = challenge else {
+        // The control plane constructs a repository pull scope below instead of trusting the challenge scope.
+        guard case .bearer(let realm, let service, _) = challenge else {
             return nil
         }
 
@@ -299,38 +300,6 @@ final class DistributionRegistryClient: RegistryClientProtocol {
         func store(_ token: RegistryPullToken, for key: String) {
             tokens[key] = token
         }
-    }
-}
-
-/// A parsed `WWW-Authenticate` challenge from a distribution registry.
-enum RegistryAuthChallenge: Equatable {
-    case bearer(realm: String, service: String?)
-    case basic
-
-    /// Parses `Bearer realm="https://...",service="..."` (parameter order and
-    /// quoting vary by registry) or a `Basic ...` challenge. Nil for anything
-    /// unrecognized.
-    static func parse(_ header: String) -> RegistryAuthChallenge? {
-        let trimmed = header.trimmingCharacters(in: .whitespaces)
-        if trimmed.lowercased().hasPrefix("basic") {
-            return .basic
-        }
-        guard trimmed.lowercased().hasPrefix("bearer") else {
-            return nil
-        }
-
-        var params: [String: String] = [:]
-        let paramString = trimmed.dropFirst("bearer".count)
-        for part in paramString.split(separator: ",") {
-            let pair = part.split(separator: "=", maxSplits: 1)
-            guard pair.count == 2 else { continue }
-            let key = pair[0].trimmingCharacters(in: .whitespaces).lowercased()
-            let value = pair[1].trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-            params[key] = value
-        }
-        guard let realm = params["realm"], !realm.isEmpty else { return nil }
-        return .bearer(realm: realm, service: params["service"])
     }
 }
 

@@ -239,25 +239,6 @@ final class RegistryPullSecretTests {
         }
     }
 
-    // MARK: - Challenge parsing
-
-    @Test("WWW-Authenticate challenges parse across quoting and order variants")
-    func challengeParsing() {
-        let hub = RegistryAuthChallenge.parse(
-            #"Bearer realm="https://auth.docker.io/token",service="registry.docker.io""#)
-        #expect(hub == .bearer(realm: "https://auth.docker.io/token", service: "registry.docker.io"))
-
-        let reordered = RegistryAuthChallenge.parse(
-            #"bearer service="ghcr.io",realm="https://ghcr.io/token",scope="repository:a/b:pull""#)
-        #expect(reordered == .bearer(realm: "https://ghcr.io/token", service: "ghcr.io"))
-
-        let basic = RegistryAuthChallenge.parse(#"Basic realm="registry""#)
-        #expect(basic == .basic)
-
-        #expect(RegistryAuthChallenge.parse("Negotiate") == nil)
-        #expect(RegistryAuthChallenge.parse(#"Bearer service="x""#) == nil)  // no realm
-    }
-
     // MARK: - DistributionRegistryClient
 
     /// Boots a bare app with a scripted HTTP client installed, and the real
@@ -286,7 +267,10 @@ final class RegistryPullSecretTests {
             fake.stub(
                 urlContaining: "ghcr.io/v2/",
                 status: .unauthorized,
-                headers: ["WWW-Authenticate": #"Bearer realm="https://ghcr.io/token",service="ghcr.io""#],
+                headers: [
+                    "WWW-Authenticate":
+                        #"Bearer realm="https://ghcr.io/token",scope="repository:other/repo:pull,push",service="ghcr.io""#
+                ],
                 body: "")
             fake.stub(
                 urlContaining: "ghcr.io/token",
@@ -310,6 +294,8 @@ final class RegistryPullSecretTests {
             let tokenURL = try #require(tokenRequests.first?.url.string)
             #expect(tokenURL.contains("scope=repository:acme%2Fworker:pull"))
             #expect(tokenURL.contains("service=ghcr.io"))
+            #expect(!tokenURL.contains("other"))
+            #expect(!tokenURL.contains("push"))
             #expect(tokenRequests.first?.headers.basicAuthorization?.username == "acme-bot")
 
             // The manifest request presented the minted token, not Basic auth.
