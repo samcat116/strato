@@ -16,6 +16,7 @@ extension ObservedStateApplier {
     ) async throws -> Bool {
         let reportedGeneration = max(observedGeneration, failedGeneration ?? observedGeneration)
         if reportedGeneration > resource.generation {
+            let resourceID = try resource.requireID()
             let reason =
                 "Agent reported generation \(reportedGeneration) ahead of current desired generation \(resource.generation); "
                 + "possible control-plane datastore rewind. Operator recovery is required."
@@ -28,7 +29,7 @@ extension ObservedStateApplier {
                 "Rejected workload observation ahead of current desired generation",
                 metadata: [
                     "resourceKind": .string(R.operationResourceKind.rawValue),
-                    "resourceId": .string(try resource.requireID().uuidString),
+                    "resourceId": .string(resourceID.uuidString),
                     "reportedGeneration": .stringConvertible(reportedGeneration),
                     "currentGeneration": .stringConvertible(resource.generation),
                 ])
