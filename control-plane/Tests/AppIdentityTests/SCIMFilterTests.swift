@@ -73,6 +73,59 @@ final class SCIMFilterTests: BaseTestCase {
         return user
     }
 
+    @Test("Grouped conjunctions retain resource-specific attributes and organization scope")
+    func groupedConjunctions() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Filter Org")
+            let other = try await builder.createOrganization(name: "Other Filter Org")
+            try await createUser(builder, username: "alice", displayName: "Platform", org: org)
+            try await createUser(builder, username: "bob", displayName: "Design", org: org)
+            try await createUser(builder, username: "aliceOther", displayName: "Platform", org: other)
+            _ = try await builder.createGroup(name: "Platform", description: "", organization: org)
+            _ = try await builder.createGroup(name: "Design", description: "", organization: org)
+            _ = try await builder.createGroup(name: "Platform Other", description: "", organization: other)
+
+            let userFilter = SCIMFilterExpression.group(
+                .logical(
+                    .and, .present("userName"),
+                    .logical(
+                        .and, .attribute("displayName", .contains, .string("PLAT")),
+                        .attribute("userName", .notEqual, .string("bob")))))
+            let users = try await UserSCIMHandler(db: app.db, organizationID: org.id!).search(
+                query: SCIMServerQuery(filter: userFilter), context: makeContext())
+            #expect(users.Resources.map(\.userName) == ["alice"])
+
+            let groupFilter = SCIMFilterExpression.group(
+                .logical(
+                    .and, .present("displayName"), .attribute("displayName", .notEqual, .string("Design"))))
+            let groups = try await GroupSCIMHandler(db: app.db, organizationID: org.id!).search(
+                query: SCIMServerQuery(filter: groupFilter), context: makeContext())
+            #expect(groups.Resources.map(\.displayName) == ["Platform"])
+        }
+    }
+
+    @Test("Unsupported logical filters are rejected for both resource kinds")
+    func unsupportedLogicalFilters() async throws {
+        try await withTestApp { app in
+            let org = try await TestDataBuilder(db: app.db).createOrganization(name: "Filter Org")
+            let attribute = SCIMFilterExpression.attribute("displayName", .equal, .string("Platform"))
+            for filter in [
+                SCIMFilterExpression.not(attribute), .logical(.or, attribute, attribute),
+                .logical(.not, attribute, attribute),
+            ] {
+                await #expect(throws: SCIMServerError.self) {
+                    try await UserSCIMHandler(db: app.db, organizationID: org.id!).search(
+                        query: SCIMServerQuery(filter: filter), context: makeContext())
+                }
+                await #expect(throws: SCIMServerError.self) {
+                    try await GroupSCIMHandler(db: app.db, organizationID: org.id!).search(
+                        query: SCIMServerQuery(filter: filter), context: makeContext())
+                }
+            }
+        }
+    }
+
     // MARK: - User username filters
 
     @Test("User co (contains) is case-insensitive")

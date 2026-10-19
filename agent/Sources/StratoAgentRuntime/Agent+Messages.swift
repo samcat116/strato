@@ -504,7 +504,7 @@ extension Agent {
             do {
                 attributes = try FileManager.default.attributesOfItem(atPath: path)
             } catch {
-                guard !Self.isFileNotFound(error) else { continue }
+                guard !FileSystemError.isFileNotFound(error) else { continue }
                 let reason =
                     "could not inspect legacy jail ownership at \(path): \(error.localizedDescription)"
                 sandboxJailUIDRecoveryBlockedReason = reason
@@ -535,28 +535,6 @@ extension Agent {
                     "error": .string(error.localizedDescription),
                 ])
             return nil
-        }
-    }
-
-    static func isFileNotFound(_ error: any Error) -> Bool {
-        var current: any Error = error
-        while true {
-            let candidate = current as NSError
-            if candidate.domain == NSCocoaErrorDomain,
-                candidate.code == NSFileNoSuchFileError
-                    || candidate.code == NSFileReadNoSuchFileError
-            {
-                return true
-            }
-            if candidate.domain == NSPOSIXErrorDomain,
-                candidate.code == POSIXErrorCode.ENOENT.rawValue
-            {
-                return true
-            }
-            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
-                return false
-            }
-            current = underlying
         }
     }
 

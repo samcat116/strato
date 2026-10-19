@@ -25,9 +25,6 @@ final class NetworkACLRule: Model, @unchecked Sendable {
         case deny
     }
 
-    /// Nil matches any IP protocol.
-    static let allowedProtocols: Set<String> = ["tcp", "udp", "icmp"]
-
     @ID(key: .id)
     var id: UUID?
 

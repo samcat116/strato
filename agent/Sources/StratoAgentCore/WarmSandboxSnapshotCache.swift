@@ -376,7 +376,7 @@ public struct WarmSandboxSnapshotCache: Sendable {
         do {
             names = try fileManager.contentsOfDirectory(atPath: rootPath)
         } catch {
-            guard !DiskCacheLRU.isFileNotFound(error) else { return [] }
+            guard !FileSystemError.isFileNotFound(error) else { return [] }
             return [StagingCleanupFailure(path: rootPath, reason: error.localizedDescription)]
         }
         return DiskCacheLRU.removeStaleStaging(

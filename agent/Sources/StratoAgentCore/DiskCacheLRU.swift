@@ -211,7 +211,7 @@ public enum DiskCacheLRU {
             do {
                 try fileManager.removeItem(atPath: path)
             } catch {
-                guard !isFileNotFound(error) else { continue }
+                guard !FileSystemError.isFileNotFound(error) else { continue }
                 let failure = StagingCleanupFailure(path: path, reason: error.localizedDescription)
                 failures.append(failure)
                 logger?.warning(
@@ -225,25 +225,4 @@ public enum DiskCacheLRU {
         return failures
     }
 
-    static func isFileNotFound(_ error: any Error) -> Bool {
-        var current: any Error = error
-        while true {
-            let candidate = current as NSError
-            if candidate.domain == NSCocoaErrorDomain,
-                candidate.code == NSFileNoSuchFileError
-                    || candidate.code == NSFileReadNoSuchFileError
-            {
-                return true
-            }
-            if candidate.domain == NSPOSIXErrorDomain,
-                candidate.code == POSIXErrorCode.ENOENT.rawValue
-            {
-                return true
-            }
-            guard let underlying = candidate.userInfo[NSUnderlyingErrorKey] as? any Error else {
-                return false
-            }
-            current = underlying
-        }
-    }
 }

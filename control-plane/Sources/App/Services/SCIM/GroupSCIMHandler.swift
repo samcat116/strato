@@ -446,39 +446,14 @@ struct GroupSCIMHandler: SCIMResourceHandler, Sendable {
     private func applyFilter(_ filter: SCIMFilterExpression, to query: QueryBuilder<App.Group>) throws -> QueryBuilder<
         App.Group
     > {
-        switch filter {
-        case .attribute(let path, let op, let value):
-            return try applyAttributeFilter(path: path, op: op, value: value, to: query)
-
-        case .logical(let logicalOp, let left, let right):
-            switch logicalOp {
-            case .and:
-                var result = try applyFilter(left, to: query)
-                result = try applyFilter(right, to: result)
-                return result
-            case .or, .not:
-                throw SCIMServerError.invalidFilter(
-                    detail: "SCIM logical filter operator '\(logicalOp)' is not supported"
-                )
-            }
-
-        case .not:
-            throw SCIMServerError.invalidFilter(
-                detail: "SCIM NOT filter is not supported"
-            )
-
-        case .present(let path):
-            if path.lowercased() == "displayname" {
-                return query.filter(\.$name != "")
-            }
-            return query
-
-        case .group(let inner):
-            return try applyFilter(inner, to: query)
-
-        case .empty:
-            return query
-        }
+        try SCIMQueryFilter.apply(
+            filter, to: query,
+            attribute: { path, op, value, query in
+                try applyAttributeFilter(path: path, op: op, value: value, to: query)
+            },
+            present: { path, query in
+                path.lowercased() == "displayname" ? query.filter(\.$name != "") : query
+            })
     }
 
     private func applyAttributeFilter(
@@ -491,7 +466,7 @@ struct GroupSCIMHandler: SCIMResourceHandler, Sendable {
 
         switch lowercasePath {
         case "displayname":
-            return applyStringFilter(
+            return SCIMQueryFilter.string(
                 keyPath: \App.Group.$name, column: "name", op: op,
                 value: try value.requireText(path: path), to: query)
 
@@ -504,26 +479,4 @@ struct GroupSCIMHandler: SCIMResourceHandler, Sendable {
         }
     }
 
-    private func applyStringFilter(
-        keyPath: KeyPath<App.Group, FieldProperty<App.Group, String>>,
-        column: String,
-        op: SCIMFilterOperator,
-        value: String,
-        to query: QueryBuilder<App.Group>
-    ) -> QueryBuilder<App.Group> {
-        switch op {
-        case .equal:
-            return query.filter(keyPath == value)
-        case .notEqual:
-            return query.filter(keyPath != value)
-        case .contains:
-            return query.filter(.caseInsensitiveContains(schema: App.Group.schema, column: column, value: value))
-        case .startsWith:
-            return query.filter(.caseInsensitiveStartsWith(schema: App.Group.schema, column: column, value: value))
-        case .endsWith:
-            return query.filter(.caseInsensitiveEndsWith(schema: App.Group.schema, column: column, value: value))
-        case .greaterThan, .greaterThanOrEqual, .lessThan, .lessThanOrEqual, .present:
-            return query
-        }
-    }
 }
