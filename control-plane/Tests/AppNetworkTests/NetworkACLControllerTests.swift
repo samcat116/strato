@@ -87,6 +87,41 @@ final class NetworkACLControllerTests {
         return try #require(result)
     }
 
+    @Test("ACL handlers authenticate before lookup and use the shared forbidden reason")
+    func resourceAuthorizationErrors() async throws {
+        try await withACLTestApp { app, _, _, _, network, _ in
+            let networkID = try network.requireID()
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "acl-handler-outsider", email: "acl-handler-outsider@example.com")
+            let cases: [(String, User?, HTTPStatus, String?)] = [
+                ("invalid", nil, .unauthorized, nil),
+                ("invalid", outsider, .badRequest, "Invalid network ID"),
+                (UUID().uuidString, outsider, .notFound, "Network not found"),
+                (networkID.uuidString, outsider, .forbidden, "Insufficient permissions for this operation"),
+            ]
+            for (rawID, user, status, reason) in cases {
+                for mutation in [false, true] {
+                    let req = Request(application: app, on: app.eventLoopGroup.any())
+                    req.parameters.set("networkId", to: rawID)
+                    if let user { req.auth.login(user) }
+                    do {
+                        if mutation {
+                            _ = try await NetworkACLController().deleteACL(req: req)
+                        } else {
+                            _ = try await NetworkACLController().getACL(req: req)
+                        }
+                        Issue.record("Expected network authorization error")
+                    } catch let abort as Abort {
+                        #expect(abort.status == status)
+                        if let reason {
+                            #expect(abort.reason == reason)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @Test("ACL and immutable-rule lifecycle advances both replay guards")
     func lifecycleAndGenerations() async throws {
         try await withACLTestApp { app, _, _, _, network, token in

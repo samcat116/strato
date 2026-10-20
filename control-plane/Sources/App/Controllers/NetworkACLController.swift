@@ -206,12 +206,7 @@ struct NetworkACLController: RouteCollection {
     private func authorizedNetwork(req: Request, action: String) async throws -> LogicalNetwork {
         _ = try req.auth.require(User.self)
         let networkID = try req.requireUUIDParameter("networkId", reason: "Invalid network ID")
-        guard let network = try await LogicalNetwork.find(networkID, on: req.db) else {
-            throw Abort(.notFound, reason: "Network not found")
-        }
-        guard try await req.can(action, on: IAMNode(type: .network, id: networkID)) else {
-            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this network")
-        }
-        return network
+        return try await req.authorizedResource(
+            networkID, as: LogicalNetwork.self, nodeType: .network, action: action, notFoundReason: "Network not found")
     }
 }

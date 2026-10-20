@@ -64,6 +64,52 @@ final class CephStorageTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("Ceph handlers preserve site lookup errors and use the shared forbidden reason")
+    func resourceAuthorizationErrors() async throws {
+        try await withFixture { fixture in
+            let siteID = try fixture.site.requireID()
+            let outsider = try await fixture.builder.createUser(
+                username: "ceph-outsider", email: "ceph-outsider@example.com")
+            let cases: [(String, User?, HTTPStatus, String)] = [
+                ("invalid", nil, .badRequest, "Invalid site ID"),
+                (UUID().uuidString, nil, .notFound, "Site not found"),
+                (siteID.uuidString, outsider, .forbidden, "Insufficient permissions for this operation"),
+                (siteID.uuidString, fixture.user, .notFound, "Ceph cluster not registered"),
+            ]
+            for (rawID, user, status, reason) in cases {
+                let req = Request(application: fixture.app, on: fixture.app.eventLoopGroup.any())
+                req.parameters.set("siteId", to: rawID)
+                if let user { req.auth.login(user) }
+                do {
+                    _ = try await CephStorageController().getCluster(req: req)
+                    Issue.record("Expected Ceph authorization or cluster lookup error")
+                } catch let abort as Abort {
+                    #expect(abort.status == status)
+                    #expect(abort.reason == reason)
+                }
+            }
+            for operation in 0..<3 {
+                let req = Request(application: fixture.app, on: fixture.app.eventLoopGroup.any())
+                req.parameters.set("siteId", to: siteID.uuidString)
+                req.auth.login(outsider)
+                do {
+                    switch operation {
+                    case 0:
+                        _ = try await CephStorageController().createCluster(req: req)
+                    case 1:
+                        _ = try await CephStorageController().updateCluster(req: req)
+                    default:
+                        _ = try await CephStorageController().deleteCluster(req: req)
+                    }
+                    Issue.record("Expected Ceph management denial")
+                } catch let abort as Abort {
+                    #expect(abort.status == .forbidden)
+                    #expect(abort.reason == "Insufficient permissions for this operation")
+                }
+            }
+        }
+    }
+
     private func clusterPath(_ fixture: Fixture) throws -> String {
         "/api/sites/\(try fixture.site.requireID())/ceph-cluster"
     }

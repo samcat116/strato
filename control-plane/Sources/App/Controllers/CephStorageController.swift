@@ -279,14 +279,12 @@ struct CephStorageController: RouteCollection {
     // MARK: Cluster registration
 
     func getCluster(req: Request) async throws -> CephClusterResponse {
-        let site = try await requireSite(req)
-        try await requireSiteAction("site:read", site: site, req: req)
+        let site = try await req.authorizedSite(action: "site:read")
         return CephClusterResponse(from: try await requireCluster(in: site, on: req.db))
     }
 
     func createCluster(req: Request) async throws -> Response {
-        let site = try await requireSite(req)
-        try await requireSiteAction("site:manage", site: site, req: req)
+        let site = try await req.authorizedSite(action: "site:manage")
         let siteID = try site.requireID()
         let input = try req.content.decodeValidated(CreateExternalCephClusterRequest.self)
         try requireEncryptedCredentialStorage(req)
@@ -325,8 +323,7 @@ struct CephStorageController: RouteCollection {
     }
 
     func updateCluster(req: Request) async throws -> CephClusterResponse {
-        let site = try await requireSite(req)
-        try await requireSiteAction("site:manage", site: site, req: req)
+        let site = try await req.authorizedSite(action: "site:manage")
         let existing = try await requireCluster(in: site, on: req.db)
         let input = try req.content.decodeValidated(UpdateExternalCephClusterRequest.self)
         if input.keyring != nil {
@@ -377,8 +374,7 @@ struct CephStorageController: RouteCollection {
     }
 
     func deleteCluster(req: Request) async throws -> HTTPStatus {
-        let site = try await requireSite(req)
-        try await requireSiteAction("site:manage", site: site, req: req)
+        let site = try await req.authorizedSite(action: "site:manage")
         let cluster = try await requireCluster(in: site, on: req.db)
         let clusterID = try cluster.requireID()
         do {
@@ -630,20 +626,6 @@ struct CephStorageController: RouteCollection {
         }
     }
 
-    private func requireSite(_ req: Request) async throws -> Site {
-        let siteID = try req.requireUUIDParameter("siteId", reason: "Invalid site ID")
-        guard let site = try await Site.find(siteID, on: req.db) else {
-            throw Abort(.notFound, reason: "Site not found")
-        }
-        return site
-    }
-
-    private func requireSiteAction(_ action: String, site: Site, req: Request) async throws {
-        guard try await req.can(action, on: IAMNode(type: .site, id: try site.requireID())) else {
-            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this site")
-        }
-    }
-
     private func requireCluster(in site: Site, on db: any Database) async throws -> CephCluster {
         guard
             let cluster = try await CephCluster.query(on: db)
@@ -669,8 +651,7 @@ struct CephStorageController: RouteCollection {
     }
 
     private func projectContext(_ req: Request, mutation: Bool) async throws -> (Site, CephCluster, Project) {
-        let site = try await requireSite(req)
-        try await requireSiteAction(mutation ? "site:manage" : "site:read", site: site, req: req)
+        let site = try await req.authorizedSite(action: mutation ? "site:manage" : "site:read")
         let project = try await req.requireProject()
         if mutation {
             try await OrganizationAccessService.requireProjectPolicyAdmin(project: project, on: req)
