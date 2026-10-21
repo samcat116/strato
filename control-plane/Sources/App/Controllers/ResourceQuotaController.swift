@@ -62,9 +62,7 @@ struct ResourceQuotaController: RouteCollection {
     /// both on `org:read` of the owning organization and no wider bound would
     /// survive that.
     func visibleQuotas(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let level = req.query[String.self, at: "level"]
 
@@ -163,9 +161,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func show(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 
@@ -180,9 +176,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func update(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 
@@ -332,9 +326,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 
@@ -369,9 +361,7 @@ struct ResourceQuotaController: RouteCollection {
     // MARK: - Organization Context Operations
 
     func indexForOrganization(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -388,9 +378,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func createForOrganization(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -423,9 +411,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func indexForOU(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -452,9 +438,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func createForOU(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -497,9 +481,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func indexForProject(req: Request) async throws -> [ResourceQuotaResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let project = try await req.requireProject()
         let projectID = try project.requireID()
@@ -517,9 +499,7 @@ struct ResourceQuotaController: RouteCollection {
     }
 
     func createForProject(req: Request) async throws -> ResourceQuotaResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let project = try await req.requireProject()
         let projectID = try project.requireID()
@@ -562,9 +542,7 @@ struct ResourceQuotaController: RouteCollection {
     // MARK: - Usage Tracking
 
     func getUsage(req: Request) async throws -> QuotaUsageResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let quotaID = try req.requireUUIDParameter("quotaID", reason: "Invalid quota ID")
 

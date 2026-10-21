@@ -43,9 +43,7 @@ struct WebhookSubscriptionController: RouteCollection {
     func create(req: Request) async throws -> Response {
         let organizationID = try requireOrganizationID(req)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let request = try req.content.decodeValidated(CreateWebhookSubscriptionRequest.self)
         try await validateTargetURL(request.url, on: req)

@@ -183,9 +183,7 @@ struct PasskeyController: RouteCollection {
     // MARK: - Helpers
 
     private func currentUser(_ req: Request) throws -> User {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
         return user
     }
 
