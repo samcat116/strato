@@ -34,6 +34,36 @@ struct OperationResponseContractTests {
         #expect(decoded.resourceId == resourceID)
     }
 
+    @Test("Only observations valid for the current row can settle current or historical mutations")
+    func generationEvidenceMustFitCurrentRow() {
+        let cases: [(observed: Int64, target: Int64, converged: Bool, status: VMOperationStatus)] = [
+            (4, 5, false, .pending),
+            (5, 5, true, .succeeded),
+            (8, 5, false, .pending),
+            (4, 3, false, .succeeded),
+            (5, 3, true, .succeeded),
+            (8, 3, false, .pending),
+        ]
+        for scenario in cases {
+            let conditions = ResourceConditions(
+                targetGeneration: 5, observedGeneration: scenario.observed, desiredSatisfied: true,
+                phase: nil, lastError: nil, failedGeneration: nil)
+            #expect(conditions.converged == scenario.converged)
+            for kind in [OperationResourceKind.virtualMachine, .sandbox] {
+                for mutation in [VMOperationKind.boot, .reboot, .restore] {
+                    let event = ResourceEvent()
+                    event.resourceKind = kind
+                    event.resourceID = UUID()
+                    event.mutation = mutation
+                    event.phase = .requested
+                    event.targetGeneration = scenario.target
+                    let view = OperationFacade.ResourceView(conditions: conditions, terminal: nil)
+                    #expect(OperationFacade.verdict(for: event, in: view).status == scenario.status)
+                }
+            }
+        }
+    }
+
     @Test("A captured command result carries separate streams and exit status")
     func commandResultContract() throws {
         let response = OperationResponse(

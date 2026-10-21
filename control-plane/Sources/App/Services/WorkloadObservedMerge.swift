@@ -4,6 +4,49 @@ import StratoShared
 import Vapor
 
 extension ObservedStateApplier {
+    /// Runs against the locked current row, before any report side effects.
+    /// A database rewind is not an instruction to adopt the agent's newer
+    /// generation or replay its durable reboot/restore nonces.
+    func rejectInvalidWorkloadGeneration<R: ConvergingResource & TimestampedConvergenceObservable>(
+        _ resource: R,
+        observedGeneration: Int64,
+        failedGeneration: Int64?,
+        at instant: ClusterInstant,
+        on db: Database
+    ) async throws -> Bool {
+        let reportedGeneration = max(observedGeneration, failedGeneration ?? observedGeneration)
+        if reportedGeneration > resource.generation {
+            let resourceID = try resource.requireID()
+            let reason =
+                "Agent reported generation \(reportedGeneration) ahead of current desired generation \(resource.generation); "
+                + "possible control-plane datastore rewind. Operator recovery is required."
+            if resource.recordTimestampedConvergence(
+                phase: nil, lastError: reason, failedGeneration: resource.generation, at: instant)
+            {
+                try await resource.save(on: db)
+            }
+            app.logger.warning(
+                "Rejected workload observation ahead of current desired generation",
+                metadata: [
+                    "resourceKind": .string(R.operationResourceKind.rawValue),
+                    "resourceId": .string(resourceID.uuidString),
+                    "reportedGeneration": .stringConvertible(reportedGeneration),
+                    "currentGeneration": .stringConvertible(resource.generation),
+                ])
+            // Do not settle a terminal failure: that would abandon intent and
+            // bump the generation, hiding the mismatch instead of diagnosing it.
+            return true
+        }
+        // Out-of-order success cannot roll back newer facts or clear a failure
+        // at a generation it has not reached (including the rewind diagnostic).
+        // An adopted agent can legitimately fail the current desired generation
+        // before reaching the database's last observed generation.
+        return failedGeneration != resource.generation
+            && (observedGeneration < resource.observedGeneration
+                || (resource.lastError != nil && resource.failedGeneration == resource.generation
+                    && observedGeneration < resource.generation))
+    }
+
     /// Apply one settled (or failing) observation to its VM row and record the
     /// convergence transition it produces.
     func applyObservedVMState(
@@ -15,6 +58,12 @@ extension ObservedStateApplier {
         on db: Database
     ) async throws {
         let vmID = try vm.requireID()
+        if try await rejectInvalidWorkloadGeneration(
+            vm, observedGeneration: observed.observedGeneration, failedGeneration: observed.failedGeneration,
+            at: instant, on: db)
+        {
+            return
+        }
         try logSupersededFailureReport(vm, reportedGeneration: observed.failedGeneration)
 
         // Where the VM stood before this report. Every convergence outcome
@@ -568,6 +617,14 @@ extension ObservedStateApplier {
         on db: Database
     ) async throws {
         let sandboxID = try sandbox.requireID()
+        if try await rejectInvalidWorkloadGeneration(
+            sandbox, observedGeneration: observed.observedGeneration, failedGeneration: observed.failedGeneration,
+            at: instant, on: db)
+        {
+            return
+        }
+        try await SandboxIdleFenceService.observe(
+            observed.idleActivity, sandbox: sandbox, at: instant, on: db)
         try logSupersededFailureReport(sandbox, reportedGeneration: observed.failedGeneration)
         let wasConverged = sandbox.isConverged
         let failedBefore = sandbox.failedGeneration

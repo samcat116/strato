@@ -32,7 +32,7 @@ enum ConvergenceWriteError: Error, CustomStringConvertible, Sendable {
 /// and the convergence progress `ObservedStateApplier` mirrors off each agent
 /// report. Nothing is stored in this shape and no mutation writes it. That is
 /// deliberate: operation completion was *already* this derivation
-/// (`ObservedStateApplier`: succeeded ⇔ `observedGeneration >= generation` ∧
+/// (`ObservedStateApplier`: succeeded ⇔ `observedGeneration == generation` ∧
 /// the desired status is satisfied; failed ⇔ `failedGeneration == generation`),
 /// so projecting it onto the resource replaced a hand-maintained side-table
 /// with a view of the reconciliation loop's own state.
@@ -126,8 +126,10 @@ struct ResourceConditions: Content, Equatable {
         // `failedGeneration` argument matters for the same reason — a failure
         // with no reason is not reportable and so is not a verdict, which keeps
         // this exactly the negation of "degraded names the target".
+        // A generation ahead of the current row is evidence of versioned state
+        // the database no longer knows, not proof that its current intent ran.
         self.converged =
-            observedGeneration >= targetGeneration
+            observedGeneration == targetGeneration
             && desiredSatisfied
             && self.degraded?.sinceGeneration != targetGeneration
     }

@@ -288,7 +288,8 @@ enum OperationFacade {
                 return Verdict(status: .pending, error: nil, completedAt: nil)
             }
         }
-        if conditions.observedGeneration >= target,
+        if conditions.observedGeneration <= conditions.targetGeneration,
+            conditions.observedGeneration >= target,
             conditions.converged || conditions.targetGeneration > target
         {
             return Verdict(status: .succeeded, error: nil, completedAt: nil)

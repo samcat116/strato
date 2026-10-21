@@ -136,6 +136,16 @@ many times it was asked for. The agent applies a nonce once, against a record it
 keeps in its own durable manifest, so the exchange needs neither a reply nor a
 socket.
 
+A datastore rewind can put desired generations and edge nonces below what the
+agent has durably applied. VM and sandbox report merging rejects evidence above
+the locked current desired generation, exposes a degraded diagnostic, and leaves
+desired state and nonces untouched. A stale success cannot clear a current
+failure; a valid current observation can. Resource conditions and historical
+mutation verdicts also reject stored observations newer than the current row.
+This is a detection boundary, not a restore protocol: an agent restart retains
+its manifest nonces and cannot make a lower reboot/restore request execute.
+Generation epochs, nonce adoption, and operator recovery remain separate work.
+
 Live frontend byte streams — console and interactive exec — do stay imperative
 by design (ADR 0001: session lifetime is a browser tab, not cluster intent),
 but they are **not** correlated request/response and never travelled this path:

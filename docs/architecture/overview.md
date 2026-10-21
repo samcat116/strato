@@ -66,6 +66,21 @@ gates) is specified in [wire-protocol](./wire-protocol.md); the agent-side
 engine in [agent](./agent.md); the control-plane side in
 [control-plane](./control-plane.md).
 
+VM and sandbox observations are checked against the **locked current row**.
+An observed or failed generation above that row's desired generation is rejected
+before applying status, guest evidence, suspension state, or convergence effects.
+The resource exposes a degraded datastore-rewind diagnostic; its desired state,
+generation, deadline, and reboot/restore nonces are retained. Current resource
+conditions require generation equality. Historical mutations can still succeed
+from a later observation, provided it is no newer than the current resource row.
+
+This detects conflicting histories after a datastore restore; it does not
+implement recovery. An agent may retain newer generations and edge nonces in
+its manifest and ignore the restored intent. Restarting the agent does not
+erase that durable evidence. Operators must reconcile the database and agent
+histories before resuming mutations; resetting counters or automatically
+adopting the agent's generation is not a supported recovery procedure.
+
 ## Async resource mutations
 
 VM and sandbox lifecycle endpoints (create/start/stop/delete, VM
