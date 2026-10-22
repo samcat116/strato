@@ -125,6 +125,18 @@ into `launchAgent`. Bootstrap resolves `AgentRuntimeConfiguration` once; the
 
 ## Shutdown
 
+Before permission migration or manifest access, startup takes a nonblocking
+exclusive lock on `.agent.lock` in `vm_storage_path`. A second local process
+using that directory fails before touching workload state. Ownership is held
+through startup errors and shutdown until the agent process exits; some teardown
+tasks are cancelled without being joined, so `stop()` alone does not release it.
+The kernel releases the lock on exit, including crashes, allowing the next
+process to recover the manifest normally. The descriptor is close-on-exec so
+guest and helper processes do not retain ownership. Never remove `.agent.lock`
+to force takeover: replacing its inode defeats exclusion. This is local process
+exclusion, separate from registration and inventory-session fencing; it does
+not arbitrate cloned identities on different hosts.
+
 **VMs outlive the agent.** A SIGINT/SIGTERM runs `Agent.stop()` —
 unregistering from the control plane, closing the socket and its event loop,
 closing console channels, disconnecting networking, stopping the SVID manager

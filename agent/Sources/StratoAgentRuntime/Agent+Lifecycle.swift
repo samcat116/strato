@@ -23,11 +23,14 @@ extension Agent {
     }
 
     func start() async throws {
-        guard !isRunning else {
+        guard !isRunning, stateDirectoryLock == nil else {
             logger.warning("Agent is already running")
             return
         }
 
+        // No await before ownership is installed: concurrent start calls on
+        // this actor must not both pass the startup guard.
+        stateDirectoryLock = try AgentStateDirectoryLock(at: configuration.vmStoragePath)
         try ManagedStatePermissions.migrate(at: configuration.vmStoragePath, legacyStagingRoot: NSTemporaryDirectory())
 
         // Recover the workload manifest from a previous incarnation of this agent.

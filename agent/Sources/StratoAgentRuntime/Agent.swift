@@ -90,6 +90,10 @@ actor Agent {
     var reconnectState = ControlPlaneReconnectState()
     var interactiveSessionFence = ControlPlaneInteractiveSessionFence()
     var isRunning = false
+    // Retain through shutdown and startup failures, until the process exits (or
+    // this Agent is destroyed). stop() cancels some work without joining it, so
+    // releasing ownership there would let a successor race lingering work.
+    var stateDirectoryLock: AgentStateDirectoryLock?
     // Set once a graceful shutdown has been requested (e.g. by a signal
     // handler calling stop()). Guards start() against parking if stop() ran
     // during startup, which would otherwise hang the process on exit.

@@ -149,7 +149,7 @@ public enum ManagedStatePermissions {
         try restrict(descriptor, mode: 0o600, path: path)
     }
 
-    private static func directory(at path: String, create: Bool) throws -> CInt {
+    static func directory(at path: String, create: Bool) throws -> CInt {
         #if os(macOS)
         // macOS ships these root-owned aliases. Expand only system aliases;
         // arbitrary managed-path symlinks must still be rejected.
