@@ -311,6 +311,9 @@ private func launchAgent(options: AgentOptions) async throws {
     let agent = Agent(
         agentID: finalAgentID, webSocketURL: finalWebSocketURL,
         configuration: runtimeConfiguration, logger: logger)
+    // In particular, retain its state-directory ownership through the explicit
+    // process exit below, even after the last actor call has returned.
+    defer { withExtendedLifetime(agent) {} }
 
     // Install signal handlers so `systemctl stop`/Ctrl-C triggers a graceful
     // shutdown: unregistering from the control plane, disconnecting consoles,
