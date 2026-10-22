@@ -34,15 +34,6 @@ struct SiteController: RouteCollection {
         }
     }
 
-    /// The given canonical action on the site itself (resolved through the site's
-    /// parent scope in the IAM tree).
-    private func requireSiteAction(_ req: Request, site: Site, action: String) async throws {
-        let allowed = try await req.can(action, on: IAMNode(type: .site, id: try site.requireID()))
-        guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this site")
-        }
-    }
-
     /// `manage` on the agent (resolved through the agent's parent scope). Site
     /// membership changes need this ON TOP of site#manage: with agents and
     /// sites delegated to different OUs of one org, a sibling-OU site admin
@@ -115,14 +106,6 @@ struct SiteController: RouteCollection {
         }
     }
 
-    private func findSite(_ req: Request) async throws -> Site {
-        let siteId = try req.requireUUIDParameter("siteId", reason: "Invalid site ID")
-        guard let site = try await Site.find(siteId, on: req.db) else {
-            throw Abort(.notFound, reason: "Site not found")
-        }
-        return site
-    }
-
     /// GET /api/sites
     /// Query params: organization_id (optional) — narrows to one org's hierarchy;
     /// limit/offset (optional) — select the page.
@@ -179,8 +162,7 @@ struct SiteController: RouteCollection {
     }
 
     func getSite(req: Request) async throws -> SiteResponse {
-        let site = try await findSite(req)
-        try await requireSiteAction(req, site: site, action: "site:read")
+        let site = try await req.authorizedSite(action: "site:read")
         let controller = try await Self.controller(of: site, on: req.db)
         let instant = try await ClusterClock.read(on: req.db)
         return try SiteResponse(from: site, controller: controller, at: instant)
@@ -235,8 +217,7 @@ struct SiteController: RouteCollection {
     }
 
     func updateSite(req: Request) async throws -> SiteResponse {
-        let site = try await findSite(req)
-        try await requireSiteAction(req, site: site, action: "site:manage")
+        let site = try await req.authorizedSite(action: "site:manage")
         let update = try req.content.decodeValidated(UpdateSiteRequest.self)
         let instant = try await ClusterClock.read(on: req.db)
 
@@ -312,8 +293,7 @@ struct SiteController: RouteCollection {
     }
 
     func deleteSite(req: Request) async throws -> HTTPStatus {
-        let site = try await findSite(req)
-        try await requireSiteAction(req, site: site, action: "site:manage")
+        let site = try await req.authorizedSite(action: "site:manage")
         let siteId = try site.requireID()
 
         // Refuse while anything references the site: a cascade would silently
@@ -347,8 +327,7 @@ struct SiteController: RouteCollection {
     }
 
     func assignAgent(req: Request) async throws -> AgentResponse {
-        let site = try await findSite(req)
-        try await requireSiteAction(req, site: site, action: "site:manage")
+        let site = try await req.authorizedSite(action: "site:manage")
         let agentId = try req.requireUUIDParameter("agentId", reason: "Invalid agent ID")
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")

@@ -14,6 +14,14 @@ and the migration that produced today's system — the phases, the
 shadow-evaluation history, the pre-cutover audit, and the upgrade constraint
 — is recorded in [ADR 0004](../adr/0004-cedar-for-authorization.md).
 
+Site and Ceph site routes share `Request.authorizedSite`, which parses the site
+UUID and delegates lookup and authorization to `Request.authorizedResource`.
+Network ACL handlers use that generic helper on the owning network after their
+explicit user-authentication check. These handlers return the shared 403 reason
+`Insufficient permissions for this operation` on denial; malformed UUID and
+missing-resource reasons remain specific to the site or network. Additional
+agent-management, project-membership and scope checks still apply.
+
 ## The shape
 
 ```

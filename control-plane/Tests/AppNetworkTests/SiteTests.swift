@@ -52,6 +52,49 @@ final class SiteTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("Site handlers preserve lookup errors and use the shared forbidden reason")
+    func resourceAuthorizationErrors() async throws {
+        try await withSiteTestApp { app, admin, _, _ in
+            let site = try await self.makeSite(app: app, name: "authorization-site")
+            let siteID = try site.requireID()
+            let outsider = try await TestDataBuilder(db: app.db).createUser(
+                username: "site-outsider", email: "site-outsider@example.com")
+            let cases: [(String, User?, HTTPStatus, String)] = [
+                ("invalid", nil, .badRequest, "Invalid site ID"),
+                (UUID().uuidString, nil, .notFound, "Site not found"),
+                (siteID.uuidString, outsider, .forbidden, "Insufficient permissions for this operation"),
+            ]
+            // Call handlers directly so middleware cannot hide their own checks.
+            for (rawID, user, status, reason) in cases {
+                for operation in 0..<4 {
+                    let req = Request(application: app, on: app.eventLoopGroup.any())
+                    req.parameters.set("siteId", to: rawID)
+                    if let user { req.auth.login(user) }
+                    do {
+                        switch operation {
+                        case 0:
+                            _ = try await SiteController().getSite(req: req)
+                        case 1:
+                            _ = try await SiteController().updateSite(req: req)
+                        case 2:
+                            _ = try await SiteController().deleteSite(req: req)
+                        default:
+                            _ = try await SiteController().assignAgent(req: req)
+                        }
+                        Issue.record("Expected site authorization error")
+                    } catch let abort as Abort {
+                        #expect(abort.status == status)
+                        #expect(abort.reason == reason)
+                    }
+                }
+            }
+            let allowed = Request(application: app, on: app.eventLoopGroup.any())
+            allowed.parameters.set("siteId", to: siteID.uuidString)
+            allowed.auth.login(admin)
+            _ = try await SiteController().getSite(req: allowed)
+        }
+    }
+
     private func registerAgent(
         app: Application, named name: String, siteID: UUID? = nil,
         protocolVersion: Int = WireProtocol.currentVersion,
