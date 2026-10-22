@@ -99,9 +99,7 @@ struct ImageController: RouteCollection {
     // MARK: - Create Image (Upload or URL Fetch)
 
     func create(req: Request) async throws -> ImageResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         guard let userID = user.id else {
             throw Abort(.unauthorized)

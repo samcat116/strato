@@ -29,9 +29,7 @@ struct HierarchyController: RouteCollection {
     // MARK: - Hierarchy Navigation
 
     func getFullHierarchy(req: Request) async throws -> OrganizationHierarchyResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -50,9 +48,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func getAllResources(req: Request) async throws -> OrganizationResourcesResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -113,9 +109,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func getResourceSummary(req: Request) async throws -> ResourceSummaryResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -151,9 +145,7 @@ struct HierarchyController: RouteCollection {
     // MARK: - Search and Navigation
 
     func searchHierarchy(req: Request) async throws -> HierarchySearchResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -185,9 +177,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func globalSearchHierarchy(req: Request) async throws -> HierarchySearchResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         guard let query = req.query[String.self, at: "q"] else {
             throw Abort(.badRequest, reason: "Search query parameter 'q' is required")
@@ -227,9 +217,7 @@ struct HierarchyController: RouteCollection {
     }
 
     func getEntityPath(req: Request) async throws -> EntityPathResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid parameters")
         let entityID = try req.requireUUIDParameter("entityID", reason: "Invalid parameters")

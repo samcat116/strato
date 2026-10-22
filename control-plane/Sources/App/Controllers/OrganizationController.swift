@@ -37,9 +37,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func index(req: Request) async throws -> [OrganizationResponse] {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         // Get all organizations the user belongs to
         try await user.$organizations.load(on: req.db)
@@ -69,9 +67,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func show(req: Request) async throws -> OrganizationResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -93,9 +89,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func create(req: Request) async throws -> OrganizationResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
         // Open by design: any authenticated user may start an organization
         // (they become its admin below). Declared so the default-deny
         // middleware's handler assertion knows this is deliberate.
@@ -197,9 +191,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func update(req: Request) async throws -> OrganizationResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -290,9 +282,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -402,9 +392,7 @@ struct OrganizationController: RouteCollection {
     // MARK: - Organization Switching
 
     func switchToOrganization(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -422,9 +410,7 @@ struct OrganizationController: RouteCollection {
     // MARK: - Member Management
 
     func getMembers(req: Request) async throws -> [OrganizationMemberResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -453,9 +439,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func addMember(req: Request) async throws -> Response {
-        guard let currentUser = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let currentUser = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -534,9 +518,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func removeMember(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -582,9 +564,7 @@ struct OrganizationController: RouteCollection {
     }
 
     func updateMemberRole(req: Request) async throws -> Response {
-        guard let currentUser = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let currentUser = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 

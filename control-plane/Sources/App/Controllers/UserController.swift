@@ -896,9 +896,7 @@ struct UserController: RouteCollection {
     }
 
     func getSession(req: Request) async throws -> SessionResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         return SessionResponse(user: user.asPublic())
     }

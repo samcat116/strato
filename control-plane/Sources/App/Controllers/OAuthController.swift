@@ -355,9 +355,7 @@ struct OAuthController: RouteCollection {
     // MARK: - Session-authenticated approval endpoints
 
     private func pendingAuthorization(req: Request) async throws -> DeviceAuthorization {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
         guard let rawCode = req.parameters.get("userCode") else {
             throw Abort(.badRequest, reason: "Missing user code")
         }
@@ -397,9 +395,7 @@ struct OAuthController: RouteCollection {
     }
 
     func approveDevice(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
         let authorization = try await pendingAuthorization(req: req)
 
         let approval = (try? req.content.decode(ApproveDeviceRequest.self)) ?? ApproveDeviceRequest(restriction: nil)
@@ -429,9 +425,7 @@ struct OAuthController: RouteCollection {
     // MARK: - Session management (Settings)
 
     func listSessions(req: Request) async throws -> [CLISessionResponse] {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let sessions = try await CLISession.query(on: req.db)
             .filter(\.$user.$id == user.requireID())
@@ -444,9 +438,7 @@ struct OAuthController: RouteCollection {
     }
 
     func revokeSession(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
         let sessionID = try req.requireUUIDParameter("sessionID", reason: "Invalid session ID")
 
         guard

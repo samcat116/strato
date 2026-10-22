@@ -18,9 +18,7 @@ struct APIKeyController: RouteCollection {
     // MARK: - API Key CRUD
 
     func index(req: Request) async throws -> [APIKeyResponse] {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let apiKeys = try await APIKey.query(on: req.db)
             .filter(\.$user.$id == user.id!)
@@ -31,9 +29,7 @@ struct APIKeyController: RouteCollection {
     }
 
     func show(req: Request) async throws -> APIKeyResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let apiKeyID = try req.requireUUIDParameter("apiKeyID", reason: "Invalid API key ID")
 
@@ -50,9 +46,7 @@ struct APIKeyController: RouteCollection {
     }
 
     func create(req: Request) async throws -> CreateAPIKeyResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let createRequest = try req.content.decodeValidated(CreateAPIKeyRequest.self)
 
@@ -112,9 +106,7 @@ struct APIKeyController: RouteCollection {
     }
 
     func update(req: Request) async throws -> APIKeyResponse {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let apiKeyID = try req.requireUUIDParameter("apiKeyID", reason: "Invalid API key ID")
 
@@ -150,9 +142,7 @@ struct APIKeyController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let user = req.auth.get(User.self) else {
-            throw Abort(.unauthorized)
-        }
+        let user = try req.auth.require(User.self)
 
         let apiKeyID = try req.requireUUIDParameter("apiKeyID", reason: "Invalid API key ID")
 

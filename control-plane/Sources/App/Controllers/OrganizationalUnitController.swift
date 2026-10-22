@@ -31,9 +31,7 @@ struct OrganizationalUnitController: RouteCollection {
     // MARK: - OU CRUD Operations
 
     func index(req: Request) async throws -> [OrganizationalUnitResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -51,9 +49,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func show(req: Request) async throws -> OrganizationalUnitResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -87,9 +83,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func create(req: Request) async throws -> OrganizationalUnitResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization ID")
 
@@ -152,9 +146,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func update(req: Request) async throws -> OrganizationalUnitResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -218,9 +210,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func delete(req: Request) async throws -> HTTPStatus {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -273,9 +263,7 @@ struct OrganizationalUnitController: RouteCollection {
     // MARK: - Hierarchy Operations
 
     func getTree(req: Request) async throws -> OrganizationalUnitTreeResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -296,9 +284,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func move(req: Request) async throws -> OrganizationalUnitResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -370,9 +356,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func indexSubOUs(req: Request) async throws -> [OrganizationalUnitResponse] {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let ouID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")
@@ -399,9 +383,7 @@ struct OrganizationalUnitController: RouteCollection {
     }
 
     func createSubOU(req: Request) async throws -> OrganizationalUnitResponse {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
 
         let organizationID = try req.requireUUIDParameter("organizationID", reason: "Invalid organization or folder ID")
         let parentOUID = try req.requireUUIDParameter("ouID", reason: "Invalid organization or folder ID")

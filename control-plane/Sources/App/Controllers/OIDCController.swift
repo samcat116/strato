@@ -604,18 +604,14 @@ struct OIDCController: RouteCollection {
     // `oidc:*` action family.
 
     private func verifyOrganizationAccess(req: Request, organizationID: UUID) async throws {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
         guard try await req.can("org:read", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Access denied to organization")
         }
     }
 
     private func verifyOrganizationAdminAccess(req: Request, organizationID: UUID) async throws {
-        guard req.auth.get(User.self) != nil else {
-            throw Abort(.unauthorized)
-        }
+        _ = try req.auth.require(User.self)
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
     }
 
