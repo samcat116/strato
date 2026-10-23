@@ -26,7 +26,7 @@ struct CurrentSchemaBaselineTests {
     private static let expectedPreAppleCatalogMD5 = "e5bfa799794134caa550f4ae9dec1884"
     // Apple Virtualization expands only ck_vms_hypervisor_type_enum. Measured
     // on PostgreSQL and independently checked by the migration round trip below.
-    private static let expectedCurrentCatalogMD5 = "8287eceaa2414b3e58b08809ffb74c9f"
+    private static let expectedPrePoolCleanupCatalogMD5 = "8287eceaa2414b3e58b08809ffb74c9f"
 
     @Test("A fresh database reaches the reviewed schema from one migration")
     func freshDatabaseMatchesReviewedCatalog() async throws {
@@ -78,9 +78,14 @@ struct CurrentSchemaBaselineTests {
             let upgradedCounts = try await catalogCounts(on: app.db)
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
-            #expect(upgradedMD5 == Self.expectedCurrentCatalogMD5, "Observed current catalog: \(upgradedMD5)")
+            // Keep the reviewed historical catalog independent of the pool cleanup.
+            let poolCleanup = RemoveReservedStoragePoolConfiguration()
+            try await poolCleanup.revert(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == Self.expectedPrePoolCleanupCatalogMD5)
+            try await poolCleanup.prepare(on: app.db)
+            #expect(try await catalogMD5(on: app.db) == upgradedMD5)
             #expect(upgradedCounts.tables == 85)
-            #expect(upgradedCounts.columns == 1098)
+            #expect(upgradedCounts.columns == 1097)
             #expect(upgradedCounts.constraints == 391)
             #expect(upgradedCounts.indexes == 256)
             #expect(upgradedCounts.enums == baselineCounts.enums)
@@ -100,19 +105,21 @@ struct CurrentSchemaBaselineTests {
     @Test("The Apple backend constraint is the only change from the reviewed pre-Apple catalog")
     func appleBackendCatalogRoundTrip() async throws {
         try await withTestApp { app in
+            try await RemoveReservedStoragePoolConfiguration().revert(on: app.db)
             let migration = AddAppleVirtualizationBackend()
-            #expect(try await self.catalogMD5(on: app.db) == Self.expectedCurrentCatalogMD5)
+            #expect(try await self.catalogMD5(on: app.db) == Self.expectedPrePoolCleanupCatalogMD5)
             try await migration.revert(on: app.db)
             #expect(try await self.catalogMD5(on: app.db) == Self.expectedPreAppleCatalogMD5)
             try await migration.prepare(on: app.db)
-            #expect(try await self.catalogMD5(on: app.db) == Self.expectedCurrentCatalogMD5)
+            #expect(try await self.catalogMD5(on: app.db) == Self.expectedPrePoolCleanupCatalogMD5)
         }
     }
 
     @Test("Update verification migration round trips without rewriting existing assignments")
     func updateHealthMigrationRoundTrip() async throws {
         try await withTestApp { app in
-            // This historical fixture predates the Apple backend constraint.
+            // This historical fixture predates the pool cleanup and Apple backend constraint.
+            try await RemoveReservedStoragePoolConfiguration().revert(on: app.db)
             try await AddAppleVirtualizationBackend().revert(on: app.db)
             let migration = AddAgentUpdateHealthVerification()
             let builder = TestDataBuilder(db: app.db)

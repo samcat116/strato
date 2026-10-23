@@ -241,8 +241,6 @@ struct VolumeController: RouteCollection {
             case .ceph:
                 capable = VolumeService.selectCephReconciler(
                     from: agents, pool: pool, requiresIOLimits: true, at: instant)
-            case .replicated:
-                capable = nil
             }
             guard capable != nil else {
                 throw Abort(
@@ -455,8 +453,6 @@ struct VolumeController: RouteCollection {
                         throw error
                     }
                     await app.agentService.syncDesiredState(agentId: agentId)
-                case .replicated:
-                    throw ResourceMutation.WorkError("Replicated storage pools are not executable")
                 }
             },
             app: app)
@@ -699,7 +695,7 @@ struct VolumeController: RouteCollection {
         // Pool-aware reachability guard: the VM's agent must be able to reach
         // the volume's data. For a `local` pool that means the agent holding
         // the volume's single replica — identical to the old same-hypervisor
-        // check; for a `replicated` pool, any member agent.
+        // check; Ceph pools require a healthy client in the same site.
         //
         // Enforced synchronously, at accept time, rather than left for the
         // reconciler to discover: a `400` now is a far better answer than a

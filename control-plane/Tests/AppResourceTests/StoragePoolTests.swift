@@ -72,21 +72,13 @@ struct StoragePoolTests {
         #expect(!StoragePool.agentCanReach(agent: other, pool: nil, replicaAgentIds: [holderID], at: instant))
     }
 
-    @Test("replicated pools remain fail closed")
-    func replicatedPoolIsUnreachable() {
-        let agent = makeAgent()
-        #expect(
-            !StoragePool.agentCanReach(
-                agent: agent, pool: makePool(mode: .replicated),
-                replicaAgentIds: [agent.id!.uuidString], at: .testing(Date())))
-    }
-
     @Test("Ceph requires same site and a fresh healthy client capability")
     func cephReachability() {
         let now = Date()
         let instant = ClusterInstant.testing(now)
         let siteID = UUID()
         let pool = makePool(mode: .ceph, siteID: siteID)
+        pool.memberAgentIds = ["unrelated-local-member"]
         let eligible = makeAgent(siteID: siteID, cephState: .healthy, receivedAt: now)
         let wrongSite = makeAgent(siteID: UUID(), cephState: .healthy, receivedAt: now)
         let missing = makeAgent(siteID: siteID)
@@ -108,7 +100,6 @@ struct StoragePoolTests {
             let pool = try await StoragePool.defaultPool(on: app.db)
             #expect(pool.name == StoragePool.defaultPoolName)
             #expect(pool.mode == .local)
-            #expect(pool.replicationFactor == 1)
             #expect(pool.memberAgentIds.isEmpty)
             #expect(pool.backing == .filesystem)
             #expect(pool.$site.id == nil)

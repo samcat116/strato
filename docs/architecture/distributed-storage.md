@@ -111,22 +111,16 @@ not a per-volume one.
 Three fields on `StoragePool` were shaped by the DRBD design and need
 explicit dispositions, or phase-2 implementers will each guess differently:
 
-- **`mode: replicated` is removed.** Nothing ever implemented it, and its
-  `agentCanReach` branch ("any member agent reaches it") is true for Ceph
-  and false for anything that exists — a selectable mode that silently
-  misbehaves. Removal is not free: `mode` is a Fluent `@Enum` column, so it
-  needs an `updateEnum().deleteCase("replicated")` migration and a check
-  that no row carries it.
-- **`backing: zfs` is removed** for the same reason and by the same
-  argument — it exists solely to describe "ZFS datasets (replicated
-  pools)". `filesystem` is the only backing a `local` pool has; a Ceph pool
-  does not use the field at all.
-- **`replicationFactor` is not authoritative for Ceph.** Durability is a
-  property of the Ceph pool (`ceph osd pool get <pool> size`), set on the
-  cluster, and mirroring it into `StoragePool` would create a second copy
-  that drifts. Read it as *observed* onto `CephCluster`; on `StoragePool`
-  it survives only as the `local`-pool constant 1, and should be removed
-  along with `replicated` if nothing else reads it.
+- **`mode: replicated` and `backing: zfs` are removed.** Neither had an
+  executable backend. The current PostgreSQL baseline stores both as text
+  with CHECK constraints, despite the model's Fluent `@Enum` wrappers.
+  `RemoveReservedStoragePoolConfiguration` tightens those constraints and
+  refuses unsupported stored values under a table lock before changing the
+  schema. It never reinterprets an unsupported pool as local storage.
+  `filesystem` remains the only backing value; Ceph does not use this field.
+- **`replicationFactor` is removed.** Durability belongs to the external
+  Ceph pool (`ceph osd pool get <pool> size`), not a second desired setting
+  in Strato. Local pools continue to have one host-local copy per volume.
 - **`memberAgentIds` stays, but does not gate Ceph pools.** For a `local`
   pool it is the eligibility list (empty = unrestricted). For a Ceph pool,
   `siteId` plus the Ceph-client capability decides, and `memberAgentIds` is

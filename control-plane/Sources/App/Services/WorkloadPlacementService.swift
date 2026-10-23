@@ -128,8 +128,6 @@ actor WorkloadPlacementService {
                             ? agent.id?.uuidString : nil
                     })
                 storageEligibleAgents = schedulableAgents.filter { reachableIDs.contains($0.id) }
-            case .replicated:
-                throw Abort(.conflict, reason: "Replicated boot pools are not executable")
             }
 
             // Reserve from an unlocked snapshot; every requirement is checked
@@ -255,8 +253,6 @@ actor WorkloadPlacementService {
                 case .ceph:
                     bootVolume.reconcilerAgentId = selectedAgentId
                     try await bootVolume.save(on: tx)
-                case .replicated:
-                    throw Abort(.conflict, reason: "Replicated boot pools are not executable")
                 }
                 if let attemptDeadline {
                     guard attemptDeadline > (try await ClusterClock.read(on: tx)).date else {

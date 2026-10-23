@@ -7,14 +7,14 @@ import Vapor
 public enum VolumeReplicaState: String, Codable, CaseIterable, Sendable {
     case provisioning = "provisioning"  // dataset being created on the agent
     case healthy = "healthy"  // in sync and serving
-    case degraded = "degraded"  // serving but missing peers (replicated pools)
+    case degraded = "degraded"  // degraded host-local copy
     case resyncing = "resyncing"  // catching up from healthy peers
     case faulted = "faulted"  // unusable; a replacement should be placed
 }
 
 /// One physical copy ("region") of a volume on one agent. A `local`-pool
-/// volume has exactly one replica. The reserved `replicated` pool mode is not
-/// executable until a storage backend can keep copies coherent. The logical
+/// volume has exactly one replica; Ceph volumes use shared RBD data instead
+/// of host-local replica rows. The logical
 /// volume (size, format, desired VM attachment) stays on `Volume`; each replica
 /// records where its bytes live and the health of that copy.
 /// Safety: this mutable Fluent model stays inside one logical operation; child tasks

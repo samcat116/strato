@@ -779,8 +779,8 @@ struct AgentController: RouteCollection {
     ///
     /// `volume_replicas` is unique on `(volume_id, agent_id)`, so a straight
     /// update collides when the target already has a replica of this volume —
-    /// possible on a replicated pool. There the source row is redundant rather
-    /// than movable: drop it and keep the target's own record of the copy.
+    /// possible in historical duplicate ownership data. The source row is then
+    /// redundant: drop it and keep the target's own record of the copy.
     private static func repointReplicas(
         volumeID: UUID, from sourceId: String, to targetId: String, on db: Database
     ) async throws {
