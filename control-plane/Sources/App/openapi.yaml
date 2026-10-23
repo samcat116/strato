@@ -17103,7 +17103,7 @@ components:
     StoragePoolMode:
       type: string
       description: How a storage pool makes volume data available to agents.
-      enum: [local, replicated, ceph]
+      enum: [local, ceph]
 
     SiteDetail:
       type: object

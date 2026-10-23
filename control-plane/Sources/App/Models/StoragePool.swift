@@ -5,14 +5,12 @@ import Vapor
 /// How a pool stores volume data across its member agents.
 public enum StoragePoolMode: String, Codable, CaseIterable, Sendable {
     case local = "local"  // single replica on one agent (today's FileSystemStorageBackend)
-    case replicated = "replicated"  // N replicas on N distinct member agents
     case ceph = "ceph"  // shared RBD images in an external site cluster
 }
 
 /// The on-disk backend the pool's agents use for volume data.
 public enum StoragePoolBacking: String, Codable, CaseIterable, Sendable {
     case filesystem = "filesystem"  // plain files + qemu-img
-    case zfs = "zfs"  // ZFS datasets (replicated pools)
 }
 
 /// A storage pool selects the storage ownership model for a volume. Local
@@ -37,9 +35,6 @@ final class StoragePool: Model, @unchecked Sendable {
     @Enum(key: "mode")
     var mode: StoragePoolMode
 
-    @Field(key: "replication_factor")
-    var replicationFactor: Int
-
     /// Agent IDs eligible to hold this pool's replicas. Empty means
     /// unrestricted — any agent that can serve the pool's backing qualifies.
     @Field(key: "member_agent_ids")
@@ -49,7 +44,7 @@ final class StoragePool: Model, @unchecked Sendable {
     var backing: StoragePoolBacking
 
     /// Ceph pools are project-scoped through their access row. These fields are
-    /// all set for `.ceph` and all nil for host-local/reserved replicated pools.
+    /// all set for `.ceph` and all nil for host-local pools.
     @OptionalParent(key: "site_id")
     var site: Site?
 
@@ -77,7 +72,6 @@ final class StoragePool: Model, @unchecked Sendable {
         id: UUID? = nil,
         name: String,
         mode: StoragePoolMode,
-        replicationFactor: Int = 1,
         memberAgentIds: [String] = [],
         backing: StoragePoolBacking,
         siteID: UUID? = nil,
@@ -89,7 +83,6 @@ final class StoragePool: Model, @unchecked Sendable {
         self.id = id
         self.name = name
         self.mode = mode
-        self.replicationFactor = replicationFactor
         self.memberAgentIds = memberAgentIds
         self.backing = backing
         self.$site.id = siteID
@@ -133,12 +126,6 @@ extension StoragePool {
             pool = try await defaultPool(on: db)
         }
         switch pool.mode {
-        case .replicated:
-            throw Abort(
-                .conflict,
-                reason:
-                    "Storage pool '\(pool.name)' uses replicated mode, which is not supported by the host-local storage backend"
-            )
         case .ceph:
             guard let accessID = pool.$cephProjectAccess.id,
                 let access = try await CephProjectAccess.find(accessID, on: db),
@@ -159,9 +146,6 @@ extension StoragePool {
     ///   replicas, so the agent must be one of them. A volume with no replicas
     ///   yet (never provisioned) is reachable from anywhere, matching the old
     ///   guard's "no hypervisor recorded" case.
-    /// - `replicated`: fail closed. The schema value was reserved for a DRBD
-    ///   design that was never implemented; independent filesystem copies are
-    ///   not a coherent shared volume.
     /// - `ceph`: the agent must be online in the same site and carry a fresh,
     ///   healthy Ceph-client dependency observation.
     ///
@@ -174,8 +158,6 @@ extension StoragePool {
         at instant: ClusterInstant
     ) -> Bool {
         switch pool?.mode {
-        case .replicated:
-            return false
         case .ceph:
             guard let pool,
                 pool.$site.id != nil,

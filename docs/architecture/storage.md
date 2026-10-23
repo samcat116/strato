@@ -878,19 +878,25 @@ every transition so they cannot disagree (STR-129):
 
 ### Pools and replicas (data model)
 
-Placement is expressed through the phase-1 data model from
-[`distributed-storage.md`](./distributed-storage.md): every `Volume` belongs
-to a `StoragePool` (mode `local`/`replicated`, backing
-`filesystem`/`zfs`, member agents, replication factor), and each physical
-copy of a volume is a `VolumeReplica` row (agent, agent-owned disk attachment,
-health state, reconciliation generation). Today the only pool is the
-migration-seeded `default` local pool — one replica per volume, `filesystem`
-backing, any QEMU-capable agent eligible — which reproduces the host-local
-behavior above exactly. While attached, `Volume.attachedAgentId` records the
-agent the attachment runs on. The legacy `hypervisor_id`/`storage_path`
-columns are dual-written alongside the replica row until nothing reads them.
-The replica row is written from the *observed* report — it records placement an
-agent has confirmed — rather than from a dispatch that awaited a response.
+Every `Volume` belongs to a `StoragePool` with mode `local` or `ceph`.
+Local pools use `filesystem` backing and a `memberAgentIds` eligibility list:
+an empty list allows any otherwise eligible agent. The migration-seeded
+`default` local pool is unrestricted. Each host-local copy has a
+`VolumeReplica` row recording its agent, disk attachment, health, and
+reconciliation generation. While attached, `Volume.attachedAgentId` records
+the agent running the attachment.
+
+Ceph pools use their site and fresh Ceph-client health to select eligible
+agents; local member lists do not restrict them. RBD data is shared, so Ceph
+volumes have a control-plane execution owner rather than host-local replica
+rows. Durability belongs to the external Ceph pool, not a Strato replication
+factor.
+
+The abandoned `replicated` mode, `zfs` backing, and replication factor field
+are removed by a forward migration. It locks the pool table and refuses to
+upgrade if an existing row uses an unsupported mode or backing. Operators
+must resolve those rows explicitly; the migration never converts them to
+local pools or makes their data eligible for placement.
 
 ## Future work
 

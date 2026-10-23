@@ -9486,7 +9486,7 @@ export interface components {
          * @description How a storage pool makes volume data available to agents.
          * @enum {string}
          */
-        StoragePoolMode: "local" | "replicated" | "ceph";
+        StoragePoolMode: "local" | "ceph";
         /** @description An availability zone: the agents that share one OVN deployment, so a logical network pinned to the site can span its nodes. */
         SiteDetail: {
             resourceClasses?: components["schemas"]["WorkloadResourceClassSnapshot"][];

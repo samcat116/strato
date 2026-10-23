@@ -58,7 +58,6 @@ export function CreateVolumeDialog({
       (poolsQuery.data ?? []).filter(
         (pool) =>
           pool.id &&
-          pool.mode !== "replicated" &&
           !(pool.mode === "local" && pool.name === "default")
       ),
     [poolsQuery.data]
