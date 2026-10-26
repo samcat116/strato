@@ -1,0 +1,31 @@
+.dagger/modules/strato-ci/dagger-module.toml
+  s_f0291837988dbd::t_9c6f9c7b14fb3f 1-5
+.dagger/modules/strato-ci/main.dang
+  s_f0291837988dbd::t_fe69071e0d7908 1-136
+.github/workflows/README.md
+  s_f0291837988dbd::t_64d8dd846dfa8e 34-41
+dagger.lock
+  s_f0291837988dbd::t_72e6e5f4e4126b 1-8
+dagger.toml
+  s_f0291837988dbd::t_be556b9acd249e 1-2
+docs/development/dagger-ci.md
+  s_f0291837988dbd::t_101e1345ffe466 1-120
+docs/development/local-development.md
+  s_f0291837988dbd::t_735d217a8de0e8 38-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a235bf9eeec3774af04af5392f07e13336cae9a",
+  "prompts": {},
+  "sessions": {
+    "s_f0291837988dbd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a169bc-10c9-7533-8733-e05e64ecefac",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
