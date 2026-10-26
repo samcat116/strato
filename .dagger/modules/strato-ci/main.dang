@@ -60,8 +60,9 @@ type StratoCi {
   pub openapi(ws: Workspace!): Void @check {
     container.from("redocly/cli:1.34.5")
       .withWorkdir("/work")
+      .withFile("redocly.yaml", ws.file("/redocly.yaml"))
       .withFile("openapi.yaml", ws.file("/control-plane/Sources/App/openapi.yaml"))
-      .withExec(["redocly", "lint", "openapi.yaml"])
+      .withExec(["redocly", "lint", "--config", "redocly.yaml", "openapi.yaml"])
       .sync
     null
   }

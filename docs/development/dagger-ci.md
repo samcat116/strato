@@ -94,27 +94,13 @@ Cloud execution needs an active Dagger Cloud organization and plan. Inspect
 `dagger cloud usage` and `dagger cloud billing` to manage usage and any trial.
 Enabling the integration does not itself commit or push the local config.
 
-## Feedback, compute, and agents
+## Check inputs and caches
 
-Independent checks can run concurrently. Dependencies install before source is
-copied, so editing application code can reuse package installation. Each check
-reads selected workspace paths; docs changes do not become Swift build inputs,
-and frontend changes do not become backend build inputs. Swift scratch caches
-use locked mounts to prevent concurrent builds from writing the same tree.
-
-On a cache hit, Dagger reuses a successful operation instead of allocating
-compute to repeat it. Cloud Engines can move work off a developer's machine
-and share a cache among users of the same organization. Cache reuse depends
-on matching inputs, platform, and engine/cache availability: a local ARM64
-result does not promise a hit on a cold AMD64 cloud engine.
-
-For coding agents, give a narrow command such as
-`dagger check --check web-test`. The stable environment and check names reduce
-repeated setup work and speculative debugging. Inspect the failing check or
-its trace instead of repeatedly feeding a full build log into an LLM. The
-module invokes no LLM and consumes no model tokens by itself; token savings
-come from how the agent uses the feedback, not from an automatic reduction in
-model pricing or context size.
+Each check reads selected workspace paths; docs changes do not become Swift
+build inputs, and frontend changes do not become backend build inputs.
+Dependencies install before application source is copied so source changes can
+reuse package installation. Swift scratch caches use locked mounts to prevent
+concurrent builds from writing the same tree.
 
 See the official [checking guide](https://docs.dagger.io/using/checking/) and
 [Cloud Checks setup](https://docs.dagger.io/cloud-checks/).
