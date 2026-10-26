@@ -1,0 +1,21 @@
+.dagger/modules/strato-ci/main.dang
+  s_1d8b3fa14509c1::t_1aab50dbda7f5d 63,65
+docs/development/dagger-ci.md
+  s_1d8b3fa14509c1::t_1aab50dbda7f5d 97-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac1ceedd3d9c2f45c8ba98704c40ded1b6cbe556",
+  "prompts": {},
+  "sessions": {
+    "s_1d8b3fa14509c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17961-fd6b-7553-b9dd-a2df88300326",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
