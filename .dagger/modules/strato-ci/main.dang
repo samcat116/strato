@@ -1,0 +1,136 @@
+"""
+Strato's portable checks. Each check runs independently with narrowly scoped inputs.
+"""
+type StratoCi {
+  """Frontend environment for reproducing CI failures interactively."""
+  pub webEnvironment(ws: Workspace!): Container! {
+    webBase(ws)
+  }
+
+  let webBase(ws: Workspace!): Container! {
+    container
+      .from("oven/bun:1.4.4-debian")
+      .withFile("/usr/local/bin/node", container.from("node:22.16.0-bookworm").file("/usr/local/bin/node"))
+      .withWorkdir("/work/control-plane/web")
+      .withMountedCache("/root/.bun/install/cache", cacheVolume("bun-downloads"))
+      .withDirectory(".", ws.directory("/control-plane/web", include: ["package.json", "bun.lock"]))
+      .withExec(["bun", "install", "--frozen-lockfile"])
+      .withDirectory(".", ws.directory("/control-plane/web", exclude: ["node_modules", ".next", "playwright-report", "test-results", "*.tsbuildinfo", "AGENTS.md", "CLAUDE.md", ".env", ".env.*"]))
+      .withEnvVariable("CI", "true")
+      .withEnvVariable("NEXT_TELEMETRY_DISABLED", "1")
+  }
+
+  """ESLint for the frontend."""
+  pub webLint(ws: Workspace!): Void @check {
+    webBase(ws).withExec(["bun", "run", "lint"]).sync
+    null
+  }
+
+  """Frontend unit and component tests."""
+  pub webTest(ws: Workspace!): Void @check {
+    webBase(ws).withExec(["bun", "run", "test"]).sync
+    null
+  }
+
+  """Next.js production build, including TypeScript checking."""
+  pub webBuild(ws: Workspace!): Void @check {
+    webBase(ws).withExec(["bun", "run", "build"]).sync
+    null
+  }
+
+  """Chromium smoke tests against the checked-in mock backend."""
+  pub webBrowser(ws: Workspace!): Void @check {
+    webBase(ws)
+      .withExec(["bunx", "playwright", "install", "--with-deps", "chromium"])
+      .withExec(["bun", "run", "test:e2e"])
+      .sync
+    null
+  }
+
+  """Regenerated OpenAPI TypeScript must match the checked-in file."""
+  pub apiTypes(ws: Workspace!): Void @check {
+    webBase(ws)
+      .withFile("/work/control-plane/Sources/App/openapi.yaml", ws.file("/control-plane/Sources/App/openapi.yaml"))
+      .withExec(["sh", "-ec", "cp src/types/openapi.ts /tmp/openapi.before; bun run generate:api-types; diff -u /tmp/openapi.before src/types/openapi.ts"])
+      .sync
+    null
+  }
+
+  """Redocly OpenAPI validation, matching the PR gate."""
+  pub openapi(ws: Workspace!): Void @check {
+    container.from("redocly/cli:1.34.5")
+      .withWorkdir("/work")
+      .withFile("openapi.yaml", ws.file("/control-plane/Sources/App/openapi.yaml"))
+      .withExec(["redocly", "lint", "openapi.yaml"])
+      .sync
+    null
+  }
+
+  """Build VitePress and check its internal page links."""
+  pub docs(ws: Workspace!): Void @check {
+    container.from("node:22.16.0-bookworm")
+      .withWorkdir("/work")
+      .withMountedCache("/root/.npm", cacheVolume("npm-downloads"))
+      .withDirectory(".", ws.directory("/", include: ["package.json", "package-lock.json"]))
+      .withExec(["npm", "ci"])
+      .withDirectory("docs", ws.directory("/docs", exclude: [".vitepress/cache", ".vitepress/dist"]))
+      .withExec(["npm", "run", "docs:build"])
+      .sync
+    null
+  }
+
+  let swiftBase: Container! {
+    container.from("swift:6.4.0-noble")
+      .withExec(["sh", "-ec", "apt-get update && apt-get install -y --no-install-recommends libjemalloc-dev libxml2-dev liblzma-dev zlib1g-dev pkg-config automake libtool qemu-utils"])
+      .withExec(["sh", "-ec", "git config --global http.version HTTP/1.1; git config --global http.lowSpeedLimit 1024; git config --global http.lowSpeedTime 60"])
+      .withWorkdir("/work")
+  }
+
+  let swiftEnv(ws: Workspace!, package: String!): Container! {
+    swiftBase
+      .withDirectory(".", ws.directory("/", include: [package + "/**", "shared/**", "SwiftFirecracker/**", "clients/swift/**", "control-plane/Sources/App/openapi.yaml"], exclude: ["**/.build", "**/.swiftpm", "**/node_modules", "control-plane/web", "**/.env", "**/.env.*"]))
+      .withWorkdir("/work/" + package)
+      .withMountedCache(".build", cacheVolume("swift-6.4-" + package), sharing: CacheSharingMode.LOCKED)
+  }
+
+  """Compile the Linux agent and its path dependencies."""
+  pub agentBuild(ws: Workspace!): Void @check {
+    swiftEnv(ws, "agent").withExec(["swift", "build", "-j", "4", "--force-resolved-versions"]).sync
+    null
+  }
+
+  """Compile the Linux CLI."""
+  pub cliBuild(ws: Workspace!): Void @check {
+    swiftEnv(ws, "cli").withExec(["swift", "build", "-j", "4", "--force-resolved-versions"]).sync
+    null
+  }
+
+  """Compile the generated Swift API client."""
+  pub clientBuild(ws: Workspace!): Void @check {
+    swiftEnv(ws, "clients/swift").withExec(["swift", "build", "-j", "4", "--force-resolved-versions"]).sync
+    null
+  }
+
+  """Compile the Linux control plane; this does not run its database tests."""
+  pub controlPlaneBuild(ws: Workspace!): Void @check {
+    swiftEnv(ws, "control-plane").withExec(["swift", "build", "-j", "4", "--force-resolved-versions"]).sync
+    null
+  }
+
+  """Strict Swift formatting over the same source and test folders as PR CI."""
+  pub swiftFormat(ws: Workspace!): Void @check {
+    swiftBase
+      .withDirectory(".", ws.directory("/", include: [".swift-format", "control-plane/Sources/**", "control-plane/Tests/**", "agent/Sources/**", "agent/Tests/**", "shared/Sources/**", "shared/Tests/**", "cli/Sources/**", "cli/Tests/**", "clients/swift/Sources/**", "clients/swift/Tests/**"]))
+      .withExec(["swift", "format", "lint", "--strict", "--recursive", "--parallel", "control-plane/Sources", "control-plane/Tests", "agent/Sources", "agent/Tests", "shared/Sources", "shared/Tests", "cli/Sources", "cli/Tests", "clients/swift/Sources", "clients/swift/Tests"])
+      .sync
+    null
+  }
+
+  """Opt-in Swift package tests. Use a package path such as shared, agent or cli."""
+  pub swiftTest(ws: Workspace!, package: String!): Container! {
+    if (package == "control-plane") {
+      raise "Use the manual Full Test Suite workflow for control-plane tests with PostgreSQL and cvc5."
+    }
+    swiftEnv(ws, package).withExec(["swift", "test", "-j", "4", "--force-resolved-versions"])
+  }
+}

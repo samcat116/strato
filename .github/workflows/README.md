@@ -31,6 +31,14 @@ VM guest agent (`sandbox-guest.yaml`, on `sandbox-guest/**`).
 
 ## Workflows
 
+### Dagger Cloud Checks
+
+`dagger.toml` installs the portable checks in `.dagger/modules/strato-ci/`.
+Run `dagger check` locally; native Dagger Cloud Checks can run the same checks
+after pushes and pull requests without an Actions wrapper. See
+[Dagger CI](../../docs/development/dagger-ci.md) for setup, filtering, caching,
+coverage, and the boundary with the existing Actions workflows below.
+
 ### PR Validation (`build.yaml`)
 Runs on pull requests. Compile and lint only — no tests:
 - Swift format lint, OpenAPI spec lint, frontend lint & build (GitHub-hosted)
