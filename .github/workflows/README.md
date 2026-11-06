@@ -33,10 +33,11 @@ VM guest agent (`sandbox-guest.yaml`, on `sandbox-guest/**`).
 
 Dependabot is configured in [`.github/dependabot.yaml`](../dependabot.yaml).
 The web app at `control-plane/web` uses the `bun` ecosystem for its text
-`bun.lock`; the root documentation project still uses npm and `package-lock.json`.
-Keep Dependabot security updates enabled in the repository settings. The Bun
-entry enables weekly version updates and configures security updates for the web
-app without excluding dependencies or suppressing security PRs.
+`bun.lock`; the root documentation project uses `npm` for `package-lock.json`.
+Both JavaScript entries set `open-pull-requests-limit: 0` to preserve security-only
+updates. That limit disables routine version PRs, not security PRs. Keep
+Dependabot security updates enabled in the repository settings. Review assignment
+uses the existing CODEOWNERS file; the retired `reviewers` option is removed.
 
 The Swift entry covers all six packages. Dependabot's hosted updater chooses its
 own Swift toolchain independently of our CI runners; there is no toolchain pin in

@@ -19,16 +19,15 @@ updates:
       - "swift"
     assignees:
       - "samcat116"
-  # The web app uses Bun's text lockfile; npm cannot update bun.lock.
+  # Explicit ecosystems route security updates to the matching lockfile updater.
+  # A zero version-update limit keeps JavaScript updates security-only.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
   - package-ecosystem: "bun"
     directory: "/control-plane/web"
     schedule:
       interval: "weekly"
-    commit-message:
-      prefix: "deps"
-      include: "scope"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-    assignees:
-      - "samcat116"
+    open-pull-requests-limit: 0
