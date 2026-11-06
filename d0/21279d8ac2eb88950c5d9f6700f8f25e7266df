@@ -1,0 +1,16 @@
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  h_a84d4ff76cadd1 507-523,525-530,542-543,586-601
+control-plane/Tests/AppNetworkTests/LoadBalancerObservationTests.swift
+  h_a84d4ff76cadd1 47-52,119-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d021279d8ac2eb88950c5d9f6700f8f25e7266df",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
