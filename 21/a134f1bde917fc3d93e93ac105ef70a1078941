@@ -1,0 +1,28 @@
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  h_a84d4ff76cadd1 209,230,250,276,300,430,436-437
+control-plane/Sources/App/Models/LoadBalancer.swift
+  h_a84d4ff76cadd1 127-138
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  h_a84d4ff76cadd1 3,225,487,489-506,509-527,549,556-564,570-584
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  h_a84d4ff76cadd1 680-686
+control-plane/Tests/AppNetworkTests/LoadBalancerControllerTests.swift
+  h_a84d4ff76cadd1 172-236
+control-plane/Tests/AppNetworkTests/LoadBalancerObservationTests.swift
+  h_a84d4ff76cadd1 1-322
+docs/architecture/networking.md
+  h_a84d4ff76cadd1 78-90
+docs/deployment/observability.md
+  h_a84d4ff76cadd1 237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "21a134f1bde917fc3d93e93ac105ef70a1078941",
+  "prompts": {},
+  "humans": {
+    "h_a84d4ff76cadd1": {
+      "author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
