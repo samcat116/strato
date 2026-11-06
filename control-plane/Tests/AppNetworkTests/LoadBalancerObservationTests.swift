@@ -44,6 +44,12 @@ struct LoadBalancerObservationTests {
                 name: "lb-network", subnet: "10.10.0.0/24", gateway: "10.10.0.1",
                 projectID: try project.requireID(), siteID: try site.requireID())
             try await network.save(on: app.db)
+            // Give the other controller a nonempty scope; a valid authority
+            // still cannot report or lock another site's load balancers.
+            try await LogicalNetwork(
+                name: "remote-network", subnet: "10.20.0.0/24", gateway: "10.20.0.1",
+                projectID: try project.requireID(), siteID: try remoteSite.requireID()
+            ).save(on: app.db)
             let loadBalancer = LoadBalancer(
                 name: "api", projectID: try project.requireID(), logicalNetworkID: try network.requireID(),
                 vip: "10.10.0.10", protocolName: .tcp)
@@ -107,6 +113,35 @@ struct LoadBalancerObservationTests {
             let backend = try #require(try await LoadBalancerBackend.find(fixture.backend.requireID(), on: app.db))
             #expect(backend.healthStatus == .unknown)
             #expect(backend.lastHealthCheckAt == nil)
+        }
+    }
+
+    @Test("Rejected reporters never wait for an unauthorized LB row lock", arguments: ["worker", "remote"])
+    func rejectsBeforeLocking(_ reporter: String) async throws {
+        try await withFixture { app, fixture in
+            let database = try #require(app.storage[TestDatabaseNameKey.self])
+            let lockHolder = try await Application.makeForTesting(database: database, owningDatabase: false)
+            do {
+                let id = try fixture.loadBalancer.requireID()
+                let report = try observation(fixture)
+                let agentID = try (reporter == "worker" ? fixture.worker : fixture.remoteController).requireID()
+                    .uuidString
+                try await lockHolder.db.transaction { db in
+                    _ = try await LoadBalancer.lockAndFetch(id, on: db)
+                    try await app.db.transaction { reportDB in
+                        let sql = try #require(reportDB as? any SQLDatabase)
+                        // A mistaken FOR UPDATE times out instead of hanging
+                        // the fixture behind its own deliberately held lock.
+                        try await sql.raw("SET LOCAL lock_timeout = '250ms'").run()
+                        try await ObservedStateApplier(app: app).applyObservedLoadBalancers(
+                            [report], reportedBy: agentID, on: reportDB)
+                    }
+                }
+            } catch {
+                try await lockHolder.shutdownForTesting()
+                throw error
+            }
+            try await lockHolder.shutdownForTesting()
         }
     }
 

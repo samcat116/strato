@@ -504,7 +504,30 @@ struct ObservedStateApplier {
             authority = nil
         }
 
+        guard let authority, !networkIDs.isEmpty else {
+            for observed in observations {
+                recordUnauthorizedLoadBalancerObservation(observed.id, reportedBy: agentId)
+            }
+            return
+        }
+        // Reject out-of-scope IDs without acquiring their row locks. Keep
+        // missing rows distinct: a recently deleted LB is ordinary stale
+        // inventory, not evidence of an unauthorized reporter.
+        let candidates = try await LoadBalancer.query(on: db)
+            .filter(\.$id ~~ observations.map(\.id))
+            .field(\.$id)
+            .field(\.$logicalNetwork.$id)
+            .all()
+        let candidateNetworks = try Dictionary(
+            uniqueKeysWithValues: candidates.map { (try $0.requireID(), $0.$logicalNetwork.id) })
+
         for observed in observations {
+            guard let networkID = candidateNetworks[observed.id] else { continue }
+            guard networkIDs.contains(networkID) else {
+                recordUnauthorizedLoadBalancerObservation(
+                    observed.id, logicalNetworkID: networkID, reportedBy: agentId)
+                continue
+            }
             try await db.transaction { tx in
                 guard let loadBalancer = try await LoadBalancer.lockAndFetch(observed.id, on: tx) else {
                     return
@@ -514,17 +537,10 @@ struct ObservedStateApplier {
                 // waits on the LB lock. Recheck its designation under a shared
                 // site lock and retain that lock until the writes commit.
                 guard networkIDs.contains(loadBalancer.$logicalNetwork.id),
-                    let authority,
                     try await retainsLoadBalancerAuthority(authority, on: tx)
                 else {
-                    app.logger.debug(
-                        "Ignoring a load-balancer observation outside the reporting agent's topology authority",
-                        metadata: [
-                            "resourceId": .string(observed.id.uuidString),
-                            "logicalNetworkId": .string(loadBalancer.$logicalNetwork.id.uuidString),
-                            "strato.agent.reporting.id": .string(agentId),
-                        ])
-                    Telemetry.recordUnauthorizedLoadBalancerObservation()
+                    recordUnauthorizedLoadBalancerObservation(
+                        observed.id, logicalNetworkID: loadBalancer.$logicalNetwork.id, reportedBy: agentId)
                     return
                 }
                 // A delayed report may describe a superseded desired row; it
@@ -565,6 +581,22 @@ struct ObservedStateApplier {
                 }
             }
         }
+    }
+
+    private func recordUnauthorizedLoadBalancerObservation(
+        _ id: UUID, logicalNetworkID: UUID? = nil, reportedBy agentId: String
+    ) {
+        var metadata: Logger.Metadata = [
+            "resourceId": .string(id.uuidString),
+            "strato.agent.reporting.id": .string(agentId),
+        ]
+        if let logicalNetworkID {
+            metadata["logicalNetworkId"] = .string(logicalNetworkID.uuidString)
+        }
+        app.logger.debug(
+            "Ignoring a load-balancer observation outside the reporting agent's topology authority",
+            metadata: metadata)
+        Telemetry.recordUnauthorizedLoadBalancerObservation()
     }
 
     private func retainsLoadBalancerAuthority(
