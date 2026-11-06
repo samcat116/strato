@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 import StratoShared
 import Vapor
 
@@ -221,7 +222,7 @@ struct ObservedStateApplier {
         // host can fail to enumerate its local VM store while its site's OVN
         // author still has a valid view of shared load-balancer rows.
         if let loadBalancers = report.loadBalancers {
-            try await applyObservedLoadBalancers(loadBalancers, on: db)
+            try await applyObservedLoadBalancers(loadBalancers, reportedBy: report.agentId, on: db)
         }
         if let networks = report.networks {
             try await applyObservedNetworks(
@@ -483,11 +484,47 @@ struct ObservedStateApplier {
     }
 
     func applyObservedLoadBalancers(
-        _ observations: [ObservedLoadBalancerState], on db: any Database
+        _ observations: [ObservedLoadBalancerState], reportedBy agentId: String, on db: any Database
     ) async throws {
+        guard !observations.isEmpty else { return }
+        // Use the same authority and network closure as desired-state assembly,
+        // once per report rather than querying every site's workloads per LB.
+        let networkIDs: Set<UUID>
+        let authority: (siteID: UUID, agentID: UUID)?
+        if let reporterID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(reporterID, on: db),
+            let site = try await Site.find(agent.$site.id, on: db)
+        {
+            let scope = try await DesiredStateAssembler(app: app).networkAssemblyScope(
+                agentId: agentId, agent: agent, site: site, ownVMs: [], ownSandboxes: [], on: db)
+            networkIDs = scope.networkIDs
+            authority = (agent.$site.id, reporterID)
+        } else {
+            networkIDs = []
+            authority = nil
+        }
+
         for observed in observations {
             try await db.transaction { tx in
-                guard let loadBalancer = try await LoadBalancer.find(observed.id, on: tx) else {
+                guard let loadBalancer = try await LoadBalancer.lockAndFetch(observed.id, on: tx) else {
+                    return
+                }
+                // The scope is a report-level candidate set, not a lease on
+                // authority. A controller can be demoted while this report
+                // waits on the LB lock. Recheck its designation under a shared
+                // site lock and retain that lock until the writes commit.
+                guard networkIDs.contains(loadBalancer.$logicalNetwork.id),
+                    let authority,
+                    try await retainsLoadBalancerAuthority(authority, on: tx)
+                else {
+                    app.logger.debug(
+                        "Ignoring a load-balancer observation outside the reporting agent's topology authority",
+                        metadata: [
+                            "resourceId": .string(observed.id.uuidString),
+                            "logicalNetworkId": .string(loadBalancer.$logicalNetwork.id.uuidString),
+                            "strato.agent.reporting.id": .string(agentId),
+                        ])
+                    Telemetry.recordUnauthorizedLoadBalancerObservation()
                     return
                 }
                 // A delayed report may describe a superseded desired row; it
@@ -509,24 +546,40 @@ struct ObservedStateApplier {
                 try await loadBalancer.save(on: tx)
 
                 for backendObservation in observed.backends {
-                    guard
-                        let backend = try await LoadBalancerBackend.query(on: tx)
-                            .filter(\.$id == backendObservation.id)
-                            .filter(\.$loadBalancer.$id == observed.id)
-                            .first()
-                    else { continue }
-                    backend.healthStatus =
+                    let health: LoadBalancerBackendHealth =
                         switch backendObservation.healthStatus {
                         case .unknown: .unknown
                         case .online: .online
                         case .offline: .offline
                         case .error: .error
                         }
-                    backend.lastHealthCheckAt = backendObservation.lastCheckedAt
-                    try await backend.save(on: tx)
+                    // Health reports own only these columns. Keep that
+                    // ownership explicit and scope the write to this LB;
+                    // missing or concurrently deleted backends stay absent.
+                    try await LoadBalancerBackend.query(on: tx)
+                        .filter(\.$id == backendObservation.id)
+                        .filter(\.$loadBalancer.$id == observed.id)
+                        .set(\.$healthStatus, to: health)
+                        .set(\.$lastHealthCheckAt, to: backendObservation.lastCheckedAt)
+                        .update()
                 }
             }
         }
+    }
+
+    private func retainsLoadBalancerAuthority(
+        _ authority: (siteID: UUID, agentID: UUID), on db: any Database
+    ) async throws -> Bool {
+        guard let sql = db as? any SQLDatabase else {
+            throw DesiredStateGenerationWriter.Error.unsupportedDatabase
+        }
+        return try await sql.raw(
+            """
+            SELECT id FROM sites
+            WHERE id = \(bind: authority.siteID) AND network_controller_agent_id = \(bind: authority.agentID)
+            FOR SHARE
+            """
+        ).first() != nil
     }
 
     func applyObservedNetworks(

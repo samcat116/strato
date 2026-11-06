@@ -1,5 +1,4 @@
 import Fluent
-import SQLKit
 import Vapor
 
 /// Project-scoped native OVN L4 load balancers (STR-28). The resource and its
@@ -207,9 +206,9 @@ struct LoadBalancerController: RouteCollection {
             loadBalancerID: loadBalancerID, port: request.port, backendPort: request.backendPort)
         do {
             try await DatabaseTransactionRetry.run(on: req.db) { db in
+                try await Self.markPendingAndBump(loadBalancerID, on: db)
                 DatabaseTransactionRetry.resetNewModel(listener)
                 try await listener.save(on: db)
-                try await Self.markPendingAndBump(loadBalancerID, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "Listener port \(request.port) already exists on this load balancer")
@@ -228,10 +227,10 @@ struct LoadBalancerController: RouteCollection {
         let listener = try await findListener(req, loadBalancerID: loadBalancerID)
         do {
             try await DatabaseTransactionRetry.run(on: req.db) { db in
+                try await Self.markPendingAndBump(loadBalancerID, on: db)
                 listener.port = request.port
                 listener.backendPort = request.backendPort
                 try await listener.save(on: db)
-                try await Self.markPendingAndBump(loadBalancerID, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "Listener port \(request.port) already exists on this load balancer")
@@ -247,8 +246,8 @@ struct LoadBalancerController: RouteCollection {
         let listener = try await findListener(req, loadBalancerID: loadBalancerID)
         let listenerID = try listener.requireID()
         try await DatabaseTransactionRetry.run(on: req.db) { db in
-            try await LoadBalancerListener.query(on: db).filter(\.$id == listenerID).delete()
             try await Self.markPendingAndBump(loadBalancerID, on: db)
+            try await LoadBalancerListener.query(on: db).filter(\.$id == listenerID).delete()
         }
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
@@ -274,9 +273,9 @@ struct LoadBalancerController: RouteCollection {
             address: target.address)
         do {
             try await DatabaseTransactionRetry.run(on: req.db) { db in
+                try await Self.markPendingAndBump(loadBalancerID, on: db)
                 DatabaseTransactionRetry.resetNewModel(backend)
                 try await backend.save(on: db)
-                try await Self.markPendingAndBump(loadBalancerID, on: db)
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "This backend is already attached to the load balancer")
@@ -297,8 +296,8 @@ struct LoadBalancerController: RouteCollection {
                 .first()
         else { throw Abort(.notFound, reason: "Backend not found on this load balancer") }
         try await DatabaseTransactionRetry.run(on: req.db) { db in
-            try await LoadBalancerBackend.query(on: db).filter(\.$id == backendID).delete()
             try await Self.markPendingAndBump(loadBalancerID, on: db)
+            try await LoadBalancerBackend.query(on: db).filter(\.$id == backendID).delete()
         }
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
@@ -428,16 +427,14 @@ struct LoadBalancerController: RouteCollection {
     }
 
     private static func locked(_ id: UUID, on db: Database) async throws -> LoadBalancer {
-        guard let sql = db as? any SQLDatabase else {
-            throw Abort(.internalServerError, reason: "Load balancer updates require an SQL database")
-        }
-        _ = try await sql.raw("SELECT id FROM load_balancers WHERE id = \(bind: id) FOR UPDATE").all()
-        guard let row = try await LoadBalancer.find(id, on: db) else {
+        guard let row = try await LoadBalancer.lockAndFetch(id, on: db) else {
             throw Abort(.notFound, reason: "Load balancer no longer exists")
         }
         return row
     }
 
+    // Take the parent lock before touching listeners/backends. Observations
+    // use the same parent-then-backend order, avoiding delete/report deadlocks.
     private static func markPendingAndBump(_ id: UUID, on db: Database) async throws {
         let row = try await locked(id, on: db)
         row.observedState = .pending
