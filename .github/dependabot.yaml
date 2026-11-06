@@ -17,7 +17,18 @@ updates:
     labels:
       - "dependencies"
       - "swift"
-    reviewers:
+    assignees:
       - "samcat116"
+  # The web app uses Bun's text lockfile; npm cannot update bun.lock.
+  - package-ecosystem: "bun"
+    directory: "/control-plane/web"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
     assignees:
       - "samcat116"
