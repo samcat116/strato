@@ -35,6 +35,9 @@ Platform notes for running VMs:
 
 ## Build and test
 
+For repeatable containerized checks and automatic Dagger Cloud runs, see
+[Dagger CI](./dagger-ci.md).
+
 The Swift packages build and test separately. The agent, shared, and cli
 suites need no running services. The control-plane suite runs against
 PostgreSQL — the engine production uses — and expects one reachable via the
