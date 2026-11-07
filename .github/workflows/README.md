@@ -31,13 +31,15 @@ VM guest agent (`sandbox-guest.yaml`, on `sandbox-guest/**`).
 
 ## Workflows
 
-### Dagger Cloud Checks
+### Local Dagger Checks
 
 `dagger.toml` installs the portable checks in `.dagger/modules/strato-ci/`.
-Run `dagger check` locally; native Dagger Cloud Checks can run the same checks
-after pushes and pull requests without an Actions wrapper. See
-[Dagger CI](../../docs/development/dagger-ci.md) for setup, filtering, caching,
-coverage, and the boundary with the existing Actions workflows below.
+Run `dagger check` locally with Docker; no Dagger Cloud account is required.
+Dagger Cloud runs the same checks for Entire Trails and reports them as Entire
+Gates. See [Dagger CI](../../docs/development/dagger-ci.md) for local engine
+setup, filtering, caching, coverage, the Cloud connection, and the boundary with
+the existing Actions workflows below. GitHub pull request checks remain in
+GitHub Actions.
 
 ### PR Validation (`build.yaml`)
 Runs on pull requests. Compile and lint only — no tests:

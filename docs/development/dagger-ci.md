@@ -1,16 +1,18 @@
 # Dagger CI
 
-Strato's Dagger module is `.dagger/modules/strato-ci/main.dang`. It runs the
-same containerized checks locally and through Dagger Cloud Checks. Use Dagger
-**1.0.0-beta.21**, matching `dagger-module.toml`, and a running Docker engine
-for local execution. This integration uses the beta's native Cloud Checks;
-older Dagger releases do not support this workflow.
+Strato's Dagger module is `.dagger/modules/strato-ci/main.dang`. It runs
+containerized checks locally with Docker and a local cache, and the same checks
+run on Dagger Cloud for Entire Trails (see [Dagger Cloud and Entire](#dagger-cloud-and-entire)).
+Use Dagger **1.0.0-beta.21**, matching `dagger-module.toml`. Local runs need no
+Dagger Cloud account.
 
 ## Run checks
 
-From the repository root:
+Start Docker, then select the local engine from the repository root. This
+explicit selection overrides any inherited remote engine setting:
 
 ```bash
+export DAGGER_ENGINE=image://registry.dagger.io/engine:v1.0.0-beta.21
 dagger check -l                         # list available checks
 dagger check                            # run every check
 dagger check --check web-test            # frontend unit/component tests
@@ -50,10 +52,13 @@ affected operations. Images and external module references are pinned in
 Swift tests remain opt-in, following the repository's existing CI policy:
 
 ```bash
-dagger api call strato-ci swift-test --package shared sync
-dagger api call strato-ci swift-test --package agent sync
-dagger api call strato-ci swift-test --package cli sync
+dagger api call strato-ci swift-test --package shared stdout
+dagger api call strato-ci swift-test --package agent stdout
+dagger api call strato-ci swift-test --package cli stdout
 ```
+
+The test environment includes Python and the guest-agent bootstrap fixture
+used by the shared suite.
 
 Use the existing **Full Test Suite (manual)** GitHub workflow for the complete
 Swift suite, including control-plane tests with disposable PostgreSQL and cvc5.
@@ -61,38 +66,50 @@ The Dagger browser check does not exercise real passkeys, an actual control
 plane, or guest VMs. Containers running on macOS are Linux checks; macOS package
 resolution and native Apple Virtualization validation remain separate.
 
-The existing GitHub Actions workflows still handle releases, deployment, Helm,
-Rust guests, shell/artifact checks, and macOS validation. Their overlapping PR
-checks also remain enabled. Migrating those required checks to Cloud Checks is
-a separate change: verify GitHub branch protection before removing old jobs.
-Until then, overlapping Actions and Cloud checks can execute twice on a cold
-change; Dagger's cache does not eliminate that duplication across systems.
+The existing GitHub Actions workflows still handle automatic PR checks,
+releases, deployment, Helm, Rust guests, shell/artifact checks, and macOS
+validation. Dagger Cloud runs the checks for Entire Trails only; GitHub pull
+requests are still gated by Actions.
 
-## Automatic Cloud Checks
+## Dagger Cloud and Entire
 
-After signing in and granting the Dagger GitHub integration access to
-`samcat116/strato`:
+The repository is connected to the `sam-personal` Dagger Cloud organization
+through Entire's Dagger plugin. Pushing a Trail or merging to `main` runs
+`dagger check` on Dagger Cloud, and the results appear as Entire **Gates** on
+the Trail. Gate settings in Entire decide which checks must pass before a Trail
+can merge.
+
+The connection is configured in the web UIs, not in this repository:
+
+1. On entire.com, open the project's **Plugins**, install **Dagger**, and grant
+   it access to `samcat116/strato` on the Dagger integrations page.
+2. On Dagger's **Sources** page, enable the plugin for the Entire repository and
+   turn on **Head** and **Trails** checks.
+
+`dagger cloud integration list` lists only GitHub integrations, so it does not
+show the Entire connection. Look for runs on the Dagger dashboard and Gates on
+the Trail instead.
+
+### Local traces
+
+Log in to upload traces from local runs:
 
 ```bash
-dagger cloud checks on
-dagger cloud checks status
+dagger cloud login
+dagger cloud org use sam-personal   # if you belong to more than one org
 ```
 
-Commit `dagger.toml`, `dagger.lock`, and `.dagger/modules/strato-ci/`, then push
-your branch. Dagger Cloud receives the GitHub event and runs `dagger check` on
-managed Cloud Engines. No additional Actions workflow or repository secret is
-needed. Inspect the run with:
+Each run then prints a `cloud url=https://dagger.cloud/...` trace link.
+`DAGGER_NO_NAG=1` hides that link along with the signup prompts. Run
+`dagger cloud logout` (and unset `DAGGER_CLOUD_TOKEN`) to go back to local-only
+runs; the local cache stays reusable. Local execution still downloads container
+images and package dependencies when needed; it is not an offline build.
 
-```bash
-dagger workspace activity
-dagger cloud checks status
-dagger check --engine cloud             # run working-tree checks remotely
-dagger cloud checks off                  # disable automatic runs
-```
-
-Cloud execution needs an active Dagger Cloud organization and plan. Inspect
-`dagger cloud usage` and `dagger cloud billing` to manage usage and any trial.
-Enabling the integration does not itself commit or push the local config.
+Dagger reads git metadata with go-git, which refuses a repository that sets
+`extensions.worktreeConfig`. Dagger then logs `failed to open git repository`
+and runs without branch or commit information. If no worktree uses a
+`config.worktree` file, remove the setting with
+`git config --unset extensions.worktreeConfig`.
 
 ## Check inputs and caches
 
@@ -102,5 +119,4 @@ Dependencies install before application source is copied so source changes can
 reuse package installation. Swift scratch caches use locked mounts to prevent
 concurrent builds from writing the same tree.
 
-See the official [checking guide](https://docs.dagger.io/using/checking/) and
-[Cloud Checks setup](https://docs.dagger.io/cloud-checks/).
+See the official [checking guide](https://docs.dagger.io/using/checking/).
