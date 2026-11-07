@@ -1,0 +1,2 @@
+[modules.strato-ci]
+source = ".dagger/modules/strato-ci"
