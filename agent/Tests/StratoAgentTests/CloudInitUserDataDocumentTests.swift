@@ -16,7 +16,7 @@ struct CloudInitUserDataDocumentTests {
             serviceEnabled: true)
     }
 
-    private func runQGASetup(fakeCommands: [String: Int32]) throws -> (status: Int32, log: String) {
+    private func runQGASetup(fakeCommands: [String: Int32]) async throws -> (status: Int32, log: String) {
         let fileManager = FileManager.default
         let directory = fileManager.temporaryDirectory
             .appendingPathComponent("strato-qga-setup-\(UUID().uuidString)", isDirectory: true)
@@ -35,18 +35,15 @@ struct CloudInitUserDataDocumentTests {
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", CloudInitProvisioner.qgaSetupScript]
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = directory.path
         environment["STRATO_QGA_TEST_LOG"] = logURL.path
-        process.environment = environment
-        try process.run()
-        process.waitUntilExit()
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", CloudInitProvisioner.qgaSetupScript], environment: environment)
 
         let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
-        return (process.terminationStatus, log)
+        return (result.terminationStatus, log)
     }
 
     @Test("NoCloud-net user-data is byte-identical to the seed ISO renderer")
@@ -128,8 +125,8 @@ struct CloudInitUserDataDocumentTests {
     }
 
     @Test("QGA package and service failures do not fail setup")
-    func guestAgentSetupSurvivesPackageFailure() throws {
-        let result = try runQGASetup(fakeCommands: ["apt-get": 1, "systemctl": 1])
+    func guestAgentSetupSurvivesPackageFailure() async throws {
+        let result = try await runQGASetup(fakeCommands: ["apt-get": 1, "systemctl": 1])
 
         #expect(result.status == 0)
         #expect(result.log.contains("apt-get update -y"))
@@ -138,8 +135,8 @@ struct CloudInitUserDataDocumentTests {
     }
 
     @Test("QGA setup skips package repositories when the image already contains QGA")
-    func guestAgentSetupSkipsInstallWhenPresent() throws {
-        let result = try runQGASetup(fakeCommands: [
+    func guestAgentSetupSkipsInstallWhenPresent() async throws {
+        let result = try await runQGASetup(fakeCommands: [
             "qemu-ga": 0,
             "apt-get": 1,
             "systemctl": 0,
@@ -151,8 +148,8 @@ struct CloudInitUserDataDocumentTests {
     }
 
     @Test("QGA setup uses zypper when it is the available package manager")
-    func guestAgentSetupUsesZypper() throws {
-        let result = try runQGASetup(fakeCommands: ["zypper": 1, "systemctl": 1])
+    func guestAgentSetupUsesZypper() async throws {
+        let result = try await runQGASetup(fakeCommands: ["zypper": 1, "systemctl": 1])
 
         #expect(result.status == 0)
         #expect(
