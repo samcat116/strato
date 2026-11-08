@@ -550,7 +550,9 @@ final class ResourceConditionsTests {
             try await vm.save(on: app.db)
             let event = try await ResourceEvent.record(
                 .reboot, resourceKind: .virtualMachine, resourceID: try vm.requireID(), actor: .system, on: app.db)
-            let deadline = vm.convergenceDeadline
+            // Compare persisted values: PostgreSQL timestamps have microsecond
+            // precision, whereas Date() can retain sub-microsecond fractions.
+            let deadline = try #require(try await VM.find(vm.id, on: app.db)?.convergenceDeadline)
 
             let ahead = try self.report(
                 agentId: agentId,
@@ -616,6 +618,7 @@ final class ResourceConditionsTests {
             sandbox.extendConvergenceDeadline(by: 120)
             try await sandbox.save(on: app.db)
             let snapshotID = sandbox.restoreSnapshotID
+            let deadline = try #require(try await Sandbox.find(sandbox.id, on: app.db)?.convergenceDeadline)
             let event = try await ResourceEvent.record(
                 .restore, resourceKind: .sandbox, resourceID: try sandbox.requireID(), actor: .system, on: app.db)
 
@@ -636,7 +639,7 @@ final class ResourceConditionsTests {
             #expect(refreshed.restoreGeneration == 2)
             #expect(refreshed.restoreSnapshotID == snapshotID)
             #expect(refreshed.desiredStatus == .running)
-            #expect(refreshed.convergenceDeadline == sandbox.convergenceDeadline)
+            #expect(refreshed.convergenceDeadline == deadline)
             #expect(!refreshed.conditions.converged)
             #expect(refreshed.conditions.degraded?.reason.contains("datastore rewind") == true)
             #expect(try await OperationFacade.response(for: event, on: app.db).status == .failed)
