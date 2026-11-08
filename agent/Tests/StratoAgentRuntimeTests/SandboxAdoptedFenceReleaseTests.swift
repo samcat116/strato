@@ -4,6 +4,7 @@ import Glibc
 import Logging
 import StratoAgentCore
 import StratoShared
+import Synchronization
 import Testing
 
 @testable import StratoAgentRuntime
@@ -12,6 +13,21 @@ import Testing
 @Suite("adopted guest automatic fence release")
 struct SandboxAdoptedFenceReleaseTests {
     enum ProbeCase: CaseIterable, Sendable { case idle, legacy, wrongIdentity }
+
+    @Test func fixtureShutdownInterruptsAccept() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = try AdoptedGuestSocketFixture(path: root.path + "/guest.sock", replies: [Data()])
+        fixture.closeListener()
+        // Shutdown wakes accept rather than waiting for the five-second poll
+        // timeout, even if serving has not yet been scheduled.
+        await #expect(throws: AdoptedGuestSocketFixture.Failure.socket) {
+            try await fixture.requests.value
+        }
+        // Closing after the worker finished must not close a reused descriptor.
+        fixture.closeListener()
+    }
 
     @Test(arguments: ProbeCase.allCases)
     func pausedAdoptionLearnsActualCapabilityBeforeRelease(probe: ProbeCase) async throws {
@@ -112,8 +128,27 @@ extension FirecrackerSandboxRuntime {
 }
 
 private final class AdoptedGuestSocketFixture: @unchecked Sendable {
-    enum Failure: Error { case socket, timeout, protocolMismatch }
-    let descriptor: Int32
+    enum Failure: Error, Equatable { case socket, timeout, protocolMismatch }
+    // The worker owns close; cancellation only shuts the listener down under
+    // the same lock. No poll/accept can observe a recycled descriptor.
+    private final class Listener: Sendable {
+        let descriptor: Int32
+        private let finished = Mutex(false)
+        init(_ descriptor: Int32) { self.descriptor = descriptor }
+        func stop() {
+            finished.withLock { finished in
+                if !finished { _ = shutdown(descriptor, Int32(SHUT_RDWR)) }
+            }
+        }
+        func finish() {
+            finished.withLock { finished in
+                guard !finished else { return }
+                _ = Glibc.close(descriptor)
+                finished = true
+            }
+        }
+    }
+    private let listener: Listener
     let requests: Task<[String], any Error>
     init(path: String, replies: [Data]) throws {
         let descriptor = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue), 0)
@@ -131,32 +166,45 @@ private final class AdoptedGuestSocketFixture: @unchecked Sendable {
             }
         }
         guard bound == 0, listen(descriptor, 4) == 0 else { _ = Glibc.close(descriptor); throw Failure.socket }
-        self.descriptor = descriptor
-        requests = Task.detached {
-            var kinds: [String] = []
-            for reply in replies {
-                var readiness = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-                guard poll(&readiness, 1, 5000) > 0 else { throw Failure.timeout }
-                try Task.checkCancellation()
-                let client = accept(descriptor, nil, nil)
-                guard client >= 0 else { throw Failure.socket }
-                defer { _ = Glibc.close(client) }
-                var timeout = timeval(tv_sec: 5, tv_usec: 0)
-                _ = setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-                let connect = try Self.readLine(client)
-                guard connect.hasPrefix("CONNECT ") else { throw Failure.protocolMismatch }
-                try Self.writeLine(Data("OK 123\n".utf8), client)
-                let request = try Self.readLine(client)
-                guard let json = try JSONSerialization.jsonObject(with: Data(request.utf8)) as? [String: Any],
-                    let type = json["type"] as? String
-                else { throw Failure.protocolMismatch }
-                kinds.append(type)
-                try Self.writeLine(reply + Data([10]), client)
+        let listener = Listener(descriptor)
+        self.listener = listener
+        // poll/read are blocking syscalls. Task.detached would occupy the
+        // cooperative executor needed by the runtime to answer the fixture.
+        requests = Task {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global().async {
+                    defer { listener.finish() }
+                    continuation.resume(
+                        with: Result {
+                            try Self.serve(descriptor: descriptor, replies: replies)
+                        })
+                }
             }
-            return kinds
         }
     }
-    func closeListener() { requests.cancel(); _ = Glibc.close(descriptor) }
+    private static func serve(descriptor: Int32, replies: [Data]) throws -> [String] {
+        var kinds: [String] = []
+        for reply in replies {
+            var readiness = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            guard poll(&readiness, 1, 5000) > 0 else { throw Failure.timeout }
+            let client = accept(descriptor, nil, nil)
+            guard client >= 0 else { throw Failure.socket }
+            defer { _ = Glibc.close(client) }
+            var timeout = timeval(tv_sec: 5, tv_usec: 0)
+            _ = setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            let connect = try Self.readLine(client)
+            guard connect.hasPrefix("CONNECT ") else { throw Failure.protocolMismatch }
+            try Self.writeLine(Data("OK 123\n".utf8), client)
+            let request = try Self.readLine(client)
+            guard let json = try JSONSerialization.jsonObject(with: Data(request.utf8)) as? [String: Any],
+                let type = json["type"] as? String
+            else { throw Failure.protocolMismatch }
+            kinds.append(type)
+            try Self.writeLine(reply + Data([10]), client)
+        }
+        return kinds
+    }
+    func closeListener() { listener.stop() }
     private static func readLine(_ descriptor: Int32) throws -> String {
         var bytes: [UInt8] = []
         var byte: UInt8 = 0

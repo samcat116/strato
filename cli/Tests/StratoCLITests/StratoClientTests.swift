@@ -65,9 +65,17 @@ struct StratoClientTests {
             operationID: "deleteVM",
             next: next)
 
+        _ = try await middleware.intercept(
+            HTTPRequest(method: .put, scheme: nil, authority: nil, path: "/api/vms/one/guest-config"),
+            body: HTTPBody(Data(#"{"guestConfig":null}"#.utf8)),
+            baseURL: baseURL,
+            operationID: "replaceVMGuestConfiguration",
+            next: next)
+
         let requests = captured.withLock { $0 }
         #expect(UUID(uuidString: requests[0].headerFields[header] ?? "") != nil)
         #expect(requests[1].headerFields[header] == "command-invocation-key")
+        #expect(UUID(uuidString: requests[2].headerFields[header] ?? "") != nil)
     }
 
     @Test("automatic keyed operation inventory agrees with OpenAPI declarations")
@@ -87,7 +95,7 @@ struct StratoClientTests {
                 declared.insert(operation)
             }
         }
-        #expect(declared.count == 33)
+        #expect(declared.count == 34)
         #expect(IdempotencyKeyMiddleware.supportedOperationIDs == declared)
     }
 

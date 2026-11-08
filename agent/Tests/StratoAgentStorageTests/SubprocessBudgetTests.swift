@@ -57,6 +57,8 @@ struct SubprocessBudgetTests {
         }
     }
 
+    // An ignored TERM disposition survives exec. Sleeping keeps the same PID
+    // alive until escalation without busy-looping on the shared CI CPUs.
     @Test func realRunnerEscalatesAndReleasesSerializedStorageKeys() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -69,7 +71,7 @@ struct SubprocessBudgetTests {
             if [ ! -f '\(recovery)' ]; then
                 trap '' TERM
                 echo $$ > '\(pidFile)'
-                while :; do :; done
+                exec sleep 120
             fi
             """, at: executable)
         let passedBudget = Mutex<SubprocessBudget?>(nil)
@@ -153,7 +155,7 @@ struct SubprocessBudgetTests {
         await #expect(throws: ProcessTimedOutError.self) {
             try await SubprocessBudget.run(
                 URL(fileURLWithPath: "/bin/sh"),
-                ["-c", "exec 1>&- 2>&-; sleep 20 & echo $! > '\(pidFile)'; trap '' TERM; while :; do :; done"],
+                ["-c", "exec 1>&- 2>&-; sleep 20 & echo $! > '\(pidFile)'; trap '' TERM; exec sleep 120"],
                 SubprocessBudget(timeout: .milliseconds(200)))
         }
         #expect(ContinuousClock.now - started < .seconds(10))
@@ -191,7 +193,7 @@ struct SubprocessBudgetTests {
             printf incomplete > "$output"
             trap '' TERM
             echo $$ > '\(pidFile)'
-            while :; do :; done
+            exec sleep 120
             """, at: executable)
         let varstore = UEFIVarstore(logger: Logger(label: "varstore-budget"), qemuImgPath: executable)
         let started = ContinuousClock.now
@@ -219,7 +221,7 @@ struct SubprocessBudgetTests {
         provisioner.runISO = { _, _, budget in
             #expect(budget == .cloudInit)
             return try await SubprocessBudget.run(
-                URL(fileURLWithPath: "/bin/sh"), ["-c", "trap '' TERM; while :; do :; done"],
+                URL(fileURLWithPath: "/bin/sh"), ["-c", "trap '' TERM; exec sleep 120"],
                 SubprocessBudget(timeout: .milliseconds(100)))
         }
         await #expect(throws: ProcessTimedOutError.self) {
@@ -254,7 +256,7 @@ struct SubprocessBudgetTests {
         let binary = root + "/agent"
         let artifact = root + "/new-agent"
         try Data("old build".utf8).write(to: URL(fileURLWithPath: binary))
-        try script("trap '' TERM; while :; do :; done", at: artifact)
+        try script("trap '' TERM; exec sleep 120", at: artifact)
         let updater = AgentUpdater(
             logger: Logger(label: "updater-budget"), installMode: .supervisedBinary, binaryPath: binary,
             runSubprocess: { executable, arguments, budget in

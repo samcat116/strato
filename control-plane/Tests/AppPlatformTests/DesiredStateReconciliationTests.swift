@@ -1391,6 +1391,7 @@ final class DesiredStateReconciliationTests {
     @Test("A report's guestInfo persists hostname, availability, and per-MAC observed addresses")
     func guestInfoPersisted() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            vm.setFixtureDesiredStatus(.running)
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             // A NIC to attribute the guest's addresses to, by MAC.
@@ -1416,7 +1417,10 @@ final class DesiredStateReconciliationTests {
                 ])
             let envelope = try self.report(
                 agentId: agentId,
-                vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1, guestInfo: guestInfo)]
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: vm.generation, guestInfo: guestInfo)
+                ]
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
@@ -1442,6 +1446,7 @@ final class DesiredStateReconciliationTests {
     @Test("A later report reconciles observed addresses; a nil guestInfo leaves them intact")
     func guestInfoReconciledAndPreservedOnNil() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            vm.setFixtureDesiredStatus(.running)
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
@@ -1451,7 +1456,10 @@ final class DesiredStateReconciliationTests {
             func send(_ guestInfo: GuestInfo?) async throws {
                 let envelope = try self.report(
                     agentId: agentId,
-                    vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 1, guestInfo: guestInfo)]
+                    vms: [
+                        ObservedVMState(
+                            vmId: vm.id!, status: .running, observedGeneration: vm.generation, guestInfo: guestInfo)
+                    ]
                 )
                 await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
             }
@@ -1491,6 +1499,7 @@ final class DesiredStateReconciliationTests {
     @Test("A nil guestInfo on a stopped VM clears the stale qga view")
     func guestInfoClearedWhenNotRunning() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            vm.setFixtureDesiredStatus(.running)
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
@@ -1500,7 +1509,10 @@ final class DesiredStateReconciliationTests {
             func send(status: VMStatus, guestInfo: GuestInfo?) async throws {
                 let envelope = try self.report(
                     agentId: agentId,
-                    vms: [ObservedVMState(vmId: vm.id!, status: status, observedGeneration: 1, guestInfo: guestInfo)]
+                    vms: [
+                        ObservedVMState(
+                            vmId: vm.id!, status: status, observedGeneration: vm.generation, guestInfo: guestInfo)
+                    ]
                 )
                 await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
             }
@@ -1534,6 +1546,7 @@ final class DesiredStateReconciliationTests {
     @Test("A report persists host and VM contention snapshots with control-plane receipt times")
     func resourceTelemetryPersisted() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            vm.setFixtureDesiredStatus(.running)
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let sampledAt = Date(timeIntervalSince1970: 1_800_000_000)
@@ -1577,7 +1590,7 @@ final class DesiredStateReconciliationTests {
                 agentId: agentId,
                 vms: [
                     ObservedVMState(
-                        vmId: vm.id!, status: .running, observedGeneration: 1,
+                        vmId: vm.id!, status: .running, observedGeneration: vm.generation,
                         convergencePhase: "applying-resource-limits",
                         resourceTelemetry: workload)
                 ],
@@ -1603,13 +1616,14 @@ final class DesiredStateReconciliationTests {
     @Test("A report's memoryStats persist and stamp their report time")
     func memoryStatsPersisted() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            vm.setFixtureDesiredStatus(.running)
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             let envelope = try self.report(
                 agentId: agentId,
                 vms: [
                     ObservedVMState(
-                        vmId: vm.id!, status: .running, observedGeneration: 1,
+                        vmId: vm.id!, status: .running, observedGeneration: vm.generation,
                         memoryStats: VMMemoryStats(
                             totalBytes: 8_254_390_272, availableBytes: 6_442_450_944,
                             balloonActualBytes: 8_589_934_592))
@@ -1628,6 +1642,7 @@ final class DesiredStateReconciliationTests {
     @Test("A nil memoryStats preserves the last-known values while running, and clears them once stopped")
     func memoryStatsPreservedOnNilAndClearedWhenNotRunning() async throws {
         try await withVMTestApp { app, _, vm, _ in
+            vm.setFixtureDesiredStatus(.running)
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             func send(status: VMStatus, memoryStats: VMMemoryStats?) async throws {
@@ -1635,7 +1650,7 @@ final class DesiredStateReconciliationTests {
                     agentId: agentId,
                     vms: [
                         ObservedVMState(
-                            vmId: vm.id!, status: status, observedGeneration: 1,
+                            vmId: vm.id!, status: status, observedGeneration: vm.generation,
                             memoryStats: memoryStats)
                     ]
                 )

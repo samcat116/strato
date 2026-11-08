@@ -132,6 +132,10 @@ type StratoCi {
     if (package == "control-plane") {
       raise "Use the manual Full Test Suite workflow for control-plane tests with PostgreSQL and cvc5."
     }
-    swiftEnv(ws, package).withExec(["swift", "test", "-j", "4", "--force-resolved-versions"])
+    swiftEnv(ws, package)
+      .withExec(["sh", "-ec", "apt-get update && apt-get install -y --no-install-recommends python3"])
+      .withFile("/work/scripts/test-guest-agent-bootstrap.py", ws.file("/scripts/test-guest-agent-bootstrap.py"))
+      .withFile("/work/config.toml.example", ws.file("/config.toml.example"))
+      .withExec(["swift", "test", "-j", "4", "--force-resolved-versions"])
   }
 }

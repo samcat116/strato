@@ -1230,7 +1230,7 @@ struct CephRBDStorageBackendTests {
                 {
                     #expect(budget == .mutation)
                     return try await SubprocessBudget.run(
-                        URL(fileURLWithPath: "/bin/sh"), ["-c", "trap '' TERM; while :; do :; done"],
+                        URL(fileURLWithPath: "/bin/sh"), ["-c", "trap '' TERM; exec sleep 120"],
                         SubprocessBudget(timeout: .milliseconds(100), maxOutputBytes: budget.maxOutputBytes))
                 }
                 return await recorder.run(executable, arguments)
