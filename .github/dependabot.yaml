@@ -17,7 +17,17 @@ updates:
     labels:
       - "dependencies"
       - "swift"
-    reviewers:
-      - "samcat116"
     assignees:
       - "samcat116"
+  # Explicit ecosystems route security updates to the matching lockfile updater.
+  # A zero version-update limit keeps JavaScript updates security-only.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "bun"
+    directory: "/control-plane/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
