@@ -57,8 +57,10 @@ dagger api call strato-ci swift-test --package agent stdout
 dagger api call strato-ci swift-test --package cli stdout
 ```
 
-The test environment includes Python and the guest-agent bootstrap fixture
-used by the shared suite.
+The test environment includes Python and the repository-level fixtures used by
+the shared and agent suites: `scripts/test-guest-agent-bootstrap.py` and
+`config.toml.example`. These inputs are added only for opt-in tests, keeping the
+production compile checks independent of test-only fixtures.
 
 Use the existing **Full Test Suite (manual)** GitHub workflow for the complete
 Swift suite, including control-plane tests with disposable PostgreSQL and cvc5.
