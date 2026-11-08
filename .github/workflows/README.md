@@ -29,6 +29,25 @@ hosted: the Helm chart lint/template/security jobs (`helm-test.yml`, on
 `helm/**`) and the Rust `cargo fmt`/`test`/`clippy` gate for the sandbox init and
 VM guest agent (`sandbox-guest.yaml`, on `sandbox-guest/**`).
 
+## Dependency updates
+
+Dependabot is configured in [`.github/dependabot.yaml`](../dependabot.yaml).
+The web app at `control-plane/web` uses the `bun` ecosystem for its text
+`bun.lock`; the root documentation project uses `npm` for `package-lock.json`.
+Both JavaScript entries set `open-pull-requests-limit: 0` to preserve security-only
+updates. That limit disables routine version PRs, not security PRs. Keep
+Dependabot security updates enabled in the repository settings. Review assignment
+uses the existing CODEOWNERS file; the retired `reviewers` option is removed.
+
+The Swift entry covers all six packages. Dependabot's hosted updater chooses its
+own Swift toolchain independently of our CI runners; there is no toolchain pin in
+this configuration. The November 4, 2026 updater failure used Swift 6.3.1 against
+SwiftFirecracker's required tools version 6.4. Upstream added Swift 6.4.1 in
+[dependabot-core#16817](https://github.com/dependabot/dependabot-core/pull/16817)
+on November 5. Keep the package requirements and Swift updates enabled, and
+check the toolchain in the next hosted updater log to confirm rollout. A normal
+PR CI build does not verify the hosted Dependabot image.
+
 ## Workflows
 
 ### Local Dagger Checks
