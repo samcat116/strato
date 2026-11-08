@@ -103,7 +103,7 @@ private struct StaticImageSource: ImageSource {
 }
 
 /// Deterministically models the observed Foundation boundary: read the real
-/// entries, remove one from another task, then emit the observed Cocoa wrapper
+/// entries, remove one from another worker, then emit the observed Cocoa wrapper
 /// instead of relying on scheduler timing to make the native call fail.
 private final class DisappearingVolumeEnumerator: Sendable {
     private let disappearingDirectory: String
@@ -117,7 +117,9 @@ private final class DisappearingVolumeEnumerator: Sendable {
         guard FileManager.default.fileExists(atPath: disappearingDirectory) else { return entries }
 
         let removed = DispatchSemaphore(value: 0)
-        Task.detached { [disappearingDirectory] in
+        // The synchronous enumerator waits here, so its worker must not need
+        // another thread from the same cooperative executor to make progress.
+        DispatchQueue.global().async { [disappearingDirectory] in
             try? FileManager.default.removeItem(atPath: disappearingDirectory)
             removed.signal()
         }

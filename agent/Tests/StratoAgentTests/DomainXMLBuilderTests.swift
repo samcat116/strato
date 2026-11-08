@@ -371,24 +371,16 @@ struct DomainXMLBuilderTests {
         "goldens validate against libvirt's own schema",
         .enabled(if: virtXMLValidatePath != nil, "virt-xml-validate is not installed"),
         arguments: scenarios)
-    func validatesAgainstLibvirtSchema(_ scenario: Scenario) throws {
+    func validatesAgainstLibvirtSchema(_ scenario: Scenario) async throws {
         let tool = try #require(Self.virtXMLValidatePath)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tool)
-        process.arguments = [Self.goldenURL(scenario.name).path, "domain"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        try process.run()
-        // Read before waiting: a full pipe buffer would otherwise deadlock the
-        // child against a parent that never drains it.
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-
+        // Schema fixtures run alongside the registration watchdog tests. Do
+        // not occupy cooperative threads while waiting for external tools.
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: tool),
+            arguments: [Self.goldenURL(scenario.name).path, "domain"])
         #expect(
-            process.terminationStatus == 0,
-            "\(scenario.name) failed libvirt's schema:\n\(output)")
+            result.terminationStatus == 0,
+            "\(scenario.name) failed libvirt's schema:\n\(result.combinedOutput)")
     }
 
     // MARK: - Properties no golden can assert

@@ -412,17 +412,30 @@ struct WarmSandboxSnapshotCacheTests {
                 return try FileHashing.sha256Hex(ofFileAt: path)
             })
 
-        let lookup = Task.detached { cache.lookup(key) }
+        // These operations deliberately block on a semaphore/file lock. A
+        // detached Task still uses the cooperative pool and can prevent the
+        // test that releases the lock from ever running on a small CI runner.
+        let lookup = Task {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    continuation.resume(returning: cache.lookup(key))
+                }
+            }
+        }
         while !hashingStarted.withLock({ $0 }) { await Task.yield() }
 
         let sweepStarted = Mutex(false)
         let sweepFinished = Mutex(false)
         let sweepLogger = logger
-        let sweep = Task.detached {
-            sweepStarted.withLock { $0 = true }
-            let result = cache.sweep(budgetBytes: 0, logger: sweepLogger)
-            sweepFinished.withLock { $0 = true }
-            return result
+        let sweep = Task {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    sweepStarted.withLock { $0 = true }
+                    let result = cache.sweep(budgetBytes: 0, logger: sweepLogger)
+                    sweepFinished.withLock { $0 = true }
+                    continuation.resume(returning: result)
+                }
+            }
         }
         while !sweepStarted.withLock({ $0 }) { await Task.yield() }
 
