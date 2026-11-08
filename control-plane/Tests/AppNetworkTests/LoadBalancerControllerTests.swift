@@ -169,4 +169,69 @@ final class LoadBalancerControllerTests {
             #expect(reservedFloatingIP.$loadBalancer.id == nil)
         }
     }
+
+    @Test("Listener and backend mutations advance the parent generation atomically")
+    func membershipMutationsAdvanceGeneration() async throws {
+        try await withLoadBalancerTestApp { app, organization, project, token in
+            let site = Site(name: "membership-site", organizationScope: .organization(try organization.requireID()))
+            try await site.save(on: app.db)
+            let network = LogicalNetwork(
+                name: "membership-network", subnet: "10.40.0.0/24", gateway: "10.40.0.1",
+                projectID: try project.requireID(), siteID: try site.requireID())
+            try await network.save(on: app.db)
+            let loadBalancer = LoadBalancer(
+                name: "membership-api", projectID: try project.requireID(), logicalNetworkID: try network.requireID(),
+                vip: "10.40.0.10", protocolName: .tcp)
+            try await loadBalancer.save(on: app.db)
+            let id = try loadBalancer.requireID()
+            let path = "/api/load-balancers/\(id)"
+
+            try await app.test(.POST, "\(path)/listeners") { request in
+                request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try request.content.encode(CreateLoadBalancerListenerRequest(port: 80, backendPort: 8080))
+            } afterResponse: { response in
+                #expect(response.status == .ok)
+            }
+            let listener = try #require(try await LoadBalancerListener.query(on: app.db).first())
+            let listenerID = try listener.requireID()
+            try await app.test(.PUT, "\(path)/listeners/\(listenerID)") { request in
+                request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try request.content.encode(UpdateLoadBalancerListenerRequest(port: 80, backendPort: 8081))
+            } afterResponse: { response in
+                #expect(response.status == .ok)
+            }
+            let updatedListener = try #require(try await LoadBalancerListener.find(listenerID, on: app.db))
+            #expect(updatedListener.backendPort == 8081)
+            try await app.test(.DELETE, "\(path)/listeners/\(listenerID)") { request in
+                request.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                #expect(response.status == .noContent)
+            }
+
+            for expectedStatus: HTTPResponseStatus in [.ok, .conflict] {
+                try await app.test(.POST, "\(path)/backends") { request in
+                    request.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try request.content.encode(
+                        CreateLoadBalancerBackendRequest(vmId: nil, nicIndex: nil, ipAddress: "10.40.0.20"))
+                } afterResponse: { response in
+                    #expect(response.status == expectedStatus)
+                }
+                let current = try #require(try await LoadBalancer.find(id, on: app.db))
+                // The rejected duplicate rolls the early parent bump back.
+                #expect(current.generation == 5)
+            }
+            let backend = try #require(try await LoadBalancerBackend.query(on: app.db).first())
+            try await app.test(.DELETE, "\(path)/backends/\(try backend.requireID())") { request in
+                request.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                #expect(response.status == .noContent)
+            }
+            let current = try #require(try await LoadBalancer.find(id, on: app.db))
+            #expect(current.generation == 6)
+            #expect(current.observedState == .pending)
+            #expect(try await LoadBalancerListener.query(on: app.db).count() == 0)
+            #expect(try await LoadBalancerBackend.query(on: app.db).count() == 0)
+        }
+    }
+
 }
