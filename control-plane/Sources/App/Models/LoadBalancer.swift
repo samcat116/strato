@@ -124,6 +124,18 @@ final class LoadBalancer: Model, @unchecked Sendable {
         self.$createdBy.id = createdByID
     }
 
+    /// Both API mutations and observations must read after taking the same row
+    /// lock. Generation guards must see prior commits so a delayed report
+    /// cannot move observedGeneration backwards after waiting for another writer.
+    /// The caller must hold a transaction for the entire read/modify/write.
+    static func lockAndFetch(_ id: UUID, on db: any Database) async throws -> LoadBalancer? {
+        guard
+            case .applied = try await DesiredStateGenerationWriter.lockCurrent(
+                schema: schema, id: id, on: db)
+        else { return nil }
+        return try await find(id, on: db)
+    }
+
     var healthCheck: LoadBalancerHealthCheckConfig {
         get {
             LoadBalancerHealthCheckConfig(

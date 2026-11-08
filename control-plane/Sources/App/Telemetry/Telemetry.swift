@@ -677,6 +677,13 @@ enum Telemetry {
             value: refused ? 1 : 0, factory: factory)
     }
 
+    /// Rejected LB facts, without resource or agent IDs as metric labels.
+    /// The companion debug log identifies the reporter without unbounded
+    /// timeseries cardinality.
+    static func recordUnauthorizedLoadBalancerObservation() {
+        Counter(label: "strato_load_balancer_unauthorized_observations_total").increment()
+    }
+
     // MARK: - HTTP request layer
 
     /// RED metrics for the whole API surface, emitted once per request by
