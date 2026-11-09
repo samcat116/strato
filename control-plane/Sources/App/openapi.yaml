@@ -517,6 +517,8 @@ paths:
           $ref: '#/components/responses/NotFound'
     put:
       operationId: replaceVMGuestConfiguration
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       summary: Replace desired guest configuration
       description: Requires vm:configureGuest and vm:read. Changes increment generation
         transactionally; unchanged configurations (including reordered arrays) are no-ops.

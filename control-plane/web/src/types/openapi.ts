@@ -11537,7 +11537,10 @@ export interface operations {
     replaceVMGuestConfiguration: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opaque caller-generated token for replay-safe mutation retries on this explicitly participating operation only. Unsupported mutation routes reject this header with `400` before handler side effects. Scoped to the authenticated principal and retained for 24 hours. Reuse with a different method, path, or JSON body is rejected with `422`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description The virtual machine's id. */
                 vmID: components["parameters"]["VMID"];

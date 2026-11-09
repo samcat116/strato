@@ -27,7 +27,7 @@ struct GuestAgentBootstrapTests {
         if userData?.hasPrefix("MIME-Version") == true { #expect(optedOut == userData) }
     }
 
-    @Test func nestedMIMEKeepsBothExecutableLeafParts() throws {
+    @Test func nestedMIMEKeepsBothExecutableLeafParts() async throws {
         let tenant =
             "MIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=tenant\n\n--tenant\nContent-Type: text/x-shellscript\nContent-Disposition: attachment; filename=tenant.sh\n\n#!/bin/sh\necho tenant\n--tenant--\n"
         let document = CloudInitProvisioner.userDataDocument(
@@ -36,9 +36,7 @@ struct GuestAgentBootstrapTests {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("strato-mime-\(UUID()).txt")
         defer { try? FileManager.default.removeItem(at: file) }
         try document.write(to: file, atomically: true, encoding: .utf8)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
+        let arguments = [
             "python3", "-c",
             """
             import email, sys
@@ -51,9 +49,9 @@ struct GuestAgentBootstrapTests {
             assert 'exec-capable ROOT daemon' in leaves[1].get_payload()
             """, file.path,
         ]
-        try process.run()
-        process.waitUntilExit()
-        #expect(process.terminationStatus == 0)
+        let result = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/env"), arguments: arguments)
+        #expect(result.terminationStatus == 0, "\(result.combinedOutput)")
     }
 
     @Test func imdsStubDoesNotDuplicateInstallation() throws {
