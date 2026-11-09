@@ -14,6 +14,7 @@ struct IdempotencyKeyMiddleware: ClientMiddleware {
     static let supportedOperationIDs: Set<String> = [
         "createVM",
         "updateVM",
+        "replaceVMGuestConfiguration",
         "deleteVM",
         "startVM",
         "retryVMPlacement",

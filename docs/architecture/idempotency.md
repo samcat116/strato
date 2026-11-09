@@ -24,13 +24,14 @@ semantics; the route declaration adds no replay or resource abstraction.
 ## Audited supported inventory
 
 This inventory was audited against main `7cb24c7b` for STR-359 / #1429.
-Placement retry was added in #1478. The 33 operations below correspond to
+Placement retry was added in #1478 and guest configuration in #1441. The 34 operations below correspond to
 OpenAPI `IdempotencyKey` parameters.
 
 | Method | Route | Claim path |
 | --- | --- | --- |
 | POST | `/api/vms` | VM creation workflow |
 | PUT | `/api/vms/{vmID}` | Controller reservation / ResourceMutation |
+| PUT | `/api/vms/{vmID}/guest-config` | VMGuestConfigMutation transaction (including unchanged configurations) |
 | DELETE | `/api/vms/{vmID}` | ResourceMutation.accept |
 | POST | `/api/vms/{vmID}/start` | ResourceMutation.accept |
 | POST | `/api/vms/{vmID}/retry-placement` | ResourceMutation.accept |

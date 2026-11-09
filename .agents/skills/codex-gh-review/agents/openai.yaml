@@ -1,0 +1,8 @@
+interface:
+  display_name: "PR Review Watch"
+  short_description: "Watch a PR for reviews and resolve them as they come up"
+  brand_color: "#3B82F6"
+
+
+policy:
+  allow_implicit_invocation: false

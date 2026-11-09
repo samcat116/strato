@@ -75,6 +75,19 @@ What genuinely remains missing (details in §Known gaps):
   Inbound resolution from outside the overlay and external publication are still
   open. See [dns](./dns.md).
 
+## Load-balancer observations
+
+Load-balancer convergence and backend health reports are accepted only from the
+site's designated network controller, for networks in the same authoritative
+scope used by desired-state assembly. Non-authoritative reports are dropped,
+logged with the reporter and resource IDs, and counted by
+`strato_load_balancer_unauthorized_observations_total`.
+
+API mutations and observations take the same load-balancer row lock and re-read
+before applying generation checks or changes. Listener/backend mutations lock
+the parent first; backend observations update only health fields, preserving
+concurrent configuration changes and never reviving deleted backends.
+
 ## CIDR admission
 
 Network create and update serialize sibling subnet checks and writes in one
